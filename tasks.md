@@ -16,19 +16,19 @@
 
 ### フェーズ・タスクの概要一覧
 
-* Phase 0: モノレポ基盤構築
-  * Task 0-1: Bun workspaces のルート構成
-  * Task 0-2: `packages/shared` の初期構成
-  * Task 0-3: `apps/backend` の Hono + Cloudflare Workers 初期構成
-  * Task 0-4: `apps/frontend` の SvelteKit 初期構成
-  * Task 0-5: Supabase プロジェクト接続とマイグレーション基盤
-  * Task 0-6: Lint / Format / CI とメール送信サービスの選定
-* Phase 1: データモデル設計
-  * Task 1-1: Supabase スキーマ定義(DDL マイグレーション)
-  * Task 1-2: `packages/shared` の Zod スキーマ定義
-  * Task 1-3: フォーム項目定義 YAML のスキーマとパーサ
+* Phase 0: モノレポ基盤構築 ✅完了
+  * Task 0-1: Bun workspaces のルート構成 ✅
+  * Task 0-2: `packages/shared` の初期構成 ✅
+  * Task 0-3: `apps/backend` の Hono + Cloudflare Workers 初期構成 ✅
+  * Task 0-4: `apps/frontend` の SvelteKit 初期構成 ✅
+  * Task 0-5: Supabase プロジェクト接続とマイグレーション基盤 ✅
+  * Task 0-6: Lint / Format / CI とメール送信サービスの選定 ✅
+* Phase 1: データモデル設計 ✅完了
+  * Task 1-1: Supabase スキーマ定義(DDL マイグレーション) ✅
+  * Task 1-2: `packages/shared` の Zod スキーマ定義 ✅
+  * Task 1-3: フォーム項目定義 YAML のスキーマとパーサ ✅
 * Phase 2: 大会・フォーム定義管理(統括スタッフ)
-  * Task 2-1: 大会(tournament)管理 API
+  * Task 2-1: 大会(tournament)管理 API 🔜次に着手可能
   * Task 2-2: フォーム定義・レギュレーション登録 API
   * Task 2-3: Google スプレッドシート → YAML 変換ツール
   * Task 2-4: 大会作成・フォーム定義管理画面
@@ -67,8 +67,8 @@ Phase 間の依存関係と、各 Phase 内の Task 間の依存関係を別の�
 
 ```mermaid
 graph TD
-  P0["Phase 0: モノレポ基盤"] --> P1["Phase 1: データモデル設計"]
-  P1 --> P2["Phase 2: 大会・フォーム定義管理"]
+  P0["Phase 0: モノレポ基盤"]:::done --> P1["Phase 1: データモデル設計"]:::done
+  P1 --> P2["Phase 2: 大会・フォーム定義管理"]:::next
   P2 --> P3["Phase 3: エントリーフォーム機能"]
   P3 --> P4["Phase 4: エントリーリスト公開"]
   P3 --> P5["Phase 5: マイページ"]
@@ -78,37 +78,50 @@ graph TD
   P4 --> P8["Phase 8: 非機能・仕上げ"]
   P5 --> P8
   P7 --> P8
+
+  classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
+  classDef next fill:#fef3c7,stroke:#d97706,color:#78350f;
 ```
+
+凡例: 緑 = 完了、黄 = 次に着手可能(Phase 2 が次フェーズ)
 
 ### Phase 内 Task の依存グラフ
 
-#### Phase 0: モノレポ基盤構築
+#### Phase 0: モノレポ基盤構築(✅ 完了)
 
 ```mermaid
 graph TD
-  T01["0-1 workspaces"] --> T02["0-2 shared init"]
-  T01 --> T03["0-3 backend init"]
-  T01 --> T04["0-4 frontend init"]
-  T03 --> T05["0-5 Supabase接続"]
-  T02 --> T06["0-6 CI/Lint/Mail選定"]
+  T01["0-1 workspaces"]:::done --> T02["0-2 shared init"]:::done
+  T01 --> T03["0-3 backend init"]:::done
+  T01 --> T04["0-4 frontend init"]:::done
+  T03 --> T05["0-5 Supabase接続"]:::done
+  T02 --> T06["0-6 CI/Lint/Mail選定"]:::done
+
+  classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
 ```
 
-#### Phase 1: データモデル設計
+#### Phase 1: データモデル設計(✅ 完了)
 
 ```mermaid
 graph TD
-  T11["1-1 DDL"] --> T12["1-2 Zodスキーマ"]
-  T12 --> T13["1-3 YAML定義パーサ"]
+  T11["1-1 DDL"]:::done --> T12["1-2 Zodスキーマ"]:::done
+  T12 --> T13["1-3 YAML定義パーサ"]:::done
+
+  classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
 ```
 
 #### Phase 2: 大会・フォーム定義管理
 
 ```mermaid
 graph TD
-  T21["2-1 大会管理API"] --> T22["2-2 フォーム定義API"]
+  T21["2-1 大会管理API"]:::next --> T22["2-2 フォーム定義API"]
   T22 --> T23["2-3 Sheets→YAML変換"]
   T22 --> T24["2-4 管理画面"]
+
+  classDef next fill:#fef3c7,stroke:#d97706,color:#78350f;
 ```
+
+凡例(以降のフェーズ図も共通): 緑 = 完了、黄 = 次に着手可能
 
 #### Phase 3: エントリーフォーム機能
 
@@ -140,9 +153,9 @@ graph TD
   T62 --> T64["6-4 CSV出力"]
 ```
 
-## Phase 0: モノレポ基盤構築
+## Phase 0: モノレポ基盤構築 ✅完了
 
-### Task 0-1: Bun workspaces のルート構成
+### Task 0-1: Bun workspaces のルート構成 ✅
 
 #### 実装・更新内容
 
@@ -194,7 +207,7 @@ graph TD
 
 * なし(最初のタスク)
 
-### Task 0-2: `packages/shared` の初期構成
+### Task 0-2: `packages/shared` の初期構成 ✅
 
 #### 実装・更新内容
 
@@ -239,7 +252,7 @@ export * from './schemas/auth';
 
 * Task 0-1
 
-### Task 0-3: `apps/backend` の Hono + Cloudflare Workers 初期構成
+### Task 0-3: `apps/backend` の Hono + Cloudflare Workers 初期構成 ✅
 
 #### 実装・更新内容
 
@@ -305,7 +318,7 @@ compatibility_date = "2026-08-01"
 
 * Task 0-1
 
-### Task 0-4: `apps/frontend` の SvelteKit 初期構成
+### Task 0-4: `apps/frontend` の SvelteKit 初期構成 ✅
 
 #### 実装・更新内容
 
@@ -346,7 +359,7 @@ export default {
 
 * Task 0-1, Task 0-3(`AppType` の型を参照するため)
 
-### Task 0-5: Supabase プロジェクト接続とマイグレーション基盤
+### Task 0-5: Supabase プロジェクト接続とマイグレーション基盤 ✅
 
 #### 実装・更新内容
 
@@ -391,7 +404,7 @@ export function createDbClient(env: Bindings) {
 
 * Task 0-3
 
-### Task 0-6: Lint / Format / CI とメール送信サービスの選定
+### Task 0-6: Lint / Format / CI とメール送信サービスの選定 ✅
 
 #### 実装・更新内容
 
@@ -461,9 +474,9 @@ jobs:
 
 * Task 0-2, Task 0-3
 
-## Phase 1: データモデル設計
+## Phase 1: データモデル設計 ✅完了
 
-### Task 1-1: Supabase スキーマ定義(DDL マイグレーション)
+### Task 1-1: Supabase スキーマ定義(DDL マイグレーション) ✅
 
 #### 実装・更新内容
 
@@ -591,7 +604,7 @@ create table staff_accounts (
 
 * Task 0-5
 
-### Task 1-2: `packages/shared` の Zod スキーマ定義
+### Task 1-2: `packages/shared` の Zod スキーマ定義 ✅
 
 #### 実装・更新内容
 
@@ -678,7 +691,7 @@ export type Tournament = z.infer<typeof TournamentSchema>;
 
 * Task 0-2, Task 1-1
 
-### Task 1-3: フォーム項目定義 YAML のスキーマとパーサ
+### Task 1-3: フォーム項目定義 YAML のスキーマとパーサ ✅
 
 #### 実装・更新内容
 
@@ -728,7 +741,7 @@ export function parseFormDefinitionYaml(yamlText: string): FormDefinitionYaml {
 
 ## Phase 2: 大会・フォーム定義管理(統括スタッフ)
 
-### Task 2-1: 大会(tournament)管理 API
+### Task 2-1: 大会(tournament)管理 API 🔜次に着手可能
 
 #### 実装・更新内容
 
