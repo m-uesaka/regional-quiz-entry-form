@@ -1,0 +1,23 @@
+{
+  "name": "@regional-quiz/backend",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "wrangler deploy --dry-run",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "lint": "echo 'lint: not configured yet'"
+  },
+  "dependencies": {
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240909.0",
+    "@types/bun": "^1.1.0",
+    "typescript": "^5.5.0",
+    "wrangler": "^3.78.0"
+  }
+}
