@@ -162,7 +162,15 @@ describe('requireStaffForTournament', () => {
       regionId: null,
       tournamentType: null,
     });
-    const tampered = token.slice(0, -1) + (token.endsWith('a') ? 'b' : 'a');
+    // Flip the *first* character of the signature segment rather than the
+    // token's last character: base64url's final character of a 32-byte
+    // HMAC signature only encodes 4 significant bits (the other 2 are
+    // unused padding), so toggling it there sometimes decodes to the same
+    // signature bytes and the token verifies as valid anyway (flaky).
+    const [header, payload, signature] = token.split('.');
+    const tamperedSignature =
+      (signature[0] === 'A' ? 'B' : 'A') + signature.slice(1);
+    const tampered = `${header}.${payload}.${tamperedSignature}`;
 
     const res = await app.request(
       '/tournaments/t1/x',
