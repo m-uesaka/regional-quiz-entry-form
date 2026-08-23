@@ -26,7 +26,8 @@ create table regulations (
   label text not null,
   priority_starts_at timestamptz,
   priority_ends_at timestamptz,
-  display_order integer not null default 0
+  display_order integer not null default 0,
+  unique (id, tournament_id)
 );
 
 create table form_field_defs (
@@ -56,7 +57,7 @@ create table entries (
   name text not null,
   furigana text not null,
   display_name text not null,
-  regulation_id uuid not null references regulations (id),
+  regulation_id uuid not null,
   free_text text,
   custom_field_values jsonb not null default '{}',
   status entry_status not null default 'pending_verification',
@@ -65,7 +66,8 @@ create table entries (
   cancelled_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (participant_id, tournament_id)
+  unique (participant_id, tournament_id),
+  foreign key (regulation_id, tournament_id) references regulations (id, tournament_id)
 );
 
 create table email_verification_tokens (
