@@ -19,11 +19,16 @@ export async function sendVerificationEmail(
 ): Promise<void> {
   const db = createDbClient(env);
   const token = generateToken();
-  await db.from('email_verification_tokens').insert({
+  const {error} = await db.from('email_verification_tokens').insert({
     entry_id: entryId,
     token_hash: await hashToken(token),
     expires_at: new Date(Date.now() + TOKEN_TTL_MS).toISOString(),
   });
+  if (error) {
+    // Don't send a link whose token was never persisted -- the recipient
+    // would click through to a token that can never be found.
+    throw new Error(`failed to persist verification token: ${error.message}`);
+  }
 
   const mailer = new ResendMailSender(env.MAIL_API_KEY, env.MAIL_FROM_ADDRESS);
   await mailer.send({
