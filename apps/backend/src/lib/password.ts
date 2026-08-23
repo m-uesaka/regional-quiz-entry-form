@@ -1,6 +1,9 @@
 const PBKDF2_ITERATIONS = 100_000;
 const SALT_BYTES = 16;
 const HASH_BITS = 256;
+const SALT_HEX_LENGTH = SALT_BYTES * 2;
+const HASH_HEX_LENGTH = (HASH_BITS / 8) * 2;
+const HEX_PATTERN = /^[0-9a-f]+$/i;
 
 function toHex(bytes: ArrayBuffer): string {
   return Array.from(new Uint8Array(bytes), byte =>
@@ -55,8 +58,17 @@ export async function verifyPassword(
   password: string,
   stored: string,
 ): Promise<boolean> {
-  const [saltHex, hashHex] = stored.split(':');
-  if (!saltHex || !hashHex) return false;
+  const parts = stored.split(':');
+  if (parts.length !== 2) return false;
+  const [saltHex, hashHex] = parts;
+  if (
+    saltHex.length !== SALT_HEX_LENGTH ||
+    hashHex.length !== HASH_HEX_LENGTH ||
+    !HEX_PATTERN.test(saltHex) ||
+    !HEX_PATTERN.test(hashHex)
+  ) {
+    return false;
+  }
   const bits = await deriveBits(password, fromHex(saltHex));
   return timingSafeEqualHex(toHex(bits), hashHex);
 }
