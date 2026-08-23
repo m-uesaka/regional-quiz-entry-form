@@ -16,7 +16,8 @@ function isStaffClaims(payload: unknown): payload is StaffClaims {
     (typeof candidate.regionId === 'string' || candidate.regionId === null) &&
     (candidate.tournamentType === 'saikyoi' ||
       candidate.tournamentType === 'shinjinou' ||
-      candidate.tournamentType === null)
+      candidate.tournamentType === null) &&
+    typeof candidate.exp === 'number'
   );
 }
 
