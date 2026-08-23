@@ -9,7 +9,7 @@ export const TournamentSchema = z.object({
   type: TournamentTypeSchema,
   name: z.string(),
   capacity: z.number().int().positive().nullable(),
-  entryOpensAt: z.string().datetime(),
-  entryClosesAt: z.string().datetime(),
+  entryOpensAt: z.string().datetime({offset: true}),
+  entryClosesAt: z.string().datetime({offset: true}),
 });
 export type Tournament = z.infer<typeof TournamentSchema>;
