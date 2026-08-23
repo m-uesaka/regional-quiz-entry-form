@@ -33,6 +33,11 @@ export function isRegulationSelectionAllowed(
   selectedRegulationId: string,
   now: Date,
 ): boolean {
+  const isKnownRegulation = regulations.some(
+    regulation => regulation.id === selectedRegulationId,
+  );
+  if (!isKnownRegulation) return false;
+
   const activePriorityIds = regulations
     .filter(hasPriorityWindow)
     .filter(

@@ -54,4 +54,19 @@ describe('isRegulationSelectionAllowed', () => {
       ),
     ).toBe(true);
   });
+
+  it('rejects an unknown regulation id even with no active priority window', () => {
+    const regulations = [
+      {id: 'reg-1', priorityStartsAt: null, priorityEndsAt: null},
+      {id: 'reg-2', priorityStartsAt: null, priorityEndsAt: null},
+    ];
+
+    expect(
+      isRegulationSelectionAllowed(
+        regulations,
+        'unknown-reg',
+        new Date('2026-08-23T00:00:00Z'),
+      ),
+    ).toBe(false);
+  });
 });
