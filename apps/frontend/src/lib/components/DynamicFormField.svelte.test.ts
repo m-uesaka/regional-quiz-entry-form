@@ -63,6 +63,38 @@ describe('DynamicFormField', () => {
     expect(onChange).toHaveBeenCalledExactlyOnceWith(['ベーコン']);
   });
 
+  it('marks every option required when a required checkbox group has no selection', () => {
+    const field: FormFieldDefYaml = {
+      type: 'checkbox',
+      key: 'toppings',
+      label: 'トッピング',
+      required: true,
+      options: ['チーズ', 'ベーコン'],
+    };
+    const onChange = vi.fn();
+
+    render(DynamicFormField, {props: {field, value: [], onChange}});
+
+    expect(screen.getByRole('checkbox', {name: 'チーズ'})).toBeRequired();
+    expect(screen.getByRole('checkbox', {name: 'ベーコン'})).toBeRequired();
+  });
+
+  it('drops the required constraint from a checkbox group once one option is selected', () => {
+    const field: FormFieldDefYaml = {
+      type: 'checkbox',
+      key: 'toppings',
+      label: 'トッピング',
+      required: true,
+      options: ['チーズ', 'ベーコン'],
+    };
+    const onChange = vi.fn();
+
+    render(DynamicFormField, {props: {field, value: ['チーズ'], onChange}});
+
+    expect(screen.getByRole('checkbox', {name: 'チーズ'})).not.toBeRequired();
+    expect(screen.getByRole('checkbox', {name: 'ベーコン'})).not.toBeRequired();
+  });
+
   it('toggles a plain boolean checkbox using the field key as the array value', async () => {
     const user = userEvent.setup();
     const field: FormFieldDefYaml = {

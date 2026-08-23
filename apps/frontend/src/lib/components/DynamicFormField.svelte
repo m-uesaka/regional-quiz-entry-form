@@ -16,6 +16,15 @@
   // empty array.
   const booleanCheckboxValue = $derived(field.key);
 
+  // A required multi-option checkbox group has no native HTML equivalent of
+  // "at least one checked". Instead, mark every checkbox in the group as
+  // `required` only while none of them is checked; once one is checked, the
+  // browser's constraint validation is already satisfied for the group, so
+  // `required` is dropped from all of them.
+  const hasCheckboxSelection = $derived(
+    Array.isArray(value) && value.length > 0,
+  );
+
   function isChecked(option: string): boolean {
     return Array.isArray(value) && value.includes(option);
   }
@@ -85,6 +94,7 @@
             type="checkbox"
             name={field.key}
             value={option}
+            required={field.required && !hasCheckboxSelection}
             checked={isChecked(option)}
             onchange={event => handleCheckboxChange(option, event)}
           />
