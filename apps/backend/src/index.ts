@@ -4,6 +4,7 @@ import {staffAuthRoute} from './routes/staff-auth';
 import {tournamentsRoute} from './routes/tournaments';
 import {entriesRoute} from './routes/entries';
 import {entryVerificationRoute} from './routes/entry-verification';
+import {formDefinitionsRoute} from './routes/form-definitions';
 
 const app = new Hono<Env>().basePath('/api');
 
@@ -13,7 +14,8 @@ const routes = app
   .route('/auth/staff', staffAuthRoute)
   .route('/tournaments', tournamentsRoute)
   .route('/tournaments', entriesRoute)
-  .route('/entries', entryVerificationRoute);
+  .route('/entries', entryVerificationRoute)
+  .route('/form-definitions', formDefinitionsRoute);
 
 export type AppType = typeof routes;
 export default app;
