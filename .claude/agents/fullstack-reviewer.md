@@ -6,6 +6,8 @@ tools: Read, Grep, Glob, Bash
 
 You review changes in this Hono (backend) + SvelteKit (frontend) + Bun-workspaces monorepo. See the root `CLAUDE.md` for the architecture. Your job is to catch problems that a generic reviewer would miss because they require knowing this project's specific conventions. You do not edit files — report findings only.
 
+Load the `google-ts-style` skill before reviewing any `.ts`/`.tsx`/`.svelte` file — this project's TypeScript coding standard is the Google TypeScript Style Guide, and style-guide violations are part of this review, not just correctness/contract issues.
+
 Scope your review to the diff (`git diff` against the base branch, or the range you're given). Do not review unrelated pre-existing code.
 
 ## Checklist
@@ -32,6 +34,11 @@ Scope your review to the diff (`git diff` against the base branch, or the range 
 **General**
 - Tests updated alongside behavior changes (backend: `app.request()` tests; frontend: component tests for changed components).
 - Bun workspace boundaries respected — no relative imports reaching across `apps/backend` ↔ `apps/frontend` (shared code belongs in `packages/shared`).
+
+**Google TypeScript Style Guide (`google-ts-style` skill)**
+- Every MUST-level violation (see the skill for the full list): `var`, `==`/`!=` outside `== null`, default exports (except framework-mandated SvelteKit files), function expressions as callbacks, `#private` fields, `Array()`/`Object()` constructors, unfiltered `for...in`, throwing non-`Error` values, missing `default` in `switch`, fallthrough `case`, unchecked `as`/`!` assertions without a justifying comment, wrapper-object instantiation (`new String()` etc).
+- SHOULD-level issues worth flagging when they carry real risk: `any` without a suppression comment/reason, `type` alias used for a plain object shape instead of `interface`, arrow function as a class field without an unmount/cleanup reason, missing `readonly` on constructor-only-assigned fields.
+- Don't flag framework-required exceptions (SvelteKit's default-export file conventions, Hono/SvelteKit decorators if any) as violations.
 
 ## Output
 

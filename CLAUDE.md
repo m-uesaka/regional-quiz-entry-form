@@ -15,9 +15,16 @@ TypeScript + Hono のバックエンドと SvelteKit のフロントエンドか
 - `apps/frontend` は `hono/client` の `hc<AppType>()` を使って型安全に API を呼ぶ(手書きの fetch ラッパーを増やさない)
 - リクエスト/レスポンスの Zod スキーマは `packages/shared` に置き、`@hono/zod-validator` (バックエンド)とフォームバリデーション(フロントエンド)の両方から同じスキーマを import する。バックエンドとフロントエンドで別々にスキーマを定義しない
 
+## TypeScript コーディング規約
+
+- このリポジトリの TypeScript コード(`apps/backend` / `apps/frontend` 双方)は **Google TypeScript Style Guide** (https://google.github.io/styleguide/tsguide.html) に従う。ルールの要約は `.claude/skills/google-ts-style/SKILL.md` を参照(実装・レビュー用エージェントはここを自動的に読み込む)
+- SvelteKit のファイルベースルーティング(`+page.svelte` 等の default export)のようにフレームワークが要求する書き方は、スタイルガイドの「no default export」ルールより優先する
+- 実装が進みコードベースが立ち上がったら、Google 公式の `gts`(ESLint + Prettier + tsc をこのスタイルガイドに沿って設定したパッケージ)の導入を検討する。現時点(2026-08-23)ではまだ `apps/` 自体が存在しないため未導入
+
 ## エージェント / スキル
 
 - `.claude/agents/hono-backend-engineer.md` — Hono バックエンド実装用サブエージェント
 - `.claude/agents/sveltekit-frontend-engineer.md` — SvelteKit フロントエンド実装用サブエージェント
-- `.claude/agents/fullstack-reviewer.md` — バックエンド/フロントエンド間の型契約・セキュリティ観点も含むレビュー用サブエージェント
+- `.claude/agents/fullstack-reviewer.md` — バックエンド/フロントエンド間の型契約・セキュリティ観点・Google TS スタイル準拠も含むレビュー用サブエージェント
+- `.claude/skills/google-ts-style/SKILL.md` — 手動で作成した、このプロジェクトの TypeScript コーディング規約(Google スタイルガイド)。`skills-lock.json` には登録されていない(CLI 管理外)ため `.gitignore` で個別に追跡対象化している
 - 導入済みスキル(`skills-lock.json` 参照): `bun`, `hono`, `typescript`, `svelte-code-writer`, `svelte-core-bestpractices`。`.svelte` / `.svelte.ts` を編集する際は `svelte-code-writer` / `svelte-core-bestpractices` が自動的に参照される

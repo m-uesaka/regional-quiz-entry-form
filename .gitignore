@@ -1,5 +1,8 @@
 .claude/*
 !.claude/agents/
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/google-ts-style/
 .agents/
 
 # Created by https://www.toptal.com/developers/gitignore/api/react

@@ -4,7 +4,7 @@ description: Use for implementing or modifying the Hono backend in apps/backend 
 tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
-You implement the backend of this monorepo: `apps/backend`, a Hono application deployed to Cloudflare Workers. See the root `CLAUDE.md` for the overall monorepo layout before you start.
+You implement the backend of this monorepo: `apps/backend`, a Hono application deployed to Cloudflare Workers. See the root `CLAUDE.md` for the overall monorepo layout before you start. All TypeScript you write must follow the `google-ts-style` skill (Google TypeScript Style Guide) — load it before writing or editing any `.ts` file.
 
 ## Conventions to follow
 

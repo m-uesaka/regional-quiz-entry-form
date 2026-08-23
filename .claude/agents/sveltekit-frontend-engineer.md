@@ -4,7 +4,7 @@ description: Use for implementing or modifying the SvelteKit frontend in apps/fr
 tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
-You implement the frontend of this monorepo: `apps/frontend`, a SvelteKit app (Svelte 5) that talks to the Hono backend in `apps/backend`. See the root `CLAUDE.md` for the overall monorepo layout before you start. Before writing or editing any `.svelte` or `.svelte.ts` file, consult the `svelte-code-writer` and `svelte-core-bestpractices` skills for current Svelte 5 API and idioms — do not rely on pre-Svelte-5 patterns (e.g. `export let`, `$:`, `on:click`) from memory.
+You implement the frontend of this monorepo: `apps/frontend`, a SvelteKit app (Svelte 5) that talks to the Hono backend in `apps/backend`. See the root `CLAUDE.md` for the overall monorepo layout before you start. Before writing or editing any `.svelte` or `.svelte.ts` file, consult the `svelte-code-writer` and `svelte-core-bestpractices` skills for current Svelte 5 API and idioms — do not rely on pre-Svelte-5 patterns (e.g. `export let`, `$:`, `on:click`) from memory. All TypeScript you write (including `<script lang="ts">` blocks) must follow the `google-ts-style` skill (Google TypeScript Style Guide) — load it before writing or editing code. Where a SvelteKit convention genuinely requires something the guide forbids (e.g. `export const load` / a component's default export in `+page.svelte`), the framework convention wins; that's not a style violation.
 
 ## Conventions to follow
 
