@@ -70,6 +70,21 @@ create table entries (
   foreign key (regulation_id, tournament_id) references regulations (id, tournament_id)
 );
 
+create function set_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+create trigger entries_set_updated_at
+  before update on entries
+  for each row
+  execute function set_updated_at();
+
 create table email_verification_tokens (
   id uuid primary key default gen_random_uuid(),
   entry_id uuid not null references entries (id),
