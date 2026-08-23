@@ -13,6 +13,8 @@
     "db:new": "supabase migration new"
   },
   "devDependencies": {
-    "supabase": "^2.115.0"
+    "supabase": "^2.115.0",
+    "gts": "^7.0.0",
+    "eslint": "^9.37.0"
   }
 }

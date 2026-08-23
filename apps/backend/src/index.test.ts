@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import {describe, expect, it} from 'bun:test';
 import app from './index';
 
 describe('GET /healthz', () => {
@@ -9,6 +9,6 @@ describe('GET /healthz', () => {
     const body: unknown = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body).toEqual({ ok: true });
+    expect(body).toEqual({ok: true});
   });
 });

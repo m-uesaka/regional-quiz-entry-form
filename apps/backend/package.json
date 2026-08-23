@@ -9,7 +9,8 @@
     "build": "wrangler deploy --dry-run",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "lint": "echo 'lint: not configured yet'"
+    "lint": "gts lint",
+    "fix": "gts fix"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",

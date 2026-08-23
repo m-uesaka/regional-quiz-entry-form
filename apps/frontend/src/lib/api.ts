@@ -1,5 +1,5 @@
-import { hc } from 'hono/client';
-import type { AppType } from '../../../backend/src/index';
+import {hc} from 'hono/client';
+import type {AppType} from '../../../backend/src/index';
 
 /**
  * Creates a type-safe RPC client for the backend Hono API.
@@ -9,5 +9,5 @@ import type { AppType } from '../../../backend/src/index';
  *     proxied/credentialed during server-side rendering.
  */
 export function createApiClient(fetchImpl: typeof fetch = fetch) {
-  return hc<AppType>('/api', { fetch: fetchImpl });
+  return hc<AppType>('/api', {fetch: fetchImpl});
 }
