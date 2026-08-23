@@ -1,6 +1,6 @@
 ---
 name: typescript
-description: "TypeScript type definition and best-practices skill. Use when: (1) writing or editing TypeScript files (.ts, .tsx), (2) defining types (interface, type), (3) configuring tsconfig.json or compiler options, (4) resolving type errors or improving type safety, (5) working with generics, utility types, or type manipulation, (6) tasks involving the keywords 'typescript', 'ts', 'type', 'interface', 'generic'."
+description: "Deep-dive TypeScript reference for generic constraints, type guards, tsconfig.json setup, DOM/React event types, branded/utility types, and resolving a specific tsc compiler error message. Do NOT use this for everyday TypeScript style or conventions in this repo (exports, naming, any/unknown, interface-vs-type, etc.) — that's covered by the `google-ts-style` skill, which is the project's actual standard."
 license: MIT
 compatibility: Requires TypeScript compiler (tsc)
 metadata:
@@ -10,55 +10,7 @@ metadata:
 
 # TypeScript
 
-Type definitions and best practices based on the TypeScript Handbook. For basic syntax, type manipulation, and utility type details, see [references/](references/) and the [Handbook](https://www.typescriptlang.org/docs/handbook/intro.html).
-
-## Core principles
-
-### 1. Rely on type inference
-
-Omit unnecessary annotations. This reduces the burden of updating two places when a type changes, and inference is often more accurate anyway.
-
-```typescript
-// ❌
-const name: string = "John";
-const user: { name: string; age: number } = { name: "John", age: 30 };
-
-// ✅
-const name = "John";
-const user = { name: "John", age: 30 };
-```
-
-### 2. Explicit return types
-
-Makes the function's contract clear and prevents accidental changes to the return type. Essential for public APIs and complex logic.
-
-```typescript
-function calculateTotal(items: Item[]): number {
-  return items.reduce((sum, item) => sum + item.price, 0);
-}
-async function fetchUser(id: string): Promise<User> {
-  const res = await fetch(`/api/users/${id}`);
-  return res.json();
-}
-```
-
-### 3. Never use `any`
-
-It disables type safety and autocompletion. Use `unknown` with a type guard, or a concrete type, instead.
-
-```typescript
-// ❌
-function process(data: any) {
-  return data.value;
-}
-
-// ✅
-function process(data: unknown): number {
-  if (typeof data === "object" && data !== null && "value" in data)
-    return (data as { value: number }).value;
-  throw new Error("Invalid data");
-}
-```
+Type definitions and best practices based on the TypeScript Handbook, for the topics this skill covers (generics, type guards, tsconfig, event/utility/branded types, compiler-error resolution). For this project's day-to-day style rules (imports/exports, naming, `any`/`unknown`, `interface` vs `type`, etc.), see the `google-ts-style` skill instead — it is the project standard and takes precedence over anything here. For basic syntax and type manipulation not covered by either skill, see [references/](references/) and the [Handbook](https://www.typescriptlang.org/docs/handbook/intro.html).
 
 ## Functions & generics
 
@@ -102,11 +54,8 @@ function process(data: unknown): number {
 
 ## Practical patterns
 
-- **Prefer `interface`**: use `interface` for object contracts/extension, `type` for unions/intersections. Write API doc comments as noun phrases (`/** Disabled state */`).
 - **`as const`**: preserves literal/object immutability. Use `typeof obj[keyof typeof obj]` to get enum-like behavior.
 - **Branded types**: `type UserId = string & { readonly brand: unique symbol }` to distinguish otherwise-identical primitive types.
-- **Minimize type assertions**: prefer a type guard over `as`.
-- **Generic constraints**: state them explicitly, e.g. `T extends object`.
 
 ## Resolving type errors
 
