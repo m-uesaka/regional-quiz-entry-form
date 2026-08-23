@@ -24,12 +24,6 @@
       "sourceType": "github",
       "skillPath": "plugins/claude/svelte/skills/svelte-core-bestpractices/SKILL.md",
       "computedHash": "98b4ee346ac45e13740c9f3353b604d5c6e844c96cdc8867052fa961cbdb525d"
-    },
-    "typescript": {
-      "source": "dalestudy/skills",
-      "sourceType": "github",
-      "skillPath": "skills/typescript/SKILL.md",
-      "computedHash": "e04393a48a9c632770f9879fc7c14533e44f7717c6f90f2dd000d5278873a82a"
     }
   }
 }
