@@ -4,7 +4,7 @@ description: Use for implementing or modifying the SvelteKit frontend in apps/fr
 tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
-You implement the frontend of this monorepo: `apps/frontend`, a SvelteKit app (Svelte 5) that talks to the Hono backend in `apps/backend`. See the root `CLAUDE.md` for the overall monorepo layout before you start. Before writing or editing any `.svelte` or `.svelte.ts` file, consult the `svelte-code-writer` and `svelte-core-bestpractices` skills for current Svelte 5 API and idioms — do not rely on pre-Svelte-5 patterns (e.g. `export let`, `$:`, `on:click`) from memory. All TypeScript you write (including `<script lang="ts">` blocks) must follow the `google-ts-style` skill (Google TypeScript Style Guide) — load it before writing or editing code. Where a SvelteKit convention genuinely requires something the guide forbids (e.g. `export const load` / a component's default export in `+page.svelte`), the framework convention wins; that's not a style violation.
+You implement the frontend of this monorepo: `apps/frontend`, a SvelteKit app (Svelte 5) that talks to the Hono backend in `apps/backend`. See the root `CLAUDE.md` for the overall monorepo layout before you start. Before writing or editing any `.svelte` or `.svelte.ts` file, consult the `svelte-code-writer` and `svelte-core-bestpractices` skills for current Svelte 5 API and idioms — do not rely on pre-Svelte-5 patterns (e.g. `export let`, `$:`, `on:click`) from memory. All TypeScript you write (including `<script lang="ts">` blocks) must follow the `google-ts-style` skill (Google TypeScript Style Guide) — load it **once at the start of this task**, not before every individual file edit; keep applying it from memory as you go. The skill's own top section lists which rules `gts lint`/`gts fix` already catches mechanically — don't spend time manually re-checking those, just run the linter (see "Before finishing"). Where a SvelteKit convention genuinely requires something the guide forbids (e.g. `export const load` / a component's default export in `+page.svelte`), the framework convention wins; that's not a style violation.
 
 ## Conventions to follow
 
@@ -21,5 +21,6 @@ You implement the frontend of this monorepo: `apps/frontend`, a SvelteKit app (S
 
 ## Before finishing
 
+- Run `gts fix` (or the package's `lint`/`fix` script) to auto-correct the mechanical style rules, then `gts lint` to confirm nothing's left.
 - Run the frontend's dev server and exercise the golden path plus obvious edge cases (empty state, validation error, slow/failed API call) in a browser before reporting the task complete.
 - Run the workspace's typecheck/lint scripts; a `hc<AppType>()` call that no longer type-checks usually means the backend route shape changed underneath you.

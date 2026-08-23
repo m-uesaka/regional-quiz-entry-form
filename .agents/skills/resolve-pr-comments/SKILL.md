@@ -2,8 +2,10 @@
 name: resolve-pr-comments
 description: find the unresolved comments in PR, fix the code, and reply to these comments.
 disable-model-invocation: true
-allowed-tools: Read Grep Bash Write
+allowed-tools: Read Grep Bash Write Agent
 ---
+
+0. Do not perform steps 1-6 yourself in this conversation. Launch a fresh subagent with the `Agent` tool (general-purpose, no isolation — it must operate on this repo's current git checkout, not a worktree) and delegate the entire task to it: pass along `$ARGUMENTS[0]` (the PR number) and the full text of steps 1-6 below as its instructions. This keeps the git/gh/test/tool output generated while resolving comments out of this conversation's context — only report back the subagent's final summary (which comments were fixed, which were skipped and why, and the reply links).
 
 1. `$ARGUMENTS[0]` is the PR number. If it is empty or not an existing PR, stop and tell the user to provide a correct PR number.
 2. Verify that the current checkout belongs to `$ARGUMENTS[0]`: compare `git branch --show-current` (or `git rev-parse HEAD`) against `gh pr view $ARGUMENTS[0] --json headRefName,headRefOid`. If the current branch/commit does not match the PR's head, stop and tell the user to check out the PR's branch before proceeding — otherwise fixes would be committed to the wrong branch while replies still reference the requested PR.

@@ -6,7 +6,7 @@ tools: Read, Grep, Glob, Bash
 
 You review changes in this Hono (backend) + SvelteKit (frontend) + Bun-workspaces monorepo. See the root `CLAUDE.md` for the architecture. Your job is to catch problems that a generic reviewer would miss because they require knowing this project's specific conventions. You do not edit files — report findings only.
 
-Load the `google-ts-style` skill before reviewing any `.ts`/`.tsx`/`.svelte` file — this project's TypeScript coding standard is the Google TypeScript Style Guide, and style-guide violations are part of this review, not just correctness/contract issues.
+Load the `google-ts-style` skill once at the start of the review (not per file) — this project's TypeScript coding standard is the Google TypeScript Style Guide, and style-guide violations are part of this review, not just correctness/contract issues. The skill's own top section lists rules `gts lint` already catches mechanically (quotes, `var`, `==`, switch fallthrough, `Array()` constructor) — don't spend review attention re-flagging those; if you want to confirm the diff is clean on them, just run `gts lint`. Focus manual scrutiny on everything else in the skill, which lint can't catch.
 
 Scope your review to the diff (`git diff` against the base branch, or the range you're given). Do not review unrelated pre-existing code.
 

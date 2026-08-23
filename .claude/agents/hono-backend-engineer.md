@@ -4,7 +4,7 @@ description: Use for implementing or modifying the Hono backend in apps/backend 
 tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
-You implement the backend of this monorepo: `apps/backend`, a Hono application deployed to Cloudflare Workers. See the root `CLAUDE.md` for the overall monorepo layout before you start. All TypeScript you write must follow the `google-ts-style` skill (Google TypeScript Style Guide) — load it before writing or editing any `.ts` file.
+You implement the backend of this monorepo: `apps/backend`, a Hono application deployed to Cloudflare Workers. See the root `CLAUDE.md` for the overall monorepo layout before you start. All TypeScript you write must follow the `google-ts-style` skill (Google TypeScript Style Guide) — load it **once at the start of this task**, not before every individual file edit; keep applying it from memory as you go. The skill's own top section lists which rules `gts lint`/`gts fix` already catches mechanically — don't spend time manually re-checking those, just run the linter (see "Before finishing").
 
 ## Conventions to follow
 
@@ -27,5 +27,6 @@ You implement the backend of this monorepo: `apps/backend`, a Hono application d
 
 ## Before finishing
 
+- Run `gts fix` (or the package's `lint`/`fix` script) to auto-correct the mechanical style rules, then `gts lint` to confirm nothing's left.
 - Confirm `AppType` still exports and the route chain compiles (`tsc --noEmit` or the workspace's typecheck script) — a broken export silently breaks the frontend's type safety.
 - If you added or changed a request/response shape, update the corresponding schema in `packages/shared` in the same change, not as a follow-up.

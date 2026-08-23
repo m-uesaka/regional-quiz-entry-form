@@ -9,6 +9,18 @@ This repo follows the Google TypeScript Style Guide for all TypeScript code, in 
 
 Rules are marked **MUST** (hard rule, flag every violation), **SHOULD** (strong default, deviate only with a good reason), **MUST NOT** (hard prohibition).
 
+## Already enforced by `gts` — don't re-derive these manually
+
+This repo runs `gts lint` / `gts fix` (ESLint + Prettier, configured in every package's `eslint.config.cjs`) in CI and via each package's `lint`/`fix` script. Verified empirically against this repo's `gts@7` config — it auto-detects/auto-fixes:
+
+- Single-quote strings and general formatting (Prettier)
+- `var` usage (`no-var`) and `let`/`var` that's never reassigned (`prefer-const`)
+- `==`/`!=` instead of `===`/`!==` (`eqeqeq`)
+- `switch` case fallthrough (`no-fallthrough`)
+- The `Array()` constructor (`no-array-constructor`)
+
+Don't spend review/writing effort manually re-checking these — run `bun run lint` (or the package's `gts fix`) instead. Everything below this section is **not** caught by lint (confirmed by testing this repo's config against sample violations) — it needs actual judgment, so this is where review attention belongs.
+
 ## Imports & exports
 
 - **MUST** use ES6 `import`/`export` only. Never `require()` or `namespace Foo {}`.

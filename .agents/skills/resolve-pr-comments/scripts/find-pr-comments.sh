@@ -55,10 +55,10 @@ while :; do
     CURSOR="$(echo "$PAGE" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')"
 done
 
-# formatting
+# formatting (long comment bodies are truncated to keep context usage bounded)
 echo "$ALL_THREADS" | jq -r '
   .[] |
   select(.isResolved == false) |
   .comments.nodes[0] |
-  "[\(.author.login)] \(.path):\(.line // .originalLine) (id: \(.databaseId))\n  \(.body)\n"
+  "[\(.author.login)] \(.path):\(.line // .originalLine) (id: \(.databaseId))\n  \(if (.body | length) > 800 then .body[0:800] + "...(truncated)" else .body end)\n"
 '

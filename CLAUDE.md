@@ -1,11 +1,11 @@
 # regional-quiz-entry-form
 
-TypeScript + Hono のバックエンドと SvelteKit のフロントエンドからなる Bun workspaces モノレポ。実装はまだこれから(2026-08-23時点でコードは未着手)。以下は合意済みのアーキテクチャ方針。実装を始める際はこの構成でディレクトリを作ること。
+TypeScript + Hono のバックエンドと SvelteKit のフロントエンドからなる Bun workspaces モノレポ。実装は進行中(2026-08-23時点で `apps/backend`(スタッフ認証・大会情報 API 等)、`apps/frontend`(SvelteKit の初期スキャフォールド)、`packages/shared`(Zod スキーマ)に着手済み)。以下は合意済みのアーキテクチャ方針。新規実装・既存コードの変更はこの構成に沿って行うこと。
 
 ## 構成
 
 - パッケージ管理 / ワークスペース: **Bun workspaces**(Turborepo 等の追加ツールは使わない)
-- バックエンド: `apps/backend` — **Hono**、**Cloudflare Workers** にデプロイ(D1/KV/R2 等の bindings を使う可能性あり)
+- バックエンド: `apps/backend` — **Hono**、**Cloudflare Workers** にデプロイ。永続化は D1/KV/R2 ではなく **Supabase**(`@supabase/supabase-js`)を使用し、接続情報(`SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` 等)は Worker の `Bindings`(`src/types/env.ts`)経由の secrets として渡す
 - フロントエンド: `apps/frontend` — **SvelteKit**。API ルートは自前で持たず、`apps/backend` の Hono API を呼び出す(SvelteKit の `+page.server.ts` 等から叩くか、クライアントから直接叩くかは実装時に決定)
 - 共有パッケージ: `packages/shared` — バックエンド/フロントエンド間で共有する Zod スキーマと型定義
 
@@ -17,9 +17,9 @@ TypeScript + Hono のバックエンドと SvelteKit のフロントエンドか
 
 ## TypeScript コーディング規約
 
-- このリポジトリの TypeScript コード(`apps/backend` / `apps/frontend` 双方)は **Google TypeScript Style Guide** (https://google.github.io/styleguide/tsguide.html) に従う。ルールの要約は `.claude/skills/google-ts-style/SKILL.md` を参照(実装・レビュー用エージェントはここを自動的に読み込む)
+- このリポジトリの TypeScript コード(`apps/backend` / `apps/frontend` 双方)は **Google TypeScript Style Guide** (https://google.github.io/styleguide/tsguide.html) に従う。ルールの要約は `.claude/skills/google-ts-style/SKILL.md` を参照(実装・レビュー用エージェントがタスク開始時に一度だけ読み込む。ファイル編集のたびに再ロードさせない)
 - SvelteKit のファイルベースルーティング(`+page.svelte` 等の default export)のようにフレームワークが要求する書き方は、スタイルガイドの「no default export」ルールより優先する
-- 実装が進みコードベースが立ち上がったら、Google 公式の `gts`(ESLint + Prettier + tsc をこのスタイルガイドに沿って設定したパッケージ)の導入を検討する。現時点(2026-08-23)ではまだ `apps/` 自体が存在しないため未導入
+- Google 公式の `gts`(ESLint + Prettier + tsc をこのスタイルガイドに沿って設定したパッケージ)は `apps/backend` / `apps/frontend` / `packages/shared` の全パッケージに導入済み(各 `package.json` の `lint` / `fix` スクリプト)。quote スタイル・`var`・`==`・switch フォールスルー・`Array()` コンストラクタなど機械的に検出できるルールは `bun run lint`(または各パッケージの `gts fix`)に任せ、`google-ts-style` スキルは lint で拾えない設計判断・命名規約側に集中させる(スキル本文冒頭に検証済みの対応表あり)
 
 ## エージェント / スキル
 
