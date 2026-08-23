@@ -122,10 +122,49 @@ describe('requireStaffForTournament', () => {
     expect(res.status).toBe(200);
   });
 
-  it('returns 401 for an expired or tampered token', async () => {
+  it('returns 401 for a malformed token', async () => {
     const res = await app.request(
       '/tournaments/t1/x',
       {headers: cookieHeader('not-a-real-token')},
+      ENV,
+    );
+
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 401 for an expired token', async () => {
+    const token = await sign(
+      {
+        sub: STAFF_ID,
+        role: 'general',
+        regionId: null,
+        tournamentType: null,
+        exp: Math.floor(Date.now() / 1000) - 3600,
+      },
+      SESSION_SECRET,
+    );
+
+    const res = await app.request(
+      '/tournaments/t1/x',
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 401 for a token with a tampered signature', async () => {
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'general',
+      regionId: null,
+      tournamentType: null,
+    });
+    const tampered = token.slice(0, -1) + (token.endsWith('a') ? 'b' : 'a');
+
+    const res = await app.request(
+      '/tournaments/t1/x',
+      {headers: cookieHeader(tampered)},
       ENV,
     );
 
