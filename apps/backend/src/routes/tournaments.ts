@@ -63,9 +63,14 @@ function toTournamentRow(
   return row;
 }
 
+// Middleware is attached per-route (not via `.use('*', ...)`) because this
+// app is mounted at `/tournaments` alongside the public entries route
+// (`routes/entries.ts`, also mounted at `/tournaments`) — a wildcard here
+// would match requests to `/tournaments/:tournamentId/entries` too, since
+// Hono matches middleware by the request's final path, not by which
+// sub-app originally registered it.
 export const tournamentsRoute = new Hono<StaffEnv>()
-  .use('*', requireGeneralStaff())
-  .get('/', async c => {
+  .get('/', requireGeneralStaff(), async c => {
     const db = createDbClient(c.env);
     const {data, error} = await db.from('tournaments').select('*');
     if (error) {
@@ -73,20 +78,26 @@ export const tournamentsRoute = new Hono<StaffEnv>()
     }
     return c.json((data as TournamentRow[]).map(rowToTournament));
   })
-  .post('/', zValidator('json', CreateTournamentSchema), async c => {
-    const db = createDbClient(c.env);
-    const {data, error} = await db
-      .from('tournaments')
-      .insert(toTournamentRow(c.req.valid('json')))
-      .select()
-      .single();
-    if (error) {
-      return c.json({error: error.message}, 400);
-    }
-    return c.json(rowToTournament(data as TournamentRow), 201);
-  })
+  .post(
+    '/',
+    requireGeneralStaff(),
+    zValidator('json', CreateTournamentSchema),
+    async c => {
+      const db = createDbClient(c.env);
+      const {data, error} = await db
+        .from('tournaments')
+        .insert(toTournamentRow(c.req.valid('json')))
+        .select()
+        .single();
+      if (error) {
+        return c.json({error: error.message}, 400);
+      }
+      return c.json(rowToTournament(data as TournamentRow), 201);
+    },
+  )
   .patch(
     '/:id',
+    requireGeneralStaff(),
     zValidator('param', TournamentIdParamSchema),
     zValidator('json', UpdateTournamentSchema),
     async c => {
