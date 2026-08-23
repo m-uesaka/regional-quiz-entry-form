@@ -1,12 +1,14 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
-import {parseFormDefinitionYaml} from '@regional-quiz/shared';
+import {
+  FormDefinitionUploadSchema,
+  parseFormDefinitionYaml,
+} from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
 import {syncFormFieldDefs} from '../lib/form-definitions';
 
-const UploadYamlSchema = z.object({yaml: z.string()});
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 
 export const formDefinitionsRoute = new Hono<StaffEnv>()
@@ -14,7 +16,7 @@ export const formDefinitionsRoute = new Hono<StaffEnv>()
   .put(
     '/:tournamentId',
     zValidator('param', TournamentIdParamSchema),
-    zValidator('json', UploadYamlSchema),
+    zValidator('json', FormDefinitionUploadSchema),
     async c => {
       let parsed;
       try {

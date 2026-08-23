@@ -42,6 +42,15 @@ export function parseFormDefinitionYaml(yamlText: string): FormDefinitionYaml {
   return FormDefinitionYamlSchema.parse(parseYaml(yamlText));
 }
 
+/**
+ * Request body for the form-definition upload API: the raw YAML text, still
+ * unparsed. Shared so the frontend and backend validate the same shape;
+ * `parseFormDefinitionYaml()` handles parsing/validating the YAML contents
+ * themselves.
+ */
+export const FormDefinitionUploadSchema = z.object({yaml: z.string()});
+export type FormDefinitionUpload = z.infer<typeof FormDefinitionUploadSchema>;
+
 export interface FormFieldDefRow {
   tournamentId: string;
   fieldKey: string;
