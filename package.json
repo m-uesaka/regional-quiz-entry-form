@@ -9,7 +9,8 @@
     "typecheck": "bun --filter '*' typecheck",
     "test": "bun --filter '*' test",
     "lint": "bun --filter '*' lint",
-    "db:migrate": "supabase db push",
+    "db:migrate": "supabase db push --local",
+    "db:migrate:remote": "supabase db push",
     "db:new": "supabase migration new"
   },
   "devDependencies": {
