@@ -25,6 +25,7 @@ export const FormFieldDefYamlSchema = z.discriminatedUnion('type', [
     options: z.array(z.string()).optional(),
   }),
 ]);
+export type FormFieldDefYaml = z.infer<typeof FormFieldDefYamlSchema>;
 
 export const FormDefinitionYamlSchema = z
   .object({
