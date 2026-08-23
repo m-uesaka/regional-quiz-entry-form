@@ -110,3 +110,16 @@ create table staff_accounts (
   tournament_type tournament_type,
   created_at timestamptz not null default now()
 );
+
+alter table regions enable row level security;
+alter table tournaments enable row level security;
+alter table regulations enable row level security;
+alter table form_field_defs enable row level security;
+alter table participants enable row level security;
+alter table entries enable row level security;
+alter table email_verification_tokens enable row level security;
+alter table password_reset_tokens enable row level security;
+alter table staff_accounts enable row level security;
+
+revoke all on all tables in schema public from anon, authenticated;
+grant select, insert, update, delete on all tables in schema public to service_role;
