@@ -70,12 +70,16 @@ export function requireStaffForTournament() {
 
     if (staff.role !== 'general') {
       const db = createDbClient(c.env);
-      const {data: tournament} = await db
+      const {data: tournament, error} = await db
         .from('tournaments')
         .select('region_id, type')
         .eq('id', c.req.param('tournamentId'))
         .returns<TournamentScopeRow[]>()
         .maybeSingle();
+
+      if (error) {
+        return c.json({error: 'internal server error'}, 500);
+      }
 
       const inScope =
         tournament !== null &&
