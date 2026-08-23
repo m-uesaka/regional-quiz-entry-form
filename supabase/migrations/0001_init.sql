@@ -96,7 +96,7 @@ create table email_verification_tokens (
 create table password_reset_tokens (
   id uuid primary key default gen_random_uuid(),
   participant_id uuid not null references participants (id),
-  token text not null unique,
+  token_hash text not null unique,
   expires_at timestamptz not null,
   used_at timestamptz
 );
