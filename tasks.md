@@ -61,6 +61,10 @@
 
 ## Dependency graph
 
+Phase 間の依存関係と、各 Phase 内の Task 間の依存関係を別の図に分けて示す。
+
+### Phase 間の依存グラフ
+
 ```mermaid
 graph TD
   P0["Phase 0: モノレポ基盤"] --> P1["Phase 1: データモデル設計"]
@@ -74,46 +78,66 @@ graph TD
   P4 --> P8["Phase 8: 非機能・仕上げ"]
   P5 --> P8
   P7 --> P8
+```
 
-  subgraph Phase0
-    T01["0-1 workspaces"] --> T02["0-2 shared init"]
-    T01 --> T03["0-3 backend init"]
-    T01 --> T04["0-4 frontend init"]
-    T03 --> T05["0-5 Supabase接続"]
-    T02 --> T06["0-6 CI/Lint/Mail選定"]
-  end
+### Phase 内 Task の依存グラフ
 
-  subgraph Phase1
-    T11["1-1 DDL"] --> T12["1-2 Zodスキーマ"]
-    T12 --> T13["1-3 YAML定義パーサ"]
-  end
+#### Phase 0: モノレポ基盤構築
 
-  subgraph Phase2
-    T21["2-1 大会管理API"] --> T22["2-2 フォーム定義API"]
-    T22 --> T23["2-3 Sheets→YAML変換"]
-    T22 --> T24["2-4 管理画面"]
-  end
+```mermaid
+graph TD
+  T01["0-1 workspaces"] --> T02["0-2 shared init"]
+  T01 --> T03["0-3 backend init"]
+  T01 --> T04["0-4 frontend init"]
+  T03 --> T05["0-5 Supabase接続"]
+  T02 --> T06["0-6 CI/Lint/Mail選定"]
+```
 
-  subgraph Phase3
-    T31["3-1 動的フォーム"] --> T33["3-3 エントリー登録API"]
-    T32["3-2 レギュレーションUI"] --> T33
-    T33 --> T34["3-4 メール確認"]
-    T33 --> T35["3-5 定員/キャンセル待ち"]
-    T33 --> T36["3-6 期間外アクセス制御"]
-  end
+#### Phase 1: データモデル設計
 
-  subgraph Phase5
-    T51["5-1 ログイン"] --> T52["5-2 マイページTop"]
-    T52 --> T53["5-3 編集"]
-    T52 --> T54["5-4 キャンセル/再エントリー"]
-    T51 --> T55["5-5 パスワード再設定"]
-  end
+```mermaid
+graph TD
+  T11["1-1 DDL"] --> T12["1-2 Zodスキーマ"]
+  T12 --> T13["1-3 YAML定義パーサ"]
+```
 
-  subgraph Phase6
-    T61["6-1 スタッフ認証"] --> T62["6-2 一覧/詳細"]
-    T62 --> T63["6-3 メール送信"]
-    T62 --> T64["6-4 CSV出力"]
-  end
+#### Phase 2: 大会・フォーム定義管理
+
+```mermaid
+graph TD
+  T21["2-1 大会管理API"] --> T22["2-2 フォーム定義API"]
+  T22 --> T23["2-3 Sheets→YAML変換"]
+  T22 --> T24["2-4 管理画面"]
+```
+
+#### Phase 3: エントリーフォーム機能
+
+```mermaid
+graph TD
+  T31["3-1 動的フォーム"] --> T33["3-3 エントリー登録API"]
+  T32["3-2 レギュレーションUI"] --> T33
+  T33 --> T34["3-4 メール確認"]
+  T33 --> T35["3-5 定員/キャンセル待ち"]
+  T33 --> T36["3-6 期間外アクセス制御"]
+```
+
+#### Phase 5: マイページ
+
+```mermaid
+graph TD
+  T51["5-1 ログイン"] --> T52["5-2 マイページTop"]
+  T52 --> T53["5-3 編集"]
+  T52 --> T54["5-4 キャンセル/再エントリー"]
+  T51 --> T55["5-5 パスワード再設定"]
+```
+
+#### Phase 6: 地域スタッフ管理ページ
+
+```mermaid
+graph TD
+  T61["6-1 スタッフ認証"] --> T62["6-2 一覧/詳細"]
+  T62 --> T63["6-3 メール送信"]
+  T62 --> T64["6-4 CSV出力"]
 ```
 
 ## Phase 0: モノレポ基盤構築
