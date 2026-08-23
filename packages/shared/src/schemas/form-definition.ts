@@ -11,10 +11,16 @@ export const FormFieldDefYamlSchema = z.object({
   options: z.array(z.string()).optional(),
 });
 
-export const FormDefinitionYamlSchema = z.object({
-  tournamentSlug: z.string(),
-  fields: z.array(FormFieldDefYamlSchema),
-});
+export const FormDefinitionYamlSchema = z
+  .object({
+    tournamentSlug: z.string(),
+    fields: z.array(FormFieldDefYamlSchema),
+  })
+  .refine(
+    data =>
+      new Set(data.fields.map(field => field.key)).size === data.fields.length,
+    {message: 'フィールドキーが重複しています', path: ['fields']},
+  );
 export type FormDefinitionYaml = z.infer<typeof FormDefinitionYamlSchema>;
 
 export function parseFormDefinitionYaml(yamlText: string): FormDefinitionYaml {

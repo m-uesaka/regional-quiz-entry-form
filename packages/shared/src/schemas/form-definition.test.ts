@@ -37,6 +37,21 @@ fields:
 
     expect(() => parseFormDefinitionYaml(yamlText)).toThrow(ZodError);
   });
+
+  it('rejects duplicate field keys', () => {
+    const yamlText = `
+tournamentSlug: kanto-saikyoi
+fields:
+  - key: comment
+    label: コメント1
+    type: textarea
+  - key: comment
+    label: コメント2
+    type: textarea
+`;
+
+    expect(() => parseFormDefinitionYaml(yamlText)).toThrow(ZodError);
+  });
 });
 
 describe('toFormFieldDefRows', () => {
