@@ -4,6 +4,11 @@ export interface Bindings {
   SUPABASE_URL: string;
   SUPABASE_SERVICE_ROLE_KEY: string;
   MAIL_API_KEY: string;
+  // Non-secret: the "From" address entry/waitlist mail is sent as.
+  MAIL_FROM_ADDRESS: string;
+  // Non-secret: the frontend origin used to build links in outgoing mail
+  // (e.g. the entry verification link).
+  FRONTEND_URL: string;
   SESSION_SECRET: string;
 }
 

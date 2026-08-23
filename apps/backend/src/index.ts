@@ -2,6 +2,8 @@ import {Hono} from 'hono';
 import type {Env} from './types/env';
 import {staffAuthRoute} from './routes/staff-auth';
 import {tournamentsRoute} from './routes/tournaments';
+import {entriesRoute} from './routes/entries';
+import {entryVerificationRoute} from './routes/entry-verification';
 
 const app = new Hono<Env>().basePath('/api');
 
@@ -9,7 +11,9 @@ const app = new Hono<Env>().basePath('/api');
 const routes = app
   .get('/healthz', c => c.json({ok: true}))
   .route('/auth/staff', staffAuthRoute)
-  .route('/tournaments', tournamentsRoute);
+  .route('/tournaments', tournamentsRoute)
+  .route('/tournaments', entriesRoute)
+  .route('/entries', entryVerificationRoute);
 
 export type AppType = typeof routes;
 export default app;

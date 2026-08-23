@@ -101,9 +101,14 @@ compatibility_date = "2026-08-01"
 
 [vars]
 # 非機密の設定値のみここに記載し、機密情報は `wrangler secret put` で登録する
+MAIL_FROM_ADDRESS = "entry@entry.regionalquiz.example"
+FRONTEND_URL = "https://entry.regionalquiz.example"
 
 [env.staging]
 name = "regional-quiz-backend-staging"
+# staging はフロントエンドのオリジンが異なるため vars を上書きする
+# [env.staging.vars]
+# FRONTEND_URL = "https://staging.entry.regionalquiz.example"
 
 [env.production]
 name = "regional-quiz-backend"
