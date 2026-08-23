@@ -2,7 +2,7 @@ import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
 import {TournamentSchema, type Tournament} from '@regional-quiz/shared';
-import type {Env} from '../types/env';
+import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
 import {createDbClient} from '../lib/db';
 
@@ -63,7 +63,7 @@ function toTournamentRow(
   return row;
 }
 
-export const tournamentsRoute = new Hono<Env>()
+export const tournamentsRoute = new Hono<StaffEnv>()
   .use('*', requireGeneralStaff())
   .get('/', async c => {
     const db = createDbClient(c.env);

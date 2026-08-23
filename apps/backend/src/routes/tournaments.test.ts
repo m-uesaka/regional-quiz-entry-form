@@ -41,7 +41,7 @@ const env: Bindings = {
 async function generalStaffCookie(): Promise<string> {
   const token = await sign(
     {
-      sub: 'staff-1',
+      sub: '99999999-9999-9999-9999-999999999999',
       role: 'general',
       regionId: null,
       tournamentType: null,
@@ -55,7 +55,7 @@ async function generalStaffCookie(): Promise<string> {
 async function regionalStaffCookie(regionId: string): Promise<string> {
   const token = await sign(
     {
-      sub: 'staff-2',
+      sub: '88888888-8888-8888-8888-888888888888',
       role: 'regional',
       regionId,
       tournamentType: 'saikyoi',
