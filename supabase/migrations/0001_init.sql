@@ -88,7 +88,7 @@ create trigger entries_set_updated_at
 create table email_verification_tokens (
   id uuid primary key default gen_random_uuid(),
   entry_id uuid not null references entries (id),
-  token text not null unique,
+  token_hash text not null unique,
   expires_at timestamptz not null,
   used_at timestamptz
 );
