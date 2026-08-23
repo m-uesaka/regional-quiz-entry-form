@@ -23,6 +23,16 @@ async function readStaffClaims(
   if (!token) return null;
   try {
     const payload = await verify(token, secret, 'HS256');
+    // hono/jwt's `verify()` only checks expiration when an `exp` claim is
+    // present, so a correctly signed token without one would otherwise be
+    // treated as a valid session indefinitely.
+    if (
+      typeof payload !== 'object' ||
+      payload === null ||
+      typeof (payload as Record<string, unknown>).exp !== 'number'
+    ) {
+      return null;
+    }
     return StaffClaimsSchema.parse(payload);
   } catch {
     // Covers both an invalid/expired signature (thrown by `verify`) and

@@ -163,4 +163,20 @@ describe('requireGeneralStaff', () => {
 
     expect(res.status).toBe(200);
   });
+
+  it('rejects a validly signed token with no exp claim', async () => {
+    const token = await sign(
+      {
+        sub: STAFF_ID,
+        role: 'general',
+        regionId: null,
+        tournamentType: null,
+      },
+      SESSION_SECRET,
+    );
+
+    const res = await app.request('/x', {headers: cookieHeader(token)}, ENV);
+
+    expect(res.status).toBe(401);
+  });
 });
