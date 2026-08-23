@@ -20,23 +20,25 @@ npx sv@0.17.0 create --template minimal --types ts --add vitest="usages:unit" sv
 
 ## Developing
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+This package is part of a Bun workspace monorepo. Install dependencies and run scripts from the
+repository root with Bun, not `npm`/`pnpm`/`yarn` from within this directory — running a different
+package manager here would create a second lockfile and bypass the root workspace scripts.
 
 ```sh
-npm run dev
+bun install
 
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
+# start the frontend dev server (from the repo root)
+bun run dev:frontend
 ```
 
 ## Building
 
-To create a production version of your app:
+To create a production version of your app (from the repo root):
 
 ```sh
-npm run build
+bun --filter ./apps/frontend build
 ```
 
-You can preview the production build with `npm run preview`.
+You can preview the production build with `bun --filter ./apps/frontend preview`.
 
 > To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
