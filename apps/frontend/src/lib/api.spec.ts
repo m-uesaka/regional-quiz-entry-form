@@ -11,8 +11,8 @@ describe('createApiClient', () => {
       });
     }) as typeof fetch;
 
-    const api = createApiClient(fakeFetch);
-    const res = await api.healthz.$get();
+    const client = createApiClient(fakeFetch);
+    const res = await client.api.healthz.$get();
 
     expect(await res.json()).toEqual({ok: true});
     expect(fetchCalls).toEqual(['/api/healthz']);

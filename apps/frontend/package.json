@@ -16,6 +16,7 @@
 		"gen": "wrangler types"
 	},
 	"dependencies": {
+		"@regional-quiz/backend": "workspace:*",
 		"hono": "^4.6.0"
 	},
 	"devDependencies": {

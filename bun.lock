@@ -28,6 +28,7 @@
       "name": "@regional-quiz/frontend",
       "version": "0.0.0",
       "dependencies": {
+        "@regional-quiz/backend": "workspace:*",
         "hono": "^4.6.0",
       },
       "devDependencies": {
