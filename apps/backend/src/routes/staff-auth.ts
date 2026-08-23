@@ -14,6 +14,10 @@ import {verifyPassword} from '../lib/password';
 import {STAFF_SESSION_COOKIE} from '../middleware/staff-auth';
 
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
+// A well-formed but unusable hash, run through `verifyPassword` when no
+// account matches so that a missing email costs the same PBKDF2 work as a
+// wrong password and can't be timed to enumerate staff emails.
+const DUMMY_PASSWORD_HASH = `${'00'.repeat(16)}:${'00'.repeat(32)}`;
 
 interface StaffAccountRow {
   id: string;
@@ -29,14 +33,22 @@ export const staffAuthRoute = new Hono<Env>().post(
   async c => {
     const {email, password} = c.req.valid('json');
     const db = createDbClient(c.env);
-    const {data: staff} = await db
+    const {data: staff, error} = await db
       .from('staff_accounts')
       .select('id, password_hash, role, region_id, tournament_type')
       .eq('email', email)
       .returns<StaffAccountRow[]>()
       .maybeSingle();
 
-    if (!staff || !(await verifyPassword(password, staff.password_hash))) {
+    if (error) {
+      return c.json({error: 'internal server error'}, 500);
+    }
+
+    const passwordValid = await verifyPassword(
+      password,
+      staff?.password_hash ?? DUMMY_PASSWORD_HASH,
+    );
+    if (!staff || !passwordValid) {
       return c.json({error: 'invalid credentials'}, 401);
     }
 
