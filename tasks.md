@@ -28,17 +28,17 @@
   * Task 1-2: `packages/shared` の Zod スキーマ定義 ✅
   * Task 1-3: フォーム項目定義 YAML のスキーマとパーサ ✅
 * Phase 2: 大会・フォーム定義管理(統括スタッフ)
-  * Task 2-1: 大会(tournament)管理 API 🔜次に着手可能
-  * Task 2-2: フォーム定義・レギュレーション登録 API
+  * Task 2-1: 大会(tournament)管理 API ✅
+  * Task 2-2: フォーム定義・レギュレーション登録 API ✅
   * Task 2-3: Google スプレッドシート → YAML 変換ツール
   * Task 2-4: 大会作成・フォーム定義管理画面
 * Phase 3: エントリーフォーム機能(参加者向け)
-  * Task 3-1: フォーム動的レンダリング
-  * Task 3-2: レギュレーション確認 UI と優先期間ロジック
-  * Task 3-3: エントリー登録 API
-  * Task 3-4: メールアドレス確認フロー
-  * Task 3-5: 定員管理とキャンセル待ちロジック
-  * Task 3-6: エントリー期間外アクセス制御
+  * Task 3-1: フォーム動的レンダリング ✅
+  * Task 3-2: レギュレーション確認 UI と優先期間ロジック ✅
+  * Task 3-3: エントリー登録 API ✅
+  * Task 3-4: メールアドレス確認フロー ✅
+  * Task 3-5: 定員管理とキャンセル待ちロジック ✅
+  * Task 3-6: エントリー期間外アクセス制御 🔜次に着手可能
 * Phase 4: エントリーリスト公開機能
   * Task 4-1: 公開エントリーリスト API
   * Task 4-2: 公開エントリーリストページ
@@ -49,7 +49,7 @@
   * Task 5-4: エントリーキャンセルと再エントリー
   * Task 5-5: パスワード再設定機能
 * Phase 6: 地域スタッフ向け管理ページ
-  * Task 6-1: スタッフ認証・権限管理
+  * Task 6-1: スタッフ認証・権限管理 ✅
   * Task 6-2: エントリー状況一覧・詳細確認
   * Task 6-3: 参加者へのメール送信機能
   * Task 6-4: CSV 出力機能
@@ -114,10 +114,11 @@ graph TD
 
 ```mermaid
 graph TD
-  T21["2-1 大会管理API"]:::next --> T22["2-2 フォーム定義API"]
-  T22 --> T23["2-3 Sheets→YAML変換"]
-  T22 --> T24["2-4 管理画面"]
+  T21["2-1 大会管理API"]:::done --> T22["2-2 フォーム定義API"]:::done
+  T22 --> T23["2-3 Sheets→YAML変換"]:::next
+  T22 --> T24["2-4 管理画面"]:::next
 
+  classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
   classDef next fill:#fef3c7,stroke:#d97706,color:#78350f;
 ```
 
@@ -127,11 +128,14 @@ graph TD
 
 ```mermaid
 graph TD
-  T31["3-1 動的フォーム"] --> T33["3-3 エントリー登録API"]
-  T32["3-2 レギュレーションUI"] --> T33
-  T33 --> T34["3-4 メール確認"]
-  T33 --> T35["3-5 定員/キャンセル待ち"]
-  T33 --> T36["3-6 期間外アクセス制御"]
+  T31["3-1 動的フォーム"]:::done --> T33["3-3 エントリー登録API"]:::done
+  T32["3-2 レギュレーションUI"]:::done --> T33
+  T33 --> T34["3-4 メール確認"]:::done
+  T33 --> T35["3-5 定員/キャンセル待ち"]:::done
+  T33 --> T36["3-6 期間外アクセス制御"]:::next
+
+  classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
+  classDef next fill:#fef3c7,stroke:#d97706,color:#78350f;
 ```
 
 #### Phase 5: マイページ
@@ -148,9 +152,12 @@ graph TD
 
 ```mermaid
 graph TD
-  T61["6-1 スタッフ認証"] --> T62["6-2 一覧/詳細"]
+  T61["6-1 スタッフ認証"]:::done --> T62["6-2 一覧/詳細"]:::next
   T62 --> T63["6-3 メール送信"]
   T62 --> T64["6-4 CSV出力"]
+
+  classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
+  classDef next fill:#fef3c7,stroke:#d97706,color:#78350f;
 ```
 
 ## タスク詳細
@@ -174,19 +181,19 @@ graph TD
 
 ### Phase 2: 大会・フォーム定義管理(統括スタッフ)
 
-* [Task 2-1: 大会(tournament)管理 API 🔜次に着手可能](tasks/task-2-1.md)
-* [Task 2-2: フォーム定義・レギュレーション登録 API](tasks/task-2-2.md)
+* [Task 2-1: 大会(tournament)管理 API ✅](tasks/task-2-1.md)
+* [Task 2-2: フォーム定義・レギュレーション登録 API ✅](tasks/task-2-2.md)
 * [Task 2-3: Google スプレッドシート → YAML 変換ツール](tasks/task-2-3.md)
 * [Task 2-4: 大会作成・フォーム定義管理画面](tasks/task-2-4.md)
 
 ### Phase 3: エントリーフォーム機能(参加者向け)
 
-* [Task 3-1: フォーム動的レンダリング](tasks/task-3-1.md)
-* [Task 3-2: レギュレーション確認 UI と優先期間ロジック](tasks/task-3-2.md)
-* [Task 3-3: エントリー登録 API](tasks/task-3-3.md)
-* [Task 3-4: メールアドレス確認フロー](tasks/task-3-4.md)
-* [Task 3-5: 定員管理とキャンセル待ちロジック](tasks/task-3-5.md)
-* [Task 3-6: エントリー期間外アクセス制御](tasks/task-3-6.md)
+* [Task 3-1: フォーム動的レンダリング ✅](tasks/task-3-1.md)
+* [Task 3-2: レギュレーション確認 UI と優先期間ロジック ✅](tasks/task-3-2.md)
+* [Task 3-3: エントリー登録 API ✅](tasks/task-3-3.md)
+* [Task 3-4: メールアドレス確認フロー ✅](tasks/task-3-4.md)
+* [Task 3-5: 定員管理とキャンセル待ちロジック ✅](tasks/task-3-5.md)
+* [Task 3-6: エントリー期間外アクセス制御 🔜次に着手可能](tasks/task-3-6.md)
 
 ### Phase 4: エントリーリスト公開機能
 
@@ -203,7 +210,7 @@ graph TD
 
 ### Phase 6: 地域スタッフ向け管理ページ
 
-* [Task 6-1: スタッフ認証・権限管理](tasks/task-6-1.md)
+* [Task 6-1: スタッフ認証・権限管理 ✅](tasks/task-6-1.md)
 * [Task 6-2: エントリー状況一覧・詳細確認](tasks/task-6-2.md)
 * [Task 6-3: 参加者へのメール送信機能](tasks/task-6-3.md)
 * [Task 6-4: CSV 出力機能](tasks/task-6-4.md)

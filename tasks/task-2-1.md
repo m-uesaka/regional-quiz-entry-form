@@ -1,6 +1,6 @@
 [← tasks.md](../tasks.md) / Phase 2: 大会・フォーム定義管理(統括スタッフ)
 
-### Task 2-1: 大会(tournament)管理 API 🔜次に着手可能
+### Task 2-1: 大会(tournament)管理 API ✅
 
 #### 実装・更新内容
 
