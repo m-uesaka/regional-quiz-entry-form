@@ -3,13 +3,28 @@ import {z} from 'zod';
 
 export const FormFieldTypeSchema = z.enum(['checkbox', 'radio', 'textarea']);
 
-export const FormFieldDefYamlSchema = z.object({
+const BaseFormFieldDefYamlSchema = z.object({
   key: z.string().regex(/^[a-z][a-z0-9_]*$/),
   label: z.string(),
-  type: FormFieldTypeSchema,
   required: z.boolean().default(false),
-  options: z.array(z.string()).optional(),
 });
+
+export const FormFieldDefYamlSchema = z.discriminatedUnion('type', [
+  // A plain boolean checkbox (e.g. "agree to the rules") has no options.
+  BaseFormFieldDefYamlSchema.extend({
+    type: z.literal('checkbox'),
+    options: z.array(z.string()).optional(),
+  }),
+  // A radio group needs at least one option to be selectable.
+  BaseFormFieldDefYamlSchema.extend({
+    type: z.literal('radio'),
+    options: z.array(z.string()).min(1),
+  }),
+  BaseFormFieldDefYamlSchema.extend({
+    type: z.literal('textarea'),
+    options: z.array(z.string()).optional(),
+  }),
+]);
 
 export const FormDefinitionYamlSchema = z
   .object({

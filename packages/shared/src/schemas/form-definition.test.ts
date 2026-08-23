@@ -38,6 +38,18 @@ fields:
     expect(() => parseFormDefinitionYaml(yamlText)).toThrow(ZodError);
   });
 
+  it('rejects a radio field with no options', () => {
+    const yamlText = `
+tournamentSlug: kanto-saikyoi
+fields:
+  - key: seat_preference
+    label: 座席の希望
+    type: radio
+`;
+
+    expect(() => parseFormDefinitionYaml(yamlText)).toThrow(ZodError);
+  });
+
   it('rejects duplicate field keys', () => {
     const yamlText = `
 tournamentSlug: kanto-saikyoi
