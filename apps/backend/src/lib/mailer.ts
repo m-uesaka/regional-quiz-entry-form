@@ -17,7 +17,10 @@ export interface MailSender {
  * `MailSender` interface above, not on Resend specifically.
  */
 export class ResendMailSender implements MailSender {
-  constructor(private readonly apiKey: string) {}
+  constructor(
+    private readonly apiKey: string,
+    private readonly fromAddress: string,
+  ) {}
 
   async send(input: SendMailInput): Promise<void> {
     const res = await fetch('https://api.resend.com/emails', {
@@ -26,7 +29,7 @@ export class ResendMailSender implements MailSender {
         Authorization: `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({from: 'entry@regionalquiz.example', ...input}),
+      body: JSON.stringify({from: this.fromAddress, ...input}),
     });
     if (!res.ok) {
       throw new Error(`Failed to send mail: ${res.status}`);

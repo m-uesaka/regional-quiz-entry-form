@@ -14,7 +14,7 @@ describe('ResendMailSender', () => {
         new Response(null, {status: 422}),
       )) as unknown as typeof fetch;
 
-    const sender = new ResendMailSender('test-api-key');
+    const sender = new ResendMailSender('test-api-key', 'entry@example.com');
 
     await expect(
       sender.send({to: 'user@example.com', subject: 'Hi', html: '<p>Hi</p>'}),
