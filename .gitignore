@@ -4,7 +4,11 @@
 .claude/skills/*
 !.claude/skills/google-ts-style/
 !.claude/skills/typescript/
-.agents/
+!.claude/skills/create-tasks
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/create-tasks/
 
 # Created by https://www.toptal.com/developers/gitignore/api/react
 # Edit at https://www.toptal.com/developers/gitignore?templates=react

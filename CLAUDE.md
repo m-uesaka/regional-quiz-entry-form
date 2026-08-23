@@ -28,4 +28,5 @@ TypeScript + Hono のバックエンドと SvelteKit のフロントエンドか
 - `.claude/agents/fullstack-reviewer.md` — バックエンド/フロントエンド間の型契約・セキュリティ観点・Google TS スタイル準拠も含むレビュー用サブエージェント
 - `.claude/skills/google-ts-style/SKILL.md` — 手動で作成した、このプロジェクトの TypeScript コーディング規約(Google スタイルガイド)。`skills-lock.json` には登録されていない(CLI 管理外)ため `.gitignore` で個別に追跡対象化している
 - `.claude/skills/typescript/SKILL.md` — 元は `dalestudy/skills@typescript`(韓国語)。全文英訳した上で `skills-lock.json` から外し、`.gitignore` で個別に追跡対象化している。`npx skills update` 等で再インストールすると韓国語に戻るので注意
+- `.claude/skills/create-tasks/SKILL.md`(実体: `.agents/skills/create-tasks/`) — 要件ファイルからタスクリスト(`tasks.md`)を生成するスキル。`disable-model-invocation: true` のため自動では発火せず、明示的に呼び出す。CLI管理外のため `.gitignore` で個別に追跡対象化している
 - 導入済みスキル(`skills-lock.json` 参照): `bun`, `hono`, `svelte-code-writer`, `svelte-core-bestpractices`。`.svelte` / `.svelte.ts` を編集する際は `svelte-code-writer` / `svelte-core-bestpractices` が自動的に参照される

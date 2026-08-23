@@ -26,8 +26,9 @@ Claude Code がファイルの種類やタスク内容に応じて自動的に�
 | [`svelte-core-bestpractices`](./.claude/skills/svelte-core-bestpractices/SKILL.md) | Svelte 5 のリアクティビティ・イベント処理・スタイリング等のベストプラクティス | CLI管理 (`skills-lock.json`, 由来: 公式 `sveltejs/ai-tools`) |
 | [`typescript`](./.claude/skills/typescript/SKILL.md) | TypeScript の型定義・ベストプラクティス(型推論、型ガード、tsconfig、ユーティリティ型 等) | 手動管理。元は `dalestudy/skills@typescript`(韓国語)だが全文英訳し、`skills-lock.json` から外して個別に追跡している |
 | [`google-ts-style`](./.claude/skills/google-ts-style/SKILL.md) | このプロジェクトの TypeScript コーディング規約。[Google TypeScript Style Guide](https://google.github.io/styleguide/tsguide.html) の MUST/SHOULD ルールを要約 | 手動作成。`skills-lock.json` 管理外 |
+| [`create-tasks`](./.claude/skills/create-tasks/SKILL.md) | 要件ファイルと現在のコード構成から、リポジトリ直下に `tasks.md`(`docs/task-format.md` の書式)を生成する。`disable-model-invocation: true` のため自動発火せず、明示的に呼び出したときのみ使用される | 手動配置(`.agents/skills/create-tasks/`)。`skills-lock.json` 管理外 |
 
-`.claude/skills/*` は基本的に `.gitignore` で無視されますが、上記の手動管理スキル(`typescript`, `google-ts-style`)は個別に `.gitignore` で追跡対象化しているため、他の CLI 管理スキルと違って `npx skills update` では上書きされません。
+`.claude/skills/*` は基本的に `.gitignore` で無視されますが、上記の手動管理スキル(`typescript`, `google-ts-style`, `create-tasks`)は個別に `.gitignore` で追跡対象化しているため、他の CLI 管理スキルと違って `npx skills update` では上書きされません。
 
 ## スキル / エージェントの追加・更新
 
