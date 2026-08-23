@@ -31,18 +31,98 @@ async function isDbReachable(): Promise<boolean> {
   }
 }
 
+const env: Bindings = {
+  SUPABASE_URL,
+  SUPABASE_SERVICE_ROLE_KEY,
+  MAIL_API_KEY: 'dummy-mail-api-key',
+  SESSION_SECRET,
+};
+
+async function generalStaffCookie(): Promise<string> {
+  const token = await sign(
+    {
+      sub: 'staff-1',
+      role: 'general',
+      regionId: null,
+      tournamentType: null,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    },
+    SESSION_SECRET,
+  );
+  return `staff_session=${token}`;
+}
+
+async function regionalStaffCookie(regionId: string): Promise<string> {
+  const token = await sign(
+    {
+      sub: 'staff-2',
+      role: 'regional',
+      regionId,
+      tournamentType: 'saikyoi',
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    },
+    SESSION_SECRET,
+  );
+  return `staff_session=${token}`;
+}
+
+// These requests short-circuit in `requireGeneralStaff()` or `zValidator()`
+// before any database call, so they run unconditionally (including CI)
+// against a fixed region UUID rather than a Supabase-provisioned one.
+describe('tournaments routes (request validation)', () => {
+  const fixedRegionId = '00000000-0000-0000-0000-000000000000';
+
+  it('rejects regional staff with 403', async () => {
+    const cookie = await regionalStaffCookie(fixedRegionId);
+
+    const res = await app.request(
+      '/api/tournaments',
+      {
+        method: 'POST',
+        headers: {cookie, 'content-type': 'application/json'},
+        body: JSON.stringify({
+          regionId: fixedRegionId,
+          type: 'saikyoi',
+          name: 'テスト大会',
+          capacity: null,
+          entryOpensAt: '2026-01-01T00:00:00+09:00',
+          entryClosesAt: '2026-01-31T00:00:00+09:00',
+        }),
+      },
+      env,
+    );
+
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects a body missing entryOpensAt with 400', async () => {
+    const cookie = await generalStaffCookie();
+
+    const res = await app.request(
+      '/api/tournaments',
+      {
+        method: 'POST',
+        headers: {cookie, 'content-type': 'application/json'},
+        body: JSON.stringify({
+          regionId: fixedRegionId,
+          type: 'saikyoi',
+          name: 'テスト大会',
+          capacity: null,
+          entryClosesAt: '2026-01-31T00:00:00+09:00',
+        }),
+      },
+      env,
+    );
+
+    expect(res.status).toBe(400);
+  });
+});
+
 describe.skipIf(!(await isDbReachable()))(
   'tournaments routes (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);
     const testRegionSlug = 'tournaments-route-test-region';
-
-    const env: Bindings = {
-      SUPABASE_URL,
-      SUPABASE_SERVICE_ROLE_KEY,
-      MAIL_API_KEY: 'dummy-mail-api-key',
-      SESSION_SECRET,
-    };
 
     afterAll(async () => {
       await sql`delete from tournaments where region_id in (
@@ -51,34 +131,6 @@ describe.skipIf(!(await isDbReachable()))(
       await sql`delete from regions where slug like ${testRegionSlug + '%'}`;
       await sql.close();
     });
-
-    async function generalStaffCookie(): Promise<string> {
-      const token = await sign(
-        {
-          sub: 'staff-1',
-          role: 'general',
-          regionId: null,
-          tournamentType: null,
-          exp: Math.floor(Date.now() / 1000) + 3600,
-        },
-        SESSION_SECRET,
-      );
-      return `staff_session=${token}`;
-    }
-
-    async function regionalStaffCookie(regionId: string): Promise<string> {
-      const token = await sign(
-        {
-          sub: 'staff-2',
-          role: 'regional',
-          regionId,
-          tournamentType: 'saikyoi',
-          exp: Math.floor(Date.now() / 1000) + 3600,
-        },
-        SESSION_SECRET,
-      );
-      return `staff_session=${token}`;
-    }
 
     async function createTestRegion(suffix: string): Promise<string> {
       const [region] = await sql`
@@ -116,53 +168,6 @@ describe.skipIf(!(await isDbReachable()))(
       expect(body.regionId).toBe(regionId);
       expect(body.name).toBe('テスト大会');
       expect(typeof body.id).toBe('string');
-    });
-
-    it('rejects regional staff with 403', async () => {
-      const regionId = await createTestRegion('regional-reject');
-      const cookie = await regionalStaffCookie(regionId);
-
-      const res = await app.request(
-        '/api/tournaments',
-        {
-          method: 'POST',
-          headers: {cookie, 'content-type': 'application/json'},
-          body: JSON.stringify({
-            regionId,
-            type: 'saikyoi',
-            name: 'テスト大会',
-            capacity: null,
-            entryOpensAt: '2026-01-01T00:00:00+09:00',
-            entryClosesAt: '2026-01-31T00:00:00+09:00',
-          }),
-        },
-        env,
-      );
-
-      expect(res.status).toBe(403);
-    });
-
-    it('rejects a body missing entryOpensAt with 400', async () => {
-      const regionId = await createTestRegion('invalid-body');
-      const cookie = await generalStaffCookie();
-
-      const res = await app.request(
-        '/api/tournaments',
-        {
-          method: 'POST',
-          headers: {cookie, 'content-type': 'application/json'},
-          body: JSON.stringify({
-            regionId,
-            type: 'saikyoi',
-            name: 'テスト大会',
-            capacity: null,
-            entryClosesAt: '2026-01-31T00:00:00+09:00',
-          }),
-        },
-        env,
-      );
-
-      expect(res.status).toBe(400);
     });
 
     it('lists tournaments for general staff', async () => {
