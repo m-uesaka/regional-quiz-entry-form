@@ -7,7 +7,10 @@ import {
 } from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
-import {syncFormFieldDefs} from '../lib/form-definitions';
+import {
+  syncFormFieldDefs,
+  TournamentNotFoundError,
+} from '../lib/form-definitions';
 
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 
@@ -33,8 +36,14 @@ export const formDefinitionsRoute = new Hono<StaffEnv>()
           parsed,
         );
       } catch (e: unknown) {
-        const message = e instanceof Error ? e.message : 'failed to sync';
-        return c.json({error: message}, 400);
+        if (e instanceof TournamentNotFoundError) {
+          return c.json({error: 'tournament not found'}, 404);
+        }
+        // Unexpected failures here (Supabase outage, unmapped insert
+        // errors, etc.) are server-side, not the client's fault, and
+        // shouldn't leak raw database error messages.
+        console.error('failed to sync form field defs', e);
+        return c.json({error: 'internal server error'}, 500);
       }
 
       return c.json({ok: true});

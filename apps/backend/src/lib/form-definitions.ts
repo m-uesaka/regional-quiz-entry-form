@@ -24,17 +24,35 @@ function toFormFieldDefTableRow(
 }
 
 /**
+ * The SQLSTATE the `sync_form_field_defs` Postgres function raises (see
+ * `supabase/migrations/0002_sync_form_field_defs_fn.sql`) when the given
+ * tournament doesn't exist.
+ */
+const TOURNAMENT_NOT_FOUND_SQLSTATE = 'P0002';
+
+/** Thrown by `syncFormFieldDefs()` when `tournamentId` doesn't exist. */
+export class TournamentNotFoundError extends Error {
+  constructor(tournamentId: string) {
+    super(`tournament not found: ${tournamentId}`);
+    this.name = 'TournamentNotFoundError';
+  }
+}
+
+/**
  * Replaces all `form_field_defs` rows for a tournament with the fields
  * parsed from a form definition YAML document.
  *
- * This deletes every existing row for the tournament and bulk-inserts the
- * new set, which has the same net effect as an update/insert/delete diff
- * (existing `field_key`s reappear via delete+reinsert, new ones are
- * inserted, and ones no longer present in the YAML are removed) since no
- * other table references `form_field_defs.id` by foreign key.
+ * This delegates to the `sync_form_field_defs` Postgres function, which
+ * deletes every existing row for the tournament and bulk-inserts the new
+ * set inside a single transaction (same net effect as an update/insert/
+ * delete diff, since no other table references `form_field_defs.id` by
+ * foreign key) and locks the tournament row for the duration, so concurrent
+ * uploads for the same tournament can't interleave and produce a merged
+ * field set.
  * @param env The Worker bindings containing the Supabase connection info.
  * @param tournamentId The tournament the fields belong to.
  * @param definition The parsed form definition YAML.
+ * @throws {TournamentNotFoundError} If `tournamentId` doesn't exist.
  */
 export async function syncFormFieldDefs(
   env: Bindings,
@@ -46,18 +64,14 @@ export async function syncFormFieldDefs(
     toFormFieldDefTableRow,
   );
 
-  const deleteResult = await db
-    .from('form_field_defs')
-    .delete()
-    .eq('tournament_id', tournamentId);
-  if (deleteResult.error) {
-    throw new Error(deleteResult.error.message);
-  }
-
-  if (rows.length > 0) {
-    const insertResult = await db.from('form_field_defs').insert(rows);
-    if (insertResult.error) {
-      throw new Error(insertResult.error.message);
+  const {error} = await db.rpc('sync_form_field_defs', {
+    p_tournament_id: tournamentId,
+    p_rows: rows,
+  });
+  if (error) {
+    if (error.code === TOURNAMENT_NOT_FOUND_SQLSTATE) {
+      throw new TournamentNotFoundError(tournamentId);
     }
+    throw new Error(error.message);
   }
 }
