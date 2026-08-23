@@ -1,0 +1,6 @@
+name = "regional-quiz-backend"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+
+[vars]
+# 非機密の設定値のみここに記載し、機密情報は `wrangler secret put` で登録する

@@ -1,0 +1,33 @@
+{
+	"name": "@regional-quiz/frontend",
+	"private": true,
+	"version": "0.0.0",
+	"type": "module",
+	"scripts": {
+		"dev": "vite dev",
+		"build": "wrangler types --check && vite build",
+		"preview": "wrangler pages dev .svelte-kit/cloudflare --port 4173",
+		"prepare": "svelte-kit sync || echo ''",
+		"typecheck": "wrangler types --check && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"typecheck:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"test": "vitest --run",
+		"lint": "gts lint",
+		"fix": "gts fix",
+		"gen": "wrangler types"
+	},
+	"dependencies": {
+		"@regional-quiz/backend": "workspace:*",
+		"hono": "^4.6.0"
+	},
+	"devDependencies": {
+		"@sveltejs/adapter-cloudflare": "^7.2.8",
+		"@sveltejs/kit": "^2.63.0",
+		"@sveltejs/vite-plugin-svelte": "^7.1.2",
+		"svelte": "^5.56.1",
+		"svelte-check": "^4.6.0",
+		"typescript": "^6.0.3",
+		"vite": "^8.0.16",
+		"vitest": "^4.1.8",
+		"wrangler": "^4.97.0"
+	}
+}

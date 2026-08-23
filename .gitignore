@@ -5,10 +5,12 @@
 !.claude/skills/google-ts-style/
 !.claude/skills/typescript/
 !.claude/skills/create-tasks
+!.claude/skills/resolve-pr-comments
 .agents/*
 !.agents/skills/
 .agents/skills/*
 !.agents/skills/create-tasks/
+!.agents/skills/resolve-pr-comments/
 
 # Created by https://www.toptal.com/developers/gitignore/api/react
 # Edit at https://www.toptal.com/developers/gitignore?templates=react

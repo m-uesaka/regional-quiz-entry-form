@@ -1,0 +1,21 @@
+{
+  "name": "regional-quiz-entry-form",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev:backend": "bun --filter ./apps/backend dev",
+    "dev:frontend": "bun --filter ./apps/frontend dev",
+    "build": "bun --filter '*' build",
+    "typecheck": "bun --filter '*' typecheck",
+    "test": "bun --filter '*' test",
+    "lint": "bun --filter '*' lint",
+    "db:migrate": "supabase db push --local",
+    "db:migrate:remote": "supabase db push",
+    "db:new": "supabase migration new"
+  },
+  "devDependencies": {
+    "supabase": "^2.115.0",
+    "gts": "^7.0.0",
+    "eslint": "^9.37.0"
+  }
+}
