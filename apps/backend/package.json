@@ -12,6 +12,7 @@
     "lint": "echo 'lint: not configured yet'"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.112.3",
     "hono": "^4.6.0"
   },
   "devDependencies": {

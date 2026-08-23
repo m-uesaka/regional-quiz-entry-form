@@ -8,6 +8,11 @@
     "build": "bun --filter '*' build",
     "typecheck": "bun --filter '*' typecheck",
     "test": "bun --filter '*' test",
-    "lint": "bun --filter '*' lint"
+    "lint": "bun --filter '*' lint",
+    "db:migrate": "supabase db push",
+    "db:new": "supabase migration new"
+  },
+  "devDependencies": {
+    "supabase": "^2.115.0"
   }
 }
