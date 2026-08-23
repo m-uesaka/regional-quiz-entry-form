@@ -251,5 +251,48 @@ describe.skipIf(!(await isDbReachable()))(
       expect(entryRow.status).toBe('pending_verification');
       expect(mailSendCount).toBe(1);
     });
+
+    it('rolls back the entry when the verification email fails to send, allowing a retry', async () => {
+      const fixture = await createFixture('mail-failure');
+      const input = validInput({regulationId: fixture.regulationId});
+      const previousFetch = globalThis.fetch;
+      globalThis.fetch = (async (
+        requestInput: RequestInfo | URL,
+        init?: RequestInit,
+      ) => {
+        const url =
+          typeof requestInput === 'string'
+            ? requestInput
+            : requestInput.toString();
+        if (url.startsWith('https://api.resend.com/')) {
+          return new Response(null, {status: 502});
+        }
+        return previousFetch(requestInput, init);
+      }) as typeof fetch;
+
+      try {
+        const failedResult = await createEntry(
+          env,
+          fixture.tournamentId,
+          input,
+        );
+
+        expect(failedResult.ok).toBe(false);
+        expect(!failedResult.ok && failedResult.status).toBe(500);
+        const rows = await sql`
+          select id from entries
+          where tournament_id = ${fixture.tournamentId}
+        `;
+        expect(rows.length).toBe(0);
+      } finally {
+        globalThis.fetch = previousFetch;
+      }
+
+      mailSendCount = 0;
+      const retryResult = await createEntry(env, fixture.tournamentId, input);
+
+      expect(retryResult.ok).toBe(true);
+      expect(mailSendCount).toBe(1);
+    });
   },
 );

@@ -10,7 +10,7 @@ import {hashPassword, verifyPassword} from './password';
 
 type CreateEntryResult =
   | {ok: true; entry: {id: string}}
-  | {ok: false; status: 400 | 401 | 403 | 409; error: string};
+  | {ok: false; status: 400 | 401 | 403 | 409 | 500; error: string};
 
 interface RegulationRow {
   id: string;
@@ -158,6 +158,26 @@ export async function createEntry(
     };
   }
 
-  await sendVerificationEmail(env, entry.id, input.email);
+  try {
+    await sendVerificationEmail(env, entry.id, input.email);
+  } catch (mailError) {
+    // Roll back the entry: leaving it in place would permanently block a
+    // retry on the unique (participant_id, tournament_id) constraint even
+    // though the participant never received a usable verification link. The
+    // verification token (if one was persisted before the mail send failed)
+    // must be removed first since it references the entry by foreign key.
+    await db
+      .from('email_verification_tokens')
+      .delete()
+      .eq('entry_id', entry.id);
+    await db.from('entries').delete().eq('id', entry.id);
+    const message =
+      mailError instanceof Error ? mailError.message : 'unknown error';
+    return {
+      ok: false,
+      status: 500,
+      error: `failed to send verification email: ${message}`,
+    };
+  }
   return {ok: true, entry: {id: entry.id}};
 }
