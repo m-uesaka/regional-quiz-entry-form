@@ -5,16 +5,12 @@ import {hashToken} from './token';
 type ConfirmResult =
   {ok: true; status: 'confirmed' | 'waitlisted'} | {ok: false; error: string};
 
-interface TokenRow {
-  id: string;
-  entry_id: string;
-  expires_at: string;
-  used_at: string | null;
-  entries: {
-    tournament_id: string;
-    tournaments: {capacity: number | null};
-  };
-}
+/**
+ * The SQLSTATE the `confirm_entry_by_token` Postgres function raises (see
+ * `supabase/migrations/0003_confirm_entry_by_token_fn.sql`) when the token
+ * is unknown, expired, or already used.
+ */
+const INVALID_TOKEN_SQLSTATE = 'P0003';
 
 /**
  * Confirms the `entries` row a verification token was issued for.
@@ -22,6 +18,12 @@ interface TokenRow {
  * The entry is set to `confirmed` if the tournament still has capacity, or
  * `waitlisted` (with the next `waitlist_position`) otherwise. The token is
  * marked used so it can't be replayed.
+ *
+ * This delegates to the `confirm_entry_by_token` Postgres function, which
+ * performs the token lookup, capacity check, and both updates inside one
+ * transaction while holding row locks on the token and the tournament, so
+ * concurrent confirmations for the same tournament or replays of the same
+ * token can't race each other (see the migration for details).
  * @param env The Worker bindings.
  * @param token The raw token from the verification link.
  */
@@ -31,62 +33,15 @@ export async function confirmEntryByToken(
 ): Promise<ConfirmResult> {
   const db = createDbClient(env);
 
-  const {data: tokenRow} = await db
-    .from('email_verification_tokens')
-    .select(
-      'id, entry_id, expires_at, used_at, ' +
-        'entries(tournament_id, tournaments(capacity))',
-    )
-    .eq('token_hash', await hashToken(token))
-    .returns<TokenRow[]>()
-    .maybeSingle();
-  if (
-    !tokenRow ||
-    tokenRow.used_at !== null ||
-    new Date(tokenRow.expires_at) < new Date()
-  ) {
-    return {ok: false, error: 'invalid or expired token'};
+  const {data, error} = await db.rpc('confirm_entry_by_token', {
+    p_token_hash: await hashToken(token),
+  });
+  if (error) {
+    if (error.code === INVALID_TOKEN_SQLSTATE) {
+      return {ok: false, error: 'invalid or expired token'};
+    }
+    return {ok: false, error: error.message};
   }
 
-  const {tournament_id: tournamentId} = tokenRow.entries;
-  const capacity = tokenRow.entries.tournaments.capacity;
-  const {count: confirmedCount} = await db
-    .from('entries')
-    .select('id', {count: 'exact', head: true})
-    .eq('tournament_id', tournamentId)
-    .eq('status', 'confirmed');
-
-  const status =
-    capacity !== null && (confirmedCount ?? 0) >= capacity
-      ? 'waitlisted'
-      : 'confirmed';
-
-  let waitlistPosition: number | null = null;
-  if (status === 'waitlisted') {
-    const {count: waitlistedCount} = await db
-      .from('entries')
-      .select('id', {count: 'exact', head: true})
-      .eq('tournament_id', tournamentId)
-      .eq('status', 'waitlisted');
-    waitlistPosition = (waitlistedCount ?? 0) + 1;
-  }
-
-  const {error: updateError} = await db
-    .from('entries')
-    .update({
-      status,
-      email_verified_at: new Date().toISOString(),
-      waitlist_position: waitlistPosition,
-    })
-    .eq('id', tokenRow.entry_id);
-  if (updateError) {
-    return {ok: false, error: updateError.message};
-  }
-
-  await db
-    .from('email_verification_tokens')
-    .update({used_at: new Date().toISOString()})
-    .eq('id', tokenRow.id);
-
-  return {ok: true, status};
+  return {ok: true, status: data as 'confirmed' | 'waitlisted'};
 }
