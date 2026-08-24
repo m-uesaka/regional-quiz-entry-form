@@ -22,7 +22,7 @@
       <th>掲載名</th>
       <th>メールアドレス</th>
       <th>ステータス</th>
-      <th></th>
+      <th>操作</th>
     </tr>
   </thead>
   <tbody>
