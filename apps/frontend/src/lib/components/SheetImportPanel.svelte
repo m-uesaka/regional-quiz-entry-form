@@ -60,19 +60,24 @@
     saveStatus = 'saving';
     saveError = null;
 
-    const res = await api.api['form-definitions'][':tournamentId'].$put({
-      param: {tournamentId},
-      json: {yaml: previewYaml},
-    });
-    const body = await res.json();
-    if ('ok' in body && body.ok) {
-      saveStatus = 'saved';
-    } else if ('error' in body && typeof body.error === 'string') {
+    try {
+      const res = await api.api['form-definitions'][':tournamentId'].$put({
+        param: {tournamentId},
+        json: {yaml: previewYaml},
+      });
+      const body = await res.json();
+      if ('ok' in body && body.ok) {
+        saveStatus = 'saved';
+      } else if ('error' in body && typeof body.error === 'string') {
+        saveStatus = 'error';
+        saveError = body.error;
+      } else {
+        saveStatus = 'error';
+        saveError = '保存に失敗しました';
+      }
+    } catch (e: unknown) {
       saveStatus = 'error';
-      saveError = body.error;
-    } else {
-      saveStatus = 'error';
-      saveError = '保存に失敗しました';
+      saveError = e instanceof Error ? e.message : '保存に失敗しました';
     }
   }
 </script>
