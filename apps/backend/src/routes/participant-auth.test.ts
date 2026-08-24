@@ -1,4 +1,5 @@
 import {afterEach, describe, expect, it} from 'bun:test';
+import {verify} from 'hono/jwt';
 import {participantAuthRoute} from './participant-auth';
 import {hashPassword} from '../lib/password';
 import type {Bindings} from '../types/env';
@@ -14,12 +15,6 @@ const ENV: Bindings = {
 };
 
 const PARTICIPANT_ID = '44444444-4444-4444-4444-444444444444';
-
-function decodeJwtPayload(token: string): Record<string, unknown> {
-  const payloadSegment = token.split('.')[1];
-  const base64 = payloadSegment.replace(/-/g, '+').replace(/_/g, '/');
-  return JSON.parse(atob(base64)) as Record<string, unknown>;
-}
 
 function mockParticipantFetch(row: Record<string, unknown> | null): void {
   globalThis.fetch = (() =>
@@ -64,7 +59,8 @@ describe('POST /login', () => {
     const token = setCookieHeader
       .split('participant_session=')[1]
       .split(';')[0];
-    expect(decodeJwtPayload(token)).toMatchObject({sub: PARTICIPANT_ID});
+    const verifiedPayload = await verify(token, ENV.SESSION_SECRET, 'HS256');
+    expect(verifiedPayload).toMatchObject({sub: PARTICIPANT_ID});
   });
 
   it('returns 401 for a wrong password', async () => {
