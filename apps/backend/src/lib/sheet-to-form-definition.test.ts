@@ -15,8 +15,20 @@ describe('fetchSheetRows', () => {
         new Response(
           JSON.stringify({
             values: [
-              ['規約に同意する', 'チェックボックス', '必須', ''],
-              ['好きな色', 'ラジオボタン', '任意', 'red, blue'],
+              [
+                'agree_to_rules',
+                '規約に同意する',
+                'チェックボックス',
+                '必須',
+                '',
+              ],
+              [
+                'favorite_color',
+                '好きな色',
+                'ラジオボタン',
+                '任意',
+                'red, blue',
+              ],
             ],
           }),
           {status: 200},
@@ -27,12 +39,14 @@ describe('fetchSheetRows', () => {
 
     expect(rows).toEqual([
       {
+        key: 'agree_to_rules',
         label: '規約に同意する',
         type: 'チェックボックス',
         required: '必須',
         options: '',
       },
       {
+        key: 'favorite_color',
         label: '好きな色',
         type: 'ラジオボタン',
         required: '任意',
@@ -54,15 +68,17 @@ describe('fetchSheetRows', () => {
 });
 
 describe('sheetRowsToYaml', () => {
-  it('converts rows into valid yaml, generating keys from row position', () => {
+  it('converts rows into valid yaml, using the staff-entered key column', () => {
     const yaml = sheetRowsToYaml('test-tournament', [
       {
+        key: 'agree_to_rules',
         label: '規約に同意する',
         type: 'チェックボックス',
         required: '必須',
         options: '',
       },
       {
+        key: 'favorite_color',
         label: '好きな色',
         type: 'ラジオボタン',
         required: '任意',
@@ -76,13 +92,13 @@ describe('sheetRowsToYaml', () => {
       tournamentSlug: 'test-tournament',
       fields: [
         {
-          key: 'field_1',
+          key: 'agree_to_rules',
           label: '規約に同意する',
           type: 'checkbox',
           required: true,
         },
         {
-          key: 'field_2',
+          key: 'favorite_color',
           label: '好きな色',
           type: 'radio',
           required: false,
@@ -95,6 +111,7 @@ describe('sheetRowsToYaml', () => {
   it('coerces a non-required value to false', () => {
     const yaml = sheetRowsToYaml('test-tournament', [
       {
+        key: 'agree_to_rules',
         label: '規約に同意する',
         type: 'チェックボックス',
         required: '任意',
@@ -111,6 +128,7 @@ describe('sheetRowsToYaml', () => {
     expect(() =>
       sheetRowsToYaml('test-tournament', [
         {
+          key: 'unknown_field',
           label: '不明な種別',
           type: 'text',
           required: '必須',
@@ -118,5 +136,19 @@ describe('sheetRowsToYaml', () => {
         },
       ]),
     ).toThrow('Unknown field type: text');
+  });
+
+  it('throws on an invalid key', () => {
+    expect(() =>
+      sheetRowsToYaml('test-tournament', [
+        {
+          key: 'Invalid Key',
+          label: '規約に同意する',
+          type: 'チェックボックス',
+          required: '必須',
+          options: '',
+        },
+      ]),
+    ).toThrow();
   });
 });
