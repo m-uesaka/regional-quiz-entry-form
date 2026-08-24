@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {TournamentTypeSchema} from './tournament';
 
 export const EntryInputSchema = z
   .object({
@@ -61,3 +62,20 @@ export const EntryListItemSchema = z.object({
   waitlistPosition: z.number().int().nullable(),
 });
 export type EntryListItem = z.infer<typeof EntryListItemSchema>;
+
+// `GET /mypage/entries` response item: the logged-in participant's own
+// entry, so (unlike `EntryListItemSchema`) every internal status including
+// `pending_verification` is exposed, and the parent tournament is embedded
+// since mypage lists entries across multiple tournaments at once.
+export const MypageEntrySchema = z.object({
+  id: z.string().uuid(),
+  tournamentId: z.string().uuid(),
+  status: EntryStatusSchema,
+  waitlistPosition: z.number().int().nullable(),
+  tournament: z.object({
+    name: z.string(),
+    type: TournamentTypeSchema,
+    regionId: z.string().uuid(),
+  }),
+});
+export type MypageEntry = z.infer<typeof MypageEntrySchema>;
