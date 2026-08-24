@@ -5,6 +5,7 @@ import {participantAuthRoute} from './routes/participant-auth';
 import {tournamentsRoute} from './routes/tournaments';
 import {entriesRoute} from './routes/entries';
 import {entryListRoute} from './routes/entry-list';
+import {staffEntriesRoute} from './routes/staff-entries';
 import {entryVerificationRoute} from './routes/entry-verification';
 import {formDefinitionsRoute} from './routes/form-definitions';
 import {sheetImportRoute} from './routes/sheet-import';
@@ -20,6 +21,7 @@ const routes = app
   .route('/tournaments', entryListRoute)
   .route('/tournaments', tournamentsRoute)
   .route('/tournaments', entriesRoute)
+  .route('/staff', staffEntriesRoute)
   .route('/entries', entryVerificationRoute)
   .route('/form-definitions', formDefinitionsRoute)
   .route('/sheet-import', sheetImportRoute)

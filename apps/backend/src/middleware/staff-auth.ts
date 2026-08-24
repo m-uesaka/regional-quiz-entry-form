@@ -58,6 +58,18 @@ export function requireGeneralStaff() {
   });
 }
 
+/** Whether `staff`'s region/tournament-type claims cover `tournament`. */
+function isInScope(
+  staff: StaffClaims,
+  tournament: TournamentScopeRow | null,
+): boolean {
+  return (
+    tournament !== null &&
+    staff.regionId === tournament.region_id &&
+    staff.tournamentType === tournament.type
+  );
+}
+
 export function requireStaffForTournament() {
   return createMiddleware<StaffEnv>(async (c, next) => {
     const staff = await readStaffClaims(
@@ -81,11 +93,50 @@ export function requireStaffForTournament() {
         return c.json({error: 'internal server error'}, 500);
       }
 
-      const inScope =
-        tournament !== null &&
-        staff.regionId === tournament.region_id &&
-        staff.tournamentType === tournament.type;
-      if (!inScope) {
+      if (!isInScope(staff, tournament)) {
+        return c.json({error: 'forbidden'}, 403);
+      }
+    }
+
+    c.set('staff', staff);
+    await next();
+  });
+}
+
+interface EntryScopeRow {
+  tournaments: TournamentScopeRow | null;
+}
+
+/**
+ * Same scope check as `requireStaffForTournament()`, but for routes keyed by
+ * an `:entryId` param instead of `:tournamentId` (e.g. the single-entry
+ * detail endpoint) — the tournament to check scope against is looked up via
+ * the entry's `tournament_id` foreign key.
+ */
+export function requireStaffForEntry() {
+  return createMiddleware<StaffEnv>(async (c, next) => {
+    const staff = await readStaffClaims(
+      getCookie(c, STAFF_SESSION_COOKIE),
+      c.env.SESSION_SECRET,
+    );
+    if (!staff) {
+      return c.json({error: 'unauthorized'}, 401);
+    }
+
+    if (staff.role !== 'general') {
+      const db = createDbClient(c.env);
+      const {data: entry, error} = await db
+        .from('entries')
+        .select('tournaments(region_id, type)')
+        .eq('id', c.req.param('entryId'))
+        .returns<EntryScopeRow[]>()
+        .maybeSingle();
+
+      if (error) {
+        return c.json({error: 'internal server error'}, 500);
+      }
+
+      if (!isInScope(staff, entry?.tournaments ?? null)) {
         return c.json({error: 'forbidden'}, 403);
       }
     }

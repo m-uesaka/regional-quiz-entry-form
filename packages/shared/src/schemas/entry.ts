@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {FormFieldDefSchema} from './form-definition';
 import {TournamentTypeSchema} from './tournament';
 
 export const EntryInputSchema = z
@@ -36,13 +37,33 @@ export const EntrySchema = z.object({
   name: z.string(),
   furigana: z.string(),
   displayName: z.string(),
+  email: z.string().email(),
   regulationId: z.string().uuid(),
+  regulationLabel: z.string(),
   freeText: z.string().nullable(),
-  customFieldValues: z.record(z.string(), z.unknown()),
+  // Same value union as `EntryInputSchema.customFieldValues` — every stored
+  // value originated from that input shape (checkbox/radio/textarea form
+  // fields), so `unknown` would be needlessly imprecise here.
+  customFieldValues: z.record(
+    z.string(),
+    z.union([z.string(), z.array(z.string())]),
+  ),
   status: EntryStatusSchema,
   waitlistPosition: z.number().int().nullable(),
 });
 export type Entry = z.infer<typeof EntrySchema>;
+
+// Staff entry-detail response: the entry plus the tournament's ordered
+// custom form field definitions, so the staff UI can render each
+// `customFieldValues` entry under its human-readable label (and, for a
+// boolean checkbox field with no options, a human-readable yes/no value)
+// instead of the raw storage key. Only the single-entry detail endpoint
+// returns this; the list endpoint doesn't render custom field answers, so
+// `EntrySchema` alone still covers it.
+export const StaffEntryDetailSchema = EntrySchema.extend({
+  formFieldDefs: z.array(FormFieldDefSchema),
+});
+export type StaffEntryDetail = z.infer<typeof StaffEntryDetailSchema>;
 
 // Statuses exposed by the public entry-list endpoint. `pending_verification`
 // entries are excluded from that query, so it is intentionally omitted here

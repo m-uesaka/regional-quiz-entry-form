@@ -3,6 +3,7 @@ import {Hono} from 'hono';
 import {sign} from 'hono/jwt';
 import {
   requireGeneralStaff,
+  requireStaffForEntry,
   requireStaffForTournament,
   STAFF_SESSION_COOKIE,
 } from './staff-auth';
@@ -176,6 +177,110 @@ describe('requireStaffForTournament', () => {
     const res = await app.request(
       '/tournaments/t1/x',
       {headers: cookieHeader(tampered)},
+      ENV,
+    );
+
+    expect(res.status).toBe(401);
+  });
+});
+
+function mockEntryTournamentFetch(
+  row: {region_id: string; type: string} | null,
+): void {
+  globalThis.fetch = (() =>
+    Promise.resolve(
+      Response.json(row ? [{tournaments: row}] : []),
+    )) as unknown as typeof fetch;
+}
+
+describe('requireStaffForEntry', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const app = new Hono<StaffEnv>().get(
+    '/entries/:entryId/x',
+    requireStaffForEntry(),
+    c => c.json({staff: c.get('staff')}),
+  );
+
+  it('allows regional staff for their own region and type', async () => {
+    mockEntryTournamentFetch({region_id: REGION_ID, type: 'saikyoi'});
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'regional',
+      regionId: REGION_ID,
+      tournamentType: 'saikyoi',
+    });
+
+    const res = await app.request(
+      '/entries/e1/x',
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(200);
+  });
+
+  it('rejects regional staff for a different region', async () => {
+    mockEntryTournamentFetch({region_id: OTHER_REGION_ID, type: 'saikyoi'});
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'regional',
+      regionId: REGION_ID,
+      tournamentType: 'saikyoi',
+    });
+
+    const res = await app.request(
+      '/entries/e1/x',
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects regional staff when the entry does not exist', async () => {
+    mockEntryTournamentFetch(null);
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'regional',
+      regionId: REGION_ID,
+      tournamentType: 'saikyoi',
+    });
+
+    const res = await app.request(
+      '/entries/e1/x',
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(403);
+  });
+
+  it('allows general staff for any entry', async () => {
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'general',
+      regionId: null,
+      tournamentType: null,
+    });
+
+    const res = await app.request(
+      '/entries/e1/x',
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(200);
+  });
+
+  it('returns 401 for a malformed token', async () => {
+    const res = await app.request(
+      '/entries/e1/x',
+      {headers: cookieHeader('not-a-real-token')},
       ENV,
     );
 
