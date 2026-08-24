@@ -119,6 +119,16 @@ describe('tournaments routes (request validation)', () => {
 
     expect(res.status).toBe(400);
   });
+
+  it('rejects an invalid tournamentSlug with 400', async () => {
+    const res = await app.request(
+      '/api/tournaments/some-region/not-a-type',
+      {},
+      env,
+    );
+
+    expect(res.status).toBe(400);
+  });
 });
 
 describe.skipIf(!(await isDbReachable()))(
@@ -239,6 +249,60 @@ describe.skipIf(!(await isDbReachable()))(
       expect(res.status).toBe(200);
       expect(body.name).toBe('更新後大会');
       expect(body.id).toBe(created.id);
+    });
+
+    async function createTestTournament(
+      regionId: string,
+      type: string,
+    ): Promise<void> {
+      await sql`
+        insert into tournaments
+          (region_id, type, name, capacity, entry_opens_at, entry_closes_at)
+        values (
+          ${regionId}, ${type}, 'テスト大会', null,
+          '2026-01-01T00:00:00+09:00', '2026-01-31T00:00:00+09:00'
+        )
+      `;
+    }
+
+    it('returns a tournament by region slug and type without staff auth', async () => {
+      const suffix = 'by-slug';
+      const regionId = await createTestRegion(suffix);
+      await createTestTournament(regionId, 'saikyoi');
+
+      const res = await app.request(
+        `/api/tournaments/${testRegionSlug}-${suffix}/saikyoi`,
+        {},
+        env,
+      );
+      const body = (await res.json()) as Record<string, unknown>;
+
+      expect(res.status).toBe(200);
+      expect(body.regionId).toBe(regionId);
+      expect(body.type).toBe('saikyoi');
+    });
+
+    it('returns 404 for an unknown region slug', async () => {
+      const res = await app.request(
+        `/api/tournaments/${testRegionSlug}-nonexistent/saikyoi`,
+        {},
+        env,
+      );
+
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 404 when the region has no tournament of that type', async () => {
+      const suffix = 'no-tournament';
+      await createTestRegion(suffix);
+
+      const res = await app.request(
+        `/api/tournaments/${testRegionSlug}-${suffix}/shinjinou`,
+        {},
+        env,
+      );
+
+      expect(res.status).toBe(404);
     });
   },
 );
