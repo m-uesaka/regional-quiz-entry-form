@@ -1,4 +1,4 @@
-import {afterAll, describe, expect, it} from 'bun:test';
+import {afterAll, afterEach, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
 import type {Bindings} from '../types/env';
 import {hashPassword} from '../lib/password';
@@ -51,6 +51,105 @@ describe('GET /tournaments/:tournamentId/entry-list (request validation)', () =>
     );
 
     expect(res.status).toBe(400);
+  });
+});
+
+// Mocks the single `fetch` call `@supabase/supabase-js` makes for
+// `.from('entries').select(...)` (same convention as
+// `routes/staff-auth.test.ts`'s `mockStaffAccountFetch`), so these run
+// unconditionally in CI without a local Supabase stack.
+function mockEntriesFetch(
+  rows: Array<{
+    display_name: string;
+    status: 'confirmed' | 'waitlisted' | 'cancelled';
+    waitlist_position: number | null;
+    [extraPersonalField: string]: unknown;
+  }>,
+): void {
+  globalThis.fetch = (() =>
+    Promise.resolve(Response.json(rows))) as unknown as typeof fetch;
+}
+
+// A request that reaches `entryListRoute`'s handler at all (rather than,
+// say, being intercepted by `tournamentsRoute`'s `/:regionSlug/:tournamentSlug`
+// — mounted after `entryListRoute` in `src/index.ts`, but registration order
+// isn't the only thing route precedence depends on) already demonstrates
+// route precedence: if `/:tournamentId/entry-list` lost precedence to
+// `/:regionSlug/:tournamentSlug`, `entry-list` would fail that route's
+// `tournamentSlug` enum validation and 400 before ever reaching the mocked
+// fetch below, instead of the 200 these tests assert.
+describe('GET /tournaments/:tournamentId/entry-list (mocked Supabase)', () => {
+  const originalFetch = globalThis.fetch;
+  const tournamentId = '12345678-1234-1234-1234-123456789012';
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('omits personal fields from the response', async () => {
+    mockEntriesFetch([
+      {
+        display_name: '太郎',
+        status: 'confirmed',
+        waitlist_position: null,
+        email: 'secret@example.com',
+        name: '山田太郎',
+        furigana: 'ヤマダタロウ',
+        free_text: '自由記述',
+      },
+    ]);
+
+    const res = await app.request(
+      `/api/tournaments/${tournamentId}/entry-list`,
+      {},
+      env,
+    );
+    const body = (await res.json()) as Array<Record<string, unknown>>;
+
+    expect(res.status).toBe(200);
+    expect(body).toHaveLength(1);
+    expect(body[0].displayName).toBe('太郎');
+    expect(body[0]).not.toHaveProperty('email');
+    expect(body[0]).not.toHaveProperty('name');
+    expect(body[0]).not.toHaveProperty('furigana');
+    expect(body[0]).not.toHaveProperty('freeText');
+  });
+
+  it('masks cancelled entries as "キャンセル"', async () => {
+    mockEntriesFetch([
+      {display_name: '太郎', status: 'cancelled', waitlist_position: null},
+    ]);
+
+    const res = await app.request(
+      `/api/tournaments/${tournamentId}/entry-list`,
+      {},
+      env,
+    );
+    const body = (await res.json()) as Array<Record<string, unknown>>;
+
+    expect(res.status).toBe(200);
+    expect(body).toHaveLength(1);
+    expect(body[0].displayName).toBe('キャンセル');
+    expect(body[0].status).toBe('cancelled');
+  });
+
+  it('returns waitlistPosition for waitlisted entries', async () => {
+    mockEntriesFetch([
+      {display_name: '次郎', status: 'waitlisted', waitlist_position: 3},
+    ]);
+
+    const res = await app.request(
+      `/api/tournaments/${tournamentId}/entry-list`,
+      {},
+      env,
+    );
+    const body = (await res.json()) as Array<Record<string, unknown>>;
+
+    expect(res.status).toBe(200);
+    expect(body).toHaveLength(1);
+    expect(body[0].displayName).toBe('次郎');
+    expect(body[0].status).toBe('waitlisted');
+    expect(body[0].waitlistPosition).toBe(3);
   });
 });
 
