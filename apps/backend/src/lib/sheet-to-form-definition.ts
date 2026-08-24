@@ -24,11 +24,31 @@ const TYPE_LABELS: Record<string, 'checkbox' | 'radio' | 'textarea'> = {
 };
 
 /**
+ * Thrown when the Google Sheets API request itself fails to produce sheet
+ * data — either the network request never completed, or Google returned
+ * a non-2xx response. Carries the HTTP status code when one is available
+ * (absent for a network-level failure), so callers can distinguish a
+ * caller-caused error (e.g. a bad spreadsheet ID or an inaccessible
+ * sheet, typically HTTP 400/403/404) from an upstream Google outage or
+ * rate limit (HTTP 429/5xx, or no response at all).
+ */
+export class SheetFetchError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number,
+  ) {
+    super(message);
+    this.name = 'SheetFetchError';
+  }
+}
+
+/**
  * Reads a region staff-filled spreadsheet's field-definition rows via the
  * Google Sheets API v4 `values.get` endpoint. Uses an API key rather than a
  * service account, so the target spreadsheet must be shared as
  * publicly/link viewable. Row 1 is a header row, skipped by starting the
- * range at row 2.
+ * range at row 2. Throws `SheetFetchError` if the request fails, whether
+ * from a network error or a non-2xx Google response.
  * @param spreadsheetId The Google Sheets spreadsheet ID.
  * @param apiKey The Google Sheets API key.
  */
@@ -39,9 +59,19 @@ export async function fetchSheetRows(
   const url =
     'https://sheets.googleapis.com/v4/spreadsheets/' +
     `${spreadsheetId}/values/A2:E?key=${apiKey}`;
-  const res = await fetch(url);
+  let res: Response;
+  try {
+    res = await fetch(url);
+  } catch (e: unknown) {
+    throw new SheetFetchError(
+      `Failed to reach Google Sheets: ${e instanceof Error ? e.message : 'network error'}`,
+    );
+  }
   if (!res.ok) {
-    throw new Error(`Failed to fetch sheet: ${res.status}`);
+    throw new SheetFetchError(
+      `Failed to fetch sheet: ${res.status}`,
+      res.status,
+    );
   }
   const {values} = (await res.json()) as SheetValuesResponse;
   return (values ?? []).map(([key, label, type, required, options]) => ({

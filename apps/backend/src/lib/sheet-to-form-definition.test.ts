@@ -1,6 +1,10 @@
 import {afterEach, describe, expect, it} from 'bun:test';
 import {parseFormDefinitionYaml} from '@regional-quiz/shared';
-import {fetchSheetRows, sheetRowsToYaml} from './sheet-to-form-definition';
+import {
+  fetchSheetRows,
+  sheetRowsToYaml,
+  SheetFetchError,
+} from './sheet-to-form-definition';
 
 describe('fetchSheetRows', () => {
   const originalFetch = globalThis.fetch;
@@ -55,7 +59,7 @@ describe('fetchSheetRows', () => {
     ]);
   });
 
-  it('throws on non-ok response', async () => {
+  it('throws a SheetFetchError carrying the status on non-ok response', async () => {
     globalThis.fetch = (() =>
       Promise.resolve(
         new Response(null, {status: 403}),
@@ -64,6 +68,26 @@ describe('fetchSheetRows', () => {
     await expect(fetchSheetRows('sheet-id', 'test-api-key')).rejects.toThrow(
       'Failed to fetch sheet: 403',
     );
+    try {
+      await fetchSheetRows('sheet-id', 'test-api-key');
+      throw new Error('expected fetchSheetRows to throw');
+    } catch (e: unknown) {
+      expect(e).toBeInstanceOf(SheetFetchError);
+      expect((e as SheetFetchError).status).toBe(403);
+    }
+  });
+
+  it('throws a SheetFetchError with no status on a network failure', async () => {
+    globalThis.fetch = (() =>
+      Promise.reject(new TypeError('fetch failed'))) as unknown as typeof fetch;
+
+    try {
+      await fetchSheetRows('sheet-id', 'test-api-key');
+      throw new Error('expected fetchSheetRows to throw');
+    } catch (e: unknown) {
+      expect(e).toBeInstanceOf(SheetFetchError);
+      expect((e as SheetFetchError).status).toBeUndefined();
+    }
   });
 });
 

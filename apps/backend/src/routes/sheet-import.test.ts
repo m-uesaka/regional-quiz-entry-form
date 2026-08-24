@@ -131,6 +131,76 @@ describe('sheet-import routes', () => {
     expect(typeof body.error).toBe('string');
   });
 
+  it('returns 502 when Google Sheets returns a 5xx', async () => {
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        new Response(null, {status: 503}),
+      )) as unknown as typeof fetch;
+
+    const cookie = await generalStaffCookie();
+
+    const res = await app.request(
+      '/api/sheet-import/preview',
+      {
+        method: 'POST',
+        headers: {cookie, 'content-type': 'application/json'},
+        body: JSON.stringify({
+          spreadsheetId: 'sheet-id',
+          tournamentSlug: 'test-tournament',
+        }),
+      },
+      env,
+    );
+
+    expect(res.status).toBe(502);
+  });
+
+  it('returns 502 on a network failure reaching Google Sheets', async () => {
+    globalThis.fetch = (() =>
+      Promise.reject(new TypeError('fetch failed'))) as unknown as typeof fetch;
+
+    const cookie = await generalStaffCookie();
+
+    const res = await app.request(
+      '/api/sheet-import/preview',
+      {
+        method: 'POST',
+        headers: {cookie, 'content-type': 'application/json'},
+        body: JSON.stringify({
+          spreadsheetId: 'sheet-id',
+          tournamentSlug: 'test-tournament',
+        }),
+      },
+      env,
+    );
+
+    expect(res.status).toBe(502);
+  });
+
+  it('returns 503 when Google Sheets rate-limits the request', async () => {
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        new Response(null, {status: 429}),
+      )) as unknown as typeof fetch;
+
+    const cookie = await generalStaffCookie();
+
+    const res = await app.request(
+      '/api/sheet-import/preview',
+      {
+        method: 'POST',
+        headers: {cookie, 'content-type': 'application/json'},
+        body: JSON.stringify({
+          spreadsheetId: 'sheet-id',
+          tournamentSlug: 'test-tournament',
+        }),
+      },
+      env,
+    );
+
+    expect(res.status).toBe(503);
+  });
+
   it('returns 200 with a yaml preview for general staff', async () => {
     globalThis.fetch = (() =>
       Promise.resolve(
