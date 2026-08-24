@@ -130,20 +130,26 @@ export const tournamentsRoute = new Hono<StaffEnv>()
     async c => {
       const {regionSlug, tournamentSlug} = c.req.valid('param');
       const db = createDbClient(c.env);
-      const {data: region} = await db
+      const {data: region, error: regionError} = await db
         .from('regions')
         .select('id')
         .eq('slug', regionSlug)
         .maybeSingle();
+      if (regionError) {
+        return c.json({error: regionError.message}, 500);
+      }
       if (!region) {
         return c.json({error: 'tournament not found'}, 404);
       }
-      const {data: tournament} = await db
+      const {data: tournament, error: tournamentError} = await db
         .from('tournaments')
         .select('*')
         .eq('region_id', region.id)
         .eq('type', tournamentSlug)
         .maybeSingle();
+      if (tournamentError) {
+        return c.json({error: tournamentError.message}, 500);
+      }
       if (!tournament) {
         return c.json({error: 'tournament not found'}, 404);
       }
