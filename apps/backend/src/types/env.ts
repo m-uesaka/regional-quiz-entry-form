@@ -4,6 +4,9 @@ export interface Bindings {
   SUPABASE_URL: string;
   SUPABASE_SERVICE_ROLE_KEY: string;
   MAIL_API_KEY: string;
+  // Secret: used to authenticate `values.get` reads against the Google
+  // Sheets API v4 for Task 2-3's spreadsheet-to-YAML preview tool.
+  GOOGLE_SHEETS_API_KEY: string;
   // Non-secret: the "From" address entry/waitlist mail is sent as.
   MAIL_FROM_ADDRESS: string;
   // Non-secret: the frontend origin used to build links in outgoing mail

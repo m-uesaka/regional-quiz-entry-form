@@ -27,11 +27,11 @@
   * Task 1-1: Supabase スキーマ定義(DDL マイグレーション) ✅
   * Task 1-2: `packages/shared` の Zod スキーマ定義 ✅
   * Task 1-3: フォーム項目定義 YAML のスキーマとパーサ ✅
-* Phase 2: 大会・フォーム定義管理(統括スタッフ)
+* Phase 2: 大会・フォーム定義管理(統括スタッフ) ✅完了
   * Task 2-1: 大会(tournament)管理 API ✅
   * Task 2-2: フォーム定義・レギュレーション登録 API ✅
-  * Task 2-3: Google スプレッドシート → YAML 変換ツール
-  * Task 2-4: 大会作成・フォーム定義管理画面
+  * Task 2-3: Google スプレッドシート → YAML 変換ツール ✅
+  * Task 2-4: 大会作成・フォーム定義管理画面 ✅
 * Phase 3: エントリーフォーム機能(参加者向け)
   * Task 3-1: フォーム動的レンダリング ✅
   * Task 3-2: レギュレーション確認 UI と優先期間ロジック ✅
@@ -68,7 +68,7 @@ Phase 間の依存関係と、各 Phase 内の Task 間の依存関係を別の�
 ```mermaid
 graph TD
   P0["Phase 0: モノレポ基盤"]:::done --> P1["Phase 1: データモデル設計"]:::done
-  P1 --> P2["Phase 2: 大会・フォーム定義管理"]:::next
+  P1 --> P2["Phase 2: 大会・フォーム定義管理"]:::done
   P2 --> P3["Phase 3: エントリーフォーム機能"]
   P3 --> P4["Phase 4: エントリーリスト公開"]
   P3 --> P5["Phase 5: マイページ"]
@@ -83,7 +83,7 @@ graph TD
   classDef next fill:#fef3c7,stroke:#d97706,color:#78350f;
 ```
 
-凡例: 緑 = 完了、黄 = 次に着手可能(Phase 2 が次フェーズ)
+凡例: 緑 = 完了、黄 = 次に着手可能(Phase 3, 6 内の一部タスクが次に着手可能)
 
 ### Phase 内 Task の依存グラフ
 
@@ -110,16 +110,15 @@ graph TD
   classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
 ```
 
-#### Phase 2: 大会・フォーム定義管理
+#### Phase 2: 大会・フォーム定義管理(✅ 完了)
 
 ```mermaid
 graph TD
   T21["2-1 大会管理API"]:::done --> T22["2-2 フォーム定義API"]:::done
-  T22 --> T23["2-3 Sheets→YAML変換"]:::next
-  T22 --> T24["2-4 管理画面"]:::next
+  T22 --> T23["2-3 Sheets→YAML変換"]:::done
+  T22 --> T24["2-4 管理画面"]:::done
 
   classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
-  classDef next fill:#fef3c7,stroke:#d97706,color:#78350f;
 ```
 
 凡例(以降のフェーズ図も共通): 緑 = 完了、黄 = 次に着手可能
@@ -179,12 +178,12 @@ graph TD
 * [Task 1-2: `packages/shared` の Zod スキーマ定義 ✅](tasks/task-1-2.md)
 * [Task 1-3: フォーム項目定義 YAML のスキーマとパーサ ✅](tasks/task-1-3.md)
 
-### Phase 2: 大会・フォーム定義管理(統括スタッフ)
+### Phase 2: 大会・フォーム定義管理(統括スタッフ) ✅完了
 
 * [Task 2-1: 大会(tournament)管理 API ✅](tasks/task-2-1.md)
 * [Task 2-2: フォーム定義・レギュレーション登録 API ✅](tasks/task-2-2.md)
-* [Task 2-3: Google スプレッドシート → YAML 変換ツール](tasks/task-2-3.md)
-* [Task 2-4: 大会作成・フォーム定義管理画面](tasks/task-2-4.md)
+* [Task 2-3: Google スプレッドシート → YAML 変換ツール ✅](tasks/task-2-3.md)
+* [Task 2-4: 大会作成・フォーム定義管理画面 ✅](tasks/task-2-4.md)
 
 ### Phase 3: エントリーフォーム機能(参加者向け)
 

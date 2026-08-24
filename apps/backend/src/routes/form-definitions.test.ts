@@ -35,6 +35,7 @@ const env: Bindings = {
   SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY,
   MAIL_API_KEY: 'dummy-mail-api-key',
+  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
   MAIL_FROM_ADDRESS: 'entry@example.com',
   FRONTEND_URL: 'https://entry.example.com',
   SESSION_SECRET,

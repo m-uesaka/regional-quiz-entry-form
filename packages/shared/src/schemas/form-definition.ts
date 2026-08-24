@@ -52,6 +52,17 @@ export function parseFormDefinitionYaml(yamlText: string): FormDefinitionYaml {
 export const FormDefinitionUploadSchema = z.object({yaml: z.string()});
 export type FormDefinitionUpload = z.infer<typeof FormDefinitionUploadSchema>;
 
+/**
+ * Request body for the sheet-import preview API: the spreadsheet to read
+ * and the tournament slug to embed in the generated YAML. Shared so the
+ * frontend and backend validate the same shape.
+ */
+export const SheetImportRequestSchema = z.object({
+  spreadsheetId: z.string(),
+  tournamentSlug: z.string(),
+});
+export type SheetImportRequest = z.infer<typeof SheetImportRequestSchema>;
+
 export interface FormFieldDefRow {
   tournamentId: string;
   fieldKey: string;
