@@ -12,6 +12,5 @@
         : '新人王'})
     </h2>
     <p>ステータス: {entry.status}</p>
-    <a href={`/mypage/${entry.tournamentId}/edit`}>編集する</a>
   </section>
 {/each}

@@ -42,7 +42,7 @@ describe('mypage +page.svelte', () => {
     expect(screen.getByText(/新人王/)).toBeInTheDocument();
   });
 
-  it('links each entry to its own edit page', () => {
+  it('does not render an edit link, since the edit route does not exist yet', () => {
     render(Page, {
       props: {
         params: {},
@@ -51,9 +51,8 @@ describe('mypage +page.svelte', () => {
       },
     });
 
-    expect(screen.getAllByRole('link', {name: '編集する'})[0]).toHaveAttribute(
-      'href',
-      `/mypage/${ENTRIES[0].tournamentId}/edit`,
-    );
+    expect(
+      screen.queryByRole('link', {name: '編集する'}),
+    ).not.toBeInTheDocument();
   });
 });
