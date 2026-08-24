@@ -48,8 +48,8 @@ function rowToEntry(row: EntryRow): Entry {
 export const staffEntriesRoute = new Hono<StaffEnv>()
   .get(
     '/tournaments/:tournamentId/entries',
-    requireStaffForTournament(),
     zValidator('param', TournamentIdParamSchema),
+    requireStaffForTournament(),
     async c => {
       const db = createDbClient(c.env);
       const {data, error} = await db
@@ -66,8 +66,8 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
   )
   .get(
     '/entries/:entryId',
-    requireStaffForEntry(),
     zValidator('param', EntryIdParamSchema),
+    requireStaffForEntry(),
     async c => {
       const db = createDbClient(c.env);
       const {data, error} = await db
