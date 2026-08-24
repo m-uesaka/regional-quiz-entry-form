@@ -3,6 +3,7 @@ import type {Env} from './types/env';
 import {staffAuthRoute} from './routes/staff-auth';
 import {tournamentsRoute} from './routes/tournaments';
 import {entriesRoute} from './routes/entries';
+import {entryListRoute} from './routes/entry-list';
 import {entryVerificationRoute} from './routes/entry-verification';
 import {formDefinitionsRoute} from './routes/form-definitions';
 import {sheetImportRoute} from './routes/sheet-import';
@@ -13,6 +14,7 @@ const app = new Hono<Env>().basePath('/api');
 const routes = app
   .get('/healthz', c => c.json({ok: true}))
   .route('/auth/staff', staffAuthRoute)
+  .route('/tournaments', entryListRoute)
   .route('/tournaments', tournamentsRoute)
   .route('/tournaments', entriesRoute)
   .route('/entries', entryVerificationRoute)
