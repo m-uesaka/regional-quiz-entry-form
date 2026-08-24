@@ -64,13 +64,31 @@ const FULL_ENTRY_ROW = {
   regulations: {label: '一般の部'},
 };
 
+const FORM_FIELD_DEF_ROWS = [
+  {
+    field_key: 't_shirt_size',
+    label: 'Tシャツサイズ',
+    field_type: 'radio',
+    options: ['S', 'M', 'L'],
+    display_order: 0,
+  },
+  {
+    field_key: 'agree_to_rules',
+    label: '規約に同意する',
+    field_type: 'checkbox',
+    options: null,
+    display_order: 1,
+  },
+];
+
 /**
  * Mocks the sequence of `fetch` calls Supabase's REST client makes,
  * returning each `responses` entry's body in order (one per call). A
  * scope-checked request under `requireStaffForTournament()` /
  * `requireStaffForEntry()` makes one call for the scope lookup followed by
  * one for the route handler's own query; general staff skip the scope
- * lookup and only trigger the second.
+ * lookup and only trigger the second. The single-entry detail route makes
+ * one further call after that to fetch the tournament's form field defs.
  */
 function mockSequentialFetch(responses: unknown[]): void {
   let callIndex = 0;
@@ -168,10 +186,11 @@ describe('GET /staff/entries/:id (mocked Supabase)', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('returns full entry data for authorized staff', async () => {
+  it('returns full entry data for authorized staff, including ordered form field defs', async () => {
     mockSequentialFetch([
       [{tournaments: {region_id: REGION_ID, type: 'saikyoi'}}],
       [FULL_ENTRY_ROW],
+      FORM_FIELD_DEF_ROWS,
     ]);
     const cookie = await regionalStaffCookie();
 
@@ -189,6 +208,22 @@ describe('GET /staff/entries/:id (mocked Supabase)', () => {
       furigana: 'ヤマダタロウ',
       email: 'taro@example.com',
       regulationLabel: '一般の部',
+      formFieldDefs: [
+        {
+          fieldKey: 't_shirt_size',
+          label: 'Tシャツサイズ',
+          fieldType: 'radio',
+          options: ['S', 'M', 'L'],
+          displayOrder: 0,
+        },
+        {
+          fieldKey: 'agree_to_rules',
+          label: '規約に同意する',
+          fieldType: 'checkbox',
+          options: null,
+          displayOrder: 1,
+        },
+      ],
     });
   });
 

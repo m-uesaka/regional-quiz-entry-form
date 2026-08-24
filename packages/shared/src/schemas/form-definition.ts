@@ -74,6 +74,22 @@ export interface FormFieldDefRow {
 }
 
 /**
+ * A tournament's custom form field definition as exposed to API clients:
+ * the metadata needed to render an answer stored in an entry's
+ * `customFieldValues` under its human-readable label rather than its raw
+ * storage key (e.g. `t_shirt_size`), in the tournament's configured display
+ * order.
+ */
+export const FormFieldDefSchema = z.object({
+  fieldKey: z.string(),
+  label: z.string(),
+  fieldType: FormFieldTypeSchema,
+  options: z.array(z.string()).nullable(),
+  displayOrder: z.number().int(),
+});
+export type FormFieldDef = z.infer<typeof FormFieldDefSchema>;
+
+/**
  * Converts a parsed form definition into rows shaped like the
  * `form_field_defs` table, for a given tournament ID resolved separately
  * from `tournamentSlug`.

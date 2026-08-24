@@ -1,6 +1,10 @@
 import {describe, expect, it} from 'vitest';
 import type {HttpError} from '@sveltejs/kit';
-import type {Entry, StaffClaims, Tournament} from '@regional-quiz/shared';
+import type {
+  StaffClaims,
+  StaffEntryDetail,
+  Tournament,
+} from '@regional-quiz/shared';
 import {load} from './+page.server';
 
 const TOURNAMENT: Tournament = {
@@ -20,7 +24,7 @@ const GENERAL_STAFF: StaffClaims = {
   tournamentType: null,
 };
 
-const ENTRY: Entry = {
+const ENTRY: StaffEntryDetail = {
   id: '00000000-0000-0000-0000-000000000004',
   tournamentId: TOURNAMENT.id,
   name: '山田太郎',
@@ -33,6 +37,7 @@ const ENTRY: Entry = {
   customFieldValues: {},
   status: 'confirmed',
   waitlistPosition: null,
+  formFieldDefs: [],
 };
 
 /**
@@ -42,7 +47,7 @@ const ENTRY: Entry = {
 function fakeFetch(options: {
   tournament?: Tournament;
   tournamentOk?: boolean;
-  entry?: Entry;
+  entry?: StaffEntryDetail;
   entryStatus?: number;
 }): typeof fetch {
   return (async input => {
@@ -126,7 +131,7 @@ describe('staff entry detail +page.server load', () => {
     const event = buildEvent({
       fetch: fakeFetch({
         tournament: TOURNAMENT,
-        entry: {error: 'entry not found'} as unknown as Entry,
+        entry: {error: 'entry not found'} as unknown as StaffEntryDetail,
         entryStatus: 404,
       }),
       staff: GENERAL_STAFF,
@@ -141,7 +146,7 @@ describe('staff entry detail +page.server load', () => {
     const event = buildEvent({
       fetch: fakeFetch({
         tournament: TOURNAMENT,
-        entry: {error: 'forbidden'} as unknown as Entry,
+        entry: {error: 'forbidden'} as unknown as StaffEntryDetail,
         entryStatus: 403,
       }),
       staff: GENERAL_STAFF,
@@ -153,7 +158,7 @@ describe('staff entry detail +page.server load', () => {
   });
 
   it('throws 404 when the entry belongs to a different tournament', async () => {
-    const entryFromOtherTournament: Entry = {
+    const entryFromOtherTournament: StaffEntryDetail = {
       ...ENTRY,
       tournamentId: '00000000-0000-0000-0000-000000000099',
     };

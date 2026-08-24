@@ -1,6 +1,10 @@
 import {describe, expect, it} from 'bun:test';
 import {ZodError} from 'zod';
-import {parseFormDefinitionYaml, toFormFieldDefRows} from './form-definition';
+import {
+  FormFieldDefSchema,
+  parseFormDefinitionYaml,
+  toFormFieldDefRows,
+} from './form-definition';
 
 describe('parseFormDefinitionYaml', () => {
   it('parses a valid document', () => {
@@ -93,5 +97,31 @@ fields:
         displayOrder: 0,
       },
     ]);
+  });
+});
+
+describe('FormFieldDefSchema', () => {
+  it('accepts a field def with null options', () => {
+    const result = FormFieldDefSchema.safeParse({
+      fieldKey: 'agree_to_rules',
+      label: '規約に同意する',
+      fieldType: 'checkbox',
+      options: null,
+      displayOrder: 0,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects an unknown fieldType', () => {
+    const result = FormFieldDefSchema.safeParse({
+      fieldKey: 'agree_to_rules',
+      label: '規約に同意する',
+      fieldType: 'not-a-real-type',
+      options: null,
+      displayOrder: 0,
+    });
+
+    expect(result.success).toBe(false);
   });
 });

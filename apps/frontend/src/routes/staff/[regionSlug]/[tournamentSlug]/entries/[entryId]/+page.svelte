@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type {EntryStatus} from '@regional-quiz/shared';
+  import type {EntryStatus, FormFieldDef} from '@regional-quiz/shared';
   import type {PageProps} from './$types';
 
   let {data, params}: PageProps = $props();
@@ -11,9 +11,44 @@
     cancelled: 'キャンセル',
   };
 
+  // Renders each raw `customFieldValues` entry under its human-readable
+  // label (via `formFieldDefs`) rather than its storage key (e.g.
+  // `t_shirt_size`), in the tournament's configured display order. A field
+  // with no matching definition (e.g. one removed from the form after this
+  // entry was submitted) falls back to its raw key so the answer is still
+  // shown.
   const customFieldEntries = $derived(
-    Object.entries(data.entry.customFieldValues),
+    data.entry.formFieldDefs.map(fieldDef => ({
+      fieldDef,
+      value: data.entry.customFieldValues[fieldDef.fieldKey],
+    })),
   );
+
+  const BOOLEAN_LABELS = {yes: 'はい', no: 'いいえ'};
+
+  /**
+   * A plain boolean checkbox (`type: 'checkbox'` with no `options`) stores
+   * "checked" as an array containing the field's own key and "unchecked" as
+   * an empty array (see `DynamicFormField.svelte`), which isn't meaningful
+   * to a reader as-is — render it as a yes/no label instead.
+   */
+  function isBooleanCheckbox(fieldDef: FormFieldDef): boolean {
+    return (
+      fieldDef.fieldType === 'checkbox' &&
+      (!fieldDef.options || fieldDef.options.length === 0)
+    );
+  }
+
+  function formatFieldValue(
+    fieldDef: FormFieldDef,
+    value: string | string[] | undefined,
+  ): string {
+    if (isBooleanCheckbox(fieldDef)) {
+      const checked = Array.isArray(value) && value.includes(fieldDef.fieldKey);
+      return checked ? BOOLEAN_LABELS.yes : BOOLEAN_LABELS.no;
+    }
+    return Array.isArray(value) ? value.join('、') : String(value ?? '');
+  }
 </script>
 
 <a href={`/staff/${params.regionSlug}/${params.tournamentSlug}/entries`}>
@@ -51,8 +86,8 @@
     <dd>{data.entry.freeText}</dd>
   {/if}
 
-  {#each customFieldEntries as [key, value] (key)}
-    <dt>{key}</dt>
-    <dd>{Array.isArray(value) ? value.join('、') : String(value)}</dd>
+  {#each customFieldEntries as {fieldDef, value} (fieldDef.fieldKey)}
+    <dt>{fieldDef.label}</dt>
+    <dd>{formatFieldValue(fieldDef, value)}</dd>
   {/each}
 </dl>
