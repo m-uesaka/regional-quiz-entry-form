@@ -20,6 +20,7 @@
       <th>氏名</th>
       <th>ふりがな</th>
       <th>掲載名</th>
+      <th>メールアドレス</th>
       <th>ステータス</th>
       <th></th>
     </tr>
@@ -30,6 +31,7 @@
         <td>{entry.name}</td>
         <td>{entry.furigana}</td>
         <td>{entry.displayName}</td>
+        <td>{entry.email}</td>
         <td>
           {STATUS_LABELS[entry.status]}
           {#if entry.status === 'waitlisted'}({entry.waitlistPosition}番目){/if}

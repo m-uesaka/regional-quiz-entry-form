@@ -60,6 +60,7 @@ const FULL_ENTRY_ROW = {
   custom_field_values: {},
   status: 'pending_verification',
   waitlist_position: null,
+  participants: {email: 'taro@example.com'},
 };
 
 /**
@@ -125,6 +126,7 @@ describe('GET /staff/tournaments/:id/entries (mocked Supabase)', () => {
       name: '山田太郎',
       furigana: 'ヤマダタロウ',
       displayName: '太郎',
+      email: 'taro@example.com',
       freeText: '自由記述',
       status: 'pending_verification',
     });
@@ -183,6 +185,7 @@ describe('GET /staff/entries/:id (mocked Supabase)', () => {
       id: ENTRY_ID,
       name: '山田太郎',
       furigana: 'ヤマダタロウ',
+      email: 'taro@example.com',
     });
   });
 

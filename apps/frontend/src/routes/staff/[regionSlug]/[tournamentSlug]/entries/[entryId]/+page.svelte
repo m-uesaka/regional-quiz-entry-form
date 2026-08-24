@@ -32,6 +32,9 @@
   <dt>掲載名</dt>
   <dd>{data.entry.displayName}</dd>
 
+  <dt>メールアドレス</dt>
+  <dd>{data.entry.email}</dd>
+
   <dt>ステータス</dt>
   <dd>
     {STATUS_LABELS[data.entry.status]}

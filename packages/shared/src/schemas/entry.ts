@@ -35,6 +35,7 @@ export const EntrySchema = z.object({
   name: z.string(),
   furigana: z.string(),
   displayName: z.string(),
+  email: z.string().email(),
   regulationId: z.string().uuid(),
   freeText: z.string().nullable(),
   // Same value union as `EntryInputSchema.customFieldValues` — every stored

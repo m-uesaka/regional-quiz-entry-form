@@ -16,6 +16,7 @@ const ENTRY: Entry = {
   name: '山田太郎',
   furigana: 'ヤマダタロウ',
   displayName: '太郎',
+  email: 'taro@example.com',
   regulationId: '00000000-0000-0000-0000-000000000005',
   freeText: '自由記述',
   customFieldValues: {},

@@ -14,7 +14,8 @@ const EntryIdParamSchema = z.object({entryId: z.string().uuid()});
 
 const ENTRY_COLUMNS =
   'id, tournament_id, name, furigana, display_name, regulation_id, ' +
-  'free_text, custom_field_values, status, waitlist_position';
+  'free_text, custom_field_values, status, waitlist_position, ' +
+  'participants(email)';
 
 /** Shape of an `entries` row as selected above (snake_case). */
 interface EntryRow {
@@ -28,6 +29,7 @@ interface EntryRow {
   custom_field_values: Record<string, string | string[]>;
   status: EntryStatus;
   waitlist_position: number | null;
+  participants: {email: string} | null;
 }
 
 function rowToEntry(row: EntryRow): Entry {
@@ -37,6 +39,7 @@ function rowToEntry(row: EntryRow): Entry {
     name: row.name,
     furigana: row.furigana,
     displayName: row.display_name,
+    email: row.participants?.email,
     regulationId: row.regulation_id,
     freeText: row.free_text,
     customFieldValues: row.custom_field_values,
