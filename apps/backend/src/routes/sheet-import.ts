@@ -1,18 +1,13 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {z} from 'zod';
+import {SheetImportRequestSchema} from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
 import {fetchSheetRows, sheetRowsToYaml} from '../lib/sheet-to-form-definition';
 
-const SheetImportSchema = z.object({
-  spreadsheetId: z.string(),
-  tournamentSlug: z.string(),
-});
-
 export const sheetImportRoute = new Hono<StaffEnv>()
   .use('*', requireGeneralStaff())
-  .post('/preview', zValidator('json', SheetImportSchema), async c => {
+  .post('/preview', zValidator('json', SheetImportRequestSchema), async c => {
     const {spreadsheetId, tournamentSlug} = c.req.valid('json');
 
     let yaml;
