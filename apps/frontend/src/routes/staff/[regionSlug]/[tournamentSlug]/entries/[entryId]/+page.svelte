@@ -35,6 +35,9 @@
   <dt>メールアドレス</dt>
   <dd>{data.entry.email}</dd>
 
+  <dt>レギュレーション</dt>
+  <dd>{data.entry.regulationLabel}</dd>
+
   <dt>ステータス</dt>
   <dd>
     {STATUS_LABELS[data.entry.status]}

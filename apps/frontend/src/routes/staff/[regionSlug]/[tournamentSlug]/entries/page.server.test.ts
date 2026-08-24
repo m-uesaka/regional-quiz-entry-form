@@ -29,6 +29,7 @@ const ENTRIES: Entry[] = [
     displayName: '太郎',
     email: 'taro@example.com',
     regulationId: '00000000-0000-0000-0000-000000000005',
+    regulationLabel: '一般の部',
     freeText: null,
     customFieldValues: {},
     status: 'confirmed',

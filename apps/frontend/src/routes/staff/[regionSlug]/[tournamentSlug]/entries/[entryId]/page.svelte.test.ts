@@ -11,6 +11,7 @@ const ENTRY: Entry = {
   displayName: '太郎',
   email: 'taro@example.com',
   regulationId: '00000000-0000-0000-0000-000000000005',
+  regulationLabel: '一般の部',
   freeText: '自由記述の本文です',
   customFieldValues: {t_shirt_size: 'L', allergies: ['卵', '乳']},
   status: 'waitlisted',
@@ -34,6 +35,7 @@ describe('staff entry detail +page.svelte', () => {
     expect(screen.getByText('山田太郎')).toBeInTheDocument();
     expect(screen.getByText('ヤマダタロウ')).toBeInTheDocument();
     expect(screen.getByText('taro@example.com')).toBeInTheDocument();
+    expect(screen.getByText('一般の部')).toBeInTheDocument();
     expect(screen.getByText(/キャンセル待ち/)).toHaveTextContent(
       'キャンセル待ち (3番目)',
     );

@@ -61,6 +61,7 @@ const FULL_ENTRY_ROW = {
   status: 'pending_verification',
   waitlist_position: null,
   participants: {email: 'taro@example.com'},
+  regulations: {label: '一般の部'},
 };
 
 /**
@@ -127,6 +128,7 @@ describe('GET /staff/tournaments/:id/entries (mocked Supabase)', () => {
       furigana: 'ヤマダタロウ',
       displayName: '太郎',
       email: 'taro@example.com',
+      regulationLabel: '一般の部',
       freeText: '自由記述',
       status: 'pending_verification',
     });
@@ -186,6 +188,7 @@ describe('GET /staff/entries/:id (mocked Supabase)', () => {
       name: '山田太郎',
       furigana: 'ヤマダタロウ',
       email: 'taro@example.com',
+      regulationLabel: '一般の部',
     });
   });
 

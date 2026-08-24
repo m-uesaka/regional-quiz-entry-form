@@ -37,6 +37,7 @@ export const EntrySchema = z.object({
   displayName: z.string(),
   email: z.string().email(),
   regulationId: z.string().uuid(),
+  regulationLabel: z.string(),
   freeText: z.string().nullable(),
   // Same value union as `EntryInputSchema.customFieldValues` — every stored
   // value originated from that input shape (checkbox/radio/textarea form
