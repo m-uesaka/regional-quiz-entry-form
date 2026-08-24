@@ -18,7 +18,10 @@ export const load: PageServerLoad = async ({params, fetch, locals}) => {
     param: {regionSlug: params.regionSlug, tournamentSlug: parsedType.data},
   });
   if (!res.ok) {
-    throw error(404, '大会が見つかりません');
+    if (res.status === 404) {
+      throw error(404, '大会が見つかりません');
+    }
+    throw error(502, '大会情報の取得に失敗しました');
   }
   const tournament = await res.json();
 
