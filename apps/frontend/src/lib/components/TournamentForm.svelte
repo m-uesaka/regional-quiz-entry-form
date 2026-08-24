@@ -62,15 +62,20 @@
     error = null;
     const capacity =
       capacityInput.trim() === '' ? null : Number(capacityInput);
-    error = await onSubmit({
-      regionId,
-      type,
-      name,
-      capacity,
-      entryOpensAt: new Date(entryOpensAt).toISOString(),
-      entryClosesAt: new Date(entryClosesAt).toISOString(),
-    });
-    submitting = false;
+    try {
+      error = await onSubmit({
+        regionId,
+        type,
+        name,
+        capacity,
+        entryOpensAt: new Date(entryOpensAt).toISOString(),
+        entryClosesAt: new Date(entryClosesAt).toISOString(),
+      });
+    } catch (e: unknown) {
+      error = e instanceof Error ? e.message : '送信に失敗しました';
+    } finally {
+      submitting = false;
+    }
   }
 </script>
 
