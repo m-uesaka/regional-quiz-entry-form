@@ -136,7 +136,7 @@ describe('sheet-import routes', () => {
       Promise.resolve(
         new Response(
           JSON.stringify({
-            values: [['agree_rules', '規約に同意する', 'checkbox', 'TRUE', '']],
+            values: [['規約に同意する', 'チェックボックス', '必須', '']],
           }),
           {status: 200},
         ),
@@ -164,7 +164,7 @@ describe('sheet-import routes', () => {
       tournamentSlug: 'test-tournament',
       fields: [
         {
-          key: 'agree_rules',
+          key: 'field_1',
           label: '規約に同意する',
           type: 'checkbox',
           required: true,
