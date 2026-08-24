@@ -30,3 +30,10 @@ export interface StaffEnv {
   Bindings: Bindings;
   Variables: Variables & {staff: StaffClaims};
 }
+
+// Used by routes mounted behind `requireParticipant()`, where the
+// authenticated participant's id is guaranteed to be set.
+export interface ParticipantEnv {
+  Bindings: Bindings;
+  Variables: Variables & {participantId: string};
+}
