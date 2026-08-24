@@ -1,7 +1,11 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
-import {TournamentSchema, type Tournament} from '@regional-quiz/shared';
+import {
+  TournamentSchema,
+  TournamentTypeSchema,
+  type Tournament,
+} from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
 import {createDbClient} from '../lib/db';
@@ -9,6 +13,10 @@ import {createDbClient} from '../lib/db';
 const CreateTournamentSchema = TournamentSchema.omit({id: true});
 const UpdateTournamentSchema = CreateTournamentSchema.partial();
 const TournamentIdParamSchema = z.object({id: z.string().uuid()});
+const TournamentBySlugParamSchema = z.object({
+  regionSlug: z.string(),
+  tournamentSlug: TournamentTypeSchema,
+});
 
 /** Shape of a `tournaments` row as returned by Supabase (snake_case). */
 interface TournamentRow {
@@ -114,5 +122,37 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         return c.json({error: error.message}, status);
       }
       return c.json(rowToTournament(data as TournamentRow));
+    },
+  )
+  .get(
+    '/:regionSlug/:tournamentSlug',
+    zValidator('param', TournamentBySlugParamSchema),
+    async c => {
+      const {regionSlug, tournamentSlug} = c.req.valid('param');
+      const db = createDbClient(c.env);
+      const {data: region, error: regionError} = await db
+        .from('regions')
+        .select('id')
+        .eq('slug', regionSlug)
+        .maybeSingle();
+      if (regionError) {
+        return c.json({error: regionError.message}, 500);
+      }
+      if (!region) {
+        return c.json({error: 'tournament not found'}, 404);
+      }
+      const {data: tournament, error: tournamentError} = await db
+        .from('tournaments')
+        .select('*')
+        .eq('region_id', region.id)
+        .eq('type', tournamentSlug)
+        .maybeSingle();
+      if (tournamentError) {
+        return c.json({error: tournamentError.message}, 500);
+      }
+      if (!tournament) {
+        return c.json({error: 'tournament not found'}, 404);
+      }
+      return c.json(rowToTournament(tournament as TournamentRow));
     },
   );
