@@ -39,9 +39,9 @@
   * Task 3-4: メールアドレス確認フロー ✅
   * Task 3-5: 定員管理とキャンセル待ちロジック ✅
   * Task 3-6: エントリー期間外アクセス制御 ✅
-* Phase 4: エントリーリスト公開機能
-  * Task 4-1: 公開エントリーリスト API
-  * Task 4-2: 公開エントリーリストページ
+* Phase 4: エントリーリスト公開機能 ✅完了
+  * Task 4-1: 公開エントリーリスト API ✅
+  * Task 4-2: 公開エントリーリストページ ✅
 * Phase 5: 参加者向けマイページ
   * Task 5-1: 参加者ログイン API とセッション管理
   * Task 5-2: マイページ トップ(複数大会のエントリー状況)
@@ -70,7 +70,7 @@ graph TD
   P0["Phase 0: モノレポ基盤"]:::done --> P1["Phase 1: データモデル設計"]:::done
   P1 --> P2["Phase 2: 大会・フォーム定義管理"]:::done
   P2 --> P3["Phase 3: エントリーフォーム機能"]:::done
-  P3 --> P4["Phase 4: エントリーリスト公開"]
+  P3 --> P4["Phase 4: エントリーリスト公開"]:::done
   P3 --> P5["Phase 5: マイページ"]
   P2 --> P6["Phase 6: 地域スタッフ管理ページ"]
   P3 --> P6
@@ -137,6 +137,15 @@ graph TD
   classDef next fill:#fef3c7,stroke:#d97706,color:#78350f;
 ```
 
+#### Phase 4: エントリーリスト公開機能(✅ 完了)
+
+```mermaid
+graph TD
+  T41["4-1 公開エントリーリストAPI"]:::done --> T42["4-2 公開エントリーリストページ"]:::done
+
+  classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
+```
+
 #### Phase 5: マイページ
 
 ```mermaid
@@ -194,10 +203,10 @@ graph TD
 * [Task 3-5: 定員管理とキャンセル待ちロジック ✅](tasks/task-3-5.md)
 * [Task 3-6: エントリー期間外アクセス制御 ✅](tasks/task-3-6.md)
 
-### Phase 4: エントリーリスト公開機能
+### Phase 4: エントリーリスト公開機能 ✅完了
 
-* [Task 4-1: 公開エントリーリスト API](tasks/task-4-1.md)
-* [Task 4-2: 公開エントリーリストページ](tasks/task-4-2.md)
+* [Task 4-1: 公開エントリーリスト API ✅](tasks/task-4-1.md)
+* [Task 4-2: 公開エントリーリストページ ✅](tasks/task-4-2.md)
 
 ### Phase 5: 参加者向けマイページ
 
