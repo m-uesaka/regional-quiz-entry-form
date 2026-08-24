@@ -59,6 +59,7 @@ describe('POST /login', () => {
     const setCookieHeader = res.headers.get('set-cookie') ?? '';
     expect(setCookieHeader).toContain('participant_session=');
     expect(setCookieHeader).toContain('HttpOnly');
+    expect(setCookieHeader).toContain('Path=/');
 
     const token = setCookieHeader
       .split('participant_session=')[1]

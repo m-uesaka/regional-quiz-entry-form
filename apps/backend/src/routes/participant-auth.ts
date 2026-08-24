@@ -55,6 +55,7 @@ export const participantAuthRoute = new Hono<Env>().post(
       httpOnly: true,
       secure: true,
       sameSite: 'Lax',
+      path: '/',
       maxAge: SESSION_TTL_SECONDS,
     });
     return c.json({ok: true});
