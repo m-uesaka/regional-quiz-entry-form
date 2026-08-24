@@ -30,7 +30,10 @@ function fakeFetch(options: {
 }): typeof fetch {
   return (async input => {
     const url = typeof input === 'string' ? input : input.toString();
-    if (url.includes('/entry-list')) {
+    // Match the entry-list call by its resolved tournament UUID (not a
+    // loose substring) so a regression that sends the slug instead of the
+    // UUID as `:tournamentId` fails this test instead of silently passing.
+    if (url.includes(`/${TOURNAMENT.id}/entry-list`)) {
       return new Response(JSON.stringify(options.entries ?? []), {
         status: options.entriesOk === false ? 502 : 200,
         headers: {'Content-Type': 'application/json'},
