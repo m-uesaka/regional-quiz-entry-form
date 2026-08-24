@@ -16,9 +16,11 @@ interface EntryListRow {
 
 function rowToEntryListItem(row: EntryListRow): EntryListItem {
   return EntryListItemSchema.parse({
-    // Cancelled entries are not removed from the ordering (no promotion
-    // happens on cancellation), so the name is masked in place rather than
-    // dropping the row.
+    // Cancelling a confirmed entry does promote the next waitlisted entry
+    // (see `promoteNextWaitlistedEntry`), but that only updates the
+    // promoted entry's own row — the cancelled row itself is kept, not
+    // removed, so its name is masked in place here rather than dropping
+    // the row.
     displayName: row.status === 'cancelled' ? 'キャンセル' : row.display_name,
     status: row.status,
     waitlistPosition: row.waitlist_position,
