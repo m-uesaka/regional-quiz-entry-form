@@ -72,11 +72,12 @@ function toTournamentRow(
 }
 
 // Middleware is attached per-route (not via `.use('*', ...)`) because this
-// app is mounted at `/tournaments` alongside the public entries route
-// (`routes/entries.ts`, also mounted at `/tournaments`) — a wildcard here
-// would match requests to `/tournaments/:tournamentId/entries` too, since
-// Hono matches middleware by the request's final path, not by which
-// sub-app originally registered it.
+// app is mounted at `/tournaments` alongside the public entries and
+// entry-list routes (`routes/entries.ts`, `routes/entry-list.ts`, also
+// mounted at `/tournaments`) — a wildcard here would match requests to
+// `/tournaments/:tournamentId/entries` and `/tournaments/:tournamentId/entry-list`
+// too, since Hono matches middleware by the request's final path, not by
+// which sub-app originally registered it.
 export const tournamentsRoute = new Hono<StaffEnv>()
   .get('/', requireGeneralStaff(), async c => {
     const db = createDbClient(c.env);

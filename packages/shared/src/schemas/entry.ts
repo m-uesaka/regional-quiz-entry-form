@@ -42,3 +42,12 @@ export const EntrySchema = z.object({
   waitlistPosition: z.number().int().nullable(),
 });
 export type Entry = z.infer<typeof EntrySchema>;
+
+// Public entry-list response item: intentionally omits every personal field
+// (`name` / `furigana` / `email` / `freeText` etc.) present on `EntrySchema`.
+export const EntryListItemSchema = z.object({
+  displayName: z.string(),
+  status: EntryStatusSchema,
+  waitlistPosition: z.number().int().nullable(),
+});
+export type EntryListItem = z.infer<typeof EntryListItemSchema>;
