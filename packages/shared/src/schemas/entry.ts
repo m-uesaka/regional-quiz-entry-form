@@ -37,7 +37,13 @@ export const EntrySchema = z.object({
   displayName: z.string(),
   regulationId: z.string().uuid(),
   freeText: z.string().nullable(),
-  customFieldValues: z.record(z.string(), z.unknown()),
+  // Same value union as `EntryInputSchema.customFieldValues` — every stored
+  // value originated from that input shape (checkbox/radio/textarea form
+  // fields), so `unknown` would be needlessly imprecise here.
+  customFieldValues: z.record(
+    z.string(),
+    z.union([z.string(), z.array(z.string())]),
+  ),
   status: EntryStatusSchema,
   waitlistPosition: z.number().int().nullable(),
 });
