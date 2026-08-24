@@ -9,7 +9,10 @@ export const load: PageLoad = async ({params, fetch}) => {
   const res = await api.api.tournaments.$get();
   const body = await res.json();
   if (!Array.isArray(body)) {
-    throw error(500, body.error);
+    // Preserve the backend's status (401 unauthenticated, 403 non-general
+    // staff, 500 an actual server failure) rather than always reporting a
+    // server error for what may just be a normal authorization failure.
+    throw error(res.status, body.error);
   }
 
   const tournament = body.find(t => t.id === params.id);
