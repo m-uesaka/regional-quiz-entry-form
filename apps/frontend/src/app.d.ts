@@ -12,6 +12,7 @@ declare global {
     // interface Error {}
     interface Locals {
       staff: import('@regional-quiz/shared').StaffClaims | null;
+      participant: import('@regional-quiz/shared').ParticipantClaims | null;
     }
     // interface PageData {}
     // interface PageState {}
