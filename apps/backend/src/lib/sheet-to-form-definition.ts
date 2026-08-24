@@ -54,17 +54,36 @@ export async function fetchSheetRows(
 }
 
 /**
+ * Parses a spreadsheet options cell (a comma-separated list) into a
+ * deduplicated array of trimmed, non-empty option values. Blank entries
+ * (e.g. from a trailing comma) are dropped rather than becoming an
+ * unusable empty-string option, and duplicate values are rejected since
+ * the frontend keys each rendered option by its value.
+ * @param raw The raw comma-separated options cell content.
+ */
+function parseOptions(raw: string): string[] {
+  const options = raw
+    .split(',')
+    .map(option => option.trim())
+    .filter(option => option !== '');
+  if (new Set(options).size !== options.length) {
+    throw new Error(`Duplicate option values: ${raw}`);
+  }
+  return options;
+}
+
+/**
  * Converts raw spreadsheet rows into a Task 1-3 form-definition YAML
  * string, for preview purposes only (saving is a separate step via the
  * Task 2-2 upload API). Throws a `ZodError` if any row's data doesn't
  * match `FormFieldDefYamlSchema` (e.g. an unexpected `options` shape or an
  * invalid `key`), or a plain `Error` if a row's `type` isn't one of the
- * dropdown's Japanese labels. The field `key` is staff-entered
- * (spreadsheet column A) rather than derived from the row position or the
- * Japanese `label`, so it stays stable across row reordering/insertion —
- * entries persist `custom_field_values` keyed by it, so a key that
- * changed on re-import would silently reassociate existing answers with a
- * different field.
+ * dropdown's Japanese labels, or its `options` contain duplicate values.
+ * The field `key` is staff-entered (spreadsheet column A) rather than
+ * derived from the row position or the Japanese `label`, so it stays
+ * stable across row reordering/insertion — entries persist
+ * `custom_field_values` keyed by it, so a key that changed on re-import
+ * would silently reassociate existing answers with a different field.
  * @param tournamentSlug The tournament slug the form definition belongs to.
  * @param rows The raw spreadsheet rows to convert.
  */
@@ -82,9 +101,7 @@ export function sheetRowsToYaml(
       label: row.label,
       type,
       required: row.required === '必須',
-      options: row.options
-        ? row.options.split(',').map(s => s.trim())
-        : undefined,
+      options: row.options ? parseOptions(row.options) : undefined,
     });
   });
   return stringifyYaml({tournamentSlug, fields});

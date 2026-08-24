@@ -151,4 +151,34 @@ describe('sheetRowsToYaml', () => {
       ]),
     ).toThrow();
   });
+
+  it('drops blank options produced by stray commas', () => {
+    const yaml = sheetRowsToYaml('test-tournament', [
+      {
+        key: 'favorite_color',
+        label: '好きな色',
+        type: 'ラジオボタン',
+        required: '必須',
+        options: 'red, , blue,',
+      },
+    ]);
+
+    const parsed = parseFormDefinitionYaml(yaml);
+
+    expect(parsed.fields[0]).toMatchObject({options: ['red', 'blue']});
+  });
+
+  it('throws on duplicate option values', () => {
+    expect(() =>
+      sheetRowsToYaml('test-tournament', [
+        {
+          key: 'favorite_color',
+          label: '好きな色',
+          type: 'ラジオボタン',
+          required: '必須',
+          options: 'red, red',
+        },
+      ]),
+    ).toThrow('Duplicate option values');
+  });
 });
