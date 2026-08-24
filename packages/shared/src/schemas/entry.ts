@@ -43,11 +43,21 @@ export const EntrySchema = z.object({
 });
 export type Entry = z.infer<typeof EntrySchema>;
 
+// Statuses exposed by the public entry-list endpoint. `pending_verification`
+// entries are excluded from that query, so it is intentionally omitted here
+// (unlike `EntryStatusSchema`, which covers every internal status).
+export const PublicEntryStatusSchema = z.enum([
+  'confirmed',
+  'waitlisted',
+  'cancelled',
+]);
+export type PublicEntryStatus = z.infer<typeof PublicEntryStatusSchema>;
+
 // Public entry-list response item: intentionally omits every personal field
 // (`name` / `furigana` / `email` / `freeText` etc.) present on `EntrySchema`.
 export const EntryListItemSchema = z.object({
   displayName: z.string(),
-  status: EntryStatusSchema,
+  status: PublicEntryStatusSchema,
   waitlistPosition: z.number().int().nullable(),
 });
 export type EntryListItem = z.infer<typeof EntryListItemSchema>;
