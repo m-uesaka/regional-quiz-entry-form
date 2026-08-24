@@ -27,24 +27,30 @@
     saveStatus = 'idle';
     saveError = null;
 
-    const res = await api.api['sheet-import'].preview.$post({
-      json: {spreadsheetId, tournamentSlug},
-    });
-    // The union of possible response bodies also includes the
-    // `@hono/zod-validator` default validation-failure shape (`{success:
-    // false, error: ZodError}`), which structurally overlaps with the
-    // `{error: string}` shape but has a non-string `error`. Narrow on the
-    // actual field presence/type rather than `res.status` so this stays
-    // type-safe either way.
-    const body = await res.json();
-    if ('yaml' in body) {
-      previewYaml = body.yaml;
-    } else if ('error' in body && typeof body.error === 'string') {
-      previewError = body.error;
-    } else {
-      previewError = '入力内容を確認してください';
+    try {
+      const res = await api.api['sheet-import'].preview.$post({
+        json: {spreadsheetId, tournamentSlug},
+      });
+      // The union of possible response bodies also includes the
+      // `@hono/zod-validator` default validation-failure shape (`{success:
+      // false, error: ZodError}`), which structurally overlaps with the
+      // `{error: string}` shape but has a non-string `error`. Narrow on the
+      // actual field presence/type rather than `res.status` so this stays
+      // type-safe either way.
+      const body = await res.json();
+      if ('yaml' in body) {
+        previewYaml = body.yaml;
+      } else if ('error' in body && typeof body.error === 'string') {
+        previewError = body.error;
+      } else {
+        previewError = '入力内容を確認してください';
+      }
+    } catch (e: unknown) {
+      previewError =
+        e instanceof Error ? e.message : 'プレビューの取得に失敗しました';
+    } finally {
+      previewing = false;
     }
-    previewing = false;
   }
 
   async function handleSave(): Promise<void> {
