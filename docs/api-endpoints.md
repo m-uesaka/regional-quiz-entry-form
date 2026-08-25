@@ -98,6 +98,7 @@ if ('yaml' in body) {
 | POST | `/api/sheet-import/preview` | 統括スタッフ |
 | GET | `/api/staff/tournaments/:tournamentId/entries` | スタッフ(担当範囲) |
 | GET | `/api/staff/entries/:entryId` | スタッフ(担当範囲) |
+| POST | `/api/staff/tournaments/:tournamentId/mail` | スタッフ(担当範囲) |
 | GET | `/api/mypage/entries` | 参加者 |
 | GET | `/api/mypage/entries/:entryId` | 参加者(本人) |
 | PATCH | `/api/mypage/entries/:entryId` | 参加者(本人) |
@@ -303,9 +304,9 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 詳細は [`google-sheets-integration.md`](./google-sheets-integration.md) を参照。
 
-## 9. スタッフ向けエントリー閲覧
+## 9. スタッフ向けエントリー閲覧・一斉メール送信
 
-`routes/staff-entries.ts`。`requireStaffForTournament()` / `requireStaffForEntry()` により、地域スタッフは担当大会のエントリーしか見られません。統括スタッフは全件見られます。
+`routes/staff-entries.ts` と `routes/staff-mail.ts`。`requireStaffForTournament()` / `requireStaffForEntry()` により、地域スタッフは担当大会のエントリーしか見られず、担当外の大会にはメールも送れません。統括スタッフは全大会が対象です。
 
 ### `GET /api/staff/tournaments/:tournamentId/entries`
 
@@ -324,6 +325,32 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 - `401` / `403` / `500`
 
 `formFieldDefs` は当該大会のフォーム項目定義を `display_order` 昇順で返すものです。これがないと、スタッフ画面は `customFieldValues` を `t_shirt_size` のような生のキーでしか表示できません。一覧エンドポイントは追加項目の回答を描画しないため、`formFieldDefs` を返しません。
+
+### `POST /api/staff/tournaments/:tournamentId/mail`
+
+`routes/staff-mail.ts`。担当大会の参加者へ一斉メールを送信します。同じ `requireStaffForTournament()` で保護されているため、地域スタッフは担当外の大会には送信できません。
+
+リクエストボディは `StaffMailInput`(`packages/shared/src/schemas/mail.ts`)です。
+
+| フィールド | 必須 | 内容 |
+| --- | --- | --- |
+| `subject` | ✅ | 件名。1〜200 文字 |
+| `body` | ✅ | 本文。1〜20000 文字。**エスケープもサニタイズもせず**メールの HTML 本文としてそのまま送信します(後述) |
+| `statusFilter` | | `EntryStatus`(`pending_verification` / `confirmed` / `waitlisted` / `cancelled`)。指定するとそのステータスのエントリーだけに絞り込みます |
+
+- `202`: `StaffMailResult` = `{"accepted": number}`
+- `400`: ボディが `StaffMailInputSchema` に合わない
+- `401` / `403` / `500`
+
+**`statusFilter` を省略した場合、`cancelled` 以外の全エントリー**が対象です。キャンセルした人に案内を送り続けないためで、キャンセル者に送るには `statusFilter: "cancelled"` を明示する必要があります。
+
+**`200` ではなく `202` を返し、`accepted` は「送信を受け付けた宛先数」であって「届いた通数」ではありません。** 宛先の取得だけを待って応答し、送信本体は `c.executionCtx.waitUntil()` に載せて応答後に走ります。`lib/bulk-mail.ts` の `sendBulkMail()` がメールプロバイダのレート制限に合わせて**同時 5 通・バッチ間 1 秒**でならすため、数百件の大会では送信に数分かかり、リクエストの中で待つとクライアントの切断でこの送信が途中で打ち切られてしまいます。個々の宛先の可否はレスポンスには現れないので、**配信結果はメールプロバイダ側の配信ログで確認**してください(拒否された宛先があった場合、件数だけは `console.error` に残ります。アドレスそのものは Worker のログに参加者の個人情報を残さないため出しません)。
+
+送信は宛先ごとに 1 通ずつ行います(受信者同士にアドレスが見えないように)。1 件がプロバイダに拒否されても送信全体は止めず、残りの宛先には送り切ります。同じアドレスは重複排除され、1 通しか届きません。
+
+宛先の取得(`lib/entry-recipients.ts`)は `.range()` で**ページングします**。PostgREST は 1 レスポンスの行数を `db-max-rows` で打ち切るため、単純な SELECT では大きな大会の宛先が黙って途中までしか取れず、「全員に送ったつもりで一部にしか届かない」状態になります。
+
+`body` を無害化していないのは、この項目が**スタッフの書いたものを信頼する**前提だからです。投稿には担当大会のスタッフセッションが必要で、同じアカウントは既にエントリー一覧から全参加者のアドレスを読めます。ただし送信元は組織の検証済みドメインなので、他所からコピーしてきた HTML はスタッフ側で確認してから貼る運用が前提になります。
 
 ## 10. マイページ(参加者本人)
 
@@ -402,7 +429,6 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 `tasks.md` 上で計画されているが、現時点で API が存在しないものです。
 
-- 参加者へのメール送信機能(Task 6-3)
 - CSV 出力(Task 6-4)
 - 全地域横断ダッシュボード(Task 7-1)
 - レギュレーション(`regulations`)の登録・編集 API — 現状はエントリー時の検証と表示ラベルの JOIN でのみ読み出しており、書き込みは Supabase 上で直接行う運用です。
