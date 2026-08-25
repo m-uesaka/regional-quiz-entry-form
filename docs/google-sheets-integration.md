@@ -4,10 +4,19 @@
 
 ## 1. 全体像
 
-```
-地域スタッフが記入した       統括スタッフが管理画面で         プレビューを確認して
-Google スプレッドシート  →  スプレッドシートIDを入力し   →   「保存」を押すと
-(公開/リンク共有)           YAML プレビューを取得            form_field_defs に保存される
+```mermaid
+%%{init: {'theme':'base','flowchart':{'wrappingWidth':400},'themeVariables':{'background':'#ffffff','mainBkg':'#ffffff','primaryColor':'#ffffff','primaryTextColor':'#1f2328','primaryBorderColor':'#57606a','secondaryColor':'#ffffff','tertiaryColor':'#ffffff','lineColor':'#57606a','textColor':'#1f2328','edgeLabelBackground':'#ffffff','clusterBkg':'#ffffff','clusterBorder':'#ffffff'}}}%%
+flowchart LR
+  %% ダーク表示でも背景を白に固定するため、図全体を白塗りの subgraph で包んでいる
+  subgraph bg[" "]
+  direction LR
+  sheet["地域スタッフが記入した<br>Google スプレッドシート<br>(公開/リンク共有)"]
+  preview["統括スタッフが管理画面で<br>スプレッドシートIDを入力し<br>YAML プレビューを取得"]
+  saved["プレビューを確認して<br>「保存」を押すと<br>form_field_defs に保存される"]
+
+  sheet --> preview --> saved
+  end
+  style bg fill:#ffffff,stroke:#ffffff
 ```
 
 - スプレッドシートの読み取りは **API キー認証**で行う(サービスアカウントではない)。そのため取り込み対象のスプレッドシートは「リンクを知っている全員が閲覧可」に共有しておく必要がある。

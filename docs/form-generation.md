@@ -11,14 +11,23 @@
 
 氏名・ふりがな・掲載名・自由記述といった**全大会共通の項目**はハードコードされています。それ以外の大会固有の設問(「Tシャツのサイズ」「懇親会に参加しますか」など)を YAML で定義し、DB に展開してフォームを動的生成します。
 
-```
- [1] 定義                [2] 保存                  [3] 描画                [4] 回答の保存
- YAML テキスト  ──→  form_field_defs テーブル  ──→  DynamicFormField  ──→  entries.custom_field_values
-                          (大会ごと)                  (Svelte)              (jsonb)
-     ↑                                                                          │
-     └── Google スプレッドシートから自動生成することも可能                        │
-                                                                                │
- [5] 再描画・検証: 保存済み定義を YAML 形状に戻して再描画し、回答を定義と照合 ←───┘
+```mermaid
+%%{init: {'theme':'base','flowchart':{'wrappingWidth':400},'themeVariables':{'background':'#ffffff','mainBkg':'#ffffff','primaryColor':'#ffffff','primaryTextColor':'#1f2328','primaryBorderColor':'#57606a','secondaryColor':'#ffffff','tertiaryColor':'#ffffff','lineColor':'#57606a','textColor':'#1f2328','edgeLabelBackground':'#ffffff','clusterBkg':'#ffffff','clusterBorder':'#ffffff'}}}%%
+flowchart LR
+  %% ダーク表示でも背景を白に固定するため、図全体を白塗りの subgraph で包んでいる
+  subgraph bg[" "]
+  direction LR
+  sheet["Google スプレッドシート"]
+  yaml["[1] 定義<br>YAML テキスト"]
+  defs["[2] 保存<br>form_field_defs テーブル<br>(大会ごと)"]
+  field["[3] 描画<br>DynamicFormField<br>(Svelte)"]
+  values["[4] 回答の保存<br>entries.custom_field_values<br>(jsonb)"]
+
+  sheet -. "自動生成することも可能" .-> yaml
+  yaml --> defs --> field --> values
+  values -- "[5] 再描画・検証<br>保存済み定義を<br>YAML 形状に戻して再描画<br>回答を定義と照合" --> field
+  end
+  style bg fill:#ffffff,stroke:#ffffff
 ```
 
 登場する型は3つあり、それぞれ役割が違います。混同しやすいので最初に整理します。
@@ -95,12 +104,21 @@ export function parseFormDefinitionYaml(yamlText: string): FormDefinitionYaml {
 
 ## 4. 保存(`PUT /api/form-definitions/:tournamentId`)
 
-```
-リクエスト {yaml: "..."}                            ← FormDefinitionUploadSchema で検証
-  → parseFormDefinitionYaml()                       ← 失敗なら 400
-  → toFormFieldDefRows(definition, tournamentId)    ← camelCase の行に変換、display_order を採番
-  → toFormFieldDefTableRow()                        ← snake_case のカラム名に変換
-  → db.rpc('sync_form_field_defs', {...})           ← 削除+一括挿入を1トランザクションで
+```mermaid
+%%{init: {'theme':'base','flowchart':{'wrappingWidth':400},'themeVariables':{'background':'#ffffff','mainBkg':'#ffffff','primaryColor':'#ffffff','primaryTextColor':'#1f2328','primaryBorderColor':'#57606a','secondaryColor':'#ffffff','tertiaryColor':'#ffffff','lineColor':'#57606a','textColor':'#1f2328','edgeLabelBackground':'#ffffff','clusterBkg':'#ffffff','clusterBorder':'#ffffff'}}}%%
+flowchart TB
+  %% ダーク表示でも背景を白に固定するため、図全体を白塗りの subgraph で包んでいる
+  subgraph bg[" "]
+  direction TB
+  req["リクエスト {yaml: ...}<br>FormDefinitionUploadSchema で検証"]
+  parse["parseFormDefinitionYaml()<br>失敗なら 400"]
+  rows["toFormFieldDefRows(definition, tournamentId)<br>camelCase の行に変換、display_order を採番"]
+  tablerow["toFormFieldDefTableRow()<br>snake_case のカラム名に変換"]
+  rpc["db.rpc('sync_form_field_defs', ...)<br>削除+一括挿入を1トランザクションで"]
+
+  req --> parse --> rows --> tablerow --> rpc
+  end
+  style bg fill:#ffffff,stroke:#ffffff
 ```
 
 ### リクエストが「パース済み JSON」ではなく「生の YAML 文字列」である理由
@@ -214,10 +232,20 @@ const fields = $derived(data.entry.formFieldDefs.map(toFormFieldDefYaml));
 
 YAML は手書きもできますが、地域スタッフが記入した Google スプレッドシートから生成することもできます。
 
-```
-Google スプレッドシート ──(POST /api/sheet-import/preview)──→ YAML プレビュー
-                                                                    │
-                       (PUT /api/form-definitions/:tournamentId) ←──┘ スタッフが内容を確認して保存
+```mermaid
+%%{init: {'theme':'base','flowchart':{'wrappingWidth':400},'themeVariables':{'background':'#ffffff','mainBkg':'#ffffff','primaryColor':'#ffffff','primaryTextColor':'#1f2328','primaryBorderColor':'#57606a','secondaryColor':'#ffffff','tertiaryColor':'#ffffff','lineColor':'#57606a','textColor':'#1f2328','edgeLabelBackground':'#ffffff','clusterBkg':'#ffffff','clusterBorder':'#ffffff'}}}%%
+flowchart LR
+  %% ダーク表示でも背景を白に固定するため、図全体を白塗りの subgraph で包んでいる
+  subgraph bg[" "]
+  direction LR
+  sheet["Google スプレッドシート"]
+  preview["YAML プレビュー"]
+  saved["form_field_defs に保存"]
+
+  sheet -- "POST<br>/api/sheet-import/preview" --> preview
+  preview -- "スタッフが内容を確認して保存<br>PUT<br>/api/form-definitions/:tournamentId" --> saved
+  end
+  style bg fill:#ffffff,stroke:#ffffff
 ```
 
 `sheetRowsToYaml()`(`apps/backend/src/lib/sheet-to-form-definition.ts`)が、`A2:E` の5列(`key`, `label`, `type`, `required`, `options`)を `FormFieldDefYamlSchema` で検証しながら YAML 文字列に変換します。

@@ -9,16 +9,32 @@
 
 ## 1. 全体像
 
-```
-regions (地域)
-  ├─ tournaments (大会) ── unique(region_id, type)
-  │    ├─ regulations (レギュレーション)
-  │    ├─ form_field_defs (大会ごとの追加フォーム項目定義)
-  │    └─ entries (エントリー) ── unique(participant_id, tournament_id)
-  │         └─ email_verification_tokens (メール確認トークン)
-  ├─ participants (参加者アカウント)
-  │    └─ password_reset_tokens (パスワード再設定トークン)
-  └─ staff_accounts (スタッフアカウント)
+```mermaid
+%%{init: {'theme':'base','flowchart':{'wrappingWidth':400},'themeVariables':{'background':'#ffffff','mainBkg':'#ffffff','primaryColor':'#ffffff','primaryTextColor':'#1f2328','primaryBorderColor':'#57606a','secondaryColor':'#ffffff','tertiaryColor':'#ffffff','lineColor':'#57606a','textColor':'#1f2328','edgeLabelBackground':'#ffffff','clusterBkg':'#ffffff','clusterBorder':'#ffffff'}}}%%
+flowchart LR
+  %% ダーク表示でも背景を白に固定するため、図全体を白塗りの subgraph で包んでいる
+  subgraph bg[" "]
+  direction LR
+  regions["regions<br>(地域)"]
+  tournaments["tournaments<br>(大会)<br>unique(region_id, type)"]
+  regulations["regulations<br>(レギュレーション)"]
+  form_field_defs["form_field_defs<br>(大会ごとの追加フォーム項目定義)"]
+  entries["entries<br>(エントリー)<br>unique(participant_id, tournament_id)"]
+  email_verification_tokens["email_verification_tokens<br>(メール確認トークン)"]
+  participants["participants<br>(参加者アカウント)"]
+  password_reset_tokens["password_reset_tokens<br>(パスワード再設定トークン)"]
+  staff_accounts["staff_accounts<br>(スタッフアカウント)"]
+
+  regions --> tournaments
+  regions --> participants
+  regions --> staff_accounts
+  tournaments --> regulations
+  tournaments --> form_field_defs
+  tournaments --> entries
+  entries --> email_verification_tokens
+  participants --> password_reset_tokens
+  end
+  style bg fill:#ffffff,stroke:#ffffff
 ```
 
 基本となるデータモデルの前提は次の通りです。
@@ -42,18 +58,26 @@ regions (地域)
 
 ### entry_status の遷移
 
-```
-                       (メール確認リンクをクリック / 定員に空きあり)
-pending_verification ──────────────────────────────────────────→ confirmed
-        │                (定員が埋まっている)                        │
-        ├──────────────────────────────────────────────→ waitlisted │
-        │                                                    │       │
-        │                        (前が空いて繰り上げ)          │       │
-        │                     confirmed ←────────────────────┘       │
-        │                                                            │
-        └──────────────── cancelled ←────────────────────────────────┘
-                              │
-                              └── 同じ行を再利用して再エントリー → pending_verification
+```mermaid
+%%{init: {'theme':'base','flowchart':{'wrappingWidth':400},'themeVariables':{'background':'#ffffff','mainBkg':'#ffffff','primaryColor':'#ffffff','primaryTextColor':'#1f2328','primaryBorderColor':'#57606a','secondaryColor':'#ffffff','tertiaryColor':'#ffffff','lineColor':'#57606a','textColor':'#1f2328','edgeLabelBackground':'#ffffff','clusterBkg':'#ffffff','clusterBorder':'#ffffff'}}}%%
+flowchart TB
+  %% ダーク表示でも背景を白に固定するため、図全体を白塗りの subgraph で包んでいる
+  subgraph bg[" "]
+  direction TB
+  pending(["pending_verification"])
+  confirmed(["confirmed"])
+  waitlisted(["waitlisted"])
+  cancelled(["cancelled"])
+
+  pending -- "メール確認リンクを<br>クリック<br>(定員に空きあり)" --> confirmed
+  pending -- "メール確認リンクを<br>クリック<br>(定員が埋まっている)" --> waitlisted
+  waitlisted -- "前が空いて繰り上げ" --> confirmed
+  pending -- "キャンセル" --> cancelled
+  confirmed -- "キャンセル" --> cancelled
+  waitlisted -- "キャンセル" --> cancelled
+  cancelled -- "同じ行を再利用して<br>再エントリー" --> pending
+  end
+  style bg fill:#ffffff,stroke:#ffffff
 ```
 
 - `pending_verification` → `confirmed` / `waitlisted` は DB 関数 `confirm_entry_by_token()` が行う。
