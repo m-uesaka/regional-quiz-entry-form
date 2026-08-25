@@ -100,7 +100,11 @@ export function parseFormDefinitionYaml(yamlText: string): FormDefinitionYaml {
 
 `yaml` パッケージで文字列を JS の値に変換し、そのまま Zod で検証します。検証エラーは `ZodError` として送出され、API 層で 400 に変換されます。
 
-この関数と各スキーマは `packages/shared` に置かれているため、**バックエンドの検証とフロントエンドのフォームバリデーションが同じ定義を import します**。バックエンドとフロントエンドで別々にスキーマを定義してはいけません。
+この関数と各スキーマを `packages/shared` に置いているのは、**YAML の項目定義がバックエンドとフロントエンドの共通の契約だから**です。片側だけで定義を持つと、項目の型や必須条件がずれても気づけません。
+
+ただし**現時点で YAML をパース・検証しているのはバックエンドだけ**です(`apps/backend/src/routes/form-definitions.ts` と `apps/backend/src/lib/sheet-to-form-definition.ts`)。フロントエンドは YAML を扱わず、`@regional-quiz/shared` からは**項目定義の型 `FormFieldDefYaml` と変換関数 `toFormFieldDefYaml` のみを import**し、API から受け取った項目定義を `DynamicFormField.svelte` の描画に使っています。
+
+将来フロントエンドで YAML のプレビューやクライアント側バリデーションを行う場合も、この `packages/shared` の定義を import してください。バックエンドとフロントエンドで別々にスキーマを定義してはいけません。
 
 ## 4. 保存(`PUT /api/form-definitions/:tournamentId`)
 
