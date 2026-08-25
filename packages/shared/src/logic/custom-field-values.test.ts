@@ -112,6 +112,24 @@ describe('findCustomFieldValuesError', () => {
     expect(error).toContain('single value');
   });
 
+  it('rejects a scalar answer for a checkbox field', () => {
+    const error = findCustomFieldValuesError(FIELD_DEFS, {
+      ...VALID_VALUES,
+      allergies: '卵',
+    });
+
+    expect(error).toContain('list of values');
+  });
+
+  it('rejects a scalar answer for a boolean checkbox', () => {
+    const error = findCustomFieldValuesError(FIELD_DEFS, {
+      ...VALID_VALUES,
+      agree_to_rules: 'agree_to_rules',
+    });
+
+    expect(error).toContain('list of values');
+  });
+
   it('accepts any text for a free-text field', () => {
     const error = findCustomFieldValuesError(FIELD_DEFS, {
       ...VALID_VALUES,

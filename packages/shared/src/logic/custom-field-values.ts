@@ -42,7 +42,14 @@ export function findCustomFieldValuesError(
 
   for (const fieldDef of fieldDefs) {
     const value = values[fieldDef.fieldKey];
-    if (fieldDef.fieldType !== 'checkbox' && Array.isArray(value)) {
+    if (fieldDef.fieldType === 'checkbox') {
+      // A scalar answer would pass the option check below but the rendered
+      // form only shows checkbox selections stored as a list, so the
+      // selection would silently disappear when the entry is reopened.
+      if (value !== undefined && !Array.isArray(value)) {
+        return `custom field expects a list of values: ${fieldDef.fieldKey}`;
+      }
+    } else if (Array.isArray(value)) {
       return `custom field expects a single value: ${fieldDef.fieldKey}`;
     }
 
