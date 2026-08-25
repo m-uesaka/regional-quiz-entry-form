@@ -170,8 +170,8 @@ Props は `{field, value, onChange}` の3つで、状態は親が持ちます(�
 | --- | --- | --- |
 | `textarea` | — | `<label>` + `<textarea>` |
 | `radio` | 必須 | `<fieldset><legend>` + 各選択肢の `<input type="radio">` |
-| `checkbox` | あり | `<fieldset><legend>` + 各選択肢の `<input type="checkbox">` |
-| `checkbox` | なし | ラベル付きの単独 `<input type="checkbox">` |
+| `checkbox` | 1件以上 | `<fieldset><legend>` + 各選択肢の `<input type="checkbox">` |
+| `checkbox` | 省略または空配列(`[]`) | ラベル付きの単独 `<input type="checkbox">` |
 
 複数選択のグループは `<fieldset>` / `<legend>` でまとめており、単なる `<div>` + `<label>` ではありません。これはスクリーンリーダーが「グループのラベル」を各選択肢に関連付けられるようにするためです。
 
