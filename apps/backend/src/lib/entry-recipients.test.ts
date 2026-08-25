@@ -112,6 +112,17 @@ describe('fetchTournamentRecipients', () => {
     expect(urls).toHaveLength(2);
   });
 
+  it('rejects a page size that would never end the loop', async () => {
+    const urls = mockFetch([]);
+
+    for (const pageSize of [0, -1, 1.5, Number.NaN]) {
+      await expect(
+        fetchTournamentRecipients(ENV, TOURNAMENT_ID, undefined, pageSize),
+      ).rejects.toThrow(RangeError);
+    }
+    expect(urls).toEqual([]);
+  });
+
   it('de-duplicates an address that appears on several entries', async () => {
     mockFetch([[row('taro@example.com'), row('taro@example.com')]]);
 

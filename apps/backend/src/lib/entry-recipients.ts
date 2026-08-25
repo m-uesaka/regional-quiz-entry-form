@@ -29,7 +29,8 @@ interface RecipientRow {
  * @param env The Worker bindings.
  * @param tournamentId The tournament whose entries to mail.
  * @param statusFilter The single entry status to narrow the recipients to.
- * @param pageSize Rows to read per request.
+ * @param pageSize Rows to read per request; must be a positive integer.
+ * @throws RangeError If `pageSize` is not a positive integer.
  */
 export async function fetchTournamentRecipients(
   env: Bindings,
@@ -37,6 +38,16 @@ export async function fetchTournamentRecipients(
   statusFilter?: EntryStatus,
   pageSize: number = RECIPIENT_PAGE_SIZE,
 ): Promise<RecipientsResult> {
+  // A page size of 0 (or a fractional/negative one) would have every request
+  // come back empty without ever satisfying the short-page check below, i.e.
+  // an endless request loop, so reject it up front rather than hanging the
+  // caller.
+  if (!Number.isInteger(pageSize) || pageSize < 1) {
+    throw new RangeError(
+      `pageSize must be a positive integer, got ${pageSize}`,
+    );
+  }
+
   const db = createDbClient(env);
   const recipients = new Set<string>();
 
