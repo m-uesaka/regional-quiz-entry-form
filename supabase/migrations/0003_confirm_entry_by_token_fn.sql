@@ -11,17 +11,6 @@
 -- serializes concurrent confirmations for the same tournament, so two
 -- requests can no longer both read the same `confirmed` count and both
 -- squeeze in under capacity.
---
--- A valid, unused token is not enough on its own: the entry it was issued
--- for is re-read under the tournament lock and the confirmation is refused
--- unless it is still `pending_verification`. `cancel_own_entry` burns the
--- tokens outstanding when it runs, but a re-entry racing a cancellation can
--- insert a fresh token that the cancellation never sees, and without this
--- check that link would later resurrect the cancelled entry. Reading the
--- status only after `for update` on the tournament row is what makes the
--- check reliable: `cancel_own_entry` holds that same lock while it flips the
--- entry to `cancelled`, so a confirmation that started first blocks here and
--- then observes the cancellation instead of overwriting it.
 create or replace function confirm_entry_by_token(p_token_hash text)
 returns entry_status
 language plpgsql
@@ -32,7 +21,6 @@ declare
   v_expires_at timestamptz;
   v_used_at timestamptz;
   v_tournament_id uuid;
-  v_entry_status entry_status;
   v_capacity integer;
   v_confirmed_count bigint;
   v_waitlisted_count bigint;
@@ -52,15 +40,6 @@ begin
 
   select capacity into v_capacity
     from tournaments where id = v_tournament_id for update;
-
-  -- Re-read under the lock: a concurrent cancellation may have moved the
-  -- entry since the token lookup above.
-  select e.status into v_entry_status from entries e where e.id = v_entry_id;
-
-  if v_entry_status <> 'pending_verification' then
-    raise exception 'entry is not awaiting verification'
-      using errcode = 'P0003';
-  end if;
 
   select count(*) into v_confirmed_count
     from entries

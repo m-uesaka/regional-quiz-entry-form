@@ -7,9 +7,10 @@ type ConfirmResult =
 
 /**
  * The SQLSTATE the `confirm_entry_by_token` Postgres function raises (see
- * `supabase/migrations/0003_confirm_entry_by_token_fn.sql`) when the token
- * is unknown, expired, or already used, or when the entry it was issued for
- * is no longer awaiting verification (it was cancelled in the meantime).
+ * `supabase/migrations/0003_confirm_entry_by_token_fn.sql`, amended by
+ * `0008_confirm_entry_by_token_entry_status.sql`) when the token is unknown,
+ * expired, or already used, or when the entry it was issued for is no longer
+ * awaiting verification (it was cancelled in the meantime).
  */
 const INVALID_TOKEN_SQLSTATE = 'P0003';
 
