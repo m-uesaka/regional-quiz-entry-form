@@ -8,6 +8,7 @@ const WRONG_SECRET = 'wrong-session-secret';
 
 const PARTICIPANT_CLAIMS: ParticipantClaims = {
   sub: '44444444-4444-4444-4444-444444444444',
+  pwdChangedAt: Date.parse('2026-08-25T01:23:45.678Z'),
 };
 
 /** Signs `claims` (plus the given `exp`, if provided) with `secret`. */
@@ -62,6 +63,22 @@ describe('readParticipantClaims', () => {
 
   it('returns null for a validly signed token with no exp claim', async () => {
     const token = await tokenFor(PARTICIPANT_CLAIMS, undefined, SESSION_SECRET);
+
+    await expect(
+      readParticipantClaims(token, SESSION_SECRET),
+    ).resolves.toBeNull();
+  });
+
+  it('returns null for a validly signed token with no pwdChangedAt claim', async () => {
+    // The backend refuses these too: without the claim a session can't be
+    // shown to have been issued for the password that is current now (see
+    // `apps/backend/src/middleware/participant-auth.ts`), so the two sides
+    // have to agree on rejecting them.
+    const token = await tokenFor(
+      {sub: PARTICIPANT_CLAIMS.sub},
+      Math.floor(Date.now() / 1000) + 3600,
+      SESSION_SECRET,
+    );
 
     await expect(
       readParticipantClaims(token, SESSION_SECRET),

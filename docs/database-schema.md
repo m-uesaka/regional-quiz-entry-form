@@ -154,11 +154,15 @@ flowchart TB
 | `region_id` | uuid | not null, FK → `regions.id` | 所属地域 |
 | `email` | text | not null, **unique(全体)** | ログイン ID |
 | `password_hash` | text | not null | PBKDF2-SHA256 ハッシュ。`{16バイトのソルト}:{32バイトのハッシュ}` を hex 化してコロンで連結した形式(10万回反復) |
+| `password_changed_at` | timestamptz | not null, default `now()` | パスワードが最後に変わった時刻(`0011` で追加)。セッション失効の判定に使います |
 | `created_at` | timestamptz | not null, default `now()` | |
 
 - `email` は地域ごとではなく**システム全体で一意**です。そのため、ある参加者が別地域の大会にエントリーしようとすると `createEntry()` が 409(`already registered in another region`)を返します。
 - Supabase Auth ではなく自前のテーブルでアカウントを管理しています。パスワードのハッシュ化・検証は `apps/backend/src/lib/password.ts`(Web Crypto の PBKDF2)。Cloudflare Workers は Node.js ランタイムではないため、Node 依存のライブラリは使えません。
 - 既存メールアドレスでの再エントリー時は**パスワード照合を必須**にしています。これがないと、メールアドレスを知っている第三者が他人のアカウントにエントリーをぶら下げられてしまいます。
+- `password_changed_at` は**パスワード再設定で既存セッションを切る**ためのものです。参加者セッションはサーバ側に実体を持たない HS256 JWT(有効期間 7 日)なので、パスワードを変えただけでは発行済み Cookie は無効になりません。ログイン時にこの列の値を `pwdChangedAt` クレームとして JWT に載せ、`requireParticipant()` が毎回この列を読み直して**一致しないセッションを 401 で拒否**します。これがないと、Cookie を盗まれた参加者がパスワードを変更しても、攻撃者は最大 7 日間マイページにアクセスし続けられます。
+- 比較対象が**どちらも同じ列の読み取り値**である(「発行時刻より後か」ではない)のは意図的です。JWT の `iat` と突き合わせる形だと、Worker と Postgres の時計が数百ミリ秒ずれているだけで、登録直後・再設定直後のログインが自分のセッションで 401 になり得ます。
+- `reset_participant_password()` が `password_hash` と同じ UPDATE 文で更新するため、「新しいパスワードは有効だが古いセッションは生きている」状態は発生しません。
 
 ### entries — エントリー
 
@@ -219,6 +223,8 @@ flowchart TB
 - `POST /api/auth/participant/password-reset/request` が発行し、`POST /api/auth/participant/password-reset/confirm` が消費します(`apps/backend/src/lib/password-reset.ts`)。
 - `token_hash` は `email_verification_tokens` と同じく生のトークンの SHA-256 ハッシュで、生のトークンは受信者のメールボックスにしか存在しません。
 - 有効期限は発行から 1 時間です。`used_at` を立てることで使い回しを防ぎます(ワンタイム)。
+- `participant_id` には `0012` でインデックスを張っています。残りトークンの焼き捨て(`where participant_id = ... and used_at is null`)と、下記の期限切れ行の削除がどちらもこの列で引くためです。張る前は PK と `token_hash` の unique しかなく、両方ともテーブル全体の逐次スキャンでした。
+- 発行時に、その参加者の**期限切れの行を削除**します(`requestPasswordReset()`)。`/request` は未認証かつレート制限なしで 1 回ごとに 1 行増えるため、これがないとテーブルが無制限に育ちます。期限切れの行は `reset_participant_password()` がどのみち拒否するので、使えるリンクは消えません。
 - 消費・パスワード更新・残りトークンの焼き捨ては DB 関数 `reset_participant_password()` が1トランザクションで行います。参加者行を `for update` でロックしてからトークン行を読み直すため、同じ参加者宛ての同時リクエストは直列化され、2 回消費されることはありません。
 - 再設定に成功した時点で、同じ参加者に残っている未使用トークンもまとめて `used_at` を立てて焼き捨てます。古い再設定リンクがもう一度パスワードを変更できてしまわないようにするためです。この焼き捨てはパスワード更新と同じトランザクションなので、失敗すればパスワード更新ごとロールバックされ、「古いリンクが生き残ったまま再設定だけ成功する」状態にはなりません。
 
@@ -319,11 +325,12 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 1. ロックなしでトークン行を引き、どの参加者を対象にするかだけを得る。見つからなければ SQLSTATE `P0003` を raise。
 2. 参加者行を `for update` でロック(`0010` で追加)。
 3. **ロック取得後に**トークン行を `for update` で読み直す。未知 / 使用済み / 期限切れなら SQLSTATE `P0003` を raise(TypeScript 側はこれを 400 `invalid or expired token` に変換します)。
-4. 参加者の `password_hash` を更新。
+4. 参加者の `password_hash` と `password_changed_at` を更新(`0011` で `password_changed_at` を追加)。
 5. その参加者の未使用トークン(消費中のものを含む)をすべて `used_at = now()` にする。
 
 - 4 と 5 が同じトランザクションにあることが要点です。分けて実行していた頃は、5 の失敗時にパスワードだけ変わって古い再設定リンクが有効なまま残り、後から再度パスワードを奪われ得ました。
 - 2 の参加者行ロックを**トークン行より先に**取るのも要点です。`0009` は自分のトークン行しかロックしていなかったため、同じ参加者に 2 通の再設定リンクが出ている状態で両方が同時にクリックされると、互いに相手のトークン行と共有の参加者行を待ち合ってデッドロックし、片方が有効なリンクで 500 を受け取っていました。先に必ず参加者行で待たせることで、後続は先行のコミット後にトークンを読み直し、`used_at` 済みとして 400 になります。
+- 4 で `password_changed_at` を同じ UPDATE 文に含めるのも要点です。参加者セッションは 7 日有効なステートレス JWT なので、この列が動かない限り、再設定前に発行された Cookie(盗まれたものを含む)はそのまま使えてしまいます。
 - パスワードのハッシュ化(PBKDF2)は意図的に高コストなため、TypeScript 側はこの関数を呼ぶ前にトークンの存在を軽く 1 回 SELECT して弾きます。あくまで早期リターン用で、正否の判定はロック下で再チェックするこの関数が行います。
 
 ### マイグレーションを修正するときの注意
@@ -344,3 +351,5 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | `0008_confirm_entry_by_token_entry_status.sql` | 確定前のステータス再確認を追加(`0003` を再定義) |
 | `0009_reset_participant_password_fn.sql` | `reset_participant_password()` |
 | `0010_reset_participant_password_participant_lock.sql` | 参加者行を先にロックして同時再設定を直列化(`0009` を再定義) |
+| `0011_participants_password_changed_at.sql` | `participants.password_changed_at` を追加し、再設定時に打刻(`0010` を再定義) |
+| `0012_password_reset_tokens_participant_id_idx.sql` | `password_reset_tokens.participant_id` のインデックス |

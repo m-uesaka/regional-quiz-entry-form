@@ -188,6 +188,57 @@ describe.skipIf(!(await isDbReachable()))(
       expect(tokenRow.used_at).not.toBeNull();
     });
 
+    it('confirmPasswordReset moves password_changed_at, cutting existing sessions', async () => {
+      const participant = await createParticipantFixture();
+      const token = await createTokenFixture(participant.id);
+      const [before] = await sql`
+        select password_changed_at from participants where id = ${participant.id}
+      `;
+
+      expect(
+        await confirmPasswordReset(env, {
+          token,
+          newPassword: 'brand-new-password',
+        }),
+      ).toEqual({ok: true});
+
+      // Participant sessions are stateless week-long JWTs carrying this value
+      // as `pwdChangedAt`; `requireParticipant()` refuses any that no longer
+      // match. If the reset left the column alone, a stolen cookie would
+      // outlive the reset meant to revoke it.
+      const [after] = await sql`
+        select password_changed_at from participants where id = ${participant.id}
+      `;
+      expect(new Date(after.password_changed_at).getTime()).toBeGreaterThan(
+        new Date(before.password_changed_at).getTime(),
+      );
+    });
+
+    it('requestPasswordReset drops the participant’s expired tokens', async () => {
+      const participant = await createParticipantFixture();
+      const expired = await createTokenFixture(participant.id, {
+        expiresAt: '2020-01-01T00:00:00Z',
+      });
+      const live = await createTokenFixture(participant.id);
+
+      await requestPasswordReset(env, participant.email);
+
+      // `/request` is unauthenticated and unthrottled, so without this the
+      // table grows a row per call forever. Only rows that were already
+      // refused for being expired go: the still-usable link stays.
+      const remaining = await sql`
+        select token_hash from password_reset_tokens
+        where participant_id = ${participant.id}
+      `;
+      const hashes = remaining.map((row: {token_hash: string}) =>
+        String(row.token_hash),
+      );
+      expect(hashes).not.toContain(await hashToken(expired));
+      expect(hashes).toContain(await hashToken(live));
+      // The freshly issued one is there too.
+      expect(hashes.length).toBe(2);
+    });
+
     it('confirmPasswordReset rejects a reused token', async () => {
       const participant = await createParticipantFixture();
       const token = await createTokenFixture(participant.id);

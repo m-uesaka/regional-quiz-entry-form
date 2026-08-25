@@ -11,16 +11,20 @@ import {
 } from '../lib/password-reset';
 
 export const passwordResetRoute = new Hono<Env>()
-  .post(
-    '/request',
-    zValidator('json', PasswordResetRequestInputSchema),
-    async c => {
-      await requestPasswordReset(c.env, c.req.valid('json').email);
-      // The same response whether or not the address is registered, so this
-      // endpoint can't be used to enumerate participant emails.
-      return c.json({ok: true});
-    },
-  )
+  .post('/request', zValidator('json', PasswordResetRequestInputSchema), c => {
+    // Handed to `waitUntil()` rather than awaited: an identical body isn't
+    // enough to keep this endpoint from enumerating participant emails if
+    // the response time still gives the answer away. A registered address
+    // costs a token insert and an awaited Resend call -- typically hundreds
+    // of milliseconds -- that an unregistered one doesn't, so answering
+    // before any of that runs is what actually makes the two cases
+    // indistinguishable. Nothing about the outcome is reported anyway (see
+    // `requestPasswordReset`), so there is nothing to wait for.
+    c.executionCtx.waitUntil(
+      requestPasswordReset(c.env, c.req.valid('json').email),
+    );
+    return c.json({ok: true});
+  })
   .post(
     '/confirm',
     zValidator('json', PasswordResetConfirmInputSchema),

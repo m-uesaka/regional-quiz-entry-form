@@ -22,7 +22,9 @@ interface ResetTokenRow {
 
 /**
  * The SQLSTATE the `reset_participant_password` Postgres function raises
- * (see `supabase/migrations/0009_reset_participant_password_fn.sql` and
+ * (currently defined by
+ * `supabase/migrations/0011_participants_password_changed_at.sql`, which
+ * redefines `0009_reset_participant_password_fn.sql` and
  * `0010_reset_participant_password_participant_lock.sql`) when the token is
  * unknown, already used, or expired.
  */
@@ -34,10 +36,16 @@ const INVALID_TOKEN_SQLSTATE = 'P0003';
  *
  * Nothing about the outcome is reported back: an unregistered address, a
  * token that couldn't be persisted and a mail send that failed all resolve
- * exactly like a link that went out, so `POST
- * /auth/participant/password-reset/request` can answer identically in every
- * case instead of becoming an oracle for which emails are registered.
- * Internal failures are logged for staff instead.
+ * exactly like a link that went out. Internal failures are logged for staff
+ * instead.
+ *
+ * An identical body is not on its own enough to keep `POST
+ * /auth/participant/password-reset/request` from being an oracle for which
+ * emails are registered, because the work is not identical: an unregistered
+ * address costs one read, a registered one additionally costs a hash, an
+ * insert and a round trip to Resend, which is measurable from the outside.
+ * The route therefore hands this whole function to `waitUntil()` and answers
+ * before any of it runs -- so it must not be awaited on the response path.
  * @param env The Worker bindings.
  * @param email The address a reset link was requested for.
  */
@@ -61,6 +69,26 @@ export async function requestPasswordReset(
   }
   if (!participant) {
     return;
+  }
+
+  // Reset links this participant let expire are dropped as they are
+  // replaced. `/request` is unauthenticated and unthrottled, so without this
+  // anyone looping it against one address grows `password_reset_tokens`
+  // without bound; pruning keeps a participant's rows to the handful they
+  // asked for within the last `TOKEN_TTL_MS`. Expired rows are refused by
+  // `reset_participant_password` anyway, so nothing usable is deleted here.
+  const {error: pruneError} = await db
+    .from('password_reset_tokens')
+    .delete()
+    .eq('participant_id', participant.id)
+    .lt('expires_at', new Date().toISOString());
+  if (pruneError) {
+    // Housekeeping, not part of the reset: a failure here leaves rows behind
+    // but must not stop the participant from getting their link.
+    console.error('failed to prune expired password reset tokens', {
+      participantId: participant.id,
+      error: pruneError.message,
+    });
   }
 
   const token = generateToken();
@@ -111,6 +139,11 @@ export async function requestPasswordReset(
  * different links for the same participant are applied one after the other
  * and the second is refused as already used, rather than racing (see the
  * migrations for details).
+ *
+ * The same statement stamps `participants.password_changed_at`, which is what
+ * makes a reset cut the participant's existing sessions: they are stateless
+ * week-long JWTs, so `requireParticipant()` checks the value each one carries
+ * against that column rather than trusting the signature alone.
  * @param env The Worker bindings.
  * @param input The validated raw token and the new password.
  */
