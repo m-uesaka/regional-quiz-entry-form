@@ -31,9 +31,11 @@ describe('POST /login', () => {
   });
 
   it('succeeds with correct credentials and sets a JWT cookie signed with SESSION_SECRET', async () => {
+    const passwordChangedAt = '2026-08-25T01:23:45.678+00:00';
     mockParticipantFetch({
       id: PARTICIPANT_ID,
       password_hash: await hashPassword('correct-password'),
+      password_changed_at: passwordChangedAt,
     });
 
     const res = await participantAuthRoute.request(
@@ -60,7 +62,12 @@ describe('POST /login', () => {
       .split('participant_session=')[1]
       .split(';')[0];
     const verifiedPayload = await verify(token, ENV.SESSION_SECRET, 'HS256');
-    expect(verifiedPayload).toMatchObject({sub: PARTICIPANT_ID});
+    // `pwdChangedAt` is what lets a later password reset cut this session:
+    // `requireParticipant()` refuses it once the column no longer matches.
+    expect(verifiedPayload).toMatchObject({
+      sub: PARTICIPANT_ID,
+      pwdChangedAt: Date.parse(passwordChangedAt),
+    });
   });
 
   it('returns 401 for a wrong password', async () => {

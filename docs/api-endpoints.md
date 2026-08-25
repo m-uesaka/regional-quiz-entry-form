@@ -38,11 +38,15 @@ JWT を httpOnly Cookie に格納して送受信します。DB 上にセッシ�
 | Cookie 名 | 対象 | 有効期間 | クレーム |
 | --- | --- | --- | --- |
 | `staff_session` | スタッフ | 12 時間 | `sub`, `role`, `regionId`, `tournamentType`, `exp` |
-| `participant_session` | 参加者 | 7 日間 | `sub`, `exp` |
+| `participant_session` | 参加者 | 7 日間 | `sub`, `pwdChangedAt`, `iat`, `exp` |
 
 Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 
 検証時の注意点として、`hono/jwt` の `verify()` は `exp` クレームが**存在するときだけ**期限を検証します。そのため各ミドルウェアは「`exp` が number であること」を明示的に確認しています。これがないと、`exp` を持たない正しく署名されたトークンが無期限のセッションとして通ってしまいます。
+
+参加者セッションだけは署名の検証に加えて **DB 参照が 1 回入ります**。`pwdChangedAt` はログイン時点の `participants.password_changed_at`(エポックミリ秒)で、`requireParticipant()` が毎リクエストその列を読み直し、**値が動いていたら 401** にします。パスワード再設定でこの列が更新されるため、再設定前に発行された Cookie(盗まれたものを含む)はその時点で使えなくなります。ステートレスな JWT のままだと、パスワードを変えても攻撃者のアクセスが最大 7 日間続いてしまいます。
+
+比較を「発行時刻より後か」ではなく**同じ列の値どうしの一致**にしているのは、Worker と Postgres の時計ずれで登録直後・再設定直後のログインが自分のセッションで 401 になるのを避けるためです。
 
 ### 認可ミドルウェア
 
@@ -53,7 +57,7 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 | `requireGeneralStaff()` | 有効な `staff_session` かつ `role === 'general'` | 401 / 403 |
 | `requireStaffForTournament()` | 有効な `staff_session`。`general` なら無条件通過、`regional` なら `:tournamentId` の大会が担当範囲(`region_id` と `type` が両方一致)であること | 401 / 403 / 500 |
 | `requireStaffForEntry()` | 同上。ただし `:entryId` から `tournament_id` を辿って範囲を判定する | 401 / 403 / 500 |
-| `requireParticipant()` | 有効な `participant_session` | 401 |
+| `requireParticipant()` | 有効な `participant_session`。加えて `pwdChangedAt` クレームが `participants.password_changed_at` と一致すること(パスワード再設定でセッションが切れる) | 401 / 500 |
 
 > **ルーティング上の注意**: `routes/tournaments.ts` はミドルウェアを `.use('*', ...)` ではなく**ルート単位**で付けています。このサブアプリは `/tournaments` にマウントされており、同じ `/tournaments` に公開ルート(`routes/entries.ts` / `routes/entry-list.ts`)もマウントされているためです。Hono はミドルウェアを「どのサブアプリで登録されたか」ではなく**リクエストの最終パス**でマッチさせるので、ワイルドカードを使うと公開ルートまで認証必須になってしまいます。
 
@@ -81,6 +85,8 @@ if ('yaml' in body) {
 | GET | `/api/healthz` | なし |
 | POST | `/api/auth/staff/login` | なし |
 | POST | `/api/auth/participant/login` | なし |
+| POST | `/api/auth/participant/password-reset/request` | なし |
+| POST | `/api/auth/participant/password-reset/confirm` | なし(トークン) |
 | GET | `/api/tournaments` | 統括スタッフ |
 | POST | `/api/tournaments` | 統括スタッフ |
 | PATCH | `/api/tournaments/:id` | 統括スタッフ |
@@ -123,6 +129,39 @@ if ('yaml' in body) {
 - リクエスト: `ParticipantLoginInputSchema` — `{email, password}`
 - `200`: `{"ok": true}`
 - `401` / `500`: スタッフ側と同じ(ダミーハッシュによる時間平準化も同様)
+
+発行する JWT には `sub` / `exp` に加えて `pwdChangedAt`(このログインで照合したパスワードの `password_changed_at`)を載せます。追加のクエリは不要で、パスワードハッシュと同じ SELECT で取得しています。
+
+### `POST /api/auth/participant/password-reset/request`
+
+参加者のパスワード再設定リンクの送信要求。`lib/password-reset.ts` の `requestPasswordReset()` が、該当する参加者がいれば使い捨てトークン(有効期限 1 時間)を `password_reset_tokens` に発行し、`FRONTEND_URL/password-reset?token=...` へのリンクをメールで送ります。トークンは Task 3-4 のメール確認トークンと同じく SHA-256 ハッシュのみを保存し、生のトークンは受信者のメールボックスにしか存在しません。
+
+- リクエスト: `PasswordResetRequestInputSchema` — `{email: string(email)}`
+- `200`: `{"ok": true}`
+- `400`: メール形式が不正(zValidator)
+
+メールアドレスが未登録の場合、トークンの保存に失敗した場合、メール送信に失敗した場合のいずれも、送信できた場合と同じ `200 {"ok": true}` を返します。内部的な失敗は `console.error` に記録されます。
+
+レスポンスが同じでも、**かかる時間が同じでなければ**メールアドレスの列挙に使えてしまいます(未登録なら SELECT 1 回、登録済みならハッシュ化・INSERT・Resend への往復が加わり、通常 100〜500ms 差が出ます)。そのためルートは `requestPasswordReset()` を `await` せず `c.executionCtx.waitUntil()` に渡し、**上記の処理を一切始めないうちに** 200 を返します。この関数は結果を呼び出し元に返さないので、待つ必要もありません。
+
+発行時には、その参加者の**期限切れトークンを削除**します。`/request` は未認証・レート制限なしで 1 回ごとに 1 行増えるため、これがないと `password_reset_tokens` が無制限に育ちます。なお**レート制限そのものは未実装**です(メール爆撃・Resend のクォータ消費は防げません)。
+
+### `POST /api/auth/participant/password-reset/confirm`
+
+トークンと新しいパスワードを受け取り、パスワードを再設定します。
+
+- リクエスト: `PasswordResetConfirmInputSchema` — `{token: string(min 1), newPassword: string(min 8)}`
+- `200`: `{"ok": true}`
+- `400`: `{"error": "invalid or expired token"}`(未知・使用済み・期限切れのトークン)
+- `500`: `{"error": "internal server error"}`
+
+未認証で叩けるエンドポイントなので、スタッフ/参加者ログインと同様に Supabase のメッセージはレスポンスに含めず `console.error` に記録するだけにしています。
+
+トークンの検証・パスワード更新・残りトークンの焼き捨ては、DB 関数 `reset_participant_password()` が 1 トランザクションで行います(`supabase/migrations/0011_participants_password_changed_at.sql`)。まず**参加者行を `for update` でロック**し、そのロックの下でトークン行を読み直して使用済み・期限切れを判定するため、同じ参加者宛ての同時リクエストは直列化され、2 番目は `used_at` 済みとして 400 になります。詳細は [`database-schema.md`](./database-schema.md#reset_participant_passwordp_token_hash-p_password_hash) を参照してください。
+
+再設定に成功すると、その参加者に対して残っている他の未使用トークンもまとめて使用済みにします。同じトランザクションなので、焼き捨てに失敗すればパスワード更新ごとロールバックされます。
+
+同じ UPDATE 文で `participants.password_changed_at` も打刻され、**その参加者の既存セッションがすべて無効になります**。参加者セッションは 7 日有効なステートレス JWT なので、これがないと Cookie を盗まれた参加者がパスワードを変えても攻撃者のアクセスは最大 7 日間続きます。
 
 ## 5. 大会管理(統括スタッフ)
 
@@ -363,7 +402,6 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 `tasks.md` 上で計画されているが、現時点で API が存在しないものです。
 
-- パスワード再設定(Task 5-5) — `password_reset_tokens` テーブルだけ先行して存在します。
 - 参加者へのメール送信機能(Task 6-3)
 - CSV 出力(Task 6-4)
 - 全地域横断ダッシュボード(Task 7-1)

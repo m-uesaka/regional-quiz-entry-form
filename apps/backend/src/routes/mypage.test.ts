@@ -41,18 +41,13 @@ const env: Bindings = {
   SESSION_SECRET,
 };
 
-async function participantCookie(participantId: string): Promise<string> {
-  const token = await sign(
-    {sub: participantId, exp: Math.floor(Date.now() / 1000) + 3600},
-    SESSION_SECRET,
-  );
-  return `participant_session=${token}`;
-}
-
 const ENTRY_ID = '11111111-1111-1111-1111-111111111111';
 
-// Short-circuits in `requireParticipant()` before any database call, so it
-// runs unconditionally (including CI).
+// Rejected by `requireParticipant()` before any database call, so these run
+// unconditionally (including CI). Anything that needs a real session belongs
+// in the integration block below instead: the middleware now checks the
+// session against the participant's row, so a fabricated participant id is
+// answered with 401 before validation is ever reached.
 describe('mypage routes (request validation)', () => {
   it('rejects a request without a participant session with 401', async () => {
     const res = await app.request('/api/mypage/entries', {}, env);
@@ -88,25 +83,6 @@ describe('mypage routes (request validation)', () => {
     );
 
     expect(res.status).toBe(401);
-  });
-
-  it('rejects a PATCH with an invalid body with 400', async () => {
-    const res = await app.request(
-      `/api/mypage/entries/${ENTRY_ID}`,
-      {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          cookie: await participantCookie(
-            '22222222-2222-2222-2222-222222222222',
-          ),
-        },
-        body: JSON.stringify({name: ''}),
-      },
-      env,
-    );
-
-    expect(res.status).toBe(400);
   });
 });
 
@@ -188,6 +164,27 @@ describe.skipIf(!(await isDbReachable()))(
         returning id
       `;
       return participant.id as string;
+    }
+
+    /**
+     * A session cookie for `participantId` carrying the
+     * `password_changed_at` currently on their row: `requireParticipant()`
+     * refuses a session that names any other value, which is how a password
+     * reset cuts the sessions that predate it.
+     */
+    async function participantCookie(participantId: string): Promise<string> {
+      const [participant] = await sql`
+        select password_changed_at from participants where id = ${participantId}
+      `;
+      const token = await sign(
+        {
+          sub: participantId,
+          pwdChangedAt: new Date(participant.password_changed_at).getTime(),
+          exp: Math.floor(Date.now() / 1000) + 3600,
+        },
+        SESSION_SECRET,
+      );
+      return `participant_session=${token}`;
     }
 
     async function createEntry(
@@ -375,6 +372,55 @@ describe.skipIf(!(await isDbReachable()))(
       );
 
       expect(res.status).toBe(404);
+    });
+
+    it('rejects a PATCH with an invalid body with 400', async () => {
+      const regionId = await createRegion('patch-invalid');
+      const participantId = await createParticipant(
+        regionId,
+        'mypage-patch-invalid@example.com',
+      );
+
+      const res = await app.request(
+        `/api/mypage/entries/${ENTRY_ID}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            cookie: await participantCookie(participantId),
+          },
+          body: JSON.stringify({name: ''}),
+        },
+        env,
+      );
+
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects a session issued before the password was reset with 401', async () => {
+      const regionId = await createRegion('reset-cuts-session');
+      const participantId = await createParticipant(
+        regionId,
+        'mypage-reset-cuts-session@example.com',
+      );
+      const cookie = await participantCookie(participantId);
+
+      // Exactly what `reset_participant_password` does to the row, minus the
+      // token bookkeeping: the session was valid a moment ago and has to stop
+      // working now, rather than a week from now when it expires.
+      await sql`
+        update participants
+          set password_hash = 'new-hash', password_changed_at = now()
+          where id = ${participantId}
+      `;
+
+      const res = await app.request(
+        '/api/mypage/entries',
+        {headers: {cookie}},
+        env,
+      );
+
+      expect(res.status).toBe(401);
     });
 
     it('updates the entry within the entry period', async () => {

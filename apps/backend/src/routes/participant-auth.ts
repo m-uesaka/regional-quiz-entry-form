@@ -17,6 +17,7 @@ const DUMMY_PASSWORD_HASH = `${'00'.repeat(16)}:${'00'.repeat(32)}`;
 interface ParticipantRow {
   id: string;
   password_hash: string;
+  password_changed_at: string;
 }
 
 export const participantAuthRoute = new Hono<Env>().post(
@@ -27,7 +28,7 @@ export const participantAuthRoute = new Hono<Env>().post(
     const db = createDbClient(c.env);
     const {data: participant, error} = await db
       .from('participants')
-      .select('id, password_hash')
+      .select('id, password_hash, password_changed_at')
       .eq('email', email)
       .returns<ParticipantRow[]>()
       .maybeSingle();
@@ -44,10 +45,18 @@ export const participantAuthRoute = new Hono<Env>().post(
       return c.json({error: 'invalid credentials'}, 401);
     }
 
+    // `pwdChangedAt` records which password this session was issued for, so
+    // that a later reset can cut it (see `middleware/participant-auth.ts`);
+    // without it the session would outlive the reset by up to
+    // `SESSION_TTL_SECONDS`. It costs nothing extra -- the column comes back
+    // with the hash this login just verified.
+    const issuedAt = Math.floor(Date.now() / 1000);
     const token = await sign(
       {
         sub: participant.id,
-        exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS,
+        pwdChangedAt: Date.parse(participant.password_changed_at),
+        iat: issuedAt,
+        exp: issuedAt + SESSION_TTL_SECONDS,
       },
       c.env.SESSION_SECRET,
     );
