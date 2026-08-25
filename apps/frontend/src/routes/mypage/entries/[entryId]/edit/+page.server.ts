@@ -127,9 +127,13 @@ export const actions = {
       if (res.status === 400) {
         return fail(400, {error: '入力内容を確認してください', values});
       }
+      // The API answers 403 both when the entry period has closed and when
+      // the entry was cancelled, and the two can only be told apart from a
+      // free-form message. Since either can happen between the page load and
+      // this submission, the message stays neutral about which one refused.
       if (res.status === 403) {
         return fail(403, {
-          error: 'エントリー期間外のため編集できません',
+          error: 'エントリー期間外またはキャンセル済みのため編集できません',
           values,
         });
       }

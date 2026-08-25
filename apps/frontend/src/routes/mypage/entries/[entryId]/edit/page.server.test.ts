@@ -232,8 +232,13 @@ describe('mypage entry edit form action', () => {
       validFormData(),
     );
 
+    // A 403 covers both a closed entry period and a cancelled entry, so the
+    // message must not claim one of the two reasons.
     await expect(actions.default(event)).resolves.toMatchObject({
       status: 403,
+      data: {
+        error: 'エントリー期間外またはキャンセル済みのため編集できません',
+      },
     });
   });
 
