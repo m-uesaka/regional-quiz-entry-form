@@ -63,9 +63,12 @@ export function buildEntriesCsv(
  * the staff detail page renders the same answer.
  *
  * A boolean checkbox stores its own field key when checked, which means
- * nothing to a reader, so it exports as a yes/no label. A checkbox offering
- * options stores every selected one, so those are joined into one cell
- * rather than spilling into columns the header row doesn't cover.
+ * nothing to a reader, so a stored answer exports as a yes/no label; an
+ * entry with no stored answer at all still exports as an empty cell, so a
+ * field added after those entries were submitted isn't reported as a `no`
+ * nobody gave. A checkbox offering options stores every selected one, so
+ * those are joined into one cell rather than spilling into columns the
+ * header row doesn't cover.
  * @param fieldDef The field the answer belongs to.
  * @param value The stored answer, or `undefined` when the entry has none.
  */
@@ -74,6 +77,9 @@ function formatCustomFieldValue(
   value: string | string[] | undefined,
 ): string {
   if (isBooleanCheckbox(fieldDef)) {
+    if (value === undefined) {
+      return '';
+    }
     return Array.isArray(value) && value.includes(fieldDef.fieldKey)
       ? BOOLEAN_CHECKBOX_LABELS.checked
       : BOOLEAN_CHECKBOX_LABELS.unchecked;
