@@ -197,7 +197,7 @@ required={field.required && !hasCheckboxSelection}
 
 回答は `entries.custom_field_values`(jsonb)に `{ field_key: string | string[] }` の形で保存されます。共有型としては `CustomFieldValues` です。
 
-サーバは**クライアントから送られた回答をそのまま信用しません**。`findCustomFieldValuesError()`(`packages/shared/src/logic/custom-field-values.ts`)が、その大会の `form_field_defs` と照合します。これがないと、API を直接叩くことで「描画されたフォームからは絶対に生成し得ない回答」を保存できてしまいます。
+**エントリー編集 API(`PATCH /api/mypage/entries/:entryId`)では**、サーバはクライアントから送られた回答をそのまま信用せず、`findCustomFieldValuesError()`(`packages/shared/src/logic/custom-field-values.ts`)がその大会の `form_field_defs` と照合します。この照合がないと、API を直接叩くことで「描画されたフォームからは絶対に生成し得ない回答」を保存できてしまいます。一方、新規エントリー API(`POST /api/tournaments/:tournamentId/entries`)の `createEntry()` はこの照合を行わないため、回答が定義どおりであることを保証できるのは編集 API に限られます(後述の「現状の注意点」を参照)。
 
 検証項目:
 
