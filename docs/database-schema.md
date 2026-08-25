@@ -188,8 +188,9 @@ flowchart TB
 
 `waitlist_position` について:
 
-- 1 始まりの連番で、**常に隙間なく詰められている**ことが不変条件です。`cancel_own_entry()` は waitlisted な行をキャンセルする際、後ろの行を1つずつ前に詰めます。
-- この不変条件があるため、`confirm_entry_by_token()` は「次の順位 = 現在の waitlisted 件数 + 1」という単純な計算で衝突しない順位を割り当てられます。
+- 1 始まりの整数です。`cancel_own_entry()` は waitlisted な行をキャンセルする際、後ろの行を1つずつ前に詰めます。
+- ただし**常に隙間なく詰まっているとは限りません**。`promote_next_waitlisted_entry()` は先頭のエントリーを `confirmed` にしてその `waitlist_position` を `null` にするだけで、後続の順位を詰めないため、繰り上げのたびに欠番が残ります(順位 1〜4 の 4 件から先頭を繰り上げると 2, 3, 4 が残る)。
+- そのため、`confirm_entry_by_token()` の「次の順位 = 現在の waitlisted 件数 + 1」という採番は既存の順位と**衝突し得ます**(上の例では waitlisted 件数 3 なので順位 4 を採番するが、すでに 4 が存在する)。`waitlist_position` には unique 制約がないため重複してもエラーにはならず、参加者に見える順位が同着になります。繰り上げ時にも後続を詰めるか、採番を `max(waitlist_position) + 1` にすれば解消できますが、現時点では未対応です。
 
 ### email_verification_tokens — メール確認トークン
 
@@ -291,6 +292,7 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 
 - 大会行を `for update` でロックしてから **定員を再チェック**します(`0007` で追加)。`cancelOwnEntry()` はキャンセルをコミットしてからこの関数を呼ぶため、その隙間に `pending_verification` のエントリーが空席へ確定してしまう可能性があります。再チェックがないと同じ席を二重に配ってしまい、定員超過になります。
 - 空席がすでに埋まっていた場合は、キューを一切触らずに何も返しません(呼び出し側はこれを「繰り上げ対象なし」と同じに扱います)。
+- 繰り上げた行の `waitlist_position` を `null` にするだけで、**後続の順位は詰めません**。欠番が残るため、`confirm_entry_by_token()` の採番と衝突し得ます(前述の `waitlist_position` の項を参照)。
 
 ### cancel_own_entry(p_entry_id, p_participant_id)
 
