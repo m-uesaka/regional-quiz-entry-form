@@ -44,13 +44,13 @@
   * Task 4-2: 公開エントリーリストページ ✅
 * Phase 5: 参加者向けマイページ
   * Task 5-1: 参加者ログイン API とセッション管理 ✅
-  * Task 5-2: マイページ トップ(複数大会のエントリー状況)
-  * Task 5-3: エントリー内容編集
-  * Task 5-4: エントリーキャンセルと再エントリー
+  * Task 5-2: マイページ トップ(複数大会のエントリー状況) ✅
+  * Task 5-3: エントリー内容編集 ✅
+  * Task 5-4: エントリーキャンセルと再エントリー ✅
   * Task 5-5: パスワード再設定機能
 * Phase 6: 地域スタッフ向け管理ページ
   * Task 6-1: スタッフ認証・権限管理 ✅
-  * Task 6-2: エントリー状況一覧・詳細確認
+  * Task 6-2: エントリー状況一覧・詳細確認 ✅
   * Task 6-3: 参加者へのメール送信機能
   * Task 6-4: CSV 出力機能
 * Phase 7: 統括スタッフ向け管理ページ
@@ -71,8 +71,8 @@ graph TD
   P1 --> P2["Phase 2: 大会・フォーム定義管理"]:::done
   P2 --> P3["Phase 3: エントリーフォーム機能"]:::done
   P3 --> P4["Phase 4: エントリーリスト公開"]:::done
-  P3 --> P5["Phase 5: マイページ"]
-  P2 --> P6["Phase 6: 地域スタッフ管理ページ"]
+  P3 --> P5["Phase 5: マイページ"]:::wip
+  P2 --> P6["Phase 6: 地域スタッフ管理ページ"]:::wip
   P3 --> P6
   P6 --> P7["Phase 7: 統括スタッフ管理ページ"]
   P4 --> P8["Phase 8: 非機能・仕上げ"]
@@ -80,10 +80,10 @@ graph TD
   P7 --> P8
 
   classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
-  classDef next fill:#fef3c7,stroke:#d97706,color:#78350f;
+  classDef wip fill:#fef3c7,stroke:#d97706,color:#78350f;
 ```
 
-凡例: 緑 = 完了、黄 = 次に着手可能(Phase 6 内の一部タスクが次に着手可能)
+凡例: 緑 = 完了、黄 = 進行中(Phase 5 は Task 5-5、Phase 6 は Task 6-3 / 6-4 が残っている)
 
 ### Phase 内 Task の依存グラフ
 
@@ -150,19 +150,22 @@ graph TD
 
 ```mermaid
 graph TD
-  T51["5-1 ログイン"] --> T52["5-2 マイページTop"]
-  T52 --> T53["5-3 編集"]
-  T52 --> T54["5-4 キャンセル/再エントリー"]
-  T51 --> T55["5-5 パスワード再設定"]
+  T51["5-1 ログイン"]:::done --> T52["5-2 マイページTop"]:::done
+  T52 --> T53["5-3 編集"]:::done
+  T52 --> T54["5-4 キャンセル/再エントリー"]:::done
+  T51 --> T55["5-5 パスワード再設定"]:::next
+
+  classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
+  classDef next fill:#fef3c7,stroke:#d97706,color:#78350f;
 ```
 
 #### Phase 6: 地域スタッフ管理ページ
 
 ```mermaid
 graph TD
-  T61["6-1 スタッフ認証"]:::done --> T62["6-2 一覧/詳細"]:::next
-  T62 --> T63["6-3 メール送信"]
-  T62 --> T64["6-4 CSV出力"]
+  T61["6-1 スタッフ認証"]:::done --> T62["6-2 一覧/詳細"]:::done
+  T62 --> T63["6-3 メール送信"]:::next
+  T62 --> T64["6-4 CSV出力"]:::next
 
   classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
   classDef next fill:#fef3c7,stroke:#d97706,color:#78350f;
@@ -211,15 +214,15 @@ graph TD
 ### Phase 5: 参加者向けマイページ
 
 * [Task 5-1: 参加者ログイン API とセッション管理 ✅](tasks/task-5-1.md)
-* [Task 5-2: マイページ トップ(複数大会のエントリー状況)](tasks/task-5-2.md)
-* [Task 5-3: エントリー内容編集](tasks/task-5-3.md)
-* [Task 5-4: エントリーキャンセルと再エントリー](tasks/task-5-4.md)
+* [Task 5-2: マイページ トップ(複数大会のエントリー状況) ✅](tasks/task-5-2.md)
+* [Task 5-3: エントリー内容編集 ✅](tasks/task-5-3.md)
+* [Task 5-4: エントリーキャンセルと再エントリー ✅](tasks/task-5-4.md)
 * [Task 5-5: パスワード再設定機能](tasks/task-5-5.md)
 
 ### Phase 6: 地域スタッフ向け管理ページ
 
 * [Task 6-1: スタッフ認証・権限管理 ✅](tasks/task-6-1.md)
-* [Task 6-2: エントリー状況一覧・詳細確認](tasks/task-6-2.md)
+* [Task 6-2: エントリー状況一覧・詳細確認 ✅](tasks/task-6-2.md)
 * [Task 6-3: 参加者へのメール送信機能](tasks/task-6-3.md)
 * [Task 6-4: CSV 出力機能](tasks/task-6-4.md)
 
