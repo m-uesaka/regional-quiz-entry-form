@@ -224,7 +224,7 @@ export async function updateOwnEntry(
 ): Promise<UpdateOwnEntryResult> {
   const db = createDbClient(env);
 
-  const {data: entry} = await db
+  const {data: entry, error: lookupError} = await db
     .from('entries')
     .select(
       'id, tournament_id, status, ' +
@@ -234,6 +234,11 @@ export async function updateOwnEntry(
     .eq('participant_id', participantId)
     .returns<OwnEntryRow[]>()
     .maybeSingle();
+  // A failed lookup must not be reported as a missing entry: that would hide
+  // a database/network outage behind a 404.
+  if (lookupError) {
+    return {ok: false, status: 500, error: lookupError.message};
+  }
   if (!entry) {
     return {ok: false, status: 404, error: 'entry not found'};
   }
