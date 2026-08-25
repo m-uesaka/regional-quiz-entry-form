@@ -81,6 +81,8 @@ if ('yaml' in body) {
 | GET | `/api/healthz` | なし |
 | POST | `/api/auth/staff/login` | なし |
 | POST | `/api/auth/participant/login` | なし |
+| POST | `/api/auth/participant/password-reset/request` | なし |
+| POST | `/api/auth/participant/password-reset/confirm` | なし(トークン) |
 | GET | `/api/tournaments` | 統括スタッフ |
 | POST | `/api/tournaments` | 統括スタッフ |
 | PATCH | `/api/tournaments/:id` | 統括スタッフ |
@@ -123,6 +125,27 @@ if ('yaml' in body) {
 - リクエスト: `ParticipantLoginInputSchema` — `{email, password}`
 - `200`: `{"ok": true}`
 - `401` / `500`: スタッフ側と同じ(ダミーハッシュによる時間平準化も同様)
+
+### `POST /api/auth/participant/password-reset/request`
+
+参加者のパスワード再設定リンクの送信要求。`lib/password-reset.ts` の `requestPasswordReset()` が、該当する参加者がいれば使い捨てトークン(有効期限 1 時間)を `password_reset_tokens` に発行し、`FRONTEND_URL/password-reset?token=...` へのリンクをメールで送ります。トークンは Task 3-4 のメール確認トークンと同じく SHA-256 ハッシュのみを保存し、生のトークンは受信者のメールボックスにしか存在しません。
+
+- リクエスト: `PasswordResetRequestInputSchema` — `{email: string(email)}`
+- `200`: `{"ok": true}`
+- `400`: メール形式が不正(zValidator)
+
+メールアドレスが未登録の場合、トークンの保存に失敗した場合、メール送信に失敗した場合のいずれも、送信できた場合と同じ `200 {"ok": true}` を返します。応答からは登録の有無が読み取れないため、このエンドポイントを参加者メールアドレスの列挙に使えません。内部的な失敗は `console.error` に記録されます。
+
+### `POST /api/auth/participant/password-reset/confirm`
+
+トークンと新しいパスワードを受け取り、パスワードを再設定します。
+
+- リクエスト: `PasswordResetConfirmInputSchema` — `{token: string(min 1), newPassword: string(min 8)}`
+- `200`: `{"ok": true}`
+- `400`: `{"error": "invalid or expired token"}`(未知・使用済み・期限切れのトークン)
+- `500`: `{"error": <Supabase のメッセージ>}`
+
+トークンの使い捨てチェックは「`used_at is null` かつ `expires_at > now` の行だけを `used_at` で更新する」1 本の UPDATE で行います。読み取ってから書き戻す形ではないため、同じトークンでの同時リクエストでも 2 回目は行ロック解放後に条件を満たさず、パスワードは 1 度しか変更されません。再設定に成功すると、その参加者に対して残っている他の未使用トークンもまとめて使用済みにします。
 
 ## 5. 大会管理(統括スタッフ)
 

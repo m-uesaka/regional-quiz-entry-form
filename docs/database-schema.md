@@ -216,7 +216,10 @@ flowchart TB
 | `expires_at` | timestamptz | not null | |
 | `used_at` | timestamptz | nullable | |
 
-スキーマだけ先行して定義されており、これを使うパスワード再設定フロー(Task 5-5)は未実装です。
+- `POST /api/auth/participant/password-reset/request` が発行し、`POST /api/auth/participant/password-reset/confirm` が消費します(`apps/backend/src/lib/password-reset.ts`)。
+- `token_hash` は `email_verification_tokens` と同じく生のトークンの SHA-256 ハッシュで、生のトークンは受信者のメールボックスにしか存在しません。
+- 有効期限は発行から 1 時間です。`used_at` を立てることで使い回しを防ぎます(ワンタイム)。使用済みへの更新は `used_at is null and expires_at > now()` を条件に含んだ 1 本の UPDATE で行うため、同時リクエストでも 2 回消費されることはありません。
+- 再設定に成功した時点で、同じ参加者に残っている未使用トークンもまとめて `used_at` を立てて焼き捨てます。古い再設定リンクがもう一度パスワードを変更できてしまわないようにするためです。
 
 ### staff_accounts — スタッフアカウント
 
