@@ -139,7 +139,7 @@ flowchart TB
 | `label` | text | not null | 画面上のラベル |
 | `field_type` | text | not null, check in (`checkbox`, `radio`, `textarea`) | 入力形式 |
 | `required` | boolean | not null, default false | 必須かどうか |
-| `options` | jsonb | nullable | 選択肢の文字列配列。`textarea` と「単独チェックボックス」では `null` |
+| `options` | jsonb | nullable | 選択肢の文字列配列。YAML で `options` を省略した項目(単独チェックボックスなど)だけが `null` になります。`checkbox` / `textarea` でも `options` が書かれていれば(空配列であっても)`toFormFieldDefRows()` がその配列をそのまま保存します |
 | `display_order` | integer | not null, default 0 | 表示順(YAML の記述順がそのまま入る) |
 
 - `unique (tournament_id, field_key)`: 同一大会内で項目キーは重複不可。
