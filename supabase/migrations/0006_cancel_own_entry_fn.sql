@@ -11,8 +11,11 @@
 --   * Any verification token still outstanding for the entry is burned, so
 --     an entry cancelled before it was ever verified can't be confirmed
 --     afterwards by clicking the link from the email that is still sitting
---     in the participant's inbox (`confirm_entry_by_token` looks at the
---     token, not at the entry's status).
+--     in the participant's inbox. A token a concurrent re-entry inserts
+--     after this burn is not covered here, but `confirm_entry_by_token`
+--     also refuses any entry that is no longer `pending_verification`,
+--     which it checks under the same tournament lock this function takes
+--     below.
 --   * The prior status is read and overwritten under the tournament lock and
 --     is returned only once, so two concurrent cancellations of the same
 --     `confirmed` entry can't both see `confirmed` and both trigger a

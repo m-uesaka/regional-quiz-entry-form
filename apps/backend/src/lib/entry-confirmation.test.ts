@@ -105,7 +105,10 @@ describe.skipIf(!(await isDbReachable()))(
       regionId: string,
       tournamentId: string,
       regulationId: string,
-      status: 'pending_verification' | 'confirmed' = 'pending_verification',
+      status:
+        | 'pending_verification'
+        | 'confirmed'
+        | 'cancelled' = 'pending_verification',
     ): Promise<string> {
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       const [participant] = await sql`
@@ -215,6 +218,27 @@ describe.skipIf(!(await isDbReachable()))(
       const result = await confirmEntryByToken(env, token);
 
       expect(result.ok).toBe(false);
+    });
+
+    it('rejects a valid token whose entry is no longer pending', async () => {
+      const fixture = await createTournamentAndRegulation('cancelled', null);
+      const entryId = await createEntryFixture(
+        fixture.regionId,
+        fixture.tournamentId,
+        fixture.regulationId,
+        'cancelled',
+      );
+      // A token a re-entry inserted while the cancellation was running: the
+      // cancellation never saw it, so it is still unused and unexpired.
+      const token = await createTokenFixture(entryId);
+
+      const result = await confirmEntryByToken(env, token);
+
+      expect(result.ok).toBe(false);
+      const [entryRow] = await sql`
+        select status from entries where id = ${entryId}
+      `;
+      expect(entryRow.status).toBe('cancelled');
     });
 
     it('rejects an unknown token', async () => {
