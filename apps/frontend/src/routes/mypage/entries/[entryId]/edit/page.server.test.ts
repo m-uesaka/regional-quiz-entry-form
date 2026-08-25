@@ -146,6 +146,15 @@ describe('mypage entry edit +page.server load', () => {
       status: 403,
     } satisfies Partial<HttpError>);
   });
+
+  it('throws 403 for a cancelled entry even within the entry period', async () => {
+    const cancelled: MypageEntryDetail = {...ENTRY, status: 'cancelled'};
+    const event = buildLoadEvent(fakeFetch({entry: cancelled}));
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 403,
+    } satisfies Partial<HttpError>);
+  });
 });
 
 describe('mypage entry edit form action', () => {

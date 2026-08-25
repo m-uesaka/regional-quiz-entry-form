@@ -1,5 +1,6 @@
 import {error, fail, redirect} from '@sveltejs/kit';
 import {
+  EDITABLE_ENTRY_STATUSES,
   EntryEditInputSchema,
   isWithinEntryPeriod,
   type FormFieldDef,
@@ -39,7 +40,11 @@ function readCustomFieldValues(
   return values;
 }
 
-/** Loads the participant's own entry, refusing edits outside the entry period. */
+/**
+ * Loads the participant's own entry, applying the same editability rule as
+ * the API (`isEntryEditable`) so a directly opened URL cannot render a form
+ * whose every save the backend would refuse.
+ */
 export const load: PageServerLoad = async ({params, fetch}) => {
   const api = createApiClient(fetch);
   const res = await api.api.mypage.entries[':entryId'].$get({
@@ -63,6 +68,11 @@ export const load: PageServerLoad = async ({params, fetch}) => {
     )
   ) {
     throw error(403, 'エントリー期間外のため編集できません');
+  }
+  // The two halves of `isEntryEditable` are checked separately so the
+  // participant is told which one refused the edit.
+  if (!EDITABLE_ENTRY_STATUSES.includes(entry.status)) {
+    throw error(403, 'キャンセル済みのエントリーは編集できません');
   }
 
   return {entry};
