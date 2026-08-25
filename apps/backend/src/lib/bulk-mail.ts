@@ -16,6 +16,7 @@ export interface BulkMailContent {
 }
 
 export interface BulkMailOptions {
+  /** Messages per batch; must be a positive integer. */
   batchSize?: number;
   intervalMs?: number;
 }
@@ -45,6 +46,7 @@ function sleep(ms: number): Promise<void> {
  *     de-duplicate before calling.
  * @param content The subject and HTML body every recipient receives.
  * @param options Overrides for the batch size and inter-batch wait.
+ * @throws RangeError If `options.batchSize` is not a positive integer.
  */
 export async function sendBulkMail(
   mailer: MailSender,
@@ -54,6 +56,15 @@ export async function sendBulkMail(
 ): Promise<BulkMailResult> {
   const batchSize = options.batchSize ?? MAIL_BATCH_SIZE;
   const intervalMs = options.intervalMs ?? MAIL_BATCH_INTERVAL_MS;
+
+  // A batch size of 0 (or a fractional/negative one) would leave the loop
+  // below never advancing `start`, i.e. an infinite send loop, so reject it
+  // up front rather than hanging the caller.
+  if (!Number.isInteger(batchSize) || batchSize < 1) {
+    throw new RangeError(
+      `batchSize must be a positive integer, got ${batchSize}`,
+    );
+  }
 
   let sent = 0;
   const failed: string[] = [];

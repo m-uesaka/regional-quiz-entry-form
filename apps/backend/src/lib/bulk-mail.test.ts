@@ -79,6 +79,17 @@ describe('sendBulkMail', () => {
     ]);
   });
 
+  it('rejects a batch size that would never advance the loop', async () => {
+    const mailer = new RecordingMailSender();
+
+    for (const batchSize of [0, -1, 1.5, Number.NaN]) {
+      await expect(
+        sendBulkMail(mailer, ['a@example.com'], CONTENT, {batchSize}),
+      ).rejects.toThrow(RangeError);
+    }
+    expect(mailer.sent).toEqual([]);
+  });
+
   it('sends nothing for an empty recipient list', async () => {
     const mailer = new RecordingMailSender();
 
