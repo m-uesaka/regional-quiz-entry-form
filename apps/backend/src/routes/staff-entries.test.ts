@@ -203,6 +203,7 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
     mockSequentialFetch([
       [{region_id: REGION_ID, type: 'saikyoi'}],
       [CSV_ENTRY_ROW],
+      [],
       FORM_FIELD_DEF_ROWS,
     ]);
     const cookie = await regionalStaffCookie();
@@ -246,7 +247,8 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
 
   it('pages past the Data API row cap and exports every entry', async () => {
     // The route asks for 500 rows at a time, so a full first page has to
-    // be followed by another request instead of ending the export.
+    // be followed by another request, and paging only ends once a request
+    // comes back empty.
     const firstPage = Array.from({length: 500}, (_, index) => ({
       ...CSV_ENTRY_ROW,
       name: `参加者${index}`,
@@ -254,6 +256,7 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
     mockSequentialFetch([
       firstPage,
       [{...CSV_ENTRY_ROW, name: '参加者500'}],
+      [],
       FORM_FIELD_DEF_ROWS,
     ]);
     const cookie = await generalStaffCookie();
@@ -270,6 +273,34 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
     expect(lines).toHaveLength(502);
     expect(lines[1].startsWith('参加者0,')).toBe(true);
     expect(lines[501].startsWith('参加者500,')).toBe(true);
+  });
+
+  it('keeps paging when the server hands back a smaller page than asked for', async () => {
+    // A deployment whose `max_rows` is below the requested page size trims
+    // every response, so the first batch is short without the entries being
+    // exhausted. Ending the export there would drop the rest.
+    mockSequentialFetch([
+      [
+        {...CSV_ENTRY_ROW, name: '参加者0'},
+        {...CSV_ENTRY_ROW, name: '参加者1'},
+      ],
+      [{...CSV_ENTRY_ROW, name: '参加者2'}],
+      [],
+      FORM_FIELD_DEF_ROWS,
+    ]);
+    const cookie = await generalStaffCookie();
+
+    const res = await app.request(
+      `/api/staff/tournaments/${TOURNAMENT_ID}/entries.csv`,
+      {headers: {cookie}},
+      ENV,
+    );
+    const lines = (await res.text()).slice(1).split('\r\n');
+
+    expect(res.status).toBe(200);
+    // One header line plus every row of all three trimmed pages.
+    expect(lines).toHaveLength(4);
+    expect(lines[3].startsWith('参加者2,')).toBe(true);
   });
 
   it('returns 401 without a staff session', async () => {

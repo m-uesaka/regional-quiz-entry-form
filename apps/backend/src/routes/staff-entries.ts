@@ -83,10 +83,13 @@ async function fetchAllEntryCsvRows(
     }
     const batch = data ?? [];
     rows.push(...batch);
-    // A short batch means the requested range ran past the last row, and
-    // an empty one guarantees the loop ends even if the server trims the
-    // range to a smaller page than we asked for.
-    if (batch.length < ENTRY_CSV_PAGE_SIZE) {
+    // Only an empty batch ends the export. A short-but-non-empty one is
+    // ambiguous: the range may have run past the last row, but the server
+    // may equally have trimmed it down to its own `max_rows`, and stopping
+    // there would drop entries exactly like the unpaginated query this
+    // replaced. Since the offset is however many rows are already
+    // collected, a trimmed page only makes the loop take smaller steps.
+    if (batch.length === 0) {
       return {rows, error: null};
     }
   }
