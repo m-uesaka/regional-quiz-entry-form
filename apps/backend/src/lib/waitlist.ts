@@ -10,12 +10,15 @@ interface PromotedEntryRow {
 /**
  * Promotes the waitlisted entry with the smallest `waitlist_position` for
  * `tournamentId` to `confirmed` and notifies its participant. Does nothing
- * if there is no waitlisted entry.
+ * if there is no waitlisted entry, or if the tournament is already at
+ * `capacity` because someone else took the vacated seat first.
  *
  * This delegates to the `promote_next_waitlisted_entry` Postgres function,
- * which selects and updates the queue head inside one transaction while
- * holding a lock on the tournament row, so two concurrent vacancies can't
- * both claim the same waitlisted entry (see the migration for details).
+ * which re-checks capacity and then selects and updates the queue head
+ * inside one transaction while holding a lock on the tournament row, so two
+ * concurrent vacancies can't both claim the same waitlisted entry and a
+ * confirmation that slipped into the seat before this call can't be
+ * double-booked (see the migrations for details).
  * @param env The Worker bindings.
  * @param tournamentId The tournament to promote a waitlisted entry for.
  */
