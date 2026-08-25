@@ -351,7 +351,8 @@ describe.skipIf(!(await isDbReachable()))(
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
       await sql`
-        update entries set status = 'cancelled', cancelled_at = now()
+        update entries
+        set status = 'cancelled', cancelled_at = now(), email_verified_at = now()
         where id = ${firstResult.entry.id}
       `;
       const previousFetch = globalThis.fetch;
@@ -370,24 +371,31 @@ describe.skipIf(!(await isDbReachable()))(
       }) as typeof fetch;
 
       try {
-        const failedResult = await createEntry(
-          env,
-          fixture.tournamentId,
-          input,
-        );
+        const failedResult = await createEntry(env, fixture.tournamentId, {
+          // A re-entry submits its own form contents, which the reuse update
+          // writes over the cancelled entry's before the mail is attempted.
+          ...input,
+          displayName: '再エントリー太郎',
+          freeText: '再エントリーの備考',
+        });
 
         expect(failedResult.ok).toBe(false);
         expect(!failedResult.ok && failedResult.status).toBe(500);
         // The row the re-entry reused is still there, back in the
-        // cancellation it came from rather than deleted.
+        // cancellation it came from rather than deleted — and carrying the
+        // original entry's contents, not the failed re-entry's.
         const rows = await sql`
-          select id, status, cancelled_at from entries
-          where tournament_id = ${fixture.tournamentId}
+          select id, status, cancelled_at, display_name, free_text,
+                 email_verified_at
+          from entries where tournament_id = ${fixture.tournamentId}
         `;
         expect(rows.length).toBe(1);
         expect(rows[0].id).toBe(firstResult.entry.id);
         expect(rows[0].status).toBe('cancelled');
         expect(rows[0].cancelled_at).not.toBeNull();
+        expect(rows[0].display_name).toBe(input.displayName);
+        expect(rows[0].free_text).toBe(input.freeText ?? null);
+        expect(rows[0].email_verified_at).not.toBeNull();
       } finally {
         globalThis.fetch = previousFetch;
       }

@@ -45,12 +45,34 @@ interface ParticipantRow {
   password_hash: string;
 }
 
-/** The participant's existing entry for the tournament, if there is one. */
+/**
+ * The participant's existing entry for the tournament, if there is one.
+ *
+ * Every column the reuse update in `createEntry()` overwrites is selected,
+ * not just the ones the reuse decision is made on, so a re-entry that fails
+ * afterwards can put the row back exactly as it was.
+ */
 interface ExistingEntryRow {
   id: string;
+  name: string;
+  furigana: string;
+  display_name: string;
+  regulation_id: string;
+  free_text: string | null;
+  // Same value union as `EntryInput['customFieldValues']`: every stored value
+  // originated from that input shape.
+  custom_field_values: Record<string, string | string[]>;
   status: EntryStatus;
+  waitlist_position: number | null;
+  email_verified_at: string | null;
   cancelled_at: string | null;
 }
+
+/** The columns of `ExistingEntryRow`, for the snapshot select. */
+const EXISTING_ENTRY_COLUMNS =
+  'id, name, furigana, display_name, regulation_id, free_text, ' +
+  'custom_field_values, status, waitlist_position, email_verified_at, ' +
+  'cancelled_at';
 
 /**
  * Runs the full entry-creation flow for `POST /tournaments/:tournamentId/entries`:
@@ -162,7 +184,7 @@ export async function createEntry(
   // one.
   const {data: existingEntry, error: existingEntryError} = await db
     .from('entries')
-    .select('id, status, cancelled_at')
+    .select(EXISTING_ENTRY_COLUMNS)
     .eq('participant_id', participantId)
     .eq('tournament_id', tournamentId)
     .returns<ExistingEntryRow[]>()
@@ -231,11 +253,22 @@ export async function createEntry(
     if (existingEntry) {
       // A reused row is put back into the cancellation it came from rather
       // than deleted, so a failed re-entry doesn't erase the record of the
-      // original entry.
+      // original entry. Every column the reuse update overwrote is restored
+      // from the snapshot taken before it: restoring only the status would
+      // still leave the cancelled entry permanently carrying the failed
+      // re-entry's answers and its cleared verification timestamp.
       await db
         .from('entries')
         .update({
-          status: 'cancelled',
+          name: existingEntry.name,
+          furigana: existingEntry.furigana,
+          display_name: existingEntry.display_name,
+          regulation_id: existingEntry.regulation_id,
+          free_text: existingEntry.free_text,
+          custom_field_values: existingEntry.custom_field_values,
+          status: existingEntry.status,
+          waitlist_position: existingEntry.waitlist_position,
+          email_verified_at: existingEntry.email_verified_at,
           cancelled_at: existingEntry.cancelled_at,
         })
         .eq('id', entry.id);
