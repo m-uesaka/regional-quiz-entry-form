@@ -93,6 +93,46 @@ describe('buildEntriesCsv', () => {
     expect(csv).toContain('"1行目\r\n2行目"');
   });
 
+  it('prefixes formula-leading cells with an apostrophe', () => {
+    const csv = buildEntriesCsv(
+      [
+        fieldDef({
+          fieldKey: 'note',
+          label: '備考',
+          fieldType: 'textarea',
+          options: null,
+        }),
+      ],
+      [
+        entryRow({
+          name: '=HYPERLINK("http://evil.example","x")',
+          furigana: '+ヤマダ',
+          displayName: '-太郎',
+          customFieldValues: {note: '@SUM(A1:A2)'},
+        }),
+      ],
+    );
+
+    expect(csv.split('\r\n')[1]).toBe(
+      '"\'=HYPERLINK(""http://evil.example"",""x"")",\'+ヤマダ,\'-太郎,確定,\'@SUM(A1:A2)',
+    );
+  });
+
+  it('prefixes cells whose formula hides behind leading whitespace', () => {
+    const csv = buildEntriesCsv(
+      [],
+      [entryRow({name: '\t=1+1', displayName: '\r=1+1'})],
+    );
+
+    expect(csv.split('\r\n')[1]).toBe('\'\t=1+1,ヤマダタロウ,"\'\r=1+1",確定');
+  });
+
+  it('leaves cells that only look arithmetic mid-value alone', () => {
+    const csv = buildEntriesCsv([], [entryRow({displayName: '太郎=1'})]);
+
+    expect(csv.split('\r\n')[1]).toBe('山田太郎,ヤマダタロウ,太郎=1,確定');
+  });
+
   it('joins multi-select checkbox values with a semicolon', () => {
     const csv = buildEntriesCsv(
       [

@@ -12,6 +12,13 @@ const FIXED_HEADERS = ['氏名', 'ふりがな', '掲載名', 'ステータス']
 const MULTI_VALUE_SEPARATOR = ';';
 
 /**
+ * Leading characters that make a spreadsheet treat a cell as a formula.
+ * Tab and CR are included because they can be skipped over before the
+ * formula character is reached.
+ */
+const FORMULA_LEAD_PATTERN = /^[=+\-@\t\r]/;
+
+/**
  * A single entry as rendered into the CSV. `status` is already the
  * human-readable label, not the stored `EntryStatus` value.
  */
@@ -32,7 +39,8 @@ export interface EntriesCsvRow {
  * exports under its current label. Answers are looked up by `fieldKey`, and
  * a field a given entry has no answer for exports as an empty cell.
  *
- * Rows are separated by CRLF and there is no trailing newline, per RFC 4180.
+ * Rows are separated by CRLF and there is no trailing newline, per RFC 4180,
+ * and cells a spreadsheet would read as formulas are neutralized.
  * @param fieldDefs The tournament's custom form field definitions.
  * @param entries The entries to export, in the order they should appear.
  */
@@ -54,7 +62,7 @@ export function buildEntriesCsv(
     ),
   ]);
   return [headers, ...rows]
-    .map(row => row.map(csvEscape).join(','))
+    .map(row => row.map(renderCell).join(','))
     .join('\r\n');
 }
 
@@ -91,9 +99,32 @@ function formatCustomFieldValue(
 }
 
 /**
+ * Renders one cell: neutralizes anything a spreadsheet would evaluate, then
+ * quotes it for RFC 4180.
+ * @param value The raw cell value.
+ */
+function renderCell(value: string): string {
+  return csvEscape(neutralizeFormula(value));
+}
+
+/**
+ * Prefixes a cell that starts like a spreadsheet formula with an apostrophe,
+ * which Excel and friends read as "treat the rest as literal text".
+ *
+ * Entry names and free-text answers are arbitrary participant input, so
+ * without this a value such as `=HYPERLINK(...)` would be evaluated when
+ * staff open the export. RFC 4180 quoting alone does not prevent that: the
+ * quotes are consumed while parsing the field, and the formula survives.
+ * @param value The raw cell value.
+ */
+function neutralizeFormula(value: string): string {
+  return FORMULA_LEAD_PATTERN.test(value) ? `'${value}` : value;
+}
+
+/**
  * Quotes a cell that would otherwise break the row/field structure,
  * doubling any embedded quotes (RFC 4180).
- * @param value The raw cell value.
+ * @param value The cell value, already neutralized.
  */
 function csvEscape(value: string): string {
   return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
