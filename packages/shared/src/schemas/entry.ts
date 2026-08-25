@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {isWithinEntryPeriod} from '../logic/entry-period';
 import {FormFieldDefSchema} from './form-definition';
 import {TournamentTypeSchema} from './tournament';
 
@@ -22,6 +23,20 @@ export const EntryInputSchema = z
     message: 'パスワードが一致しません',
   });
 export type EntryInput = z.infer<typeof EntryInputSchema>;
+
+// The subset of an entry a participant may change themselves from mypage
+// (`PATCH /mypage/entries/:entryId`). `email` / `password` are account
+// credentials and are changed through the auth flow instead, and
+// `regulationId` is fixed at entry time because regulation priority windows
+// are evaluated then.
+export const EntryEditInputSchema = EntryInputSchema.innerType().pick({
+  name: true,
+  furigana: true,
+  displayName: true,
+  freeText: true,
+  customFieldValues: true,
+});
+export type EntryEditInput = z.infer<typeof EntryEditInputSchema>;
 
 export const EntryStatusSchema = z.enum([
   'pending_verification',
@@ -87,7 +102,9 @@ export type EntryListItem = z.infer<typeof EntryListItemSchema>;
 // `GET /mypage/entries` response item: the logged-in participant's own
 // entry, so (unlike `EntryListItemSchema`) every internal status including
 // `pending_verification` is exposed, and the parent tournament is embedded
-// since mypage lists entries across multiple tournaments at once.
+// since mypage lists entries across multiple tournaments at once. The entry
+// period travels with it so the list can tell which entries are still
+// editable without fetching each one.
 export const MypageEntrySchema = z.object({
   id: z.string().uuid(),
   tournamentId: z.string().uuid(),
@@ -97,6 +114,57 @@ export const MypageEntrySchema = z.object({
     name: z.string(),
     type: TournamentTypeSchema,
     regionId: z.string().uuid(),
+    entryOpensAt: z.string().datetime({offset: true}),
+    entryClosesAt: z.string().datetime({offset: true}),
   }),
 });
 export type MypageEntry = z.infer<typeof MypageEntrySchema>;
+
+// Statuses a participant may still edit. A cancelled entry is read-only:
+// re-entering is Task 5-4's flow, not an edit.
+export const EDITABLE_ENTRY_STATUSES: readonly EntryStatus[] = [
+  'pending_verification',
+  'confirmed',
+  'waitlisted',
+];
+
+/**
+ * Determines whether a participant may still edit one of their entries:
+ * the tournament's entry period must be open and the entry must not have
+ * been cancelled. Shared so the mypage UI hides what the API would refuse.
+ * @param entry The participant's own entry.
+ * @param now The current time.
+ */
+export function isEntryEditable(
+  entry: Pick<MypageEntry, 'status'> & {
+    tournament: Pick<
+      MypageEntry['tournament'],
+      'entryOpensAt' | 'entryClosesAt'
+    >;
+  },
+  now: Date = new Date(),
+): boolean {
+  return (
+    EDITABLE_ENTRY_STATUSES.includes(entry.status) &&
+    isWithinEntryPeriod(
+      entry.tournament.entryOpensAt,
+      entry.tournament.entryClosesAt,
+      now,
+    )
+  );
+}
+
+// `GET /mypage/entries/:entryId` response: everything the participant's own
+// edit screen needs to prefill and re-render the entry form — the currently
+// stored editable values and the tournament's custom form field
+// definitions, on top of the list item's own fields.
+export const MypageEntryDetailSchema = MypageEntrySchema.extend({
+  name: z.string(),
+  furigana: z.string(),
+  displayName: z.string(),
+  regulationLabel: z.string(),
+  freeText: z.string().nullable(),
+  customFieldValues: EntrySchema.shape.customFieldValues,
+  formFieldDefs: z.array(FormFieldDefSchema),
+});
+export type MypageEntryDetail = z.infer<typeof MypageEntryDetailSchema>;

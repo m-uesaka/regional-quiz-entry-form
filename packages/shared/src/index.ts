@@ -5,5 +5,6 @@ export * from './schemas/regulation';
 export * from './schemas/staff';
 export * from './schemas/participant';
 export * from './schemas/auth';
+export * from './logic/custom-field-values';
 export * from './logic/regulation-eligibility';
 export * from './logic/entry-period';

@@ -4,6 +4,7 @@ import {
   FormFieldDefSchema,
   parseFormDefinitionYaml,
   toFormFieldDefRows,
+  toFormFieldDefYaml,
 } from './form-definition';
 
 describe('parseFormDefinitionYaml', () => {
@@ -106,6 +107,7 @@ describe('FormFieldDefSchema', () => {
       fieldKey: 'agree_to_rules',
       label: '規約に同意する',
       fieldType: 'checkbox',
+      required: true,
       options: null,
       displayOrder: 0,
     });
@@ -118,10 +120,51 @@ describe('FormFieldDefSchema', () => {
       fieldKey: 'agree_to_rules',
       label: '規約に同意する',
       fieldType: 'not-a-real-type',
+      required: true,
       options: null,
       displayOrder: 0,
     });
 
     expect(result.success).toBe(false);
+  });
+});
+
+describe('toFormFieldDefYaml', () => {
+  it('converts a stored radio field def back into the rendering shape', () => {
+    const yaml = toFormFieldDefYaml({
+      fieldKey: 't_shirt_size',
+      label: 'Tシャツサイズ',
+      fieldType: 'radio',
+      required: true,
+      options: ['S', 'M', 'L'],
+      displayOrder: 0,
+    });
+
+    expect(yaml).toEqual({
+      key: 't_shirt_size',
+      label: 'Tシャツサイズ',
+      type: 'radio',
+      required: true,
+      options: ['S', 'M', 'L'],
+    });
+  });
+
+  it('converts null options to undefined for a boolean checkbox', () => {
+    const yaml = toFormFieldDefYaml({
+      fieldKey: 'agree_to_rules',
+      label: '規約に同意する',
+      fieldType: 'checkbox',
+      required: false,
+      options: null,
+      displayOrder: 1,
+    });
+
+    expect(yaml).toEqual({
+      key: 'agree_to_rules',
+      label: '規約に同意する',
+      type: 'checkbox',
+      required: false,
+      options: undefined,
+    });
   });
 });

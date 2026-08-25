@@ -13,6 +13,8 @@ const ENTRIES: MypageEntry[] = [
       name: 'テスト大会',
       type: 'saikyoi',
       regionId: '00000000-0000-0000-0000-000000000003',
+      entryOpensAt: '2020-01-01T00:00:00.000Z',
+      entryClosesAt: '2099-01-01T00:00:00.000Z',
     },
   },
 ];
