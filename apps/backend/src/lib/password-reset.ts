@@ -17,8 +17,15 @@ interface ParticipantRow {
 }
 
 interface ResetTokenRow {
-  participant_id: string;
+  id: string;
 }
+
+/**
+ * The SQLSTATE the `reset_participant_password` Postgres function raises
+ * (see `supabase/migrations/0009_reset_participant_password_fn.sql`) when
+ * the token is unknown, already used, or expired.
+ */
+const INVALID_TOKEN_SQLSTATE = 'P0003';
 
 /**
  * Issues a one-time password reset token for the participant registered
@@ -94,6 +101,12 @@ export async function requestPasswordReset(
  *
  * The token has to be unused and unexpired; every other reset link
  * outstanding for the same participant is burnt along with it.
+ *
+ * The token check, the password update and that burning all happen inside
+ * the `reset_participant_password` Postgres function, so they commit or roll
+ * back together: a failure to burn the remaining links can no longer leave
+ * the new password in place while an older link stays usable (see the
+ * migration for details).
  * @param env The Worker bindings.
  * @param input The validated raw token and the new password.
  */
@@ -102,58 +115,40 @@ export async function confirmPasswordReset(
   input: PasswordResetConfirmInput,
 ): Promise<ConfirmResult> {
   const db = createDbClient(env);
-  const now = new Date().toISOString();
+  const tokenHash = await hashToken(input.token);
 
-  // Burning the token is one conditional update rather than a read followed
-  // by a write: matching on `used_at is null` from inside the update is what
-  // makes the token single-use even when two confirmations for it arrive at
-  // once, since the second update re-evaluates the condition after the first
-  // one's row lock is released and then matches nothing.
-  const {data: consumed, error} = await db
+  // A cheap look at the token before the password is hashed: PBKDF2 is
+  // deliberately expensive (see `./password`), and hashing up front would
+  // let anyone spend that work by posting tokens that were never going to be
+  // valid. Nothing is decided here -- the row can still be consumed or
+  // expire between this read and the call below, which is why
+  // `reset_participant_password` re-checks it under a row lock.
+  const {data: candidate, error} = await db
     .from('password_reset_tokens')
-    .update({used_at: now})
-    .eq('token_hash', await hashToken(input.token))
+    .select('id')
+    .eq('token_hash', tokenHash)
     .is('used_at', null)
-    .gt('expires_at', now)
-    .select('participant_id')
+    .gt('expires_at', new Date().toISOString())
     .returns<ResetTokenRow[]>()
     .maybeSingle();
-  // A failed update must not be reported as a bad token: that would tell the
+  // A failed read must not be reported as a bad token: that would tell the
   // participant their link had expired when the database was simply down.
   if (error) {
     return {ok: false, status: 500, error: error.message};
   }
-  if (!consumed) {
+  if (!candidate) {
     return {ok: false, status: 400, error: 'invalid or expired token'};
   }
 
-  // Hashed only now, after the token check: PBKDF2 is deliberately expensive
-  // (see `./password`), and doing it up front would let anyone spend that
-  // work by posting tokens that were never going to be valid.
-  const {error: updateError} = await db
-    .from('participants')
-    .update({password_hash: await hashPassword(input.newPassword)})
-    .eq('id', consumed.participant_id);
-  if (updateError) {
-    // The token is already burnt at this point, so the participant has to
-    // request a new link. That's the safe direction to fail in: the opposite
-    // order would leave a usable link behind after a successful reset.
-    return {ok: false, status: 500, error: updateError.message};
-  }
-
-  const {error: invalidateError} = await db
-    .from('password_reset_tokens')
-    .update({used_at: now})
-    .eq('participant_id', consumed.participant_id)
-    .is('used_at', null);
-  if (invalidateError) {
-    // The reset itself has gone through, so this can't fail the request.
-    // What's left behind is an older link that can still change this
-    // password once more -- worth a log, not a rollback.
-    console.error('failed to invalidate the remaining reset tokens', {
-      participantId: consumed.participant_id,
-      error: invalidateError.message,
-    });
+  const {error: resetError} = await db.rpc('reset_participant_password', {
+    p_token_hash: tokenHash,
+    p_password_hash: await hashPassword(input.newPassword),
+  });
+  if (resetError) {
+    if (resetError.code === INVALID_TOKEN_SQLSTATE) {
+      return {ok: false, status: 400, error: 'invalid or expired token'};
+    }
+    return {ok: false, status: 500, error: resetError.message};
   }
   return {ok: true};
 }
