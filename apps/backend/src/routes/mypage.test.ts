@@ -49,23 +49,69 @@ async function participantCookie(participantId: string): Promise<string> {
   return `participant_session=${token}`;
 }
 
+const ENTRY_ID = '11111111-1111-1111-1111-111111111111';
+
 // Short-circuits in `requireParticipant()` before any database call, so it
 // runs unconditionally (including CI).
-describe('GET /mypage/entries (request validation)', () => {
+describe('mypage routes (request validation)', () => {
   it('rejects a request without a participant session with 401', async () => {
     const res = await app.request('/api/mypage/entries', {}, env);
 
     expect(res.status).toBe(401);
   });
+
+  it('rejects a detail request without a participant session with 401', async () => {
+    const res = await app.request(`/api/mypage/entries/${ENTRY_ID}`, {}, env);
+
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects a PATCH without a participant session with 401', async () => {
+    const res = await app.request(
+      `/api/mypage/entries/${ENTRY_ID}`,
+      {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({}),
+      },
+      env,
+    );
+
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects a PATCH with an invalid body with 400', async () => {
+    const res = await app.request(
+      `/api/mypage/entries/${ENTRY_ID}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          cookie: await participantCookie(
+            '22222222-2222-2222-2222-222222222222',
+          ),
+        },
+        body: JSON.stringify({name: ''}),
+      },
+      env,
+    );
+
+    expect(res.status).toBe(400);
+  });
 });
 
 describe.skipIf(!(await isDbReachable()))(
-  'GET /mypage/entries (local Supabase integration)',
+  'mypage routes (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);
     const testRegionSlug = 'mypage-route-test-region';
 
     afterAll(async () => {
+      await sql`delete from form_field_defs where tournament_id in (
+        select id from tournaments where region_id in (
+          select id from regions where slug like ${testRegionSlug + '%'}
+        )
+      )`;
       await sql`delete from entries where tournament_id in (
         select id from tournaments where region_id in (
           select id from regions where slug like ${testRegionSlug + '%'}
@@ -98,12 +144,15 @@ describe.skipIf(!(await isDbReachable()))(
     async function createTournament(
       regionId: string,
       type: 'saikyoi' | 'shinjinou',
+      options: {entryOpensAt?: string; entryClosesAt?: string} = {},
     ): Promise<string> {
       const [tournament] = await sql`
         insert into tournaments (
           region_id, type, name, entry_opens_at, entry_closes_at
         ) values (
-          ${regionId}, ${type}, 'テスト大会', now(), now()
+          ${regionId}, ${type}, 'テスト大会',
+          ${options.entryOpensAt ?? new Date().toISOString()},
+          ${options.entryClosesAt ?? new Date().toISOString()}
         )
         returning id
       `;
@@ -135,8 +184,8 @@ describe.skipIf(!(await isDbReachable()))(
       participantId: string,
       tournamentId: string,
       regulationId: string,
-    ): Promise<void> {
-      await sql`
+    ): Promise<string> {
+      const [entry] = await sql`
         insert into entries (
           participant_id, tournament_id, name, furigana, display_name,
           regulation_id, status
@@ -144,7 +193,9 @@ describe.skipIf(!(await isDbReachable()))(
           ${participantId}, ${tournamentId}, '山田太郎', 'ヤマダタロウ', '太郎',
           ${regulationId}, 'confirmed'
         )
+        returning id
       `;
+      return entry.id as string;
     }
 
     it("returns only the logged-in participant's entries", async () => {
@@ -199,6 +250,179 @@ describe.skipIf(!(await isDbReachable()))(
         'saikyoi',
         'shinjinou',
       ]);
+    });
+
+    const OPEN_PERIOD = {
+      entryOpensAt: '2020-01-01T00:00:00Z',
+      entryClosesAt: '2099-01-01T00:00:00Z',
+    };
+
+    const EDIT_PATCH = {
+      name: '山田花子',
+      furigana: 'ヤマダハナコ',
+      displayName: '花子',
+      freeText: '更新後の自由記述',
+      customFieldValues: {t_shirt_size: 'L'},
+    };
+
+    /** Adds the `t_shirt_size` custom field `EDIT_PATCH` answers. */
+    async function createFormFieldDef(tournamentId: string): Promise<void> {
+      await sql`
+        insert into form_field_defs (
+          tournament_id, field_key, label, field_type, required, options,
+          display_order
+        ) values (
+          ${tournamentId}, 't_shirt_size', 'Tシャツサイズ', 'radio', true,
+          ${['S', 'M', 'L']}::jsonb, 0
+        )
+      `;
+    }
+
+    async function patchEntry(
+      entryId: string,
+      participantId: string,
+    ): Promise<Response> {
+      return app.request(
+        `/api/mypage/entries/${entryId}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            cookie: await participantCookie(participantId),
+          },
+          body: JSON.stringify(EDIT_PATCH),
+        },
+        env,
+      );
+    }
+
+    it("returns an entry's detail with the tournament's form field defs", async () => {
+      const regionId = await createRegion('detail');
+      const tournamentId = await createTournament(
+        regionId,
+        'saikyoi',
+        OPEN_PERIOD,
+      );
+      const regulationId = await createRegulation(tournamentId);
+      const participantId = await createParticipant(
+        regionId,
+        'mypage-detail@example.com',
+      );
+      const entryId = await createEntry(
+        participantId,
+        tournamentId,
+        regulationId,
+      );
+      await createFormFieldDef(tournamentId);
+
+      const res = await app.request(
+        `/api/mypage/entries/${entryId}`,
+        {headers: {cookie: await participantCookie(participantId)}},
+        env,
+      );
+      const body = (await res.json()) as Record<string, unknown>;
+
+      expect(res.status).toBe(200);
+      expect(body).toMatchObject({
+        id: entryId,
+        name: '山田太郎',
+        regulationLabel: 'テストレギュレーション',
+        formFieldDefs: [
+          {
+            fieldKey: 't_shirt_size',
+            label: 'Tシャツサイズ',
+            fieldType: 'radio',
+            required: true,
+            options: ['S', 'M', 'L'],
+            displayOrder: 0,
+          },
+        ],
+      });
+    });
+
+    it("returns 404 for another participant's entry detail", async () => {
+      const regionId = await createRegion('detail-other');
+      const tournamentId = await createTournament(
+        regionId,
+        'saikyoi',
+        OPEN_PERIOD,
+      );
+      const regulationId = await createRegulation(tournamentId);
+      const ownerId = await createParticipant(
+        regionId,
+        'mypage-detail-owner@example.com',
+      );
+      const otherId = await createParticipant(
+        regionId,
+        'mypage-detail-intruder@example.com',
+      );
+      const entryId = await createEntry(ownerId, tournamentId, regulationId);
+
+      const res = await app.request(
+        `/api/mypage/entries/${entryId}`,
+        {headers: {cookie: await participantCookie(otherId)}},
+        env,
+      );
+
+      expect(res.status).toBe(404);
+    });
+
+    it('updates the entry within the entry period', async () => {
+      const regionId = await createRegion('patch-open');
+      const tournamentId = await createTournament(
+        regionId,
+        'saikyoi',
+        OPEN_PERIOD,
+      );
+      const regulationId = await createRegulation(tournamentId);
+      const participantId = await createParticipant(
+        regionId,
+        'mypage-patch@example.com',
+      );
+      const entryId = await createEntry(
+        participantId,
+        tournamentId,
+        regulationId,
+      );
+      await createFormFieldDef(tournamentId);
+
+      const res = await patchEntry(entryId, participantId);
+
+      expect(res.status).toBe(200);
+      const [row] = await sql`
+        select name, display_name, free_text, custom_field_values
+        from entries where id = ${entryId}
+      `;
+      expect(row.name).toBe('山田花子');
+      expect(row.display_name).toBe('花子');
+      expect(row.free_text).toBe('更新後の自由記述');
+      expect(row.custom_field_values).toEqual({t_shirt_size: 'L'});
+    });
+
+    it('rejects an update outside the entry period with 403', async () => {
+      const regionId = await createRegion('patch-closed');
+      const tournamentId = await createTournament(regionId, 'saikyoi', {
+        entryOpensAt: '2020-01-01T00:00:00Z',
+        entryClosesAt: '2020-01-02T00:00:00Z',
+      });
+      const regulationId = await createRegulation(tournamentId);
+      const participantId = await createParticipant(
+        regionId,
+        'mypage-patch-closed@example.com',
+      );
+      const entryId = await createEntry(
+        participantId,
+        tournamentId,
+        regulationId,
+      );
+
+      const res = await patchEntry(entryId, participantId);
+
+      expect(res.status).toBe(403);
+      const [row] = await sql`
+        select name from entries where id = ${entryId}
+      `;
+      expect(row.name).toBe('山田太郎');
     });
   },
 );

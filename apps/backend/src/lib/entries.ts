@@ -1,16 +1,25 @@
 import {
+  EDITABLE_ENTRY_STATUSES,
+  findCustomFieldValuesError,
   isRegulationSelectionAllowed,
   isWithinEntryPeriod,
+  type EntryEditInput,
   type EntryInput,
+  type EntryStatus,
 } from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import {sendVerificationEmail} from './entry-verification';
+import {FORM_FIELD_DEF_COLUMNS, toFormFieldDef} from './form-field-defs';
+import type {FormFieldDefRow} from './form-field-defs';
 import {hashPassword, verifyPassword} from './password';
 
 type CreateEntryResult =
   | {ok: true; entry: {id: string}}
   | {ok: false; status: 400 | 401 | 403 | 409 | 500; error: string};
+
+type UpdateOwnEntryResult =
+  {ok: true} | {ok: false; status: 400 | 403 | 404 | 500; error: string};
 
 interface RegulationRow {
   id: string;
@@ -180,4 +189,101 @@ export async function createEntry(
     };
   }
   return {ok: true, entry: {id: entry.id}};
+}
+
+/** Shape of the ownership/entry-period lookup in `updateOwnEntry()`. */
+interface OwnEntryRow {
+  id: string;
+  tournament_id: string;
+  status: EntryStatus;
+  tournaments: {
+    entry_opens_at: string;
+    entry_closes_at: string;
+  };
+}
+
+/**
+ * Applies a participant's own edits to one of their entries
+ * (`PATCH /mypage/entries/:entryId`).
+ *
+ * The entry is looked up by `(id, participant_id)` so another participant's
+ * entry is indistinguishable from a nonexistent one; edits are refused once
+ * the tournament's entry period has closed or the entry was cancelled, and
+ * the custom field answers are checked against the tournament's own form
+ * definition rather than trusted from the client.
+ * @param env The Worker bindings.
+ * @param participantId The logged-in participant, from the session cookie.
+ * @param entryId The entry to update.
+ * @param patch The validated editable fields.
+ */
+export async function updateOwnEntry(
+  env: Bindings,
+  participantId: string,
+  entryId: string,
+  patch: EntryEditInput,
+): Promise<UpdateOwnEntryResult> {
+  const db = createDbClient(env);
+
+  const {data: entry, error: lookupError} = await db
+    .from('entries')
+    .select(
+      'id, tournament_id, status, ' +
+        'tournaments(entry_opens_at, entry_closes_at)',
+    )
+    .eq('id', entryId)
+    .eq('participant_id', participantId)
+    .returns<OwnEntryRow[]>()
+    .maybeSingle();
+  // A failed lookup must not be reported as a missing entry: that would hide
+  // a database/network outage behind a 404.
+  if (lookupError) {
+    return {ok: false, status: 500, error: lookupError.message};
+  }
+  if (!entry) {
+    return {ok: false, status: 404, error: 'entry not found'};
+  }
+
+  if (
+    !isWithinEntryPeriod(
+      entry.tournaments.entry_opens_at,
+      entry.tournaments.entry_closes_at,
+    )
+  ) {
+    return {ok: false, status: 403, error: 'entry period closed'};
+  }
+  if (!EDITABLE_ENTRY_STATUSES.includes(entry.status)) {
+    return {ok: false, status: 403, error: `entry is ${entry.status}`};
+  }
+
+  const {data: fieldDefRows, error: fieldDefsError} = await db
+    .from('form_field_defs')
+    .select(FORM_FIELD_DEF_COLUMNS)
+    .eq('tournament_id', entry.tournament_id)
+    .order('display_order', {ascending: true})
+    .returns<FormFieldDefRow[]>();
+  if (fieldDefsError) {
+    return {ok: false, status: 500, error: fieldDefsError.message};
+  }
+  const customFieldValuesError = findCustomFieldValuesError(
+    (fieldDefRows ?? []).map(toFormFieldDef),
+    patch.customFieldValues,
+  );
+  if (customFieldValuesError) {
+    return {ok: false, status: 400, error: customFieldValuesError};
+  }
+
+  const {error} = await db
+    .from('entries')
+    .update({
+      name: patch.name,
+      furigana: patch.furigana,
+      display_name: patch.displayName,
+      free_text: patch.freeText ?? null,
+      custom_field_values: patch.customFieldValues,
+    })
+    .eq('id', entryId);
+  if (error) {
+    return {ok: false, status: 500, error: error.message};
+  }
+  return {ok: true};
 }

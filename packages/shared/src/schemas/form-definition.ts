@@ -84,10 +84,37 @@ export const FormFieldDefSchema = z.object({
   fieldKey: z.string(),
   label: z.string(),
   fieldType: FormFieldTypeSchema,
+  required: z.boolean(),
   options: z.array(z.string()).nullable(),
   displayOrder: z.number().int(),
 });
 export type FormFieldDef = z.infer<typeof FormFieldDefSchema>;
+
+/**
+ * Converts a stored form field definition back into the shape
+ * `DynamicFormField.svelte` renders (the same shape the definition was
+ * authored in), so an existing entry can be re-rendered as an editable form.
+ * @param fieldDef The definition as returned by the API.
+ */
+export function toFormFieldDefYaml(fieldDef: FormFieldDef): FormFieldDefYaml {
+  const base = {
+    key: fieldDef.fieldKey,
+    label: fieldDef.label,
+    required: fieldDef.required,
+  };
+  // `radio` is the one variant whose options are non-optional; a stored
+  // definition with none can't happen through `FormDefinitionYamlSchema`,
+  // but the database column is nullable, so fall back to an empty list
+  // rather than asserting.
+  if (fieldDef.fieldType === 'radio') {
+    return {...base, type: 'radio', options: fieldDef.options ?? []};
+  }
+  return {
+    ...base,
+    type: fieldDef.fieldType,
+    options: fieldDef.options ?? undefined,
+  };
+}
 
 /**
  * Converts a parsed form definition into rows shaped like the

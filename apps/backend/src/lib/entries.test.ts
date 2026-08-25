@@ -2,7 +2,7 @@ import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
 import type {EntryInput} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
-import {createEntry} from './entries';
+import {createEntry, updateOwnEntry} from './entries';
 import {hashPassword} from './password';
 
 // Local Supabase Postgres connection (`supabase start` default), same
@@ -294,6 +294,234 @@ describe.skipIf(!(await isDbReachable()))(
 
       expect(retryResult.ok).toBe(true);
       expect(mailSendCount).toBe(1);
+    });
+  },
+);
+
+describe.skipIf(!(await isDbReachable()))(
+  'updateOwnEntry (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const testRegionSlug = 'entries-update-test-region';
+    const testEmailDomain = 'entries-update-test.example.com';
+
+    afterAll(async () => {
+      await sql`delete from form_field_defs where tournament_id in (
+        select id from tournaments where region_id in (
+          select id from regions where slug like ${testRegionSlug + '%'}
+        )
+      )`;
+      await sql`delete from entries where tournament_id in (
+        select id from tournaments where region_id in (
+          select id from regions where slug like ${testRegionSlug + '%'}
+        )
+      )`;
+      await sql`delete from participants where email like ${'%@' + testEmailDomain}`;
+      await sql`delete from regulations where tournament_id in (
+        select id from tournaments where region_id in (
+          select id from regions where slug like ${testRegionSlug + '%'}
+        )
+      )`;
+      await sql`delete from tournaments where region_id in (
+        select id from regions where slug like ${testRegionSlug + '%'}
+      )`;
+      await sql`delete from regions where slug like ${testRegionSlug + '%'}`;
+      await sql.close();
+    });
+
+    interface EntryFixture {
+      participantId: string;
+      entryId: string;
+    }
+
+    /**
+     * Creates a region, tournament (with one `t_shirt_size` custom field),
+     * regulation, participant and entry, and returns the ids needed to
+     * exercise `updateOwnEntry()` against them.
+     */
+    async function createEntryFixture(
+      suffix: string,
+      options: {
+        entryOpensAt?: string;
+        entryClosesAt?: string;
+        status?: string;
+      } = {},
+    ): Promise<EntryFixture> {
+      const [region] = await sql`
+        insert into regions (slug, name)
+        values (${testRegionSlug + '-' + suffix}, 'テスト地域')
+        returning id
+      `;
+      const [tournament] = await sql`
+        insert into tournaments (
+          region_id, type, name, entry_opens_at, entry_closes_at
+        ) values (
+          ${region.id}, 'saikyoi', 'テスト大会',
+          ${options.entryOpensAt ?? '2020-01-01T00:00:00Z'},
+          ${options.entryClosesAt ?? '2099-01-01T00:00:00Z'}
+        )
+        returning id
+      `;
+      const [regulation] = await sql`
+        insert into regulations (tournament_id, label)
+        values (${tournament.id}, 'テストレギュレーション')
+        returning id
+      `;
+      await sql`
+        insert into form_field_defs (
+          tournament_id, field_key, label, field_type, required, options,
+          display_order
+        ) values (
+          ${tournament.id}, 't_shirt_size', 'Tシャツサイズ', 'radio', false,
+          ${['S', 'M', 'L']}::jsonb, 0
+        )
+      `;
+      const [participant] = await sql`
+        insert into participants (region_id, email, password_hash)
+        values (
+          ${region.id},
+          ${`update-${crypto.randomUUID()}@${testEmailDomain}`},
+          'hash'
+        )
+        returning id
+      `;
+      const [entry] = await sql`
+        insert into entries (
+          participant_id, tournament_id, name, furigana, display_name,
+          regulation_id, free_text, custom_field_values, status
+        ) values (
+          ${participant.id}, ${tournament.id}, '山田太郎', 'ヤマダタロウ', '太郎',
+          ${regulation.id}, '元の自由記述', ${{t_shirt_size: 'M'}},
+          ${options.status ?? 'confirmed'}
+        )
+        returning id
+      `;
+      return {
+        participantId: participant.id as string,
+        entryId: entry.id as string,
+      };
+    }
+
+    const patch = {
+      name: '山田花子',
+      furigana: 'ヤマダハナコ',
+      displayName: '花子',
+      freeText: '更新後の自由記述',
+      customFieldValues: {t_shirt_size: 'L'},
+    };
+
+    it('updates the entry within the entry period', async () => {
+      const fixture = await createEntryFixture('open');
+
+      const result = await updateOwnEntry(
+        env,
+        fixture.participantId,
+        fixture.entryId,
+        patch,
+      );
+
+      expect(result.ok).toBe(true);
+      const [row] = await sql`
+        select name, furigana, display_name, free_text, custom_field_values
+        from entries where id = ${fixture.entryId}
+      `;
+      expect(row.name).toBe('山田花子');
+      expect(row.furigana).toBe('ヤマダハナコ');
+      expect(row.display_name).toBe('花子');
+      expect(row.free_text).toBe('更新後の自由記述');
+      expect(row.custom_field_values).toEqual({t_shirt_size: 'L'});
+    });
+
+    it('rejects updates outside the entry period', async () => {
+      const fixture = await createEntryFixture('closed', {
+        entryOpensAt: '2020-01-01T00:00:00Z',
+        entryClosesAt: '2020-01-02T00:00:00Z',
+      });
+
+      const result = await updateOwnEntry(
+        env,
+        fixture.participantId,
+        fixture.entryId,
+        patch,
+      );
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.status).toBe(403);
+      const [row] = await sql`
+        select name from entries where id = ${fixture.entryId}
+      `;
+      expect(row.name).toBe('山田太郎');
+    });
+
+    it("rejects updating another participant's entry", async () => {
+      const fixture = await createEntryFixture('owner');
+      const other = await createEntryFixture('other');
+
+      const result = await updateOwnEntry(
+        env,
+        other.participantId,
+        fixture.entryId,
+        patch,
+      );
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.status).toBe(404);
+      const [row] = await sql`
+        select name from entries where id = ${fixture.entryId}
+      `;
+      expect(row.name).toBe('山田太郎');
+    });
+
+    it('rejects updating a cancelled entry', async () => {
+      const fixture = await createEntryFixture('cancelled', {
+        status: 'cancelled',
+      });
+
+      const result = await updateOwnEntry(
+        env,
+        fixture.participantId,
+        fixture.entryId,
+        patch,
+      );
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.status).toBe(403);
+      const [row] = await sql`
+        select name from entries where id = ${fixture.entryId}
+      `;
+      expect(row.name).toBe('山田太郎');
+    });
+
+    it('rejects custom field answers the tournament does not define', async () => {
+      const fixture = await createEntryFixture('unknown-field');
+
+      const result = await updateOwnEntry(
+        env,
+        fixture.participantId,
+        fixture.entryId,
+        {...patch, customFieldValues: {...patch.customFieldValues, junk: 'x'}},
+      );
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.status).toBe(400);
+      const [row] = await sql`
+        select name from entries where id = ${fixture.entryId}
+      `;
+      expect(row.name).toBe('山田太郎');
+    });
+
+    it('rejects an answer outside the field definition options', async () => {
+      const fixture = await createEntryFixture('unknown-option');
+
+      const result = await updateOwnEntry(
+        env,
+        fixture.participantId,
+        fixture.entryId,
+        {...patch, customFieldValues: {t_shirt_size: 'XXL'}},
+      );
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.status).toBe(400);
     });
   },
 );

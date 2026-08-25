@@ -1,5 +1,11 @@
 import {describe, expect, it} from 'bun:test';
-import {EntryInputSchema, EntrySchema, StaffEntryDetailSchema} from './entry';
+import {
+  EntryEditInputSchema,
+  EntryInputSchema,
+  EntrySchema,
+  MypageEntryDetailSchema,
+  StaffEntryDetailSchema,
+} from './entry';
 
 describe('EntryInputSchema', () => {
   it('rejects mismatched password confirmation', () => {
@@ -33,6 +39,87 @@ describe('EntryInputSchema', () => {
     });
 
     expect(result.success).toBe(true);
+  });
+});
+
+describe('EntryEditInputSchema', () => {
+  const BASE_EDIT = {
+    name: '山田太郎',
+    furigana: 'ヤマダタロウ',
+    displayName: '太郎',
+    customFieldValues: {t_shirt_size: 'M'},
+  };
+
+  it('accepts the editable fields without any credentials', () => {
+    const result = EntryEditInputSchema.safeParse(BASE_EDIT);
+
+    expect(result.success).toBe(true);
+  });
+
+  it('strips email, password and regulationId, which are not editable here', () => {
+    const result = EntryEditInputSchema.safeParse({
+      ...BASE_EDIT,
+      email: 'taro@example.com',
+      password: 'password1',
+      passwordConfirm: 'password1',
+      regulationId: '00000000-0000-0000-0000-000000000000',
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toEqual(BASE_EDIT);
+    }
+  });
+
+  it('rejects an empty display name', () => {
+    const result = EntryEditInputSchema.safeParse({
+      ...BASE_EDIT,
+      displayName: '',
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('MypageEntryDetailSchema', () => {
+  const BASE_DETAIL = {
+    id: '00000000-0000-0000-0000-000000000000',
+    tournamentId: '00000000-0000-0000-0000-000000000001',
+    name: '山田太郎',
+    furigana: 'ヤマダタロウ',
+    displayName: '太郎',
+    regulationLabel: '一般の部',
+    freeText: null,
+    customFieldValues: {},
+    status: 'confirmed' as const,
+    waitlistPosition: null,
+    tournament: {
+      name: 'テスト大会',
+      type: 'saikyoi' as const,
+      regionId: '00000000-0000-0000-0000-000000000002',
+      entryOpensAt: '2026-01-01T00:00:00+00:00',
+      entryClosesAt: '2026-02-01T00:00:00+00:00',
+    },
+    formFieldDefs: [],
+  };
+
+  it('accepts a detail carrying the tournament entry period', () => {
+    const result = MypageEntryDetailSchema.safeParse(BASE_DETAIL);
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a tournament missing its entry period', () => {
+    const result = MypageEntryDetailSchema.safeParse({
+      ...BASE_DETAIL,
+      tournament: {
+        name: 'テスト大会',
+        type: 'saikyoi',
+        regionId: '00000000-0000-0000-0000-000000000002',
+      },
+    });
+
+    expect(result.success).toBe(false);
   });
 });
 
@@ -130,6 +217,7 @@ describe('StaffEntryDetailSchema', () => {
           fieldKey: 't_shirt_size',
           label: 'Tシャツサイズ',
           fieldType: 'radio',
+          required: true,
           options: ['S', 'M', 'L'],
           displayOrder: 0,
         },

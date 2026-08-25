@@ -13,6 +13,11 @@ import {
   requireStaffForTournament,
 } from '../middleware/staff-auth';
 import {createDbClient} from '../lib/db';
+import {
+  FORM_FIELD_DEF_COLUMNS,
+  toFormFieldDef,
+  type FormFieldDefRow,
+} from '../lib/form-field-defs';
 
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 const EntryIdParamSchema = z.object({entryId: z.string().uuid()});
@@ -36,29 +41,6 @@ interface EntryRow {
   waitlist_position: number | null;
   participants: {email: string} | null;
   regulations: {label: string} | null;
-}
-
-/** Shape of a `form_field_defs` row as selected below (snake_case). */
-interface FormFieldDefRow {
-  field_key: string;
-  label: string;
-  field_type: string;
-  options: string[] | null;
-  display_order: number;
-}
-
-// Not typed as `FormFieldDef` here: `field_type` is a plain `string` at the
-// database boundary, and `StaffEntryDetailSchema.parse()` (below, mirroring
-// `rowToEntry()`'s use of `EntrySchema.parse()`) is what actually validates
-// and narrows it to the `FormFieldType` enum at runtime.
-function toFormFieldDef(row: FormFieldDefRow) {
-  return {
-    fieldKey: row.field_key,
-    label: row.label,
-    fieldType: row.field_type,
-    options: row.options,
-    displayOrder: row.display_order,
-  };
 }
 
 function rowToEntry(row: EntryRow): Entry {
@@ -122,7 +104,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
       // key.
       const {data: formFieldDefRows, error: formFieldDefsError} = await db
         .from('form_field_defs')
-        .select('field_key, label, field_type, options, display_order')
+        .select(FORM_FIELD_DEF_COLUMNS)
         .eq('tournament_id', data.tournament_id)
         .order('display_order', {ascending: true})
         .returns<FormFieldDefRow[]>();

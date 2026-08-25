@@ -1,4 +1,8 @@
 <script lang="ts">
+  import {
+    EDITABLE_ENTRY_STATUSES,
+    isEntryEditable,
+  } from '@regional-quiz/shared';
   import type {PageProps} from './$types';
   let {data}: PageProps = $props();
 </script>
@@ -12,5 +16,16 @@
         : '新人王'})
     </h2>
     <p>ステータス: {entry.status}</p>
+    <!-- The edit API refuses cancelled entries and closed entry periods, so
+         the link is only offered where it would actually work. The two
+         reasons are told apart here (as on the edit page) because a
+         cancelled entry can still sit inside an open entry period. -->
+    {#if isEntryEditable(entry)}
+      <a href={`/mypage/entries/${entry.id}/edit`}>編集する</a>
+    {:else if !EDITABLE_ENTRY_STATUSES.includes(entry.status)}
+      <p>キャンセル済みのエントリーは編集できません</p>
+    {:else}
+      <p>編集期間は終了しました</p>
+    {/if}
   </section>
 {/each}
