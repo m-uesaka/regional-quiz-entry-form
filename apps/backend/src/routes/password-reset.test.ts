@@ -123,4 +123,29 @@ describe('POST /confirm', () => {
 
     expect(res.status).toBe(400);
   });
+
+  it('hides the database message behind a fixed 500 body', async () => {
+    const originalConsoleError = console.error;
+    console.error = () => {};
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        Response.json(
+          {message: 'relation "password_reset_tokens" does not exist'},
+          {status: 500},
+        ),
+      )) as unknown as typeof fetch;
+
+    try {
+      const res = await post('/confirm', {
+        token: 'a'.repeat(64),
+        newPassword: 'brand-new-password',
+      });
+
+      const body: unknown = await res.json();
+      expect(res.status).toBe(500);
+      expect(body).toEqual({error: 'internal server error'});
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
 });

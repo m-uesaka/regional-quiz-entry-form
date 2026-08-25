@@ -27,6 +27,15 @@ export const passwordResetRoute = new Hono<Env>()
     async c => {
       const result = await confirmPasswordReset(c.env, c.req.valid('json'));
       if (!result.ok) {
+        if (result.status === 500) {
+          // This endpoint is unauthenticated, so the Supabase message stays
+          // server-side: it describes the database rather than anything the
+          // caller can act on.
+          console.error('failed to confirm the password reset', {
+            error: result.error,
+          });
+          return c.json({error: 'internal server error'}, 500);
+        }
         return c.json({error: result.error}, result.status);
       }
       return c.json({ok: true});
