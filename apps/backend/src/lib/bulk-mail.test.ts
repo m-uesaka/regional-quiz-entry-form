@@ -1,5 +1,6 @@
 import {describe, expect, it} from 'bun:test';
 import {sendBulkMail} from './bulk-mail';
+import {MailSendError} from './mailer';
 import type {MailSender, SendMailInput} from './mailer';
 
 class RecordingMailSender implements MailSender {
@@ -17,6 +18,31 @@ class RecordingMailSender implements MailSender {
     this.inFlight--;
     if (this.rejectFor.includes(input.to)) {
       throw new Error('rejected');
+    }
+    this.sent.push(input);
+  }
+}
+
+/**
+ * Rejects the first `throttleCount` sends with a rate-limit error, the way
+ * the provider does when another mail job is eating the shared quota, then
+ * accepts everything after that.
+ */
+class ThrottlingMailSender implements MailSender {
+  readonly sent: SendMailInput[] = [];
+  attempts = 0;
+  readonly waitedAt: number[] = [];
+
+  constructor(
+    private readonly throttleCount: number,
+    private readonly retryAfterMs?: number,
+  ) {}
+
+  async send(input: SendMailInput): Promise<void> {
+    this.attempts++;
+    this.waitedAt.push(Date.now());
+    if (this.attempts <= this.throttleCount) {
+      throw new MailSendError(429, this.retryAfterMs);
     }
     this.sent.push(input);
   }
@@ -85,6 +111,72 @@ describe('sendBulkMail', () => {
     for (const batchSize of [0, -1, 1.5, Number.NaN]) {
       await expect(
         sendBulkMail(mailer, ['a@example.com'], CONTENT, {batchSize}),
+      ).rejects.toThrow(RangeError);
+    }
+    expect(mailer.sent).toEqual([]);
+  });
+
+  it('retries a rate-limited send instead of failing the recipient', async () => {
+    const mailer = new ThrottlingMailSender(2);
+
+    const result = await sendBulkMail(mailer, ['a@example.com'], CONTENT, {
+      retryBaseDelayMs: 5,
+    });
+
+    expect(result).toEqual({sent: 1, failed: []});
+    expect(mailer.attempts).toBe(3);
+    expect(mailer.sent).toEqual([{to: 'a@example.com', ...CONTENT}]);
+  });
+
+  it("waits as long as the provider's `Retry-After` asks", async () => {
+    const mailer = new ThrottlingMailSender(1, 40);
+
+    const result = await sendBulkMail(mailer, ['a@example.com'], CONTENT, {
+      // Far shorter than the provider's answer, so a wait of at least 40ms
+      // can only come from honouring `Retry-After`.
+      retryBaseDelayMs: 1,
+    });
+
+    expect(result).toEqual({sent: 1, failed: []});
+    expect(mailer.waitedAt[1] - mailer.waitedAt[0]).toBeGreaterThanOrEqual(40);
+  });
+
+  it('gives up on a recipient once the retries are exhausted', async () => {
+    const mailer = new ThrottlingMailSender(Number.POSITIVE_INFINITY);
+
+    const result = await sendBulkMail(mailer, ['a@example.com'], CONTENT, {
+      maxRetries: 2,
+      retryBaseDelayMs: 1,
+    });
+
+    expect(result).toEqual({sent: 0, failed: ['a@example.com']});
+    // The first attempt plus the two retries, and no more.
+    expect(mailer.attempts).toBe(3);
+  });
+
+  it('does not retry a rejection that is not a rate limit', async () => {
+    const mailer = new ThrottlingMailSender(0);
+    const permanent: MailSender = {
+      send: async () => {
+        mailer.attempts++;
+        throw new MailSendError(422);
+      },
+    };
+
+    const result = await sendBulkMail(permanent, ['a@example.com'], CONTENT, {
+      retryBaseDelayMs: 1,
+    });
+
+    expect(result).toEqual({sent: 0, failed: ['a@example.com']});
+    expect(mailer.attempts).toBe(1);
+  });
+
+  it('rejects a retry budget that is not a whole number of retries', async () => {
+    const mailer = new RecordingMailSender();
+
+    for (const maxRetries of [-1, 1.5, Number.NaN]) {
+      await expect(
+        sendBulkMail(mailer, ['a@example.com'], CONTENT, {maxRetries}),
       ).rejects.toThrow(RangeError);
     }
     expect(mailer.sent).toEqual([]);
