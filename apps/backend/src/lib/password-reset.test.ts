@@ -249,6 +249,114 @@ describe.skipIf(!(await isDbReachable()))(
       });
     });
 
+    it('confirmPasswordReset lets only one of two concurrent distinct tokens through', async () => {
+      const participant = await createParticipantFixture();
+      const firstToken = await createTokenFixture(participant.id);
+      const secondToken = await createTokenFixture(participant.id);
+
+      // Two links the participant requested one after the other, clicked at
+      // the same moment. `reset_participant_password` locks the participant
+      // row before either token row, so these queue up instead of each
+      // holding the token row the other one has to burn -- which used to
+      // deadlock and cost one of them a 500 -- and the loser observes the
+      // `used_at` the winner set.
+      const results = await Promise.all([
+        confirmPasswordReset(env, {
+          token: firstToken,
+          newPassword: 'first-password',
+        }),
+        confirmPasswordReset(env, {
+          token: secondToken,
+          newPassword: 'second-password',
+        }),
+      ]);
+
+      const succeeded = results.filter(result => result.ok);
+      expect(succeeded.length).toBe(1);
+      expect(results.filter(result => !result.ok)).toEqual([
+        {ok: false, status: 400, error: 'invalid or expired token'},
+      ]);
+
+      // Exactly one of the two new passwords is in place -- never a mix
+      // where the rejected request still overwrote the accepted one.
+      const passwordHash = await readPasswordHash(participant.id);
+      const winnerIsFirst = results[0].ok;
+      expect(
+        await verifyPassword(
+          winnerIsFirst ? 'first-password' : 'second-password',
+          passwordHash,
+        ),
+      ).toBe(true);
+      expect(
+        await verifyPassword(
+          winnerIsFirst ? 'second-password' : 'first-password',
+          passwordHash,
+        ),
+      ).toBe(false);
+
+      // Both links are spent either way.
+      const tokenRows = await sql`
+        select used_at from password_reset_tokens
+        where participant_id = ${participant.id}
+      `;
+      expect(tokenRows.length).toBe(2);
+      for (const row of tokenRows) {
+        expect(row.used_at).not.toBeNull();
+      }
+    });
+
+    it('reset_participant_password serializes two distinct tokens for the same participant', async () => {
+      // Driven against the function rather than through
+      // `confirmPasswordReset`, which cannot provoke this on its own:
+      // hashing the new password takes long enough that two calls started
+      // together still reach the database milliseconds apart, while the
+      // window being guarded here is a single statement wide. Two
+      // connections, so the two calls really are in flight at once, and a
+      // handful of rounds because the interleaving is up to the scheduler.
+      //
+      // Before the participant row was locked first, each call locked only
+      // its own token and then went after the shared `participants` row and
+      // the other call's token, so the two ended up waiting on each other
+      // and Postgres aborted one with a deadlock -- a 500 for a participant
+      // whose reset link was perfectly valid.
+      const connections = [new SQL(DB_URL), new SQL(DB_URL)];
+      try {
+        for (let round = 0; round < 10; round++) {
+          const participant = await createParticipantFixture();
+          const tokenHashes = await Promise.all(
+            [
+              await createTokenFixture(participant.id),
+              await createTokenFixture(participant.id),
+            ].map(hashToken),
+          );
+
+          const outcomes = await Promise.allSettled(
+            tokenHashes.map(
+              (tokenHash, index) =>
+                connections[
+                  index
+                ]`select reset_participant_password(${tokenHash}, ${`password-hash-${index}`})`,
+            ),
+          );
+
+          // One reset goes through and the other is refused as already
+          // used. Neither is ever refused for having lost a deadlock.
+          expect(
+            outcomes.filter(outcome => outcome.status === 'fulfilled').length,
+          ).toBe(1);
+          const rejections = outcomes.filter(
+            outcome => outcome.status === 'rejected',
+          );
+          expect(rejections.length).toBe(1);
+          expect((rejections[0].reason as Error).message).toBe(
+            'invalid or expired token',
+          );
+        }
+      } finally {
+        await Promise.all(connections.map(connection => connection.close()));
+      }
+    });
+
     it('confirmPasswordReset burns the participant’s other outstanding tokens', async () => {
       const participant = await createParticipantFixture();
       const usedToken = await createTokenFixture(participant.id);

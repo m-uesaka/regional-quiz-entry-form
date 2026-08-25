@@ -22,8 +22,9 @@ interface ResetTokenRow {
 
 /**
  * The SQLSTATE the `reset_participant_password` Postgres function raises
- * (see `supabase/migrations/0009_reset_participant_password_fn.sql`) when
- * the token is unknown, already used, or expired.
+ * (see `supabase/migrations/0009_reset_participant_password_fn.sql` and
+ * `0010_reset_participant_password_participant_lock.sql`) when the token is
+ * unknown, already used, or expired.
  */
 const INVALID_TOKEN_SQLSTATE = 'P0003';
 
@@ -105,8 +106,11 @@ export async function requestPasswordReset(
  * The token check, the password update and that burning all happen inside
  * the `reset_participant_password` Postgres function, so they commit or roll
  * back together: a failure to burn the remaining links can no longer leave
- * the new password in place while an older link stays usable (see the
- * migration for details).
+ * the new password in place while an older link stays usable. That function
+ * also serializes on the participant, so two confirmations presenting two
+ * different links for the same participant are applied one after the other
+ * and the second is refused as already used, rather than racing (see the
+ * migrations for details).
  * @param env The Worker bindings.
  * @param input The validated raw token and the new password.
  */
@@ -122,7 +126,7 @@ export async function confirmPasswordReset(
   // let anyone spend that work by posting tokens that were never going to be
   // valid. Nothing is decided here -- the row can still be consumed or
   // expire between this read and the call below, which is why
-  // `reset_participant_password` re-checks it under a row lock.
+  // `reset_participant_password` re-checks it under the participant lock.
   const {data: candidate, error} = await db
     .from('password_reset_tokens')
     .select('id')

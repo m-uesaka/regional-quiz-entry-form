@@ -219,7 +219,7 @@ flowchart TB
 - `POST /api/auth/participant/password-reset/request` が発行し、`POST /api/auth/participant/password-reset/confirm` が消費します(`apps/backend/src/lib/password-reset.ts`)。
 - `token_hash` は `email_verification_tokens` と同じく生のトークンの SHA-256 ハッシュで、生のトークンは受信者のメールボックスにしか存在しません。
 - 有効期限は発行から 1 時間です。`used_at` を立てることで使い回しを防ぎます(ワンタイム)。
-- 消費・パスワード更新・残りトークンの焼き捨ては DB 関数 `reset_participant_password()` が1トランザクションで行います。トークン行を `for update` でロックするため、同時リクエストでも 2 回消費されることはありません。
+- 消費・パスワード更新・残りトークンの焼き捨ては DB 関数 `reset_participant_password()` が1トランザクションで行います。参加者行を `for update` でロックしてからトークン行を読み直すため、同じ参加者宛ての同時リクエストは直列化され、2 回消費されることはありません。
 - 再設定に成功した時点で、同じ参加者に残っている未使用トークンもまとめて `used_at` を立てて焼き捨てます。古い再設定リンクがもう一度パスワードを変更できてしまわないようにするためです。この焼き捨てはパスワード更新と同じトランザクションなので、失敗すればパスワード更新ごとロールバックされ、「古いリンクが生き残ったまま再設定だけ成功する」状態にはなりません。
 
 ### staff_accounts — スタッフアカウント
@@ -268,7 +268,7 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | `confirm_entry_by_token(text)` | `0003` → `0008` で再定義 | `lib/entry-confirmation.ts` | 確認トークンでエントリーを確定 / キャンセル待ちに載せる |
 | `promote_next_waitlisted_entry(uuid)` | `0004` → `0007` で再定義 | `lib/waitlist.ts` | キャンセル待ち先頭を繰り上げる |
 | `cancel_own_entry(uuid, uuid)` | `0006` | `lib/entries.ts` | 参加者自身のエントリーをキャンセルする |
-| `reset_participant_password(text, text)` | `0009` | `lib/password-reset.ts` | 再設定トークンを消費してパスワードを更新し、残りのトークンを焼き捨てる |
+| `reset_participant_password(text, text)` | `0009` → `0010` で再定義 | `lib/password-reset.ts` | 再設定トークンを消費してパスワードを更新し、残りのトークンを焼き捨てる |
 
 ### sync_form_field_defs(p_tournament_id, p_rows)
 
@@ -316,11 +316,14 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 
 処理順:
 
-1. トークン行を `for update` でロックしつつ取得。未知 / 使用済み / 期限切れなら SQLSTATE `P0003` を raise(TypeScript 側はこれを 400 `invalid or expired token` に変換します)。
-2. 参加者の `password_hash` を更新。
-3. その参加者の未使用トークン(消費中のものを含む)をすべて `used_at = now()` にする。
+1. ロックなしでトークン行を引き、どの参加者を対象にするかだけを得る。見つからなければ SQLSTATE `P0003` を raise。
+2. 参加者行を `for update` でロック(`0010` で追加)。
+3. **ロック取得後に**トークン行を `for update` で読み直す。未知 / 使用済み / 期限切れなら SQLSTATE `P0003` を raise(TypeScript 側はこれを 400 `invalid or expired token` に変換します)。
+4. 参加者の `password_hash` を更新。
+5. その参加者の未使用トークン(消費中のものを含む)をすべて `used_at = now()` にする。
 
-- 2 と 3 が同じトランザクションにあることが要点です。分けて実行していた頃は、3 の失敗時にパスワードだけ変わって古い再設定リンクが有効なまま残り、後から再度パスワードを奪われ得ました。
+- 4 と 5 が同じトランザクションにあることが要点です。分けて実行していた頃は、5 の失敗時にパスワードだけ変わって古い再設定リンクが有効なまま残り、後から再度パスワードを奪われ得ました。
+- 2 の参加者行ロックを**トークン行より先に**取るのも要点です。`0009` は自分のトークン行しかロックしていなかったため、同じ参加者に 2 通の再設定リンクが出ている状態で両方が同時にクリックされると、互いに相手のトークン行と共有の参加者行を待ち合ってデッドロックし、片方が有効なリンクで 500 を受け取っていました。先に必ず参加者行で待たせることで、後続は先行のコミット後にトークンを読み直し、`used_at` 済みとして 400 になります。
 - パスワードのハッシュ化(PBKDF2)は意図的に高コストなため、TypeScript 側はこの関数を呼ぶ前にトークンの存在を軽く 1 回 SELECT して弾きます。あくまで早期リターン用で、正否の判定はロック下で再チェックするこの関数が行います。
 
 ### マイグレーションを修正するときの注意
@@ -340,3 +343,4 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | `0007_promote_next_waitlisted_entry_capacity.sql` | 繰り上げ時の定員再チェックを追加(`0004` を再定義) |
 | `0008_confirm_entry_by_token_entry_status.sql` | 確定前のステータス再確認を追加(`0003` を再定義) |
 | `0009_reset_participant_password_fn.sql` | `reset_participant_password()` |
+| `0010_reset_participant_password_participant_lock.sql` | 参加者行を先にロックして同時再設定を直列化(`0009` を再定義) |
