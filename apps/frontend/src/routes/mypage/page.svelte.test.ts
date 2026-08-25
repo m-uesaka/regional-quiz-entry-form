@@ -71,6 +71,7 @@ describe('mypage +page.svelte', () => {
     expect(
       screen.queryByRole('link', {name: '編集する'}),
     ).not.toBeInTheDocument();
+    expect(screen.getByText('編集期間は終了しました')).toBeInTheDocument();
   });
 
   it('offers no edit link for a cancelled entry', () => {
@@ -78,6 +79,17 @@ describe('mypage +page.svelte', () => {
 
     expect(
       screen.queryByRole('link', {name: '編集する'}),
+    ).not.toBeInTheDocument();
+  });
+
+  it('explains the cancellation rather than the entry period for a cancelled entry still within an open period', () => {
+    renderPage([{...ENTRIES[0], status: 'cancelled'}]);
+
+    expect(
+      screen.getByText('キャンセル済みのエントリーは編集できません'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('編集期間は終了しました'),
     ).not.toBeInTheDocument();
   });
 });
