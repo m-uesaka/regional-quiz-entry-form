@@ -7,8 +7,10 @@ type ConfirmResult =
 
 /**
  * The SQLSTATE the `confirm_entry_by_token` Postgres function raises (see
- * `supabase/migrations/0003_confirm_entry_by_token_fn.sql`) when the token
- * is unknown, expired, or already used.
+ * `supabase/migrations/0003_confirm_entry_by_token_fn.sql`, amended by
+ * `0008_confirm_entry_by_token_entry_status.sql`) when the token is unknown,
+ * expired, or already used, or when the entry it was issued for is no longer
+ * awaiting verification (it was cancelled in the meantime).
  */
 const INVALID_TOKEN_SQLSTATE = 'P0003';
 
@@ -17,7 +19,9 @@ const INVALID_TOKEN_SQLSTATE = 'P0003';
  *
  * The entry is set to `confirmed` if the tournament still has capacity, or
  * `waitlisted` (with the next `waitlist_position`) otherwise. The token is
- * marked used so it can't be replayed.
+ * marked used so it can't be replayed, and an entry that is no longer
+ * awaiting verification -- a cancelled one, say -- is refused even when the
+ * token itself is still valid.
  *
  * This delegates to the `confirm_entry_by_token` Postgres function, which
  * performs the token lookup, capacity check, and both updates inside one

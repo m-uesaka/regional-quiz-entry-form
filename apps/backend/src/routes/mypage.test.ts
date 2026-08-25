@@ -80,6 +80,16 @@ describe('mypage routes (request validation)', () => {
     expect(res.status).toBe(401);
   });
 
+  it('rejects a DELETE without a participant session with 401', async () => {
+    const res = await app.request(
+      `/api/mypage/entries/${ENTRY_ID}`,
+      {method: 'DELETE'},
+      env,
+    );
+
+    expect(res.status).toBe(401);
+  });
+
   it('rejects a PATCH with an invalid body with 400', async () => {
     const res = await app.request(
       `/api/mypage/entries/${ENTRY_ID}`,
@@ -423,6 +433,75 @@ describe.skipIf(!(await isDbReachable()))(
         select name from entries where id = ${entryId}
       `;
       expect(row.name).toBe('山田太郎');
+    });
+
+    async function deleteEntry(
+      entryId: string,
+      participantId: string,
+    ): Promise<Response> {
+      return app.request(
+        `/api/mypage/entries/${entryId}`,
+        {
+          method: 'DELETE',
+          headers: {cookie: await participantCookie(participantId)},
+        },
+        env,
+      );
+    }
+
+    it("cancels the participant's own entry", async () => {
+      const regionId = await createRegion('delete');
+      const tournamentId = await createTournament(
+        regionId,
+        'saikyoi',
+        OPEN_PERIOD,
+      );
+      const regulationId = await createRegulation(tournamentId);
+      const participantId = await createParticipant(
+        regionId,
+        'mypage-delete@example.com',
+      );
+      const entryId = await createEntry(
+        participantId,
+        tournamentId,
+        regulationId,
+      );
+
+      const res = await deleteEntry(entryId, participantId);
+
+      expect(res.status).toBe(200);
+      const [row] = await sql`
+        select status, cancelled_at from entries where id = ${entryId}
+      `;
+      expect(row.status).toBe('cancelled');
+      expect(row.cancelled_at).not.toBeNull();
+    });
+
+    it("returns 404 when cancelling another participant's entry", async () => {
+      const regionId = await createRegion('delete-other');
+      const tournamentId = await createTournament(
+        regionId,
+        'saikyoi',
+        OPEN_PERIOD,
+      );
+      const regulationId = await createRegulation(tournamentId);
+      const ownerId = await createParticipant(
+        regionId,
+        'mypage-delete-owner@example.com',
+      );
+      const otherId = await createParticipant(
+        regionId,
+        'mypage-delete-intruder@example.com',
+      );
+      const entryId = await createEntry(ownerId, tournamentId, regulationId);
+
+      const res = await deleteEntry(entryId, otherId);
+
+      expect(res.status).toBe(404);
+      const [row] = await sql`
+        select status from entries where id = ${entryId}
+      `;
+      expect(row.status).toBe('confirmed');
     });
   },
 );

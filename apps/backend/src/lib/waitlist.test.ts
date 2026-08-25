@@ -162,6 +162,36 @@ describe.skipIf(!(await isDbReachable()))(
       expect(secondRow.status).toBe('waitlisted');
     });
 
+    it('promotes nobody when the tournament is already at capacity', async () => {
+      // The fixture's capacity is 1, so a single confirmed entry means the
+      // seat this promotion was triggered for has already been taken by a
+      // concurrent confirmation.
+      const fixture = await createTournamentAndRegulation('at-capacity');
+      const waitlisted = await createWaitlistedEntry(
+        fixture.regionId,
+        fixture.tournamentId,
+        fixture.regulationId,
+        1,
+      );
+      await sql`
+        update entries set status = 'confirmed', waitlist_position = null
+        where id = ${await createWaitlistedEntry(
+          fixture.regionId,
+          fixture.tournamentId,
+          fixture.regulationId,
+          2,
+        )}
+      `;
+
+      await promoteNextWaitlistedEntry(env, fixture.tournamentId);
+
+      const [waitlistedRow] = await sql`
+        select status, waitlist_position from entries where id = ${waitlisted}
+      `;
+      expect(waitlistedRow.status).toBe('waitlisted');
+      expect(waitlistedRow.waitlist_position).toBe(1);
+    });
+
     it('does nothing when there is no waitlisted entry', async () => {
       const fixture = await createTournamentAndRegulation('empty');
 

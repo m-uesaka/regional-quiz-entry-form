@@ -10,7 +10,7 @@ import {
 import type {ParticipantEnv} from '../types/env';
 import {requireParticipant} from '../middleware/participant-auth';
 import {createDbClient} from '../lib/db';
-import {updateOwnEntry} from '../lib/entries';
+import {cancelOwnEntry, updateOwnEntry} from '../lib/entries';
 import {
   FORM_FIELD_DEF_COLUMNS,
   toFormFieldDef,
@@ -140,6 +140,21 @@ export const mypageRoute = new Hono<ParticipantEnv>()
         c.get('participantId'),
         c.req.valid('param').entryId,
         c.req.valid('json'),
+      );
+      if (!result.ok) {
+        return c.json({error: result.error}, result.status);
+      }
+      return c.json({ok: true});
+    },
+  )
+  .delete(
+    '/entries/:entryId',
+    zValidator('param', EntryIdParamSchema),
+    async c => {
+      const result = await cancelOwnEntry(
+        c.env,
+        c.get('participantId'),
+        c.req.valid('param').entryId,
       );
       if (!result.ok) {
         return c.json({error: result.error}, result.status);
