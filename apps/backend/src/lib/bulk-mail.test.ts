@@ -1,5 +1,11 @@
 import {describe, expect, it} from 'bun:test';
-import {sendBulkMail} from './bulk-mail';
+import {
+  BACKGROUND_SEND_BUDGET_MS,
+  MAIL_BATCH_INTERVAL_MS,
+  MAIL_BATCH_SIZE,
+  MAX_BACKGROUND_RECIPIENTS,
+  sendBulkMail,
+} from './bulk-mail';
 import {MailSendError} from './mailer';
 import type {MailSender, SendMailInput} from './mailer';
 
@@ -189,5 +195,17 @@ describe('sendBulkMail', () => {
 
     expect(result).toEqual({sent: 0, failed: []});
     expect(mailer.sent).toEqual([]);
+  });
+});
+
+describe('MAX_BACKGROUND_RECIPIENTS', () => {
+  it('paces a full list well inside the post-response budget', () => {
+    const batches = Math.ceil(MAX_BACKGROUND_RECIPIENTS / MAIL_BATCH_SIZE);
+    const pacingMs = (batches - 1) * MAIL_BATCH_INTERVAL_MS;
+
+    // The waits alone must leave room for the sends themselves, so half the
+    // budget is the most the pacing may claim. A change to the batch size or
+    // interval that breaks this makes the ceiling unreachable in practice.
+    expect(pacingMs).toBeLessThanOrEqual(BACKGROUND_SEND_BUDGET_MS / 2);
   });
 });

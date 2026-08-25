@@ -23,6 +23,34 @@ export const MAIL_RETRY_BASE_DELAY_MS = 1000;
 /** Cap on a single wait, so an absurd `Retry-After` can't stall the run. */
 export const MAIL_RETRY_MAX_DELAY_MS = 30_000;
 
+// Cloudflare keeps a Worker alive for `waitUntil()` work only for about 30
+// seconds after the response has been sent, then cancels whatever is still
+// pending. A send paced by the batching above therefore has a hard ceiling
+// on how many recipients it can reach from a background task, and handing
+// it more would drop the tail silently.
+export const BACKGROUND_SEND_BUDGET_MS = 30_000;
+
+// Only part of that budget may go on the deliberate waits between batches:
+// the sends themselves need network time, and a throttled one waits out a
+// `Retry-After` on top of it. Half the budget is left for those, so the
+// ceiling below stays reachable rather than being the theoretical best case.
+const PACING_BUDGET_RATIO = 0.5;
+
+/**
+ * How many recipients a background `sendBulkMail()` run with the default
+ * pacing can be expected to finish before the platform cancels it.
+ *
+ * Sending to more than this many addresses needs the send to outlive the
+ * request that started it -- see the TODO on the staff bulk-mail route
+ * about moving the paced send onto a durable Cloudflare Queue consumer.
+ */
+export const MAX_BACKGROUND_RECIPIENTS =
+  (Math.floor(
+    (BACKGROUND_SEND_BUDGET_MS * PACING_BUDGET_RATIO) / MAIL_BATCH_INTERVAL_MS,
+  ) +
+    1) *
+  MAIL_BATCH_SIZE;
+
 export interface BulkMailContent {
   subject: string;
   html: string;

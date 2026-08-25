@@ -2,7 +2,7 @@ import {afterEach, describe, expect, it} from 'bun:test';
 import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
 import app from '../index';
-import {MAIL_BATCH_SIZE} from '../lib/bulk-mail';
+import {MAIL_BATCH_SIZE, MAX_BACKGROUND_RECIPIENTS} from '../lib/bulk-mail';
 
 const ENV: Bindings = {
   SUPABASE_URL: 'https://example.supabase.co',
@@ -314,6 +314,25 @@ describe('POST /staff/tournaments/:tournamentId/mail', () => {
       'taro@example.com',
       'hanako@example.com',
     ]);
+  });
+
+  it('refuses a send too large to finish in the background', async () => {
+    const recipients = Array.from(
+      {length: MAX_BACKGROUND_RECIPIENTS + 1},
+      (unusedValue, index) => `user${index}@example.com`,
+    );
+    const log = mockFetch([IN_SCOPE_TOURNAMENT, recipients.map(entryRow)]);
+    const cookie = await regionalStaffCookie();
+
+    const res = await postMail(cookie);
+    const body = (await res.json()) as {error: string};
+    await settleBackgroundWork();
+
+    expect(res.status).toBe(413);
+    // Refused outright rather than accepted and then cut short: nothing at
+    // all is sent, so no half-mailed list has to be reconstructed.
+    expect(log.mails).toEqual([]);
+    expect(body.error).toContain(String(MAX_BACKGROUND_RECIPIENTS));
   });
 
   it('returns 400 for an empty subject', async () => {

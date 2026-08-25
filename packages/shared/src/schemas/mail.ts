@@ -36,6 +36,11 @@ export type StaffMailInput = z.infer<typeof StaffMailInputSchema>;
  * are known, and the rate-controlled send runs on after it. Per-recipient
  * delivery results therefore aren't in this response -- they belong to the
  * mail provider's own delivery log.
+ *
+ * That background send has to finish inside the hosting platform's budget
+ * for post-response work, so a filter matching more recipients than it can
+ * pace through is refused with 413 instead of being accepted here and then
+ * cut short halfway.
  */
 export const StaffMailResultSchema = z.object({
   accepted: z.number().int().nonnegative(),

@@ -8,7 +8,7 @@ import {
 import type {StaffEnv} from '../types/env';
 import {requireStaffForTournament} from '../middleware/staff-auth';
 import {ResendMailSender} from '../lib/mailer';
-import {sendBulkMail} from '../lib/bulk-mail';
+import {MAX_BACKGROUND_RECIPIENTS, sendBulkMail} from '../lib/bulk-mail';
 import {fetchTournamentRecipients} from '../lib/entry-recipients';
 
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
@@ -33,6 +33,26 @@ export const staffMailRoute = new Hono<StaffEnv>().post(
       return c.json({error: result.error}, 500);
     }
     const {recipients} = result;
+
+    // TODO: move the paced send onto a durable Cloudflare Queue (or
+    // Workflow) consumer, which may run for minutes, and drop this ceiling
+    // once the send no longer depends on the request's `waitUntil()`
+    // budget.
+    //
+    // Until then a list this long cannot be finished in the background, so
+    // it is refused rather than accepted with a 202 whose tail would be
+    // cancelled without anybody being told.
+    if (recipients.length > MAX_BACKGROUND_RECIPIENTS) {
+      return c.json(
+        {
+          error:
+            `too many recipients: ${recipients.length} matched, but one ` +
+            `request can send to at most ${MAX_BACKGROUND_RECIPIENTS}. ` +
+            'Narrow the send with statusFilter and repeat it per status.',
+        },
+        413,
+      );
+    }
 
     const mailer = new ResendMailSender(
       c.env.MAIL_API_KEY,
