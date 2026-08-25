@@ -244,6 +244,34 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
     );
   });
 
+  it('pages past the Data API row cap and exports every entry', async () => {
+    // The route asks for 500 rows at a time, so a full first page has to
+    // be followed by another request instead of ending the export.
+    const firstPage = Array.from({length: 500}, (_, index) => ({
+      ...CSV_ENTRY_ROW,
+      name: `参加者${index}`,
+    }));
+    mockSequentialFetch([
+      firstPage,
+      [{...CSV_ENTRY_ROW, name: '参加者500'}],
+      FORM_FIELD_DEF_ROWS,
+    ]);
+    const cookie = await generalStaffCookie();
+
+    const res = await app.request(
+      `/api/staff/tournaments/${TOURNAMENT_ID}/entries.csv`,
+      {headers: {cookie}},
+      ENV,
+    );
+    const lines = (await res.text()).slice(1).split('\r\n');
+
+    expect(res.status).toBe(200);
+    // One header line plus every row of both pages.
+    expect(lines).toHaveLength(502);
+    expect(lines[1].startsWith('参加者0,')).toBe(true);
+    expect(lines[501].startsWith('参加者500,')).toBe(true);
+  });
+
   it('returns 401 without a staff session', async () => {
     const res = await app.request(
       `/api/staff/tournaments/${TOURNAMENT_ID}/entries.csv`,

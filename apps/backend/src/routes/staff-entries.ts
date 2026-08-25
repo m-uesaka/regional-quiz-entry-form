@@ -47,6 +47,51 @@ interface EntryCsvRow {
 // with a UTF-8 BOM.
 const UTF8_BOM = '\uFEFF';
 
+// Supabase's Data API caps a single response at `max_rows` rows
+// (`supabase/config.toml`), so the export pages through the tournament's
+// entries instead of silently stopping at that cap.
+const ENTRY_CSV_PAGE_SIZE = 500;
+
+/** Either every matching row, or the error that stopped the paging. */
+type EntryCsvRowsResult =
+  {rows: EntryCsvRow[]; error: null} | {rows: null; error: {message: string}};
+
+/**
+ * Fetches every entry of a tournament in `range()` batches.
+ *
+ * `created_at` is not unique, so `id` breaks ties and keeps rows from
+ * being skipped or repeated across page boundaries.
+ * @param db The Supabase client to query with.
+ * @param tournamentId The tournament whose entries are exported.
+ */
+async function fetchAllEntryCsvRows(
+  db: ReturnType<typeof createDbClient>,
+  tournamentId: string,
+): Promise<EntryCsvRowsResult> {
+  const rows: EntryCsvRow[] = [];
+  for (;;) {
+    const {data, error} = await db
+      .from('entries')
+      .select(ENTRY_CSV_COLUMNS)
+      .eq('tournament_id', tournamentId)
+      .order('created_at', {ascending: true})
+      .order('id', {ascending: true})
+      .range(rows.length, rows.length + ENTRY_CSV_PAGE_SIZE - 1)
+      .returns<EntryCsvRow[]>();
+    if (error) {
+      return {rows: null, error};
+    }
+    const batch = data ?? [];
+    rows.push(...batch);
+    // A short batch means the requested range ran past the last row, and
+    // an empty one guarantees the loop ends even if the server trims the
+    // range to a smaller page than we asked for.
+    if (batch.length < ENTRY_CSV_PAGE_SIZE) {
+      return {rows, error: null};
+    }
+  }
+}
+
 /** Shape of an `entries` row as selected above (snake_case). */
 interface EntryRow {
   id: string;
@@ -106,12 +151,10 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
     async c => {
       const {tournamentId} = c.req.valid('param');
       const db = createDbClient(c.env);
-      const {data: entryRows, error} = await db
-        .from('entries')
-        .select(ENTRY_CSV_COLUMNS)
-        .eq('tournament_id', tournamentId)
-        .order('created_at', {ascending: true})
-        .returns<EntryCsvRow[]>();
+      const {rows: entryRows, error} = await fetchAllEntryCsvRows(
+        db,
+        tournamentId,
+      );
       if (error) {
         return c.json({error: error.message}, 500);
       }
@@ -131,7 +174,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
 
       const csv = buildEntriesCsv(
         (formFieldDefRows ?? []).map(toFormFieldDef),
-        (entryRows ?? []).map(row => ({
+        entryRows.map(row => ({
           name: row.name,
           furigana: row.furigana,
           displayName: row.display_name,
