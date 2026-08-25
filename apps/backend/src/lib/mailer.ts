@@ -9,6 +9,55 @@ export interface MailSender {
 }
 
 /**
+ * A send the mail provider rejected, carrying the provider's own answer so
+ * callers can tell a retryable throttle (HTTP 429) from a permanent
+ * rejection such as an invalid address.
+ */
+export class MailSendError extends Error {
+  constructor(
+    readonly status: number,
+    /**
+     * How long the provider asked us to wait before retrying, in
+     * milliseconds, or `undefined` when it said nothing.
+     */
+    readonly retryAfterMs?: number,
+  ) {
+    super(`Failed to send mail: ${status}`);
+    this.name = 'MailSendError';
+  }
+
+  /** Whether the provider throttled us, i.e. a retry may still succeed. */
+  isRateLimited(): boolean {
+    return this.status === 429;
+  }
+}
+
+/**
+ * Reads a `Retry-After`-style header into milliseconds.
+ *
+ * `Retry-After` is either a delay in seconds or an HTTP date; Resend also
+ * answers a rate limit with `ratelimit-reset` in seconds. Anything else
+ * (missing, blank, unparsable) yields `undefined` so the caller falls back
+ * to its own backoff.
+ */
+function parseRetryAfterMs(headers: Headers): number | undefined {
+  const raw = headers.get('retry-after') ?? headers.get('ratelimit-reset');
+  const value = raw?.trim();
+  if (!value) {
+    return undefined;
+  }
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) {
+    return Math.max(0, seconds * 1000);
+  }
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) {
+    return undefined;
+  }
+  return Math.max(0, at - Date.now());
+}
+
+/**
  * Sends mail via the Resend HTTP API.
  *
  * Resend is chosen because it's callable over `fetch` (no Node.js-only
@@ -32,7 +81,7 @@ export class ResendMailSender implements MailSender {
       body: JSON.stringify({from: this.fromAddress, ...input}),
     });
     if (!res.ok) {
-      throw new Error(`Failed to send mail: ${res.status}`);
+      throw new MailSendError(res.status, parseRetryAfterMs(res.headers));
     }
   }
 }

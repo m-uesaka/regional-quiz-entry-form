@@ -51,7 +51,7 @@
 * Phase 6: 地域スタッフ向け管理ページ
   * Task 6-1: スタッフ認証・権限管理 ✅
   * Task 6-2: エントリー状況一覧・詳細確認 ✅
-  * Task 6-3: 参加者へのメール送信機能
+  * Task 6-3: 参加者へのメール送信機能 ✅
   * Task 6-4: CSV 出力機能
 * Phase 7: 統括スタッフ向け管理ページ
   * Task 7-1: 全地域横断ダッシュボード
@@ -83,7 +83,7 @@ graph TD
   classDef wip fill:#fef3c7,stroke:#d97706,color:#78350f;
 ```
 
-凡例: 緑 = 完了、黄 = 進行中(Phase 5 は Task 5-5、Phase 6 は Task 6-3 / 6-4 が残っている)
+凡例: 緑 = 完了、黄 = 進行中(Phase 5 は Task 5-5、Phase 6 は Task 6-4 が残っている)
 
 ### Phase 内 Task の依存グラフ
 
@@ -164,7 +164,7 @@ graph TD
 ```mermaid
 graph TD
   T61["6-1 スタッフ認証"]:::done --> T62["6-2 一覧/詳細"]:::done
-  T62 --> T63["6-3 メール送信"]:::next
+  T62 --> T63["6-3 メール送信"]:::done
   T62 --> T64["6-4 CSV出力"]:::next
 
   classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
@@ -223,7 +223,7 @@ graph TD
 
 * [Task 6-1: スタッフ認証・権限管理 ✅](tasks/task-6-1.md)
 * [Task 6-2: エントリー状況一覧・詳細確認 ✅](tasks/task-6-2.md)
-* [Task 6-3: 参加者へのメール送信機能](tasks/task-6-3.md)
+* [Task 6-3: 参加者へのメール送信機能 ✅](tasks/task-6-3.md)
 * [Task 6-4: CSV 出力機能](tasks/task-6-4.md)
 
 ### Phase 7: 統括スタッフ向け管理ページ
