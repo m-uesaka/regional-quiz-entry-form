@@ -59,27 +59,37 @@ export const staffMailRoute = new Hono<StaffEnv>().post(
       c.env.MAIL_FROM_ADDRESS,
     );
     // Handed to `waitUntil()` rather than awaited: `sendBulkMail()` paces
-    // itself against the mail provider's rate limit, so a tournament of a
-    // few hundred entries takes minutes -- far longer than the client will
-    // hold the connection open, and a disconnect would cancel the send
-    // half-finished with nothing reported. Answering with the recipient
-    // count and sending on afterwards keeps the whole list mailed.
+    // itself against the mail provider's rate limit, so even a list at the
+    // ceiling above spends most of a minute waiting between batches --
+    // longer than a client will reliably hold the connection open, and a
+    // disconnect would cancel the send half-finished with nothing
+    // reported. Answering with the recipient count and sending on
+    // afterwards keeps the whole list mailed.
     c.executionCtx.waitUntil(
-      sendBulkMail(mailer, recipients, {subject, html: body}).then(
-        sendResult => {
+      sendBulkMail(mailer, recipients, {subject, html: body})
+        .then(sendResult => {
           if (sendResult.failed.length > 0) {
+            // Covers both the addresses the provider rejected and any the
+            // run had no budget left to reach; which is which is in
+            // `sendBulkMail()`'s own logs.
             console.error(
-              'some recipients of a staff bulk mail were rejected',
+              'some recipients of a staff bulk mail were not delivered to',
               {
                 tournamentId,
                 accepted: recipients.length,
                 sent: sendResult.sent,
-                failedCount: sendResult.failed.length,
+                undeliveredCount: sendResult.failed.length,
               },
             );
           }
-        },
-      ),
+        })
+        // `sendBulkMail()` settles each recipient itself, so a rejection
+        // here means the run as a whole broke. Swallowing it keeps an
+        // unhandled rejection from taking down the Worker after the
+        // response has already gone out.
+        .catch((error: unknown) => {
+          console.error('staff bulk mail run failed', {tournamentId, error});
+        }),
     );
 
     const response: StaffMailResult = {accepted: recipients.length};

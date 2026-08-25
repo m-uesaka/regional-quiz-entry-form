@@ -3,6 +3,7 @@ import {
   BACKGROUND_SEND_BUDGET_MS,
   MAIL_BATCH_INTERVAL_MS,
   MAIL_BATCH_SIZE,
+  MAIL_RETRY_MAX_DELAY_MS,
   MAX_BACKGROUND_RECIPIENTS,
   sendBulkMail,
 } from './bulk-mail';
@@ -188,6 +189,60 @@ describe('sendBulkMail', () => {
     expect(mailer.sent).toEqual([]);
   });
 
+  it('rejects a budget that leaves no time to send in', async () => {
+    const mailer = new RecordingMailSender();
+
+    for (const budgetMs of [0, -1, Number.NaN]) {
+      await expect(
+        sendBulkMail(mailer, ['a@example.com'], CONTENT, {budgetMs}),
+      ).rejects.toThrow(RangeError);
+    }
+    expect(mailer.sent).toEqual([]);
+  });
+
+  it('stops at its budget and reports the recipients it never reached', async () => {
+    const mailer = new RecordingMailSender();
+    const recipients = [
+      'a@example.com',
+      'b@example.com',
+      'c@example.com',
+      'd@example.com',
+    ];
+
+    const result = await sendBulkMail(mailer, recipients, CONTENT, {
+      batchSize: 2,
+      intervalMs: 50,
+      // Room for the first batch only: the wait before the second one
+      // already runs past the deadline.
+      budgetMs: 20,
+    });
+
+    // Left in `failed` rather than dropped, so the caller can log that
+    // these two were never tried instead of the platform cancelling the
+    // run mid-flight with nothing reported.
+    expect(result).toEqual({
+      sent: 2,
+      failed: ['c@example.com', 'd@example.com'],
+    });
+    expect(mailer.sent.map(input => input.to)).toEqual([
+      'a@example.com',
+      'b@example.com',
+    ]);
+  });
+
+  it('gives up on a retry that would outlast the run', async () => {
+    const mailer = new ThrottlingMailSender(1, MAIL_RETRY_MAX_DELAY_MS);
+
+    const result = await sendBulkMail(mailer, ['a@example.com'], CONTENT, {
+      budgetMs: 50,
+    });
+
+    // Waiting out the throttle would have the platform cancel the run
+    // mid-wait, so the send is abandoned after its first attempt instead.
+    expect(result).toEqual({sent: 0, failed: ['a@example.com']});
+    expect(mailer.attempts).toBe(1);
+  });
+
   it('sends nothing for an empty recipient list', async () => {
     const mailer = new RecordingMailSender();
 
@@ -207,5 +262,14 @@ describe('MAX_BACKGROUND_RECIPIENTS', () => {
     // budget is the most the pacing may claim. A change to the batch size or
     // interval that breaks this makes the ceiling unreachable in practice.
     expect(pacingMs).toBeLessThanOrEqual(BACKGROUND_SEND_BUDGET_MS / 2);
+  });
+
+  it('leaves one retry wait unable to swallow the budget', () => {
+    // A single throttled message waits inside the run, so a cap anywhere
+    // near the whole budget would cost every recipient queued behind it
+    // their send.
+    expect(MAIL_RETRY_MAX_DELAY_MS).toBeLessThanOrEqual(
+      BACKGROUND_SEND_BUDGET_MS / 4,
+    );
   });
 });

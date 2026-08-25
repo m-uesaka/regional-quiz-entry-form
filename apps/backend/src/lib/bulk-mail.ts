@@ -16,12 +16,22 @@ export const MAIL_BATCH_INTERVAL_MS = 1000;
 // over the limit. A throttled send is therefore retried instead of being
 // recorded as a permanently failed recipient, waiting as long as the
 // provider asked (`Retry-After`) or, failing that, an exponential backoff.
-// The retries are bounded so one sustained outage can't keep a background
-// send alive indefinitely.
+//
+// The retrying deliberately lives here and not in `ResendMailSender`: the
+// single transactional sends (entry verification, password reset, waitlist
+// promotion) are awaited inside a user-facing request, where stalling the
+// response for seconds is worse than failing the send.
 export const MAIL_MAX_RETRIES = 3;
 export const MAIL_RETRY_BASE_DELAY_MS = 1000;
-/** Cap on a single wait, so an absurd `Retry-After` can't stall the run. */
-export const MAIL_RETRY_MAX_DELAY_MS = 30_000;
+/**
+ * Cap on a single retry wait.
+ *
+ * Kept well under `BACKGROUND_SEND_BUDGET_MS`: the wait happens inside the
+ * background run, so one message honouring an absurd `Retry-After` would
+ * otherwise burn the whole budget and cost every recipient still queued
+ * behind it their send.
+ */
+export const MAIL_RETRY_MAX_DELAY_MS = 5_000;
 
 // Cloudflare keeps a Worker alive for `waitUntil()` work only for about 30
 // seconds after the response has been sent, then cancels whatever is still
@@ -39,6 +49,10 @@ const PACING_BUDGET_RATIO = 0.5;
 /**
  * How many recipients a background `sendBulkMail()` run with the default
  * pacing can be expected to finish before the platform cancels it.
+ *
+ * This is the figure for a run the provider does not throttle. Sustained
+ * throttling can still exhaust the budget below the ceiling, which is why
+ * the run tracks its own deadline rather than trusting this number alone.
  *
  * Sending to more than this many addresses needs the send to outlive the
  * request that started it -- see the TODO on the staff bulk-mail route
@@ -64,12 +78,29 @@ export interface BulkMailOptions {
   maxRetries?: number;
   /** First backoff wait when the provider names no `Retry-After`. */
   retryBaseDelayMs?: number;
+  /**
+   * Wall-clock the whole run may take, in milliseconds; must be positive.
+   * Defaults to the platform's post-response budget.
+   */
+  budgetMs?: number;
 }
 
 export interface BulkMailResult {
   sent: number;
-  /** The recipients whose send was rejected, in the given order. */
+  /**
+   * The recipients this run did not deliver to, in the given order --
+   * whether the provider rejected the address or the run ran out of its
+   * budget before reaching it.
+   */
   failed: string[];
+}
+
+/** How a throttled send is retried, and by when the run must be over. */
+interface RetryPolicy {
+  maxRetries: number;
+  baseDelayMs: number;
+  /** Epoch milliseconds the run must have finished by. */
+  deadline: number;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -95,8 +126,17 @@ function retryDelayMs(
   }
   // The provider's own answer wins; the exponential backoff is only the
   // fallback for a 429 that carries no `Retry-After`.
-  const delayMs = error.retryAfterMs ?? baseDelayMs * 2 ** attempt;
-  return Math.min(delayMs, MAIL_RETRY_MAX_DELAY_MS);
+  if (error.retryAfterMs !== undefined) {
+    return Math.min(error.retryAfterMs, MAIL_RETRY_MAX_DELAY_MS);
+  }
+  // Jittered, because a batch is throttled as a group: every message in it
+  // hits the limit at the same instant, and an undithered backoff would
+  // march them all back to the provider together and be throttled again.
+  const backoffMs = Math.min(
+    baseDelayMs * 2 ** attempt,
+    MAIL_RETRY_MAX_DELAY_MS,
+  );
+  return backoffMs / 2 + Math.random() * (backoffMs / 2);
 }
 
 /**
@@ -109,8 +149,7 @@ function retryDelayMs(
 async function sendWithRetry(
   mailer: MailSender,
   input: SendMailInput,
-  maxRetries: number,
-  baseDelayMs: number,
+  policy: RetryPolicy,
 ): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -118,8 +157,14 @@ async function sendWithRetry(
       return;
     } catch (error) {
       const delayMs =
-        attempt < maxRetries ? retryDelayMs(error, attempt, baseDelayMs) : null;
-      if (delayMs === null) {
+        attempt < policy.maxRetries
+          ? retryDelayMs(error, attempt, policy.baseDelayMs)
+          : null;
+      // A retry that would end after the run's deadline is worse than no
+      // retry at all: the platform cancels the run while this message
+      // waits, so every recipient still queued behind it loses their
+      // attempt too. Give this one up and let the rest proceed.
+      if (delayMs === null || Date.now() + delayMs > policy.deadline) {
         throw error;
       }
       await sleep(delayMs);
@@ -137,14 +182,21 @@ async function sendWithRetry(
  * rest of a tournament from being notified. A send the provider merely
  * throttled (HTTP 429) is retried with backoff first, since that says
  * nothing about the address.
+ *
+ * The run keeps to `options.budgetMs`. Being throttled can make even a
+ * list within `MAX_BACKGROUND_RECIPIENTS` overrun it, and a background run
+ * that overruns is cancelled by the platform mid-flight with nothing
+ * reported; stopping at the deadline instead leaves the untried recipients
+ * in `failed`, where the caller can log them.
  * @param mailer The mail sender to send through.
  * @param recipients The addresses to mail; duplicates are mailed twice, so
  *     de-duplicate before calling.
  * @param content The subject and HTML body every recipient receives.
- * @param options Overrides for the batch size, inter-batch wait, and retry
- *     behaviour.
- * @throws RangeError If `options.batchSize` is not a positive integer, or
- *     `options.maxRetries` is not a non-negative integer.
+ * @param options Overrides for the batch size, inter-batch wait, retry
+ *     behaviour, and the run's own budget.
+ * @throws RangeError If `options.batchSize` is not a positive integer,
+ *     `options.maxRetries` is not a non-negative integer, or
+ *     `options.budgetMs` is not a positive number.
  */
 export async function sendBulkMail(
   mailer: MailSender,
@@ -156,6 +208,7 @@ export async function sendBulkMail(
   const intervalMs = options.intervalMs ?? MAIL_BATCH_INTERVAL_MS;
   const maxRetries = options.maxRetries ?? MAIL_MAX_RETRIES;
   const retryBaseDelayMs = options.retryBaseDelayMs ?? MAIL_RETRY_BASE_DELAY_MS;
+  const budgetMs = options.budgetMs ?? BACKGROUND_SEND_BUDGET_MS;
 
   // A batch size of 0 (or a fractional/negative one) would leave the loop
   // below never advancing `start`, i.e. an infinite send loop, so reject it
@@ -173,20 +226,43 @@ export async function sendBulkMail(
       `maxRetries must be a non-negative integer, got ${maxRetries}`,
     );
   }
+  // Written as a positive test so `NaN` is rejected along with 0 and the
+  // negatives, none of which leave the run any time to send in.
+  if (!(budgetMs > 0)) {
+    throw new RangeError(`budgetMs must be a positive number, got ${budgetMs}`);
+  }
+
+  const deadline = Date.now() + budgetMs;
+  const policy: RetryPolicy = {
+    maxRetries,
+    baseDelayMs: retryBaseDelayMs,
+    deadline,
+  };
 
   let sent = 0;
   const failed: string[] = [];
 
   for (let start = 0; start < recipients.length; start += batchSize) {
     if (start > 0) {
+      // Stop rather than start a wait that runs past the deadline: the
+      // platform would cancel the run in the middle of it, and the
+      // recipients left over would go unmailed with nobody the wiser.
+      if (Date.now() + intervalMs > deadline) {
+        const remaining = recipients.slice(start);
+        failed.push(...remaining);
+        console.error('bulk mail ran out of its background budget', {
+          budgetMs,
+          sent,
+          unreachedCount: remaining.length,
+        });
+        break;
+      }
       await sleep(intervalMs);
     }
 
     const batch = recipients.slice(start, start + batchSize);
     const results = await Promise.allSettled(
-      batch.map(to =>
-        sendWithRetry(mailer, {to, ...content}, maxRetries, retryBaseDelayMs),
-      ),
+      batch.map(to => sendWithRetry(mailer, {to, ...content}, policy)),
     );
 
     results.forEach((result, index) => {
