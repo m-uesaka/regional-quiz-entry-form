@@ -13,6 +13,7 @@ import {sendVerificationEmail} from './entry-verification';
 import {FORM_FIELD_DEF_COLUMNS, toFormFieldDef} from './form-field-defs';
 import type {FormFieldDefRow} from './form-field-defs';
 import {hashPassword, verifyPassword} from './password';
+import {promoteNextWaitlistedEntry} from './waitlist';
 
 type CreateEntryResult =
   | {ok: true; entry: {id: string}}
@@ -20,6 +21,9 @@ type CreateEntryResult =
 
 type UpdateOwnEntryResult =
   {ok: true} | {ok: false; status: 400 | 403 | 404 | 500; error: string};
+
+type CancelOwnEntryResult =
+  {ok: true} | {ok: false; status: 404 | 500; error: string};
 
 interface RegulationRow {
   id: string;
@@ -41,11 +45,19 @@ interface ParticipantRow {
   password_hash: string;
 }
 
+/** The participant's existing entry for the tournament, if there is one. */
+interface ExistingEntryRow {
+  id: string;
+  status: EntryStatus;
+  cancelled_at: string | null;
+}
+
 /**
  * Runs the full entry-creation flow for `POST /tournaments/:tournamentId/entries`:
  * entry-period check, regulation priority-window check, participant
- * lookup/creation, password hashing, `entries` row creation, and dispatch of
- * the verification email.
+ * lookup/creation, password hashing, `entries` row creation (reusing the
+ * participant's own cancelled row for this tournament, if any) and dispatch
+ * of the verification email.
  * @param env The Worker bindings.
  * @param tournamentId The tournament being entered.
  * @param input The validated entry form submission.
@@ -144,21 +156,55 @@ export async function createEntry(
     participantId = created.id;
   }
 
-  const {data: entry, error} = await db
+  // A participant who cancelled may enter the same tournament again with the
+  // same credentials. The unique (participant_id, tournament_id) constraint
+  // means that has to reuse the cancelled row instead of inserting a second
+  // one.
+  const {data: existingEntry, error: existingEntryError} = await db
     .from('entries')
-    .insert({
-      participant_id: participantId,
-      tournament_id: tournamentId,
-      name: input.name,
-      furigana: input.furigana,
-      display_name: input.displayName,
-      regulation_id: input.regulationId,
-      free_text: input.freeText ?? null,
-      custom_field_values: input.customFieldValues,
-      status: 'pending_verification',
-    })
-    .select('id')
-    .single();
+    .select('id, status, cancelled_at')
+    .eq('participant_id', participantId)
+    .eq('tournament_id', tournamentId)
+    .returns<ExistingEntryRow[]>()
+    .maybeSingle();
+  if (existingEntryError) {
+    return {ok: false, status: 500, error: existingEntryError.message};
+  }
+  if (existingEntry && existingEntry.status !== 'cancelled') {
+    return {ok: false, status: 409, error: 'already entered'};
+  }
+
+  const entryValues = {
+    participant_id: participantId,
+    tournament_id: tournamentId,
+    name: input.name,
+    furigana: input.furigana,
+    display_name: input.displayName,
+    regulation_id: input.regulationId,
+    free_text: input.freeText ?? null,
+    custom_field_values: input.customFieldValues,
+    status: 'pending_verification',
+    // Explicitly reset on reuse, so a re-entry starts from exactly the state
+    // a freshly inserted row would: unverified, unplaced on the waitlist and
+    // no longer carrying the previous cancellation.
+    waitlist_position: null,
+    email_verified_at: null,
+    cancelled_at: null,
+  };
+
+  const {data: entry, error} = existingEntry
+    ? await db
+        .from('entries')
+        // Still filtered on `cancelled`, so two concurrent re-entries behave
+        // like two concurrent first entries: the second one matches no row
+        // and is refused instead of mailing a second verification link for
+        // the same entry.
+        .update(entryValues)
+        .eq('id', existingEntry.id)
+        .eq('status', 'cancelled')
+        .select('id')
+        .single()
+    : await db.from('entries').insert(entryValues).select('id').single();
   if (error || !entry) {
     return {
       ok: false,
@@ -171,15 +217,31 @@ export async function createEntry(
     await sendVerificationEmail(env, entry.id, input.email);
   } catch (mailError) {
     // Roll back the entry: leaving it in place would permanently block a
-    // retry on the unique (participant_id, tournament_id) constraint even
-    // though the participant never received a usable verification link. The
-    // verification token (if one was persisted before the mail send failed)
-    // must be removed first since it references the entry by foreign key.
+    // retry — on the unique (participant_id, tournament_id) constraint for a
+    // new row, or on the 'already entered' check above for a reused one —
+    // even though the participant never received a usable verification link.
+    // The verification tokens go first: the entry can't be deleted while
+    // they reference it by foreign key, and on the reuse path dropping them
+    // is what stops a link that did go out from confirming an entry that has
+    // been put back into its cancellation.
     await db
       .from('email_verification_tokens')
       .delete()
       .eq('entry_id', entry.id);
-    await db.from('entries').delete().eq('id', entry.id);
+    if (existingEntry) {
+      // A reused row is put back into the cancellation it came from rather
+      // than deleted, so a failed re-entry doesn't erase the record of the
+      // original entry.
+      await db
+        .from('entries')
+        .update({
+          status: 'cancelled',
+          cancelled_at: existingEntry.cancelled_at,
+        })
+        .eq('id', entry.id);
+    } else {
+      await db.from('entries').delete().eq('id', entry.id);
+    }
     const message =
       mailError instanceof Error ? mailError.message : 'unknown error';
     return {
@@ -284,6 +346,71 @@ export async function updateOwnEntry(
     .eq('id', entryId);
   if (error) {
     return {ok: false, status: 500, error: error.message};
+  }
+  return {ok: true};
+}
+
+/** Shape of the row `cancel_own_entry` returns. */
+interface CancelledEntryRow {
+  previous_status: EntryStatus;
+  entry_tournament_id: string;
+}
+
+/**
+ * Cancels one of the participant's own entries
+ * (`DELETE /mypage/entries/:entryId`).
+ *
+ * The entry is looked up by `(id, participant_id)` so another participant's
+ * entry is indistinguishable from a nonexistent one. Freeing a `confirmed`
+ * seat promotes the head of the tournament's waitlist; cancelling from the
+ * waitlist itself only closes the gap in the queue, and cancelling before
+ * the entry was ever verified burns its outstanding verification token (see
+ * the migration). Cancelling an already-cancelled entry succeeds without
+ * promoting anyone.
+ * @param env The Worker bindings.
+ * @param participantId The logged-in participant, from the session cookie.
+ * @param entryId The entry to cancel.
+ */
+export async function cancelOwnEntry(
+  env: Bindings,
+  participantId: string,
+  entryId: string,
+): Promise<CancelOwnEntryResult> {
+  const db = createDbClient(env);
+
+  // The status change, the waitlist renumbering, and the read of the status
+  // the entry had beforehand all happen inside one locked transaction, so
+  // two concurrent cancellations of the same seat can't both trigger a
+  // promotion (see `supabase/migrations/0006_cancel_own_entry_fn.sql`).
+  const {data, error} = await db.rpc('cancel_own_entry', {
+    p_entry_id: entryId,
+    p_participant_id: participantId,
+  });
+  if (error) {
+    return {ok: false, status: 500, error: error.message};
+  }
+
+  // `db` isn't constructed with generated Database types (see `./db`), so
+  // the SETOF row shape has to be asserted here — same as in `./waitlist`.
+  const cancelled = (data as CancelledEntryRow[] | null)?.[0];
+  if (!cancelled) {
+    return {ok: false, status: 404, error: 'entry not found'};
+  }
+
+  if (cancelled.previous_status === 'confirmed') {
+    try {
+      await promoteNextWaitlistedEntry(env, cancelled.entry_tournament_id);
+    } catch (promotionError) {
+      // The cancellation itself is already committed, so failing the request
+      // would tell the participant their cancellation didn't go through when
+      // it did. Log instead: what's lost is the promotion of the next
+      // waitlisted entry (or only its notification mail), which staff can
+      // re-run, not the participant's own action.
+      console.error('failed to promote the next waitlisted entry', {
+        tournamentId: cancelled.entry_tournament_id,
+        error: promotionError,
+      });
+    }
   }
   return {ok: true};
 }

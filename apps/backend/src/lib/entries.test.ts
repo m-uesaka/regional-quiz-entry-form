@@ -2,7 +2,7 @@ import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
 import type {EntryInput} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
-import {createEntry, updateOwnEntry} from './entries';
+import {cancelOwnEntry, createEntry, updateOwnEntry} from './entries';
 import {hashPassword} from './password';
 
 // Local Supabase Postgres connection (`supabase start` default), same
@@ -295,6 +295,103 @@ describe.skipIf(!(await isDbReachable()))(
       expect(retryResult.ok).toBe(true);
       expect(mailSendCount).toBe(1);
     });
+
+    it('rejects a second entry for a tournament the participant is already in', async () => {
+      const fixture = await createFixture('duplicate');
+      const input = validInput({regulationId: fixture.regulationId});
+      const firstResult = await createEntry(env, fixture.tournamentId, input);
+      expect(firstResult.ok).toBe(true);
+
+      const secondResult = await createEntry(env, fixture.tournamentId, input);
+
+      expect(secondResult.ok).toBe(false);
+      expect(!secondResult.ok && secondResult.status).toBe(409);
+    });
+
+    it('reuses the same entry row with pending_verification status after cancellation', async () => {
+      const fixture = await createFixture('re-entry');
+      const input = validInput({regulationId: fixture.regulationId});
+      const firstResult = await createEntry(env, fixture.tournamentId, input);
+      expect(firstResult.ok).toBe(true);
+      if (!firstResult.ok) return;
+      await sql`
+        update entries
+        set status = 'cancelled', cancelled_at = now(), email_verified_at = now()
+        where id = ${firstResult.entry.id}
+      `;
+
+      mailSendCount = 0;
+      const reEntryResult = await createEntry(
+        env,
+        fixture.tournamentId,
+        // A re-entry is a fresh submission of the form, so its contents may
+        // differ from the cancelled entry's.
+        {...input, displayName: '再エントリー太郎'},
+      );
+
+      expect(reEntryResult.ok).toBe(true);
+      if (!reEntryResult.ok) return;
+      expect(reEntryResult.entry.id).toBe(firstResult.entry.id);
+      expect(mailSendCount).toBe(1);
+      const rows = await sql`
+        select id, status, display_name, cancelled_at, email_verified_at
+        from entries where tournament_id = ${fixture.tournamentId}
+      `;
+      expect(rows.length).toBe(1);
+      expect(rows[0].status).toBe('pending_verification');
+      expect(rows[0].display_name).toBe('再エントリー太郎');
+      expect(rows[0].cancelled_at).toBeNull();
+      expect(rows[0].email_verified_at).toBeNull();
+    });
+
+    it('restores the cancellation when the re-entry verification email fails', async () => {
+      const fixture = await createFixture('re-entry-mail-failure');
+      const input = validInput({regulationId: fixture.regulationId});
+      const firstResult = await createEntry(env, fixture.tournamentId, input);
+      expect(firstResult.ok).toBe(true);
+      if (!firstResult.ok) return;
+      await sql`
+        update entries set status = 'cancelled', cancelled_at = now()
+        where id = ${firstResult.entry.id}
+      `;
+      const previousFetch = globalThis.fetch;
+      globalThis.fetch = (async (
+        requestInput: RequestInfo | URL,
+        init?: RequestInit,
+      ) => {
+        const url =
+          typeof requestInput === 'string'
+            ? requestInput
+            : requestInput.toString();
+        if (url.startsWith('https://api.resend.com/')) {
+          return new Response(null, {status: 502});
+        }
+        return previousFetch(requestInput, init);
+      }) as typeof fetch;
+
+      try {
+        const failedResult = await createEntry(
+          env,
+          fixture.tournamentId,
+          input,
+        );
+
+        expect(failedResult.ok).toBe(false);
+        expect(!failedResult.ok && failedResult.status).toBe(500);
+        // The row the re-entry reused is still there, back in the
+        // cancellation it came from rather than deleted.
+        const rows = await sql`
+          select id, status, cancelled_at from entries
+          where tournament_id = ${fixture.tournamentId}
+        `;
+        expect(rows.length).toBe(1);
+        expect(rows[0].id).toBe(firstResult.entry.id);
+        expect(rows[0].status).toBe('cancelled');
+        expect(rows[0].cancelled_at).not.toBeNull();
+      } finally {
+        globalThis.fetch = previousFetch;
+      }
+    });
   },
 );
 
@@ -522,6 +619,267 @@ describe.skipIf(!(await isDbReachable()))(
 
       expect(result.ok).toBe(false);
       expect(!result.ok && result.status).toBe(400);
+    });
+  },
+);
+
+describe.skipIf(!(await isDbReachable()))(
+  'cancelOwnEntry (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const testRegionSlug = 'entries-cancel-test-region';
+    const testEmailDomain = 'entries-cancel-test.example.com';
+    const originalFetch = globalThis.fetch;
+    let mailSendCount = 0;
+
+    beforeAll(() => {
+      // The Supabase client also runs on `fetch`, so only intercept the
+      // outbound Resend call and pass everything else through untouched.
+      globalThis.fetch = (async (
+        input: RequestInfo | URL,
+        init?: RequestInit,
+      ) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.startsWith('https://api.resend.com/')) {
+          mailSendCount++;
+          return new Response(null, {status: 200});
+        }
+        return originalFetch(input, init);
+      }) as typeof fetch;
+    });
+
+    afterAll(async () => {
+      globalThis.fetch = originalFetch;
+      await sql`delete from email_verification_tokens where entry_id in (
+        select id from entries where tournament_id in (
+          select id from tournaments where region_id in (
+            select id from regions where slug like ${testRegionSlug + '%'}
+          )
+        )
+      )`;
+      await sql`delete from entries where tournament_id in (
+        select id from tournaments where region_id in (
+          select id from regions where slug like ${testRegionSlug + '%'}
+        )
+      )`;
+      await sql`delete from participants where email like ${'%@' + testEmailDomain}`;
+      await sql`delete from regulations where tournament_id in (
+        select id from tournaments where region_id in (
+          select id from regions where slug like ${testRegionSlug + '%'}
+        )
+      )`;
+      await sql`delete from tournaments where region_id in (
+        select id from regions where slug like ${testRegionSlug + '%'}
+      )`;
+      await sql`delete from regions where slug like ${testRegionSlug + '%'}`;
+      await sql.close();
+    });
+
+    interface CancelFixture {
+      regionId: string;
+      tournamentId: string;
+      regulationId: string;
+    }
+
+    async function createFixture(suffix: string): Promise<CancelFixture> {
+      const [region] = await sql`
+        insert into regions (slug, name)
+        values (${testRegionSlug + '-' + suffix}, 'テスト地域')
+        returning id
+      `;
+      const [tournament] = await sql`
+        insert into tournaments (
+          region_id, type, name, capacity, entry_opens_at, entry_closes_at
+        ) values (
+          ${region.id}, 'saikyoi', 'テスト大会', 1,
+          '2020-01-01T00:00:00Z', '2099-01-01T00:00:00Z'
+        )
+        returning id
+      `;
+      const [regulation] = await sql`
+        insert into regulations (tournament_id, label)
+        values (${tournament.id}, 'テストレギュレーション')
+        returning id
+      `;
+      return {
+        regionId: region.id as string,
+        tournamentId: tournament.id as string,
+        regulationId: regulation.id as string,
+      };
+    }
+
+    interface EntryFixture {
+      participantId: string;
+      entryId: string;
+    }
+
+    async function createEntryRow(
+      fixture: CancelFixture,
+      status: 'pending_verification' | 'confirmed' | 'waitlisted',
+      waitlistPosition: number | null = null,
+    ): Promise<EntryFixture> {
+      const [participant] = await sql`
+        insert into participants (region_id, email, password_hash)
+        values (
+          ${fixture.regionId},
+          ${`cancel-${crypto.randomUUID()}@${testEmailDomain}`},
+          'hash'
+        )
+        returning id
+      `;
+      const [entry] = await sql`
+        insert into entries (
+          participant_id, tournament_id, name, furigana, display_name,
+          regulation_id, status, waitlist_position
+        ) values (
+          ${participant.id}, ${fixture.tournamentId}, '山田太郎', 'ヤマダタロウ',
+          '太郎', ${fixture.regulationId}, ${status}, ${waitlistPosition}
+        )
+        returning id
+      `;
+      return {
+        participantId: participant.id as string,
+        entryId: entry.id as string,
+      };
+    }
+
+    it('cancels a confirmed entry and promotes the next waitlisted entry', async () => {
+      const fixture = await createFixture('confirmed');
+      const confirmed = await createEntryRow(fixture, 'confirmed');
+      const firstWaiting = await createEntryRow(fixture, 'waitlisted', 1);
+      const secondWaiting = await createEntryRow(fixture, 'waitlisted', 2);
+      mailSendCount = 0;
+
+      const result = await cancelOwnEntry(
+        env,
+        confirmed.participantId,
+        confirmed.entryId,
+      );
+
+      expect(result.ok).toBe(true);
+      const [cancelledRow] = await sql`
+        select status, cancelled_at, waitlist_position
+        from entries where id = ${confirmed.entryId}
+      `;
+      expect(cancelledRow.status).toBe('cancelled');
+      expect(cancelledRow.cancelled_at).not.toBeNull();
+      const [promotedRow] = await sql`
+        select status from entries where id = ${firstWaiting.entryId}
+      `;
+      expect(promotedRow.status).toBe('confirmed');
+      const [stillWaitingRow] = await sql`
+        select status from entries where id = ${secondWaiting.entryId}
+      `;
+      expect(stillWaitingRow.status).toBe('waitlisted');
+      expect(mailSendCount).toBe(1);
+    });
+
+    it('cancels a waitlisted entry without promoting anyone', async () => {
+      const fixture = await createFixture('waitlisted');
+      const confirmed = await createEntryRow(fixture, 'confirmed');
+      const firstWaiting = await createEntryRow(fixture, 'waitlisted', 1);
+      const secondWaiting = await createEntryRow(fixture, 'waitlisted', 2);
+      mailSendCount = 0;
+
+      const result = await cancelOwnEntry(
+        env,
+        firstWaiting.participantId,
+        firstWaiting.entryId,
+      );
+
+      expect(result.ok).toBe(true);
+      const [cancelledRow] = await sql`
+        select status, waitlist_position
+        from entries where id = ${firstWaiting.entryId}
+      `;
+      expect(cancelledRow.status).toBe('cancelled');
+      expect(cancelledRow.waitlist_position).toBeNull();
+      const [confirmedRow] = await sql`
+        select status from entries where id = ${confirmed.entryId}
+      `;
+      expect(confirmedRow.status).toBe('confirmed');
+      // Nobody was promoted, and the entry behind the cancelled one moved up
+      // one place instead of being left with a gap in front of it.
+      const [stillWaitingRow] = await sql`
+        select status, waitlist_position
+        from entries where id = ${secondWaiting.entryId}
+      `;
+      expect(stillWaitingRow.status).toBe('waitlisted');
+      expect(stillWaitingRow.waitlist_position).toBe(1);
+      expect(mailSendCount).toBe(0);
+    });
+
+    it("returns 404 for another participant's entry", async () => {
+      const fixture = await createFixture('other-participant');
+      const owner = await createEntryRow(fixture, 'confirmed');
+      const intruder = await createEntryRow(fixture, 'waitlisted', 1);
+
+      const result = await cancelOwnEntry(
+        env,
+        intruder.participantId,
+        owner.entryId,
+      );
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.status).toBe(404);
+      const [row] = await sql`
+        select status from entries where id = ${owner.entryId}
+      `;
+      expect(row.status).toBe('confirmed');
+    });
+
+    it('burns the verification token of an entry cancelled before it was verified', async () => {
+      const fixture = await createFixture('unverified');
+      const unverified = await createEntryRow(fixture, 'pending_verification');
+      await sql`
+        insert into email_verification_tokens (
+          entry_id, token_hash, expires_at
+        ) values (
+          ${unverified.entryId},
+          ${`cancel-token-${crypto.randomUUID()}`},
+          '2099-01-01T00:00:00Z'
+        )
+      `;
+
+      const result = await cancelOwnEntry(
+        env,
+        unverified.participantId,
+        unverified.entryId,
+      );
+
+      expect(result.ok).toBe(true);
+      // The verification link mailed out before the cancellation must not
+      // still be able to confirm the entry afterwards.
+      const [tokenRow] = await sql`
+        select used_at from email_verification_tokens
+        where entry_id = ${unverified.entryId}
+      `;
+      expect(tokenRow.used_at).not.toBeNull();
+    });
+
+    it('leaves an already-cancelled entry alone without promoting anyone', async () => {
+      const fixture = await createFixture('already-cancelled');
+      const confirmed = await createEntryRow(fixture, 'confirmed');
+      const waiting = await createEntryRow(fixture, 'waitlisted', 1);
+      await cancelOwnEntry(env, confirmed.participantId, confirmed.entryId);
+      const [promotedRow] = await sql`
+        select status from entries where id = ${waiting.entryId}
+      `;
+      expect(promotedRow.status).toBe('confirmed');
+      mailSendCount = 0;
+
+      const result = await cancelOwnEntry(
+        env,
+        confirmed.participantId,
+        confirmed.entryId,
+      );
+
+      expect(result.ok).toBe(true);
+      const [stillConfirmedRow] = await sql`
+        select status from entries where id = ${waiting.entryId}
+      `;
+      expect(stillConfirmedRow.status).toBe('confirmed');
+      expect(mailSendCount).toBe(0);
     });
   },
 );
