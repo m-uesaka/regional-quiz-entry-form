@@ -2,8 +2,10 @@ import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
 import {
+  ENTRY_STATUS_LABELS,
   EntrySchema,
   StaffEntryDetailSchema,
+  type CustomFieldValues,
   type Entry,
   type EntryStatus,
 } from '@regional-quiz/shared';
@@ -18,6 +20,7 @@ import {
   toFormFieldDef,
   type FormFieldDefRow,
 } from '../lib/form-field-defs';
+import {buildEntriesCsv} from '../lib/entries-csv';
 
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 const EntryIdParamSchema = z.object({entryId: z.string().uuid()});
@@ -26,6 +29,23 @@ const ENTRY_COLUMNS =
   'id, tournament_id, name, furigana, display_name, regulation_id, ' +
   'free_text, custom_field_values, status, waitlist_position, ' +
   'participants(email), regulations(label)';
+
+const ENTRY_CSV_COLUMNS =
+  'name, furigana, display_name, custom_field_values, status';
+
+/** Shape of an `entries` row as selected for the CSV export. */
+interface EntryCsvRow {
+  name: string;
+  furigana: string;
+  display_name: string;
+  custom_field_values: CustomFieldValues;
+  status: EntryStatus;
+}
+
+// Excel on Windows reads a BOM-less file as the system's legacy encoding,
+// which turns every Japanese cell into mojibake, so the export is served
+// with a UTF-8 BOM.
+const UTF8_BOM = '\uFEFF';
 
 /** Shape of an `entries` row as selected above (snake_case). */
 interface EntryRow {
@@ -77,6 +97,56 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
         return c.json({error: error.message}, 500);
       }
       return c.json((data ?? []).map(rowToEntry));
+    },
+  )
+  .get(
+    '/tournaments/:tournamentId/entries.csv',
+    zValidator('param', TournamentIdParamSchema),
+    requireStaffForTournament(),
+    async c => {
+      const {tournamentId} = c.req.valid('param');
+      const db = createDbClient(c.env);
+      const {data: entryRows, error} = await db
+        .from('entries')
+        .select(ENTRY_CSV_COLUMNS)
+        .eq('tournament_id', tournamentId)
+        .order('created_at', {ascending: true})
+        .returns<EntryCsvRow[]>();
+      if (error) {
+        return c.json({error: error.message}, 500);
+      }
+
+      // The tournament's custom form fields become the CSV's trailing
+      // columns, headed by their `label` in `display_order` — the raw
+      // `custom_field_values` keys would be meaningless to staff.
+      const {data: formFieldDefRows, error: formFieldDefsError} = await db
+        .from('form_field_defs')
+        .select(FORM_FIELD_DEF_COLUMNS)
+        .eq('tournament_id', tournamentId)
+        .order('display_order', {ascending: true})
+        .returns<FormFieldDefRow[]>();
+      if (formFieldDefsError) {
+        return c.json({error: formFieldDefsError.message}, 500);
+      }
+
+      const csv = buildEntriesCsv(
+        (formFieldDefRows ?? []).map(toFormFieldDef),
+        (entryRows ?? []).map(row => ({
+          name: row.name,
+          furigana: row.furigana,
+          displayName: row.display_name,
+          status: ENTRY_STATUS_LABELS[row.status],
+          customFieldValues: row.custom_field_values,
+        })),
+      );
+
+      return c.body(UTF8_BOM + csv, 200, {
+        'Content-Type': 'text/csv; charset=utf-8',
+        // The tournament id keeps downloads for different tournaments from
+        // collapsing into `entries.csv`, `entries (1).csv`, ... and stays
+        // ASCII, unlike the tournament name.
+        'Content-Disposition': `attachment; filename="entries-${tournamentId}.csv"`,
+      });
     },
   )
   .get(

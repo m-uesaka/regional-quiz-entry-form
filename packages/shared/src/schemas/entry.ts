@@ -120,6 +120,17 @@ export const MypageEntrySchema = z.object({
 });
 export type MypageEntry = z.infer<typeof MypageEntrySchema>;
 
+// Japanese display labels for each entry status. Shared because both the
+// staff UI and the staff CSV export show the same wording, and a CSV whose
+// other columns are Japanese shouldn't fall back to raw storage values like
+// `pending_verification`.
+export const ENTRY_STATUS_LABELS: Record<EntryStatus, string> = {
+  pending_verification: 'メール確認待ち',
+  confirmed: '確定',
+  waitlisted: 'キャンセル待ち',
+  cancelled: 'キャンセル',
+};
+
 // Statuses a participant may still edit. A cancelled entry is read-only:
 // re-entering is Task 5-4's flow, not an edit.
 export const EDITABLE_ENTRY_STATUSES: readonly EntryStatus[] = [

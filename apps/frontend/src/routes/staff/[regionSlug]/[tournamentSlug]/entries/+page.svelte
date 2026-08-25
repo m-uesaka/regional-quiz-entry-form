@@ -1,18 +1,21 @@
 <script lang="ts">
-  import type {EntryStatus} from '@regional-quiz/shared';
+  import {ENTRY_STATUS_LABELS} from '@regional-quiz/shared';
   import type {PageProps} from './$types';
 
   let {data, params}: PageProps = $props();
 
-  const STATUS_LABELS: Record<EntryStatus, string> = {
-    pending_verification: 'メール確認待ち',
-    confirmed: '確定',
-    waitlisted: 'キャンセル待ち',
-    cancelled: 'キャンセル',
-  };
+  // A plain link rather than a `fetch`: the export is served from the same
+  // origin as this page, so the browser sends the `staff_session` cookie
+  // the endpoint authorizes against, and the response's
+  // `Content-Disposition` triggers the download.
+  const csvHref = $derived(
+    `/api/staff/tournaments/${data.tournament.id}/entries.csv`,
+  );
 </script>
 
 <h1>{data.tournament.name} エントリー一覧</h1>
+
+<p><a href={csvHref} download>CSV をダウンロード</a></p>
 
 <table>
   <thead>
@@ -33,7 +36,7 @@
         <td>{entry.displayName}</td>
         <td>{entry.email}</td>
         <td>
-          {STATUS_LABELS[entry.status]}
+          {ENTRY_STATUS_LABELS[entry.status]}
           {#if entry.status === 'waitlisted'}({entry.waitlistPosition}番目){/if}
         </td>
         <td>

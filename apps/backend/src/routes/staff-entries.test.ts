@@ -181,6 +181,93 @@ describe('GET /staff/tournaments/:id/entries (mocked Supabase)', () => {
   });
 });
 
+describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const CSV_ENTRY_ROW = {
+    name: '山田太郎',
+    furigana: 'ヤマダタロウ',
+    display_name: '太郎',
+    custom_field_values: {
+      t_shirt_size: 'M',
+      agree_to_rules: ['agree_to_rules'],
+    },
+    status: 'confirmed',
+  };
+
+  it('returns a CSV whose custom field columns are headed by their labels', async () => {
+    mockSequentialFetch([
+      [{region_id: REGION_ID, type: 'saikyoi'}],
+      [CSV_ENTRY_ROW],
+      FORM_FIELD_DEF_ROWS,
+    ]);
+    const cookie = await regionalStaffCookie();
+
+    const res = await app.request(
+      `/api/staff/tournaments/${TOURNAMENT_ID}/entries.csv`,
+      {headers: {cookie}},
+      ENV,
+    );
+    const body = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('text/csv; charset=utf-8');
+    expect(res.headers.get('content-disposition')).toBe(
+      `attachment; filename="entries-${TOURNAMENT_ID}.csv"`,
+    );
+    // Leading UTF-8 BOM, so Excel doesn't render the Japanese cells as
+    // mojibake.
+    expect(body.startsWith('\uFEFF')).toBe(true);
+    expect(body.slice(1).split('\r\n')).toEqual([
+      '氏名,ふりがな,掲載名,ステータス,Tシャツサイズ,規約に同意する',
+      '山田太郎,ヤマダタロウ,太郎,確定,M,はい',
+    ]);
+  });
+
+  it('returns a header-only CSV when the tournament has no entries', async () => {
+    mockSequentialFetch([[], FORM_FIELD_DEF_ROWS]);
+    const cookie = await generalStaffCookie();
+
+    const res = await app.request(
+      `/api/staff/tournaments/${TOURNAMENT_ID}/entries.csv`,
+      {headers: {cookie}},
+      ENV,
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(
+      '\uFEFF氏名,ふりがな,掲載名,ステータス,Tシャツサイズ,規約に同意する',
+    );
+  });
+
+  it('returns 401 without a staff session', async () => {
+    const res = await app.request(
+      `/api/staff/tournaments/${TOURNAMENT_ID}/entries.csv`,
+      {},
+      ENV,
+    );
+
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 403 for staff of a different region', async () => {
+    mockSequentialFetch([[{region_id: OTHER_REGION_ID, type: 'saikyoi'}]]);
+    const cookie = await regionalStaffCookie(REGION_ID);
+
+    const res = await app.request(
+      `/api/staff/tournaments/${TOURNAMENT_ID}/entries.csv`,
+      {headers: {cookie}},
+      ENV,
+    );
+
+    expect(res.status).toBe(403);
+  });
+});
+
 describe('GET /staff/entries/:id (mocked Supabase)', () => {
   const originalFetch = globalThis.fetch;
 
