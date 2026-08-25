@@ -1,15 +1,13 @@
 <script lang="ts">
-  import type {EntryStatus, FormFieldDef} from '@regional-quiz/shared';
+  import {
+    BOOLEAN_CHECKBOX_LABELS,
+    ENTRY_STATUS_LABELS,
+    isBooleanCheckbox,
+    type FormFieldDef,
+  } from '@regional-quiz/shared';
   import type {PageProps} from './$types';
 
   let {data, params}: PageProps = $props();
-
-  const STATUS_LABELS: Record<EntryStatus, string> = {
-    pending_verification: 'メール確認待ち',
-    confirmed: '確定',
-    waitlisted: 'キャンセル待ち',
-    cancelled: 'キャンセル',
-  };
 
   // Renders each raw `customFieldValues` entry under its human-readable
   // label (via `formFieldDefs`) rather than its storage key (e.g.
@@ -24,28 +22,20 @@
     })),
   );
 
-  const BOOLEAN_LABELS = {yes: 'はい', no: 'いいえ'};
-
-  /**
-   * A plain boolean checkbox (`type: 'checkbox'` with no `options`) stores
-   * "checked" as an array containing the field's own key and "unchecked" as
-   * an empty array (see `DynamicFormField.svelte`), which isn't meaningful
-   * to a reader as-is — render it as a yes/no label instead.
-   */
-  function isBooleanCheckbox(fieldDef: FormFieldDef): boolean {
-    return (
-      fieldDef.fieldType === 'checkbox' &&
-      (!fieldDef.options || fieldDef.options.length === 0)
-    );
-  }
-
+  // A plain boolean checkbox stores "checked" as an array containing the
+  // field's own key and "unchecked" as an empty array (see
+  // `DynamicFormField.svelte`), which isn't meaningful to a reader as-is —
+  // render it as a yes/no label instead. The staff CSV export
+  // (`lib/entries-csv.ts` in the backend) uses the same labels.
   function formatFieldValue(
     fieldDef: FormFieldDef,
     value: string | string[] | undefined,
   ): string {
     if (isBooleanCheckbox(fieldDef)) {
       const checked = Array.isArray(value) && value.includes(fieldDef.fieldKey);
-      return checked ? BOOLEAN_LABELS.yes : BOOLEAN_LABELS.no;
+      return checked
+        ? BOOLEAN_CHECKBOX_LABELS.checked
+        : BOOLEAN_CHECKBOX_LABELS.unchecked;
     }
     return Array.isArray(value) ? value.join('、') : String(value ?? '');
   }
@@ -75,7 +65,7 @@
 
   <dt>ステータス</dt>
   <dd>
-    {STATUS_LABELS[data.entry.status]}
+    {ENTRY_STATUS_LABELS[data.entry.status]}
     {#if data.entry.status === 'waitlisted'}
       ({data.entry.waitlistPosition}番目)
     {/if}

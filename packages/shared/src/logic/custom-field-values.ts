@@ -17,6 +17,23 @@ function selectedOptions(value: string | string[] | undefined): string[] {
 }
 
 /**
+ * Whether `fieldDef` is a plain boolean checkbox — a `checkbox` field that
+ * offers no options of its own. It stores "checked" as a list containing
+ * the field's own key and "unchecked" as an empty list, so it is the one
+ * field type whose stored value isn't meaningful to a reader as-is.
+ * @param fieldDef The form field definition to test.
+ */
+export function isBooleanCheckbox(fieldDef: FormFieldDef): boolean {
+  return (
+    fieldDef.fieldType === 'checkbox' &&
+    (!fieldDef.options || fieldDef.options.length === 0)
+  );
+}
+
+/** Japanese display labels for a boolean checkbox's two states. */
+export const BOOLEAN_CHECKBOX_LABELS = {checked: 'はい', unchecked: 'いいえ'};
+
+/**
  * Checks submitted custom field answers against the tournament's own form
  * field definitions, so an API client can't store answers the rendered form
  * could never have produced (unknown fields, options that aren't offered, or
@@ -61,11 +78,9 @@ export function findCustomFieldValuesError(
     // A `textarea` answer is free text, so only fields offering a fixed set
     // of choices can be checked against it. A boolean checkbox (no options)
     // offers exactly one implicit choice: its own key.
-    const allowed =
-      fieldDef.fieldType === 'checkbox' &&
-      (!fieldDef.options || fieldDef.options.length === 0)
-        ? [fieldDef.fieldKey]
-        : fieldDef.options;
+    const allowed = isBooleanCheckbox(fieldDef)
+      ? [fieldDef.fieldKey]
+      : fieldDef.options;
     if (fieldDef.fieldType === 'textarea' || !allowed) {
       continue;
     }

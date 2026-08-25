@@ -97,6 +97,7 @@ if ('yaml' in body) {
 | PUT | `/api/form-definitions/:tournamentId` | 統括スタッフ |
 | POST | `/api/sheet-import/preview` | 統括スタッフ |
 | GET | `/api/staff/tournaments/:tournamentId/entries` | スタッフ(担当範囲) |
+| GET | `/api/staff/tournaments/:tournamentId/entries.csv` | スタッフ(担当範囲) |
 | GET | `/api/staff/entries/:entryId` | スタッフ(担当範囲) |
 | GET | `/api/mypage/entries` | 参加者 |
 | GET | `/api/mypage/entries/:entryId` | 参加者(本人) |
@@ -314,6 +315,25 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 `Entry` は `id` / `tournamentId` / `name` / `furigana` / `displayName` / `email` / `regulationId` / `regulationLabel` / `freeText` / `customFieldValues` / `status` / `waitlistPosition` を含みます。`email` は `participants` の、`regulationLabel` は `regulations` の JOIN 結果です。
 
 - `401` / `403` / `500`
+
+### `GET /api/staff/tournaments/:tournamentId/entries.csv`
+
+エントリー一覧の CSV エクスポート。一覧エンドポイントと同じ範囲(当該大会の全エントリー、`created_at` 昇順)を CSV で返します。
+
+- `200`: `text/csv; charset=utf-8` / `Content-Disposition: attachment; filename="entries-<tournamentId>.csv"`
+- `401` / `403` / `500`
+
+| 項目 | 内容 |
+| --- | --- |
+| 列 | `氏名` / `ふりがな` / `掲載名` / `ステータス` + 当該大会の追加項目(`form_field_defs` の `label` を見出しに、`display_order` 昇順) |
+| 改行 | CRLF(RFC 4180)。末尾に改行は付けません |
+| エンコーディング | UTF-8 + BOM。BOM がないと Excel(Windows)が日本語列を文字化けさせるため |
+| ステータス | `ENTRY_STATUS_LABELS`(共有)による日本語表記。スタッフ画面の表示と同じ文言です |
+| 追加項目の値 | 複数選択チェックボックスは選択肢を `;` で連結。単独ブールチェックボックスは `はい` / `いいえ`(スタッフ詳細画面と同じ)。回答がない項目は空セル |
+
+追加項目の列は現在のフォーム定義から組み立てるため、エントリー後に項目名を変えた場合は新しい `label` で出力されます。逆に、フォームから削除された項目の回答は出力されません(見出しのない列を作らないため)。
+
+生成ロジックは `apps/backend/src/lib/entries-csv.ts` の `buildEntriesCsv()`。スタッフ画面のエントリー一覧にはこのエンドポイントへのダウンロードリンクがあります。
 
 ### `GET /api/staff/entries/:entryId`
 

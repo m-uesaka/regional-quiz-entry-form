@@ -61,6 +61,23 @@ describe('staff entries +page.svelte', () => {
     );
   });
 
+  it('links to the CSV export for this tournament', () => {
+    render(Page, {
+      props: {
+        params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
+        data: {tournament: TOURNAMENT, entries: ENTRIES},
+        form: null,
+      },
+    });
+
+    expect(
+      screen.getByRole('link', {name: 'CSV をダウンロード'}),
+    ).toHaveAttribute(
+      'href',
+      `/api/staff/tournaments/${TOURNAMENT.id}/entries.csv`,
+    );
+  });
+
   it('links each row to its detail page', () => {
     render(Page, {
       props: {
