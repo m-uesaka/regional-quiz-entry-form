@@ -21,6 +21,7 @@ import {
   type FormFieldDefRow,
 } from '../lib/form-field-defs';
 import {buildEntriesCsv} from '../lib/entries-csv';
+import {fetchAllRows, type AllRowsResult} from '../lib/paged-select';
 
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 const EntryIdParamSchema = z.object({entryId: z.string().uuid()});
@@ -47,52 +48,25 @@ interface EntryCsvRow {
 // with a UTF-8 BOM.
 const UTF8_BOM = '\uFEFF';
 
-// Supabase's Data API caps a single response at `max_rows` rows
-// (`supabase/config.toml`), so the export pages through the tournament's
-// entries instead of silently stopping at that cap.
-const ENTRY_CSV_PAGE_SIZE = 500;
-
-/** Either every matching row, or the error that stopped the paging. */
-type EntryCsvRowsResult =
-  {rows: EntryCsvRow[]; error: null} | {rows: null; error: {message: string}};
-
 /**
- * Fetches every entry of a tournament in `range()` batches.
- *
- * `created_at` is not unique, so `id` breaks ties and keeps rows from
- * being skipped or repeated across page boundaries.
+ * Fetches every entry of a tournament in the shape the CSV export needs.
  * @param db The Supabase client to query with.
  * @param tournamentId The tournament whose entries are exported.
  */
-async function fetchAllEntryCsvRows(
+function fetchAllEntryCsvRows(
   db: ReturnType<typeof createDbClient>,
   tournamentId: string,
-): Promise<EntryCsvRowsResult> {
-  const rows: EntryCsvRow[] = [];
-  for (;;) {
-    const {data, error} = await db
+): Promise<AllRowsResult<EntryCsvRow>> {
+  return fetchAllRows<EntryCsvRow>((from, to) =>
+    db
       .from('entries')
       .select(ENTRY_CSV_COLUMNS)
       .eq('tournament_id', tournamentId)
       .order('created_at', {ascending: true})
       .order('id', {ascending: true})
-      .range(rows.length, rows.length + ENTRY_CSV_PAGE_SIZE - 1)
-      .returns<EntryCsvRow[]>();
-    if (error) {
-      return {rows: null, error};
-    }
-    const batch = data ?? [];
-    rows.push(...batch);
-    // Only an empty batch ends the export. A short-but-non-empty one is
-    // ambiguous: the range may have run past the last row, but the server
-    // may equally have trimmed it down to its own `max_rows`, and stopping
-    // there would drop entries exactly like the unpaginated query this
-    // replaced. Since the offset is however many rows are already
-    // collected, a trimmed page only makes the loop take smaller steps.
-    if (batch.length === 0) {
-      return {rows, error: null};
-    }
-  }
+      .range(from, to)
+      .returns<EntryCsvRow[]>(),
+  );
 }
 
 /** Shape of an `entries` row as selected above (snake_case). */
@@ -135,16 +109,21 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
     requireStaffForTournament(),
     async c => {
       const db = createDbClient(c.env);
-      const {data, error} = await db
-        .from('entries')
-        .select(ENTRY_COLUMNS)
-        .eq('tournament_id', c.req.valid('param').tournamentId)
-        .order('created_at', {ascending: true})
-        .returns<EntryRow[]>();
+      const {tournamentId} = c.req.valid('param');
+      const {rows, error} = await fetchAllRows<EntryRow>((from, to) =>
+        db
+          .from('entries')
+          .select(ENTRY_COLUMNS)
+          .eq('tournament_id', tournamentId)
+          .order('created_at', {ascending: true})
+          .order('id', {ascending: true})
+          .range(from, to)
+          .returns<EntryRow[]>(),
+      );
       if (error) {
         return c.json({error: error.message}, 500);
       }
-      return c.json((data ?? []).map(rowToEntry));
+      return c.json(rows.map(rowToEntry));
     },
   )
   .get(

@@ -4,6 +4,7 @@ import {z} from 'zod';
 import {EntryListItemSchema, type EntryListItem} from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
+import {fetchAllRows} from '../lib/paged-select';
 
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 
@@ -32,16 +33,21 @@ export const entryListRoute = new Hono<Env>().get(
   zValidator('param', TournamentIdParamSchema),
   async c => {
     const db = createDbClient(c.env);
-    const {data, error} = await db
-      .from('entries')
-      .select('display_name, status, waitlist_position, created_at')
-      .eq('tournament_id', c.req.valid('param').tournamentId)
-      .in('status', ['confirmed', 'waitlisted', 'cancelled'])
-      .order('created_at', {ascending: true})
-      .returns<EntryListRow[]>();
+    const {tournamentId} = c.req.valid('param');
+    const {rows, error} = await fetchAllRows<EntryListRow>((from, to) =>
+      db
+        .from('entries')
+        .select('display_name, status, waitlist_position, created_at')
+        .eq('tournament_id', tournamentId)
+        .in('status', ['confirmed', 'waitlisted', 'cancelled'])
+        .order('created_at', {ascending: true})
+        .order('id', {ascending: true})
+        .range(from, to)
+        .returns<EntryListRow[]>(),
+    );
     if (error) {
       return c.json({error: error.message}, 500);
     }
-    return c.json((data ?? []).map(rowToEntryListItem));
+    return c.json(rows.map(rowToEntryListItem));
   },
 );

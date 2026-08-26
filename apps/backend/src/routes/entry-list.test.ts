@@ -54,20 +54,26 @@ describe('GET /tournaments/:tournamentId/entry-list (request validation)', () =>
   });
 });
 
-// Mocks the single `fetch` call `@supabase/supabase-js` makes for
+interface MockEntryRow {
+  display_name: string;
+  status: 'confirmed' | 'waitlisted' | 'cancelled';
+  waitlist_position: number | null;
+  [extraPersonalField: string]: unknown;
+}
+
+// Mocks the `fetch` calls `@supabase/supabase-js` makes for
 // `.from('entries').select(...)` (same convention as
 // `routes/staff-auth.test.ts`'s `mockStaffAccountFetch`), so these run
-// unconditionally in CI without a local Supabase stack.
-function mockEntriesFetch(
-  rows: Array<{
-    display_name: string;
-    status: 'confirmed' | 'waitlisted' | 'cancelled';
-    waitlist_position: number | null;
-    [extraPersonalField: string]: unknown;
-  }>,
-): void {
-  globalThis.fetch = (() =>
-    Promise.resolve(Response.json(rows))) as unknown as typeof fetch;
+// unconditionally in CI without a local Supabase stack. The route pages
+// through the entries, so each `pages` entry answers one request and an
+// exhausted mock answers with the empty page that ends the paging.
+function mockEntriesFetch(...pages: MockEntryRow[][]): void {
+  let callIndex = 0;
+  globalThis.fetch = (() => {
+    const body = pages[callIndex] ?? [];
+    callIndex++;
+    return Promise.resolve(Response.json(body));
+  }) as unknown as typeof fetch;
 }
 
 // A request that reaches `entryListRoute`'s handler at all (rather than,
@@ -131,6 +137,56 @@ describe('GET /tournaments/:tournamentId/entry-list (mocked Supabase)', () => {
     expect(body).toHaveLength(1);
     expect(body[0].displayName).toBe('キャンセル');
     expect(body[0].status).toBe('cancelled');
+  });
+
+  it('pages past the Data API row cap and returns every entry', async () => {
+    // The route asks for 500 rows at a time, so a full first page has to be
+    // followed by another request, and paging only ends once a request
+    // comes back empty.
+    const firstPage: MockEntryRow[] = Array.from({length: 500}, (_, index) => ({
+      display_name: `参加者${index}`,
+      status: 'confirmed',
+      waitlist_position: null,
+    }));
+
+    mockEntriesFetch(firstPage, [
+      {display_name: '参加者500', status: 'confirmed', waitlist_position: null},
+    ]);
+
+    const res = await app.request(
+      `/api/tournaments/${tournamentId}/entry-list`,
+      {},
+      env,
+    );
+    const body = (await res.json()) as Array<Record<string, unknown>>;
+
+    expect(res.status).toBe(200);
+    expect(body).toHaveLength(501);
+    expect(body[500].displayName).toBe('参加者500');
+  });
+
+  it('keeps paging when the server hands back a smaller page than asked for', async () => {
+    // A deployment whose `max_rows` is below the requested page size trims
+    // every response, so the first batch is short without the entries being
+    // exhausted. Ending there would drop the rest.
+    mockEntriesFetch(
+      [
+        {display_name: '参加者0', status: 'confirmed', waitlist_position: null},
+        {display_name: '参加者1', status: 'confirmed', waitlist_position: null},
+      ],
+      [{display_name: '参加者2', status: 'confirmed', waitlist_position: null}],
+    );
+
+    const res = await app.request(
+      `/api/tournaments/${tournamentId}/entry-list`,
+      {},
+      env,
+    );
+    const body = (await res.json()) as Array<Record<string, unknown>>;
+
+    expect(res.status).toBe(200);
+    expect(body).toHaveLength(3);
+    expect(body[2].displayName).toBe('参加者2');
   });
 
   it('returns waitlistPosition for waitlisted entries', async () => {
