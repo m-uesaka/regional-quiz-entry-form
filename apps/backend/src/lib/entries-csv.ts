@@ -115,6 +115,13 @@ function renderCell(value: string): string {
  * without this a value such as `=HYPERLINK(...)` would be evaluated when
  * staff open the export. RFC 4180 quoting alone does not prevent that: the
  * quotes are consumed while parsing the field, and the formula survives.
+ *
+ * Only the leading character is inspected, so legitimate values such as `-3`
+ * or `-太郎` are prefixed too. That is deliberate: a spreadsheet hides the
+ * apostrophe, and deciding whether the rest really parses as a formula would
+ * mean reimplementing a spreadsheet parser, where a miss is an injection.
+ * The cost is that this export cannot be read back programmatically — see
+ * the CSV section of `docs/api-endpoints.md` and issue #67.
  * @param value The raw cell value.
  */
 function neutralizeFormula(value: string): string {

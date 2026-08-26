@@ -78,6 +78,20 @@ describe('staff entries +page.svelte', () => {
     );
   });
 
+  it('warns that the CSV is meant for spreadsheets, not re-import', () => {
+    render(Page, {
+      props: {
+        params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
+        data: {tournament: TOURNAMENT, entries: ENTRIES},
+        form: null,
+      },
+    });
+
+    expect(
+      screen.getByText(/他システムへの取り込みには使えません/),
+    ).toBeInTheDocument();
+  });
+
   it('links each row to its detail page', () => {
     render(Page, {
       props: {
