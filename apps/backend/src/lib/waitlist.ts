@@ -1,6 +1,6 @@
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
-import {ResendMailSender} from './mailer';
+import {createMailSender} from './mailer';
 
 interface PromotedEntryRow {
   entry_id: string;
@@ -45,7 +45,7 @@ export async function promoteNextWaitlistedEntry(
     return;
   }
 
-  const mailer = new ResendMailSender(env.MAIL_API_KEY, env.MAIL_FROM_ADDRESS);
+  const mailer = createMailSender(env);
   await mailer.send({
     to: promoted.participant_email,
     subject: 'キャンセル待ちからの繰り上げについて',

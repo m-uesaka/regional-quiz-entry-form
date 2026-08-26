@@ -8,7 +8,10 @@
     "build": "bun --filter '*' build",
     "typecheck": "bun --filter '*' typecheck",
     "test": "bun --filter '*' test",
+    "test:e2e": "bun --filter ./apps/e2e test:e2e",
     "lint": "bun --filter '*' lint",
+    "db:start": "supabase start",
+    "db:stop": "supabase stop",
     "db:migrate": "supabase db push --local",
     "db:migrate:remote": "supabase db push",
     "db:new": "supabase migration new"
