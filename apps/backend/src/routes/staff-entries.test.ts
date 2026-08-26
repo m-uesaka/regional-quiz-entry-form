@@ -154,6 +154,35 @@ describe('GET /staff/tournaments/:id/entries (mocked Supabase)', () => {
     });
   });
 
+  it('pages past the Data API row cap and returns every entry', async () => {
+    // The route asks for 500 rows at a time, so a full first page has to
+    // be followed by another request, and paging only ends once a request
+    // comes back empty. Staff counts drive capacity and roster decisions,
+    // so a truncated list would be worse than an error.
+    const firstPage = Array.from({length: 500}, (_, index) => ({
+      ...FULL_ENTRY_ROW,
+      id: `55555555-5555-5555-5555-${String(index).padStart(12, '0')}`,
+      name: `参加者${index}`,
+    }));
+    mockSequentialFetch([
+      firstPage,
+      [{...FULL_ENTRY_ROW, name: '参加者500'}],
+      [],
+    ]);
+    const cookie = await generalStaffCookie();
+
+    const res = await app.request(
+      `/api/staff/tournaments/${TOURNAMENT_ID}/entries`,
+      {headers: {cookie}},
+      ENV,
+    );
+    const body = (await res.json()) as Array<Record<string, unknown>>;
+
+    expect(res.status).toBe(200);
+    expect(body).toHaveLength(501);
+    expect(body[500].name).toBe('参加者500');
+  });
+
   it('returns 403 for staff of a different region', async () => {
     mockSequentialFetch([[{region_id: OTHER_REGION_ID, type: 'saikyoi'}]]);
     const cookie = await regionalStaffCookie(REGION_ID);
