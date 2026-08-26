@@ -10,7 +10,7 @@ import {
 describe('parseFormDefinitionYaml', () => {
   it('parses a valid document', () => {
     const yamlText = `
-tournamentSlug: kanto-saikyoi
+tournamentSlug: saikyoi
 fields:
   - key: agree_to_rules
     label: 規約に同意する
@@ -33,7 +33,7 @@ fields:
 
   it('rejects an invalid field key', () => {
     const yamlText = `
-tournamentSlug: kanto-saikyoi
+tournamentSlug: saikyoi
 fields:
   - key: Invalid_Key
     label: 不正なキー
@@ -45,7 +45,7 @@ fields:
 
   it('rejects a radio field with no options', () => {
     const yamlText = `
-tournamentSlug: kanto-saikyoi
+tournamentSlug: saikyoi
 fields:
   - key: seat_preference
     label: 座席の希望
@@ -55,9 +55,21 @@ fields:
     expect(() => parseFormDefinitionYaml(yamlText)).toThrow(ZodError);
   });
 
-  it('rejects duplicate field keys', () => {
+  it('rejects a tournamentSlug that is not a tournament type', () => {
     const yamlText = `
 tournamentSlug: kanto-saikyoi
+fields:
+  - key: comment
+    label: コメント
+    type: textarea
+`;
+
+    expect(() => parseFormDefinitionYaml(yamlText)).toThrow(ZodError);
+  });
+
+  it('rejects duplicate field keys', () => {
+    const yamlText = `
+tournamentSlug: saikyoi
 fields:
   - key: comment
     label: コメント1
@@ -74,7 +86,7 @@ fields:
 describe('toFormFieldDefRows', () => {
   it('converts parsed fields into form_field_defs rows', () => {
     const definition = parseFormDefinitionYaml(`
-tournamentSlug: kanto-saikyoi
+tournamentSlug: saikyoi
 fields:
   - key: agree_to_rules
     label: 規約に同意する

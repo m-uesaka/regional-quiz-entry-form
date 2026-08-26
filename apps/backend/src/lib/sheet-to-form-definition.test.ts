@@ -93,7 +93,7 @@ describe('fetchSheetRows', () => {
 
 describe('sheetRowsToYaml', () => {
   it('converts rows into valid yaml, using the staff-entered key column', () => {
-    const yaml = sheetRowsToYaml('test-tournament', [
+    const yaml = sheetRowsToYaml('saikyoi', [
       {
         key: 'agree_to_rules',
         label: '規約に同意する',
@@ -113,7 +113,7 @@ describe('sheetRowsToYaml', () => {
     const parsed = parseFormDefinitionYaml(yaml);
 
     expect(parsed).toEqual({
-      tournamentSlug: 'test-tournament',
+      tournamentSlug: 'saikyoi',
       fields: [
         {
           key: 'agree_to_rules',
@@ -133,7 +133,7 @@ describe('sheetRowsToYaml', () => {
   });
 
   it('coerces a non-required value to false', () => {
-    const yaml = sheetRowsToYaml('test-tournament', [
+    const yaml = sheetRowsToYaml('saikyoi', [
       {
         key: 'agree_to_rules',
         label: '規約に同意する',
@@ -150,7 +150,7 @@ describe('sheetRowsToYaml', () => {
 
   it('throws on an unknown type label', () => {
     expect(() =>
-      sheetRowsToYaml('test-tournament', [
+      sheetRowsToYaml('saikyoi', [
         {
           key: 'unknown_field',
           label: '不明な種別',
@@ -164,7 +164,7 @@ describe('sheetRowsToYaml', () => {
 
   it('throws on an invalid key', () => {
     expect(() =>
-      sheetRowsToYaml('test-tournament', [
+      sheetRowsToYaml('saikyoi', [
         {
           key: 'Invalid Key',
           label: '規約に同意する',
@@ -177,7 +177,7 @@ describe('sheetRowsToYaml', () => {
   });
 
   it('drops blank options produced by stray commas', () => {
-    const yaml = sheetRowsToYaml('test-tournament', [
+    const yaml = sheetRowsToYaml('saikyoi', [
       {
         key: 'favorite_color',
         label: '好きな色',
@@ -194,7 +194,7 @@ describe('sheetRowsToYaml', () => {
 
   it('throws on duplicate option values', () => {
     expect(() =>
-      sheetRowsToYaml('test-tournament', [
+      sheetRowsToYaml('saikyoi', [
         {
           key: 'favorite_color',
           label: '好きな色',

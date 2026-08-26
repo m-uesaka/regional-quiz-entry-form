@@ -1,5 +1,8 @@
 import {stringify as stringifyYaml} from 'yaml';
-import {FormFieldDefYamlSchema} from '@regional-quiz/shared';
+import {
+  FormFieldDefYamlSchema,
+  type TournamentType,
+} from '@regional-quiz/shared';
 
 export interface SheetRow {
   key: string;
@@ -114,11 +117,14 @@ function parseOptions(raw: string): string[] {
  * stable across row reordering/insertion — entries persist
  * `custom_field_values` keyed by it, so a key that changed on re-import
  * would silently reassociate existing answers with a different field.
- * @param tournamentSlug The tournament slug the form definition belongs to.
+ * @param tournamentSlug The tournament type slug the form definition belongs
+ *     to. Embedded in the YAML and checked against the target tournament
+ *     when the definition is saved, so it has to be one of the real
+ *     tournament types rather than free text.
  * @param rows The raw spreadsheet rows to convert.
  */
 export function sheetRowsToYaml(
-  tournamentSlug: string,
+  tournamentSlug: TournamentType,
   rows: SheetRow[],
 ): string {
   const fields = rows.map(row => {

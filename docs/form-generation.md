@@ -67,7 +67,7 @@ fields:
 
 | キー | 型 | 説明 |
 | --- | --- | --- |
-| `tournamentSlug` | string | 対象大会のスラッグ。**現時点では記録目的のみで、保存先の大会は URL の `:tournamentId` で決まります**(後述) |
+| `tournamentSlug` | `saikyoi` / `shinjinou` | 対象の**大会種別**のスラッグ(`tournaments.type` および URL の `/{regionSlug}/{tournamentSlug}` の第2セグメントと同じ値)。保存先の大会そのものは URL の `:tournamentId` で決まり、このスラッグは保存時にその大会の種別と一致するか検証されます(後述) |
 | `fields` | array | 項目定義の配列。**記述順がそのまま `display_order` になります** |
 
 `fields` 内の `key` に重複があると `FormDefinitionYamlSchema` の `.refine()` が「フィールドキーが重複しています」で弾きます。
@@ -116,11 +116,12 @@ flowchart TB
   direction TB
   req["リクエスト {yaml: ...}<br>FormDefinitionUploadSchema で検証"]
   parse["parseFormDefinitionYaml()<br>失敗なら 400"]
+  check["tournamentSlug と大会の type を照合<br>大会が無ければ 404、食い違えば 400<br>(この時点では DB 未変更)"]
   rows["toFormFieldDefRows(definition, tournamentId)<br>camelCase の行に変換、display_order を採番"]
   tablerow["toFormFieldDefTableRow()<br>snake_case のカラム名に変換"]
   rpc["db.rpc('sync_form_field_defs', ...)<br>削除+一括挿入を1トランザクションで"]
 
-  req --> parse --> rows --> tablerow --> rpc
+  req --> parse --> check --> rows --> tablerow --> rpc
   end
   style bg fill:#ffffff,stroke:#ffffff
 ```
@@ -144,9 +145,13 @@ flowchart TB
 
 大会が存在しない場合は SQLSTATE `P0002` が raise され、`TournamentNotFoundError` を経て 404 になります。
 
-### `tournamentSlug` の扱いに関する注意
+### `tournamentSlug` による取り違え検証
 
-YAML の `tournamentSlug` は**保存先の決定に使われていません**。保存先は URL パスの `:tournamentId` です。そのため、YAML に別の大会のスラッグが書かれていても検出されずに保存されます。スプレッドシート取り込み画面では大会スラッグを手入力させているため、ここは取り違えが起こり得る箇所です。
+保存先の大会を決めるのは URL パスの `:tournamentId` で、YAML の `tournamentSlug` ではありません。ただし `syncFormFieldDefs()` は**削除+挿入を走らせる前に**、`:tournamentId` の大会の `type` を引いて `tournamentSlug` と突き合わせます。食い違っていれば `TournamentSlugMismatchError` を送出し、API は 400 を返します。**この時点では DB に何も書き込んでいないため、対象大会の既存のフォーム定義はそのまま残ります。**
+
+これで防げるのは**大会種別の取り違え**(最強位の定義を新人王に保存してしまう等)だけです。`tournamentSlug` は地域を含まないため、**同じ種別の別地域の大会に保存してしまう取り違えは検出できません**。完全に防ぐには YAML に `regionSlug` を持たせて `(regionSlug, tournamentSlug)` の組で突き合わせる必要があります(issue #62 の案2)。
+
+スプレッドシート取り込み画面(`SheetImportPanel.svelte`)は大会スラッグを手入力させず、**編集中の大会の `type` をそのまま YAML に埋め込みます**。手入力の誤りがそもそも発生しないため、この検証で 400 になるのは主に「別の大会向けに作った YAML を手動でアップロードした」ケースです。
 
 ## 5. 描画(`DynamicFormField.svelte`)
 

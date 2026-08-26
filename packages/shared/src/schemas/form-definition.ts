@@ -1,5 +1,6 @@
 import {parse as parseYaml} from 'yaml';
 import {z} from 'zod';
+import {TournamentTypeSchema} from './tournament';
 
 export const FormFieldTypeSchema = z.enum(['checkbox', 'radio', 'textarea']);
 
@@ -29,7 +30,12 @@ export type FormFieldDefYaml = z.infer<typeof FormFieldDefYamlSchema>;
 
 export const FormDefinitionYamlSchema = z
   .object({
-    tournamentSlug: z.string(),
+    // The slug identifies the *tournament type* (`saikyoi` / `shinjinou`),
+    // matching the `:tournamentSlug` URL segment and `tournaments.type` —
+    // not a per-tournament identifier. It's checked against the tournament
+    // the upload targets so a definition can't be saved to the wrong one
+    // (see `syncFormFieldDefs()` in the backend).
+    tournamentSlug: TournamentTypeSchema,
     fields: z.array(FormFieldDefYamlSchema),
   })
   .refine(
@@ -59,7 +65,7 @@ export type FormDefinitionUpload = z.infer<typeof FormDefinitionUploadSchema>;
  */
 export const SheetImportRequestSchema = z.object({
   spreadsheetId: z.string(),
-  tournamentSlug: z.string(),
+  tournamentSlug: TournamentTypeSchema,
 });
 export type SheetImportRequest = z.infer<typeof SheetImportRequestSchema>;
 

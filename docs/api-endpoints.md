@@ -283,9 +283,11 @@ YAML テキストを受け取り、その大会の `form_field_defs` を丸ご�
 
 - リクエスト: `FormDefinitionUploadSchema` — `{yaml: string}`(**パース前の生テキスト**)
 - `200`: `{"ok": true}`
-- `400`: `{"error": <YAML パース/検証エラーのメッセージ>}`
+- `400`: `{"error": <YAML パース/検証エラーのメッセージ、または大会種別の不一致メッセージ>}`
 - `404`: `{"error": "tournament not found"}`
 - `500`: `{"error": "internal server error"}`
+
+YAML の `tournamentSlug`(`saikyoi` / `shinjinou`)が `:tournamentId` の大会の `type` と食い違う場合は 400 を返します。**この判定は `sync_form_field_defs()` を呼ぶ前に行うため、既存のフォーム定義は削除されません。** 詳細は [`form-generation.md`](./form-generation.md#tournamentslug-による取り違え検証) を参照。
 
 500 を返す場合、Supabase の生のエラーメッセージはクライアントに返さずサーバログにのみ出力します。
 
@@ -293,7 +295,7 @@ YAML テキストを受け取り、その大会の `form_field_defs` を丸ご�
 
 Google スプレッドシートを読み取り、フォーム定義 YAML を生成して返します。**この時点では DB に何も書き込みません。** 保存は上記の `PUT /api/form-definitions/:tournamentId` を別途呼びます。
 
-- リクエスト: `SheetImportRequestSchema` — `{spreadsheetId: string, tournamentSlug: string}`
+- リクエスト: `SheetImportRequestSchema` — `{spreadsheetId: string, tournamentSlug: 'saikyoi' | 'shinjinou'}`
 - `200`: `{"yaml": "..."}`
 
 エラーは失敗の原因によって切り分けています。

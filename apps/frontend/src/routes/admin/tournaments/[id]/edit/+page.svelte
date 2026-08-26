@@ -43,4 +43,7 @@
 {/if}
 
 <h2>フォーム定義の取り込み</h2>
-<SheetImportPanel tournamentId={data.tournament.id} />
+<SheetImportPanel
+  tournamentId={data.tournament.id}
+  tournamentType={data.tournament.type}
+/>
