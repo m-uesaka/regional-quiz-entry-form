@@ -16,6 +16,13 @@
 <h1>{data.tournament.name} エントリー一覧</h1>
 
 <p><a href={csvHref} download>CSV をダウンロード</a></p>
+<p>
+  この CSV は Excel / Google スプレッドシートで開く前提の出力です。数式として実行され
+  るのを防ぐため、<code>=</code> <code>+</code> <code>-</code> <code>@</code>
+  タブ・CR のいずれかで始まる値には先頭にアポストロフィが付きます。Excel / Google スプ
+  レッドシートでは表示されませんが、Numbers やプログラムで読み込むと文字列として残るた
+  め、他システムへの取り込みには使えません。
+</p>
 
 <table>
   <thead>

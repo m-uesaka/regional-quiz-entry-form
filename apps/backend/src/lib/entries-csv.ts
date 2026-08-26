@@ -109,12 +109,22 @@ function renderCell(value: string): string {
 
 /**
  * Prefixes a cell that starts like a spreadsheet formula with an apostrophe,
- * which Excel and friends read as "treat the rest as literal text".
+ * which Excel and Google Sheets read as "treat the rest as literal text".
  *
  * Entry names and free-text answers are arbitrary participant input, so
  * without this a value such as `=HYPERLINK(...)` would be evaluated when
  * staff open the export. RFC 4180 quoting alone does not prevent that: the
  * quotes are consumed while parsing the field, and the formula survives.
+ *
+ * Only the leading character is inspected, so legitimate values such as `-3`
+ * or `-太郎` are prefixed too. That is deliberate: Excel and Google Sheets —
+ * the spreadsheet apps this export is meant to be opened in — hide the
+ * apostrophe, and deciding whether the rest really parses as a formula would
+ * mean reimplementing a spreadsheet parser, where a miss is an injection.
+ * Other readers (Numbers, `pandas.read_csv()`, ...) show it as an ordinary
+ * character instead.
+ * The cost is that this export cannot be read back programmatically — see
+ * the CSV section of `docs/api-endpoints.md` and issue #67.
  * @param value The raw cell value.
  */
 function neutralizeFormula(value: string): string {
