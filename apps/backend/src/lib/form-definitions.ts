@@ -1,5 +1,6 @@
 import {
   toFormFieldDefRows,
+  TournamentTypeSchema,
   type FormDefinitionYaml,
   type TournamentType,
 } from '@regional-quiz/shared';
@@ -107,7 +108,13 @@ export async function syncFormFieldDefs(
   if (!tournament) {
     throw new TournamentNotFoundError(tournamentId);
   }
-  const type = (tournament as {type: TournamentType}).type;
+  // The client is created without generated database types, so the selected
+  // row comes back as `any`. Parsing (rather than asserting) keeps the
+  // narrowing honest: `tournaments.type` is the `tournament_type` Postgres
+  // enum, whose values are exactly the ones `TournamentTypeSchema` accepts
+  // (see `supabase/migrations/0001_init.sql`), so this only throws if the
+  // database schema and the shared schema have drifted apart.
+  const type: TournamentType = TournamentTypeSchema.parse(tournament.type);
   if (type !== definition.tournamentSlug) {
     throw new TournamentSlugMismatchError(type, definition.tournamentSlug);
   }
