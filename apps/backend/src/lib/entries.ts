@@ -76,10 +76,11 @@ const EXISTING_ENTRY_COLUMNS =
 
 /**
  * Runs the full entry-creation flow for `POST /tournaments/:tournamentId/entries`:
- * entry-period check, regulation priority-window check, participant
- * lookup/creation, password hashing, `entries` row creation (reusing the
- * participant's own cancelled row for this tournament, if any) and dispatch
- * of the verification email.
+ * entry-period check, regulation priority-window check, validation of the
+ * custom field answers against the tournament's own form definition,
+ * participant lookup/creation, password hashing, `entries` row creation
+ * (reusing the participant's own cancelled row for this tournament, if any)
+ * and dispatch of the verification email.
  * @param env The Worker bindings.
  * @param tournamentId The tournament being entered.
  * @param input The validated entry form submission.
@@ -126,6 +127,26 @@ export async function createEntry(
       status: 403,
       error: 'regulation not eligible in priority window',
     };
+  }
+
+  // Checked here, before the participant lookup, so a submission the rendered
+  // form could never have produced is refused without creating an account for
+  // it as a side effect.
+  const {data: fieldDefRows, error: fieldDefsError} = await db
+    .from('form_field_defs')
+    .select(FORM_FIELD_DEF_COLUMNS)
+    .eq('tournament_id', tournamentId)
+    .order('display_order', {ascending: true})
+    .returns<FormFieldDefRow[]>();
+  if (fieldDefsError) {
+    return {ok: false, status: 500, error: fieldDefsError.message};
+  }
+  const customFieldValuesError = findCustomFieldValuesError(
+    (fieldDefRows ?? []).map(toFormFieldDef),
+    input.customFieldValues,
+  );
+  if (customFieldValuesError) {
+    return {ok: false, status: 400, error: customFieldValuesError};
   }
 
   const {data: existingParticipant} = await db

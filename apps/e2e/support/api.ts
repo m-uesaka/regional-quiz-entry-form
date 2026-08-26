@@ -101,7 +101,8 @@ export async function submitEntry(
         passwordConfirm: PARTICIPANT_PASSWORD,
         regulationId: tournament.regulationId,
         freeText: overrides.freeText,
-        customFieldValues: overrides.customFieldValues ?? {},
+        customFieldValues:
+          overrides.customFieldValues ?? tournament.defaultCustomFieldValues,
       },
     },
   );
