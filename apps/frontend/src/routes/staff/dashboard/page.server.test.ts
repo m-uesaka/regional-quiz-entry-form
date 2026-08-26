@@ -86,6 +86,14 @@ describe('staff dashboard +page.server load', () => {
     await expect(load(event)).resolves.toEqual({summaries: SUMMARIES});
   });
 
+  it('throws 401 when the session expired before the API call', async () => {
+    const event = buildEvent({fetch: fakeFetch(401), staff: GENERAL_STAFF});
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 401,
+    } satisfies Partial<HttpError>);
+  });
+
   it('throws 403 when the API rejects the session as out of scope', async () => {
     const event = buildEvent({fetch: fakeFetch(403), staff: GENERAL_STAFF});
 

@@ -16,6 +16,11 @@ export const load: PageServerLoad = async ({fetch, locals}) => {
   const api = createApiClient(fetch);
   const res = await api.api.staff.dashboard.$get();
   if (!res.ok) {
+    // The claims check above cannot rule this out: the JWT may expire between
+    // `hooks.server.ts` parsing it and this request reaching the backend.
+    if (res.status === 401) {
+      throw error(401, 'ログインが必要です');
+    }
     if (res.status === 403) {
       throw error(403, '全地域ダッシュボードは統括スタッフ専用です');
     }
