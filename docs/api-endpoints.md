@@ -100,6 +100,7 @@ if ('yaml' in body) {
 | GET | `/api/staff/tournaments/:tournamentId/entries.csv` | スタッフ(担当範囲) |
 | GET | `/api/staff/entries/:entryId` | スタッフ(担当範囲) |
 | POST | `/api/staff/tournaments/:tournamentId/mail` | スタッフ(担当範囲) |
+| GET | `/api/staff/dashboard` | 統括スタッフ |
 | GET | `/api/mypage/entries` | 参加者 |
 | GET | `/api/mypage/entries/:entryId` | 参加者(本人) |
 | PATCH | `/api/mypage/entries/:entryId` | 参加者(本人) |
@@ -377,7 +378,29 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 `body` を無害化していないのは、この項目が**スタッフの書いたものを信頼する**前提だからです。投稿には担当大会のスタッフセッションが必要で、同じアカウントは既にエントリー一覧から全参加者のアドレスを読めます。ただし送信元は組織の検証済みドメインなので、他所からコピーしてきた HTML はスタッフ側で確認してから貼る運用が前提になります。
 
-## 10. マイページ(参加者本人)
+## 10. 全地域横断ダッシュボード(統括スタッフ)
+
+`routes/staff-dashboard.ts`。セクション 9 のエントリー閲覧・メール送信が「1 大会ずつ」なのに対し、こちらは**全地域・全大会の集計を 1 回で**返します。地域スタッフには自分の地域外の情報を見せないため、`requireStaffForTournament()` ではなく `requireGeneralStaff()` で保護しています(地域スタッフは 403)。
+
+### `GET /api/staff/dashboard`
+
+- `200`: `DashboardTournamentSummary[]`(地域名 → 大会種別の昇順)
+- `401` / `403` / `500`
+
+| フィールド | 内容 |
+| --- | --- |
+| `tournamentId` / `tournamentName` / `tournamentType` | 大会の識別子・名称・種別 |
+| `regionId` / `regionSlug` / `regionName` | 大会が属する地域。`regionSlug` と `tournamentType` で `/staff/:regionSlug/:tournamentSlug/entries` へ遷移できます |
+| `capacity` | 定員。`null` は定員なし |
+| `confirmedCount` / `waitlistedCount` / `pendingVerificationCount` / `cancelledCount` | ステータス別のエントリー件数 |
+
+集計は DB 関数 `tournament_entry_summary()`(`supabase/migrations/0013_...`)が行い、ルートは `db.rpc()` で 1 回呼ぶだけです。Worker 側で数えると「大会ごとに 1 クエリ」か「全地域の `entries` を丸ごと取得」のどちらかになるため、集計は DB に寄せています。エントリーが 0 件の大会も件数 0 の行として返るので、まだ誰も申し込んでいない大会が一覧から消えることはありません。
+
+充足率(`confirmedCount / capacity`)は API では返さず、`packages/shared` の `calculateFillRate()` をフロントエンドと共有しています。席を占めるのは `confirmed` のみで、キャンセル待ち・メール確認待ちは充足率に含めません。
+
+行数は「大会数(地域数 × 大会種別)」に等しく Supabase の `max_rows` に届かないため、CSV エクスポートのようなページングは行っていません。
+
+## 11. マイページ(参加者本人)
 
 `routes/mypage.ts`。このサブアプリは `.use('*', requireParticipant())` により全ルートが参加者ログイン必須です。
 
@@ -434,7 +457,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 - すでに `cancelled` の場合も 200 を返します(冪等)。誰も繰り上げません。
 - 繰り上げ処理が失敗しても**リクエスト自体は成功扱い**にし、ログ出力にとどめます。キャンセル自体は既にコミット済みであり、ここで失敗を返すと「キャンセルできていない」と参加者に誤解させるためです。失われるのは繰り上げ(またはその通知メール)だけで、参加者のキャンセル自体は成立しています。なお繰り上げが走るのはこのキャンセル処理だけで(`promoteNextWaitlistedEntry()` の呼び出し元は `cancelOwnEntry()` のみ)、スタッフが繰り上げをやり直すための API / UI は現状ありません。取りこぼした繰り上げは Supabase 上で直接対応する運用です。
 
-## 11. 環境変数(Bindings)
+## 12. 環境変数(Bindings)
 
 `apps/backend/src/types/env.ts`。Cloudflare Workers の Bindings 経由で渡します。
 
@@ -450,11 +473,9 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 登録手順は [`supabase-deployment.md`](./supabase-deployment.md) / [`google-sheets-integration.md`](./google-sheets-integration.md) を参照してください。
 
-## 12. 未実装のエンドポイント
+## 13. 未実装のエンドポイント
 
 `tasks.md` 上で計画されているが、現時点で API が存在しないものです。
 
-- CSV 出力(Task 6-4)
-- 全地域横断ダッシュボード(Task 7-1)
 - レギュレーション(`regulations`)の登録・編集 API — 現状はエントリー時の検証と表示ラベルの JOIN でのみ読み出しており、書き込みは Supabase 上で直接行う運用です。
 - 地域(`regions`)・スタッフアカウント(`staff_accounts`)の管理 API — 同上。

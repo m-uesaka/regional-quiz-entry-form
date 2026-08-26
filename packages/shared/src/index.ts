@@ -6,6 +6,8 @@ export * from './schemas/staff';
 export * from './schemas/participant';
 export * from './schemas/auth';
 export * from './schemas/mail';
+export * from './schemas/dashboard';
 export * from './logic/custom-field-values';
 export * from './logic/regulation-eligibility';
 export * from './logic/entry-period';
+export * from './logic/fill-rate';

@@ -89,3 +89,152 @@ describe.skipIf(!(await isDbReachable()))(
     });
   },
 );
+
+// Also requires a running local Supabase instance: `tournament_entry_summary()`
+// is pure SQL living in `supabase/migrations/`, so the aggregation it does
+// for the general-staff dashboard can only be checked against a real
+// Postgres.
+describe.skipIf(!(await isDbReachable()))(
+  'tournament_entry_summary() (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const summaryEmailPrefix = 'summary-test-';
+    const summaryRegionSlugPrefix = 'summary-test-region-';
+    const summaryRegionSlugs = [
+      `${summaryRegionSlugPrefix}a`,
+      `${summaryRegionSlugPrefix}b`,
+    ];
+
+    afterAll(async () => {
+      await sql`delete from entries where participant_id in (
+        select id from participants where email like ${summaryEmailPrefix + '%'}
+      )`;
+      await sql`delete from participants where email like ${summaryEmailPrefix + '%'}`;
+      await sql`delete from regulations where tournament_id in (
+        select id from tournaments where region_id in (
+          select id from regions where slug like ${summaryRegionSlugPrefix + '%'}
+        )
+      )`;
+      await sql`delete from tournaments where region_id in (
+        select id from regions where slug like ${summaryRegionSlugPrefix + '%'}
+      )`;
+      await sql`delete from regions where slug like ${summaryRegionSlugPrefix + '%'}`;
+      await sql.close();
+    });
+
+    /** Inserts a region with one `saikyoi` tournament and its regulation. */
+    async function seedTournament(
+      slug: string,
+      regionName: string,
+      capacity: number | null,
+    ): Promise<{regionId: string; tournamentId: string; regulationId: string}> {
+      const [region] = await sql`
+        insert into regions (slug, name) values (${slug}, ${regionName})
+        returning id
+      `;
+      const [tournament] = await sql`
+        insert into tournaments (
+          region_id, type, name, capacity, entry_opens_at, entry_closes_at
+        ) values (
+          ${region.id}, 'saikyoi', ${regionName + '大会'}, ${capacity},
+          now(), now()
+        )
+        returning id
+      `;
+      const [regulation] = await sql`
+        insert into regulations (tournament_id, label)
+        values (${tournament.id}, '一般の部')
+        returning id
+      `;
+      return {
+        regionId: region.id,
+        tournamentId: tournament.id,
+        regulationId: regulation.id,
+      };
+    }
+
+    async function seedEntry(
+      tournament: {
+        tournamentId: string;
+        regionId: string;
+        regulationId: string;
+      },
+      email: string,
+      status: string,
+    ): Promise<void> {
+      const [participant] = await sql`
+        insert into participants (region_id, email, password_hash)
+        values (${tournament.regionId}, ${email}, 'hash')
+        returning id
+      `;
+      await sql`insert into entries ${sql({
+        participant_id: participant.id,
+        tournament_id: tournament.tournamentId,
+        name: '山田太郎',
+        furigana: 'ヤマダタロウ',
+        display_name: '太郎',
+        regulation_id: tournament.regulationId,
+        status,
+      })}`;
+    }
+
+    it('counts entries per status across regions, keeping empty tournaments', async () => {
+      // `regionName` doubles as the sort key: the function orders by region
+      // name, so these two are asserted in this order below.
+      const regionA = await seedTournament(
+        summaryRegionSlugs[0],
+        'AAA集計テスト地域',
+        2,
+      );
+      const regionB = await seedTournament(
+        summaryRegionSlugs[1],
+        'BBB集計テスト地域',
+        null,
+      );
+      await seedEntry(
+        regionA,
+        `${summaryEmailPrefix}1@example.com`,
+        'confirmed',
+      );
+      await seedEntry(
+        regionA,
+        `${summaryEmailPrefix}2@example.com`,
+        'confirmed',
+      );
+      await seedEntry(
+        regionA,
+        `${summaryEmailPrefix}3@example.com`,
+        'waitlisted',
+      );
+      await seedEntry(
+        regionA,
+        `${summaryEmailPrefix}4@example.com`,
+        'cancelled',
+      );
+
+      const rows: Array<Record<string, unknown>> =
+        await sql`select * from tournament_entry_summary()
+                  where region_slug like ${summaryRegionSlugPrefix + '%'}`;
+
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toMatchObject({
+        tournament_id: regionA.tournamentId,
+        region_slug: summaryRegionSlugs[0],
+        tournament_type: 'saikyoi',
+        capacity: 2,
+        confirmed_count: 2,
+        waitlisted_count: 1,
+        pending_verification_count: 0,
+        cancelled_count: 1,
+      });
+      // A tournament nobody entered still reports a row, with zeros.
+      expect(rows[1]).toMatchObject({
+        tournament_id: regionB.tournamentId,
+        region_slug: summaryRegionSlugs[1],
+        capacity: null,
+        confirmed_count: 0,
+        waitlisted_count: 0,
+      });
+    });
+  },
+);

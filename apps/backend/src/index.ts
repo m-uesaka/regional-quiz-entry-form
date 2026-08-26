@@ -7,6 +7,7 @@ import {tournamentsRoute} from './routes/tournaments';
 import {entriesRoute} from './routes/entries';
 import {entryListRoute} from './routes/entry-list';
 import {staffEntriesRoute} from './routes/staff-entries';
+import {staffDashboardRoute} from './routes/staff-dashboard';
 import {staffMailRoute} from './routes/staff-mail';
 import {entryVerificationRoute} from './routes/entry-verification';
 import {formDefinitionsRoute} from './routes/form-definitions';
@@ -24,6 +25,7 @@ const routes = app
   .route('/tournaments', entryListRoute)
   .route('/tournaments', tournamentsRoute)
   .route('/tournaments', entriesRoute)
+  .route('/staff', staffDashboardRoute)
   .route('/staff', staffEntriesRoute)
   .route('/staff', staffMailRoute)
   .route('/entries', entryVerificationRoute)

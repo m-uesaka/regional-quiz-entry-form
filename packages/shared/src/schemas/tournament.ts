@@ -13,3 +13,10 @@ export const TournamentSchema = z.object({
   entryClosesAt: z.string().datetime({offset: true}),
 });
 export type Tournament = z.infer<typeof TournamentSchema>;
+
+// Japanese display labels for each tournament type, shared so staff-facing
+// screens don't each carry their own copy of the wording.
+export const TOURNAMENT_TYPE_LABELS: Record<TournamentType, string> = {
+  saikyoi: '最強位',
+  shinjinou: '新人王',
+};
