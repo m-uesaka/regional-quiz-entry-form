@@ -96,8 +96,8 @@ C列(type)・D列(required)は Google スプレッドシート側のデータの
 
 ## 6. 処理フロー(詳細)
 
-1. 統括スタッフが管理画面(`SheetImportPanel.svelte`)で「大会スラッグ」「スプレッドシートID」を入力し、「YAML プレビュー」を押す。
-2. フロントエンドが `POST /api/sheet-import/preview` に `{spreadsheetId, tournamentSlug}`(`packages/shared` の `SheetImportRequestSchema`)を送信。ルートは `requireGeneralStaff()` ミドルウェアで保護されており、統括スタッフ(`role: 'general'`)のみアクセス可能(地域スタッフは 403)。
+1. 統括スタッフが管理画面(`SheetImportPanel.svelte`)で「スプレッドシートID」を入力し、「YAML プレビュー」を押す。大会スラッグは手入力させず、**パネルが編集中の大会の `type`(`saikyoi` / `shinjinou`)を親から props で受け取ってそのまま使う**。取り込み先はパネル上部に表示される。
+2. フロントエンドが `POST /api/sheet-import/preview` に `{spreadsheetId, tournamentSlug}`(`packages/shared` の `SheetImportRequestSchema`)を送信。`tournamentSlug` は `TournamentTypeSchema` の enum なので、`saikyoi` / `shinjinou` 以外は 400 で弾かれる。ルートは `requireGeneralStaff()` ミドルウェアで保護されており、統括スタッフ(`role: 'general'`)のみアクセス可能(地域スタッフは 403)。
 3. バックエンドの `fetchSheetRows(spreadsheetId, c.env.GOOGLE_SHEETS_API_KEY)` がシートの `A2:E` を取得。ネットワークエラーや Google からの非 2xx レスポンスは、HTTP ステータス(取得できた場合)を保持した `SheetFetchError` として throw される。
 4. `sheetRowsToYaml(tournamentSlug, rows)` が各行を YAML 化する。
    - `key` はスプレッドシートの A 列に地域スタッフが入力した値をそのまま使う(5章参照)。
@@ -111,7 +111,7 @@ C列(type)・D列(required)は Google スプレッドシート側のデータの
    - `SheetFetchError` でそれ以外の非 2xx(400/403/404 など、スプレッドシートID誤り・非公開など)、または `sheetRowsToYaml` からの `ZodError`/`Error`(入力起因) → **400**。
    - いずれの場合も `{error: message}` を返す。成功時は `{yaml}` を 200 で返す。
 6. プレビューされた YAML を確認し、「保存」を押すと `PUT /api/form-definitions/:tournamentId` に `{yaml: previewYaml}` を送信。
-7. 保存 API 側で `parseFormDefinitionYaml()` により再度パース・検証し、`toFormFieldDefRows()` で `form_field_defs` テーブルの行形式に変換した上で Supabase に同期保存する。
+7. 保存 API 側で `parseFormDefinitionYaml()` により再度パース・検証し、**YAML の `tournamentSlug` が `:tournamentId` の大会の `type` と一致するかを照合**した上で(食い違えば 400。この時点では DB 未変更なので既存定義は消えない)、`toFormFieldDefRows()` で `form_field_defs` テーブルの行形式に変換して Supabase に同期保存する。詳細は [`form-generation.md`](./form-generation.md#tournamentslug-による取り違え検証) を参照。
 
 ## 7. 環境変数・シークレットの登録
 
@@ -146,8 +146,8 @@ bunx wrangler secret put GOOGLE_SHEETS_API_KEY --env production
 ### Web UI から使う(通常の運用)
 
 1. `bunx wrangler dev`(`apps/backend`)と SvelteKit の dev server(`apps/frontend`)を起動。
-2. 統括スタッフでログインし、`/admin/tournaments/new`(新規作成時)または `/admin/tournaments/{id}/edit`(既存大会)を開く。
-3. 「スプレッドシート取り込み」パネルで大会スラッグとスプレッドシートIDを入力し「YAML プレビュー」を押す。
+2. 統括スタッフでログインし、`/admin/tournaments/{id}/edit` を開く。取り込みパネルは大会の種別を必要とするため、大会を作成した**後**の編集画面にのみ置かれている(`/admin/tournaments/new` には無い)。
+3. 「スプレッドシート取り込み」パネルでスプレッドシートIDを入力し「YAML プレビュー」を押す(大会スラッグは編集中の大会から自動で決まる)。
 4. プレビューされた YAML を確認し、問題なければ「保存」を押す。
 
 ### API を直接叩く場合
@@ -156,17 +156,17 @@ bunx wrangler secret put GOOGLE_SHEETS_API_KEY --env production
 curl -X POST http://localhost:8787/api/sheet-import/preview \
   -H 'Content-Type: application/json' \
   -H 'Cookie: staff_session=<統括スタッフのJWT>' \
-  -d '{"spreadsheetId": "<スプレッドシートID>", "tournamentSlug": "example-tournament"}'
+  -d '{"spreadsheetId": "<スプレッドシートID>", "tournamentSlug": "saikyoi"}'
 ```
 
 ## 9. 関連スキーマ(`packages/shared/src/schemas/form-definition.ts`)
 
 - `FormFieldTypeSchema`: `z.enum(['checkbox', 'radio', 'textarea'])`
 - `FormFieldDefYamlSchema`: `type` による discriminated union。`radio` のみ `options` が必須(最低1件)。
-- `FormDefinitionYamlSchema`: `{tournamentSlug, fields[]}`。`fields` 内で `key` が重複していないことを `.refine()` でチェック。
+- `FormDefinitionYamlSchema`: `{tournamentSlug, fields[]}`。`tournamentSlug` は `TournamentTypeSchema`(`saikyoi` / `shinjinou`)。`fields` 内で `key` が重複していないことを `.refine()` でチェック。
 - `parseFormDefinitionYaml(yamlText)`: YAML文字列をパース・検証。
 - `FormDefinitionUploadSchema`: 保存 API のリクエストボディ(`{yaml: string}`)。
-- `SheetImportRequestSchema`: プレビュー API のリクエストボディ(`{spreadsheetId: string, tournamentSlug: string}`)。
+- `SheetImportRequestSchema`: プレビュー API のリクエストボディ(`{spreadsheetId: string, tournamentSlug: 'saikyoi' | 'shinjinou'}`)。
 - `toFormFieldDefRows(definition, tournamentId)`: パース済み定義を `form_field_defs` テーブルの行形式に変換。
 
 これらはバックエンド(`sheet-import.ts`、`form-definitions.ts`)とフロントエンド(`SheetImportPanel.svelte`)の両方から同一の定義を import して使う。

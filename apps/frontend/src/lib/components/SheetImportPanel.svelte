@@ -1,16 +1,24 @@
 <script lang="ts">
+  import {
+    TOURNAMENT_TYPE_LABELS,
+    type TournamentType,
+  } from '@regional-quiz/shared';
   import {createApiClient} from '$lib/api';
 
   interface Props {
     tournamentId: string;
+    tournamentType: TournamentType;
   }
 
-  const {tournamentId}: Props = $props();
+  // The slug embedded in the generated YAML comes from the tournament being
+  // edited rather than from a staff-typed field: the upload API rejects a
+  // YAML whose `tournamentSlug` doesn't match the target tournament's type,
+  // and a typo here would have meant a preview that can't be saved.
+  const {tournamentId, tournamentType}: Props = $props();
 
   const api = createApiClient();
 
   let spreadsheetId = $state('');
-  let tournamentSlug = $state('');
   let previewYaml = $state<string | null>(null);
   let previewError = $state<string | null>(null);
   let previewing = $state(false);
@@ -29,7 +37,7 @@
 
     try {
       const res = await api.api['sheet-import'].preview.$post({
-        json: {spreadsheetId, tournamentSlug},
+        json: {spreadsheetId, tournamentSlug: tournamentType},
       });
       // The union of possible response bodies also includes the
       // `@hono/zod-validator` default validation-failure shape (`{success:
@@ -85,16 +93,11 @@
 <section class="sheet-import-panel">
   <h2>スプレッドシート取り込み</h2>
 
+  <p class="sheet-import-target">
+    取り込み先: {TOURNAMENT_TYPE_LABELS[tournamentType]} ({tournamentType})
+  </p>
+
   <form onsubmit={handlePreview}>
-    <label>
-      大会スラッグ
-      <input
-        type="text"
-        bind:value={tournamentSlug}
-        placeholder="大会スラッグ"
-        required
-      />
-    </label>
     <label>
       スプレッドシートID
       <input

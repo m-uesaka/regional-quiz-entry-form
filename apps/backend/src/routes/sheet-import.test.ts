@@ -59,7 +59,7 @@ describe('sheet-import routes', () => {
         headers: {'content-type': 'application/json'},
         body: JSON.stringify({
           spreadsheetId: 'sheet-id',
-          tournamentSlug: 'test-tournament',
+          tournamentSlug: 'saikyoi',
         }),
       },
       env,
@@ -80,7 +80,7 @@ describe('sheet-import routes', () => {
         headers: {cookie, 'content-type': 'application/json'},
         body: JSON.stringify({
           spreadsheetId: 'sheet-id',
-          tournamentSlug: 'test-tournament',
+          tournamentSlug: 'saikyoi',
         }),
       },
       env,
@@ -120,7 +120,7 @@ describe('sheet-import routes', () => {
         headers: {cookie, 'content-type': 'application/json'},
         body: JSON.stringify({
           spreadsheetId: 'sheet-id',
-          tournamentSlug: 'test-tournament',
+          tournamentSlug: 'saikyoi',
         }),
       },
       env,
@@ -146,7 +146,7 @@ describe('sheet-import routes', () => {
         headers: {cookie, 'content-type': 'application/json'},
         body: JSON.stringify({
           spreadsheetId: 'sheet-id',
-          tournamentSlug: 'test-tournament',
+          tournamentSlug: 'saikyoi',
         }),
       },
       env,
@@ -168,7 +168,7 @@ describe('sheet-import routes', () => {
         headers: {cookie, 'content-type': 'application/json'},
         body: JSON.stringify({
           spreadsheetId: 'sheet-id',
-          tournamentSlug: 'test-tournament',
+          tournamentSlug: 'saikyoi',
         }),
       },
       env,
@@ -192,7 +192,7 @@ describe('sheet-import routes', () => {
         headers: {cookie, 'content-type': 'application/json'},
         body: JSON.stringify({
           spreadsheetId: 'sheet-id',
-          tournamentSlug: 'test-tournament',
+          tournamentSlug: 'saikyoi',
         }),
       },
       env,
@@ -229,7 +229,7 @@ describe('sheet-import routes', () => {
         headers: {cookie, 'content-type': 'application/json'},
         body: JSON.stringify({
           spreadsheetId: 'sheet-id',
-          tournamentSlug: 'test-tournament',
+          tournamentSlug: 'saikyoi',
         }),
       },
       env,
@@ -239,7 +239,7 @@ describe('sheet-import routes', () => {
     expect(res.status).toBe(200);
     const parsed = parseFormDefinitionYaml(body.yaml);
     expect(parsed).toEqual({
-      tournamentSlug: 'test-tournament',
+      tournamentSlug: 'saikyoi',
       fields: [
         {
           key: 'agree_to_rules',

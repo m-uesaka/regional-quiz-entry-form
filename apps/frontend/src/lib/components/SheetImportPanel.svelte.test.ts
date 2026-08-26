@@ -4,6 +4,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import SheetImportPanel from './SheetImportPanel.svelte';
 
 const TOURNAMENT_ID = '00000000-0000-0000-0000-000000000000';
+const PROPS = {tournamentId: TOURNAMENT_ID, tournamentType: 'saikyoi'} as const;
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -27,19 +28,20 @@ describe('SheetImportPanel', () => {
   it('previews YAML from the sheet-import endpoint and renders it', async () => {
     const user = userEvent.setup();
     fetchMock.mockResolvedValueOnce(
-      jsonResponse({yaml: 'tournamentSlug: foo\n'}),
+      jsonResponse({yaml: 'tournamentSlug: saikyoi\n'}),
     );
 
-    render(SheetImportPanel, {props: {tournamentId: TOURNAMENT_ID}});
+    render(SheetImportPanel, {props: PROPS});
 
-    await user.type(screen.getByPlaceholderText('大会スラッグ'), 'foo');
     await user.type(
       screen.getByPlaceholderText('スプレッドシートID'),
       'sheet-123',
     );
     await user.click(screen.getByRole('button', {name: 'YAMLプレビュー'}));
 
-    expect(await screen.findByText('tournamentSlug: foo')).toBeInTheDocument();
+    expect(
+      await screen.findByText('tournamentSlug: saikyoi'),
+    ).toBeInTheDocument();
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -47,7 +49,7 @@ describe('SheetImportPanel', () => {
     expect(init.method).toBe('POST');
     expect(JSON.parse(init.body as string)).toEqual({
       spreadsheetId: 'sheet-123',
-      tournamentSlug: 'foo',
+      tournamentSlug: 'saikyoi',
     });
   });
 
@@ -57,9 +59,8 @@ describe('SheetImportPanel', () => {
       jsonResponse({error: 'invalid spreadsheet id'}, 400),
     );
 
-    render(SheetImportPanel, {props: {tournamentId: TOURNAMENT_ID}});
+    render(SheetImportPanel, {props: PROPS});
 
-    await user.type(screen.getByPlaceholderText('大会スラッグ'), 'foo');
     await user.type(
       screen.getByPlaceholderText('スプレッドシートID'),
       'bad-id',
@@ -77,18 +78,17 @@ describe('SheetImportPanel', () => {
   it('saves the previewed YAML via the form-definitions endpoint', async () => {
     const user = userEvent.setup();
     fetchMock
-      .mockResolvedValueOnce(jsonResponse({yaml: 'tournamentSlug: foo\n'}))
+      .mockResolvedValueOnce(jsonResponse({yaml: 'tournamentSlug: saikyoi\n'}))
       .mockResolvedValueOnce(jsonResponse({ok: true}));
 
-    render(SheetImportPanel, {props: {tournamentId: TOURNAMENT_ID}});
+    render(SheetImportPanel, {props: PROPS});
 
-    await user.type(screen.getByPlaceholderText('大会スラッグ'), 'foo');
     await user.type(
       screen.getByPlaceholderText('スプレッドシートID'),
       'sheet-123',
     );
     await user.click(screen.getByRole('button', {name: 'YAMLプレビュー'}));
-    await screen.findByText('tournamentSlug: foo');
+    await screen.findByText('tournamentSlug: saikyoi');
 
     await user.click(screen.getByRole('button', {name: '保存'}));
 
@@ -99,7 +99,7 @@ describe('SheetImportPanel', () => {
     expect(url).toBe(`/api/form-definitions/${TOURNAMENT_ID}`);
     expect(init.method).toBe('PUT');
     expect(JSON.parse(init.body as string)).toEqual({
-      yaml: 'tournamentSlug: foo\n',
+      yaml: 'tournamentSlug: saikyoi\n',
     });
   });
 });

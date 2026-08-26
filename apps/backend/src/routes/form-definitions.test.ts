@@ -1,6 +1,7 @@
-import {afterAll, describe, expect, it} from 'bun:test';
+import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
 import {sign} from 'hono/jwt';
+import type {TournamentType} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import app from '../index';
 
@@ -69,14 +70,23 @@ async function regionalStaffCookie(regionId: string): Promise<string> {
   return `staff_session=${token}`;
 }
 
-const validYaml = `
-tournamentSlug: test-tournament
+/**
+ * A definition YAML for the given tournament type. The slug has to name the
+ * type of the tournament being uploaded to, or the API rejects it with 400.
+ * @param tournamentSlug The tournament type slug to put in the YAML.
+ */
+function yamlFor(tournamentSlug: TournamentType): string {
+  return `
+tournamentSlug: ${tournamentSlug}
 fields:
   - key: agree_rules
     label: 規約に同意する
     type: checkbox
     required: true
 `;
+}
+
+const validYaml = yamlFor('saikyoi');
 
 // These requests short-circuit in `requireGeneralStaff()` or `zValidator()`
 // before any database call, so they run unconditionally (including CI)
@@ -140,25 +150,39 @@ describe.skipIf(!(await isDbReachable()))(
   () => {
     const sql = new SQL(DB_URL);
     const testRegionSlug = 'form-definitions-route-test-region';
+    // `tournaments` is unique on `(region_id, type)`, so each test gets its
+    // own region (suffixed slug) rather than sharing one.
+    const testRegionSlugPattern = `${testRegionSlug}-%`;
 
-    afterAll(async () => {
+    async function deleteTestRegions(): Promise<void> {
       await sql`delete from form_field_defs where tournament_id in (
         select id from tournaments where region_id in (
-          select id from regions where slug = ${testRegionSlug}
+          select id from regions where slug like ${testRegionSlugPattern}
         )
       )`;
       await sql`delete from tournaments where region_id in (
-        select id from regions where slug = ${testRegionSlug}
+        select id from regions where slug like ${testRegionSlugPattern}
       )`;
-      await sql`delete from regions where slug = ${testRegionSlug}`;
+      await sql`delete from regions where slug like ${testRegionSlugPattern}`;
+    }
+
+    // Also cleaned up up front, so rows left behind by an interrupted run
+    // don't collide with this run's inserts.
+    beforeAll(deleteTestRegions);
+
+    afterAll(async () => {
+      await deleteTestRegions();
       await sql.close();
     });
 
-    async function createTestTournament(): Promise<string> {
+    /**
+     * Creates a 最強位 tournament in a region of its own and returns its ID.
+     * @param regionSuffix Distinguishes this test's region from the others'.
+     */
+    async function createTestTournament(regionSuffix: string): Promise<string> {
       const [region] = await sql`
         insert into regions (slug, name)
-        values (${testRegionSlug}, 'テスト地域')
-        on conflict (slug) do update set name = excluded.name
+        values (${`${testRegionSlug}-${regionSuffix}`}, 'テスト地域')
         returning id
       `;
       const [tournament] = await sql`
@@ -172,8 +196,17 @@ describe.skipIf(!(await isDbReachable()))(
       return tournament.id as string;
     }
 
+    async function fieldKeysOf(tournamentId: string): Promise<string[]> {
+      const rows = await sql`
+        select field_key from form_field_defs
+        where tournament_id = ${tournamentId}
+        order by display_order
+      `;
+      return rows.map((row: {field_key: string}) => row.field_key);
+    }
+
     it('uploads a form definition for general staff', async () => {
-      const tournamentId = await createTestTournament();
+      const tournamentId = await createTestTournament('upload');
       const cookie = await generalStaffCookie();
 
       const res = await app.request(
@@ -189,12 +222,53 @@ describe.skipIf(!(await isDbReachable()))(
 
       expect(res.status).toBe(200);
       expect(body.ok).toBe(true);
+      expect(await fieldKeysOf(tournamentId)).toEqual(['agree_rules']);
+    });
 
-      const rows = await sql`
-        select field_key from form_field_defs where tournament_id = ${tournamentId}
+    it('rejects a YAML slug naming another tournament type with 400', async () => {
+      const tournamentId = await createTestTournament('mismatch');
+      const cookie = await generalStaffCookie();
+
+      await sql`
+        insert into form_field_defs (
+          tournament_id, field_key, label, field_type, required, display_order
+        ) values
+          (${tournamentId}, 'existing_field', '既存フィールド', 'textarea', false, 0)
       `;
-      expect(rows.length).toBe(1);
-      expect(rows[0].field_key).toBe('agree_rules');
+
+      const res = await app.request(
+        `/api/form-definitions/${tournamentId}`,
+        {
+          method: 'PUT',
+          headers: {cookie, 'content-type': 'application/json'},
+          body: JSON.stringify({yaml: yamlFor('shinjinou')}),
+        },
+        env,
+      );
+      const body = (await res.json()) as Record<string, unknown>;
+
+      expect(res.status).toBe(400);
+      expect(body.error).toContain('tournamentSlug');
+      // The existing definition must survive a rejected upload —
+      // `sync_form_field_defs()` deletes before inserting, so a check that
+      // ran too late would already have wiped it.
+      expect(await fieldKeysOf(tournamentId)).toEqual(['existing_field']);
+    });
+
+    it('rejects an unknown tournament with 404', async () => {
+      const cookie = await generalStaffCookie();
+
+      const res = await app.request(
+        '/api/form-definitions/00000000-0000-0000-0000-000000000000',
+        {
+          method: 'PUT',
+          headers: {cookie, 'content-type': 'application/json'},
+          body: JSON.stringify({yaml: validYaml}),
+        },
+        env,
+      );
+
+      expect(res.status).toBe(404);
     });
   },
 );
