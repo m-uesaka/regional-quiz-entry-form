@@ -84,7 +84,11 @@ export default defineConfig({
       cwd: '../backend',
       url: `${BACKEND_URL}/api/healthz`,
       ignoreHTTPSErrors: true,
-      reuseExistingServer: !process.env.CI,
+      // Never reused: an already running Worker on this port would be
+      // started from a developer's own `.dev.vars`, so it could point at
+      // remote Supabase data or a real mail provider instead of the
+      // bindings in `BACKEND_VARS`. Failing on a port conflict is safer.
+      reuseExistingServer: false,
       // A cold `wrangler dev` has to build the Worker before it answers.
       timeout: 120_000,
       stdout: 'pipe',
