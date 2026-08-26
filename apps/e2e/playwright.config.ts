@@ -55,7 +55,12 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,
-  reporter: process.env.CI ? [['github'], ['list']] : [['list']],
+  // On CI the HTML report is what `.github/workflows/ci.yml` uploads as
+  // the `playwright-report` artifact when the job fails, so it has to be
+  // written to that default output folder instead of being served.
+  reporter: process.env.CI
+    ? [['github'], ['list'], ['html', {open: 'never'}]]
+    : [['list']],
   timeout: 30_000,
   use: {
     // Every spec talks to the backend directly: the flows they cover have
