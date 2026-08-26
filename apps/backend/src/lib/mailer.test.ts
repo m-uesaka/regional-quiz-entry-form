@@ -86,7 +86,11 @@ describe('createMailSender', () => {
       MAIL_FROM_ADDRESS: 'entry@example.com',
       MAIL_API_BASE_URL: mailApiBaseUrl,
     } as Bindings);
-    await mailer.send({to: 'user@example.com', subject: 'Hi', html: '<p>Hi</p>'});
+    await mailer.send({
+      to: 'user@example.com',
+      subject: 'Hi',
+      html: '<p>Hi</p>',
+    });
     return posted;
   }
 
