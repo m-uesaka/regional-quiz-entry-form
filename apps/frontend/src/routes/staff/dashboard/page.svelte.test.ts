@@ -66,9 +66,12 @@ describe('staff dashboard +page.svelte', () => {
   it('links each tournament to its own staff entry list', () => {
     renderPage([TOKYO, OSAKA]);
 
-    const links = screen.getAllByRole('link', {name: 'エントリー一覧'});
-    expect(links[0]).toHaveAttribute('href', '/staff/tokyo/saikyoi/entries');
-    expect(links[1]).toHaveAttribute('href', '/staff/osaka/shinjinou/entries');
+    expect(
+      screen.getByRole('link', {name: '東京 東京大会のエントリー一覧'}),
+    ).toHaveAttribute('href', '/staff/tokyo/saikyoi/entries');
+    expect(
+      screen.getByRole('link', {name: '大阪 大阪大会のエントリー一覧'}),
+    ).toHaveAttribute('href', '/staff/osaka/shinjinou/entries');
   });
 
   it('tells staff when no tournament exists yet', () => {

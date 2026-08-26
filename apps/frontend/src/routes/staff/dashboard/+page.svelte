@@ -80,7 +80,10 @@
           <td>{summary.waitlistedCount}</td>
           <td>{summary.pendingVerificationCount}</td>
           <td>
-            <a href={entriesHref(summary.regionSlug, summary.tournamentType)}>
+            <a
+              href={entriesHref(summary.regionSlug, summary.tournamentType)}
+              aria-label="{summary.regionName} {summary.tournamentName}のエントリー一覧"
+            >
               エントリー一覧
             </a>
           </td>
