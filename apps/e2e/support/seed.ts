@@ -34,6 +34,43 @@ const TABLES_TO_CLEAR = [
   'regions',
 ] as const;
 
+// `SUPABASE_URL` is read from the ambient environment, so a shell that
+// happens to have staging or production values exported would otherwise
+// point the wipe below at that database. Only loopback addresses — what
+// `supabase start` serves on — are accepted.
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '[::1]', '::1']);
+
+/**
+ * @param url The URL to inspect.
+ * @return Whether `url` parses and names a loopback host.
+ */
+function isLoopbackUrl(url: string): boolean {
+  let hostname: string;
+  try {
+    ({hostname} = new URL(url));
+  } catch {
+    return false;
+  }
+  return (
+    LOOPBACK_HOSTNAMES.has(hostname) || /^127(?:\.\d{1,3}){3}$/.test(hostname)
+  );
+}
+
+/**
+ * Refuses to seed anything but a local stack, because seeding starts by
+ * deleting every application row.
+ */
+function assertLocalSupabase(): void {
+  if (isLoopbackUrl(SUPABASE_URL)) {
+    return;
+  }
+  throw new Error(
+    `Refusing to seed ${SUPABASE_URL}: E2E seeding deletes every ` +
+      'application row and only ever runs against a local Supabase stack. ' +
+      'Unset SUPABASE_URL (or point it at 127.0.0.1) and re-run.',
+  );
+}
+
 function createServiceRoleClient(): SupabaseClient {
   return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: {persistSession: false},
@@ -89,13 +126,16 @@ async function clearAllTables(db: SupabaseClient): Promise<void> {
 
 /**
  * Clears the database and inserts the fixture region, tournaments,
- * regulations, custom form fields and staff accounts.
+ * regulations, custom form fields and staff accounts. Aborts unless
+ * `SUPABASE_URL` names a loopback address, since the clearing step is
+ * destructive.
  *
  * Staff passwords are hashed with the backend's own `hashPassword()`
  * rather than with a precomputed constant, so the fixtures cannot drift
  * out of the format `verifyPassword()` expects.
  */
 export async function seedDatabase(): Promise<void> {
+  assertLocalSupabase();
   const db = createServiceRoleClient();
   await assertReachable(db);
   await clearAllTables(db);
