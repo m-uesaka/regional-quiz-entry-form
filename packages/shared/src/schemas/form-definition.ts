@@ -32,8 +32,10 @@ export const FormDefinitionYamlSchema = z
   .object({
     // The slug identifies the *tournament type* (`saikyoi` / `shinjinou`),
     // matching the `:tournamentSlug` URL segment and `tournaments.type` —
-    // not a per-tournament identifier. It's checked against the tournament
-    // the upload targets so a definition can't be saved to the wrong one
+    // not a per-tournament identifier. It's checked against the type of the
+    // tournament the upload targets, so a definition can't be saved to a
+    // tournament of the wrong *type*; it can still land on the wrong
+    // tournament of the same type (e.g. another region's)
     // (see `syncFormFieldDefs()` in the backend).
     tournamentSlug: TournamentTypeSchema,
     fields: z.array(FormFieldDefYamlSchema),
