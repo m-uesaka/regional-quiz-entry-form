@@ -26,6 +26,11 @@ declare global {
 // appears in `wrangler.jsonc`.
 interface Env {
   SESSION_SECRET: string;
+  // The origin of the backend Worker that `hooks.server.ts` forwards
+  // `/api/*` to. Not a secret, but it differs per environment (preview vs.
+  // production), so it is set as a Pages environment variable rather than
+  // hard-coded in `wrangler.jsonc`. Locally it comes from `.env`.
+  BACKEND_URL: string;
 }
 
 export {};
