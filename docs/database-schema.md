@@ -262,9 +262,11 @@ grant select, insert, update, delete on all tables in schema public to service_r
   - 例: マイページ系のクエリは `.eq('participant_id', c.get('participantId'))` を必ず付け、他人のエントリーが存在しないエントリーと区別できないようにしています。
 - `SUPABASE_SERVICE_ROLE_KEY` は RLS を貫通する強い鍵です。フロントエンドには決して渡さず、Worker の secret としてのみ扱ってください。
 
-## 5. DB 関数(PL/pgSQL)
+## 5. DB 関数
 
 Supabase 経由の複数クエリはそれぞれ別トランザクションになるため、**アトミック性や排他制御が必要な処理は PL/pgSQL 関数にまとめ、`db.rpc()` から1回で呼び出す**方針を取っています。PL/pgSQL の関数本体は呼び出し文の暗黙トランザクション内で実行されるため、関数内の全ステートメントがまとめてコミット/ロールバックされます。
+
+例外は `tournament_entry_summary()` で、これだけは書き込みを伴わない集計用の `language sql` / `stable` 関数です(理由は下記)。
 
 いずれの関数も `revoke all ... from public` / `grant execute ... to service_role` が付いており、service_role からしか実行できません。
 
@@ -275,6 +277,7 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | `promote_next_waitlisted_entry(uuid)` | `0004` → `0007` で再定義 | `lib/waitlist.ts` | キャンセル待ち先頭を繰り上げる |
 | `cancel_own_entry(uuid, uuid)` | `0006` | `lib/entries.ts` | 参加者自身のエントリーをキャンセルする |
 | `reset_participant_password(text, text)` | `0009` → `0010` で再定義 | `lib/password-reset.ts` | 再設定トークンを消費してパスワードを更新し、残りのトークンを焼き捨てる |
+| `tournament_entry_summary()` | `0013` | `routes/staff-dashboard.ts` | 全大会のエントリー件数をステータス別に集計する(読み取り専用) |
 
 ### sync_form_field_defs(p_tournament_id, p_rows)
 
@@ -333,6 +336,16 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 - 4 で `password_changed_at` を同じ UPDATE 文に含めるのも要点です。参加者セッションは 7 日有効なステートレス JWT なので、この列が動かない限り、再設定前に発行された Cookie(盗まれたものを含む)はそのまま使えてしまいます。
 - パスワードのハッシュ化(PBKDF2)は意図的に高コストなため、TypeScript 側はこの関数を呼ぶ前にトークンの存在を軽く 1 回 SELECT して弾きます。あくまで早期リターン用で、正否の判定はロック下で再チェックするこの関数が行います。
 
+### tournament_entry_summary()
+
+統括スタッフ向けダッシュボード(`GET /api/staff/dashboard`)のために、全大会 1 行ずつの集計を返します。
+
+- 他の関数と違い、アトミック性やロックのために存在するわけではありません。Worker 側で数えようとすると「大会ごとに `entries` を 1 クエリ」か「全地域のエントリー行を丸ごと取得して数える」のどちらかになるため、集計を DB に寄せています。書き込みがないので `language sql` / `stable` です。
+- `tournaments` から `entries` への **`left join`** が要点です。`count(*) filter (...)` は null 拡張された行を数えないため、エントリーが 0 件の大会も「全件 0」の行として残ります。`inner join` にすると、まだ誰も申し込んでいない大会がダッシュボードから消えてしまいます。
+- 件数は `count()` の `bigint` から `integer` にキャストしています。PostgREST 経由で `bigint` は文字列として届く可能性があり、エントリー件数が `integer` の範囲に迫ることはないためです。
+- 地域名・大会名も一緒に返すため、`regions` を JOIN しています。呼び出し側で JOIN し直さずに済みます。
+- 本体の列参照はすべてテーブル修飾(`t.id` / `r.slug` など)しています。`returns table` の出力列名(`region_id` など)と衝突して曖昧参照になるのを避けるためです。
+
 ### マイグレーションを修正するときの注意
 
 `supabase db push` は各バージョンを一度しか適用しません。そのため、**適用済みのマイグレーションファイルを直接書き換えても、既存環境には反映されません**。関数の挙動を変更する場合は、`0007` / `0008` のように**新しい番号のファイルで `create or replace function` し直す**のが本リポジトリの流儀です。その際は変更しない部分も含めて関数全体を書き直すことになるため、元ファイルからの差分をコメントに明記してください。
@@ -353,3 +366,4 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | `0010_reset_participant_password_participant_lock.sql` | 参加者行を先にロックして同時再設定を直列化(`0009` を再定義) |
 | `0011_participants_password_changed_at.sql` | `participants.password_changed_at` を追加し、再設定時に打刻(`0010` を再定義) |
 | `0012_password_reset_tokens_participant_id_idx.sql` | `password_reset_tokens.participant_id` のインデックス |
+| `0013_tournament_entry_summary_fn.sql` | `tournament_entry_summary()` |
