@@ -32,7 +32,13 @@ export default defineConfig(({mode}) => {
         // during `vite dev` this proxy stands in for that routing. Requests
         // made from `load`/`actions` never reach here — they go through
         // `handleFetch` in `src/hooks.server.ts` instead.
-        '/api': {
+        // A key starting with `^` is compiled to a `RegExp` and matched
+        // against the whole request target (query string included); a plain
+        // key would be a raw prefix and would also catch `/apiece` and
+        // `/api-docs`. This pattern matches exactly what `isApiPath()` in
+        // `src/lib/server/backend-fetch.ts` accepts: `/api` itself and
+        // `/api/...`, each with an optional `?query`.
+        '^/api(?:[/?].*)?$': {
           target: backendUrl || DEFAULT_BACKEND_URL,
           changeOrigin: true,
           // `apps/e2e` starts the backend with `wrangler dev
