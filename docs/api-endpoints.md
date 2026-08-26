@@ -229,22 +229,25 @@ if ('yaml' in body) {
 | ステータス | `error` | 条件 |
 | --- | --- | --- |
 | 400 | `invalid tournament` | `:tournamentId` の大会が存在しない |
+| 400 | `unknown custom field: ...` 等 | `customFieldValues` が大会の `form_field_defs` と一致しない(メッセージは [`form-generation.md`](./form-generation.md) の一覧を参照) |
 | 403 | `entry period closed` | エントリー期間外 |
 | 403 | `regulation not eligible in priority window` | 優先期間中に対象外レギュレーションを選択した |
 | 401 | `invalid password` | 既存メールアドレスでのエントリーだがパスワードが一致しない |
 | 409 | `already registered in another region` | そのメールアドレスが別地域の participant として登録済み |
 | 409 | `already entered` | 同じ大会にキャンセル以外のエントリーが既にある |
 | 409 | (Supabase のメッセージ) | participant / entry の作成に失敗 |
+| 500 | (Supabase のメッセージ) | 大会の `form_field_defs` の取得に失敗 |
 | 500 | `failed to send verification email: ...` | 確認メールの送信に失敗 |
 
 処理の流れ:
 
 1. 大会とそのレギュレーション群を取得し、エントリー期間・優先期間を検証。
-2. メールアドレスから participant を検索。既存なら**パスワード照合**、無ければ新規作成(PBKDF2 でハッシュ化)。
-3. 同じ大会の既存エントリーを確認。`cancelled` なら**その行を再利用**して上書き(`unique (participant_id, tournament_id)` があるため2行目は作れない)、それ以外なら 409。
-4. 確認メールを送信。
+2. その大会の `form_field_defs` を取得し、`customFieldValues` を `findCustomFieldValuesError()` で照合(未定義キー、選択肢にない値、必須項目の空欄、型の不一致を 400 で弾く)。
+3. メールアドレスから participant を検索。既存なら**パスワード照合**、無ければ新規作成(PBKDF2 でハッシュ化)。
+4. 同じ大会の既存エントリーを確認。`cancelled` なら**その行を再利用**して上書き(`unique (participant_id, tournament_id)` があるため2行目は作れない)、それ以外なら 409。
+5. 確認メールを送信。
 
-> **現状の注意点**: `customFieldValues` は `EntryInputSchema` で形(`Record<string, string | string[]>`)しか検証されておらず、**その大会の `form_field_defs` との照合は行われていません**。照合を行う `findCustomFieldValuesError()` を呼んでいるのは編集側(`PATCH /api/mypage/entries/:entryId`)だけです。
+`customFieldValues` の照合を participant の検索・作成より前に置いているのは、フォームからは生成し得ない回答を弾いた結果としてアカウントだけが作られる、という副作用を残さないためです。編集 API(`PATCH /api/mypage/entries/:entryId`)と同じ `findCustomFieldValuesError()` を使うので、新規と編集で通る回答は一致します。
 
 メール送信に失敗した場合はエントリーを**ロールバック**します。放置すると、参加者は使えるリンクを受け取っていないのに一意制約や「already entered」で再試行を永久に阻まれるためです。ロールバックは「確認トークンの削除 → 新規行なら削除 / 再利用行なら元の値へ復元」の順に行います(トークンが FK で参照している間はエントリーを削除できないため)。再利用行は削除ではなく**キャンセル状態へ復元**することで、元のエントリーの記録が消えないようにしています。
 

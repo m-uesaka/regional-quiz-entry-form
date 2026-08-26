@@ -15,6 +15,13 @@ export interface TournamentFixture {
   capacity: number | null;
   regulationId: string;
   regulationLabel: string;
+  /**
+   * Answers that satisfy the tournament's seeded custom form fields, used
+   * as `submitEntry()`'s filler. `createEntry()` checks submitted answers
+   * against `form_field_defs`, so an entry that leaves a required field out
+   * is refused with a 400.
+   */
+  defaultCustomFieldValues: Record<string, string | string[]>;
 }
 
 export interface StaffFixture {
@@ -51,6 +58,8 @@ export const SAIKYOI: TournamentFixture = {
   capacity: 1,
   regulationId: '22222222-2222-4222-8222-2222222222aa',
   regulationLabel: '一般',
+  // No custom fields are seeded for this tournament.
+  defaultCustomFieldValues: {},
 };
 
 /** Uncapped, so an entry here confirms without touching a waitlist. */
@@ -61,6 +70,8 @@ export const SHINJINOU: TournamentFixture = {
   capacity: null,
   regulationId: '33333333-3333-4333-8333-3333333333aa',
   regulationLabel: '一般',
+  // `shirt_size` below is required; `note` is optional and left out.
+  defaultCustomFieldValues: {shirt_size: 'M'},
 };
 
 export const TOURNAMENTS: readonly TournamentFixture[] = [SAIKYOI, SHINJINOU];

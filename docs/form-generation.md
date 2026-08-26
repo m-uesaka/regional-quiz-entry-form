@@ -197,7 +197,7 @@ required={field.required && !hasCheckboxSelection}
 
 回答は `entries.custom_field_values`(jsonb)に `{ field_key: string | string[] }` の形で保存されます。共有型としては `CustomFieldValues` です。
 
-**エントリー編集 API(`PATCH /api/mypage/entries/:entryId`)では**、サーバはクライアントから送られた回答をそのまま信用せず、`findCustomFieldValuesError()`(`packages/shared/src/logic/custom-field-values.ts`)がその大会の `form_field_defs` と照合します。この照合がないと、API を直接叩くことで「描画されたフォームからは絶対に生成し得ない回答」を保存できてしまいます。一方、新規エントリー API(`POST /api/tournaments/:tournamentId/entries`)の `createEntry()` はこの照合を行わないため、回答が定義どおりであることを保証できるのは編集 API に限られます(後述の「現状の注意点」を参照)。
+**新規エントリー API(`POST /api/tournaments/:tournamentId/entries`)と編集 API(`PATCH /api/mypage/entries/:entryId`)の両方で**、サーバはクライアントから送られた回答をそのまま信用せず、`findCustomFieldValuesError()`(`packages/shared/src/logic/custom-field-values.ts`)がその大会の `form_field_defs` と照合します。この照合がないと、API を直接叩くことで「描画されたフォームからは絶対に生成し得ない回答」を保存できてしまいます。照合に失敗した場合はどちらも 400 を返します。
 
 検証項目:
 
@@ -216,7 +216,9 @@ required={field.required && !hasCheckboxSelection}
 - 単独ブールチェックボックス(`options` が**省略されているか空配列**の `checkbox`)は、「自分のキー1つだけを選択肢に持つ」ものとして照合されます。つまり `[field.key]` か `[]` 以外は弾かれます。
 - `checkbox` にスカラー値が来た場合は、選択肢の照合自体は通ってしまうものの弾いています。保存できてしまうと、エントリーを開き直したときに描画側(配列しか見ない)が選択を認識できず、回答が黙って消えたように見えるためです。
 
-> **現状の注意点**: この検証を呼んでいるのは `updateOwnEntry()`(`PATCH /api/mypage/entries/:entryId`)だけで、**新規エントリー時の `createEntry()`(`POST /api/tournaments/:tournamentId/entries`)では呼ばれていません**。そのため新規エントリーでは、API を直接叩けば定義に無い項目や選択肢外の値を保存できてしまいます(`EntryInputSchema` の `z.record()` は形だけを見て、大会のフォーム定義とは照合しません)。項目を追加する際はこの非対称性に注意してください。
+`EntryInputSchema` / `EntryEditInputSchema` の `z.record()` は形(`Record<string, string | string[]>`)しか見ないため、大会のフォーム定義との照合はこの関数が担っています。新しい入力形式を足すときに `findCustomFieldValuesError()` の更新を忘れると、その形式だけ素通りする点に注意してください。
+
+`createEntry()` はこの照合をレギュレーション検証の直後、participant の検索・作成より**前**に行います。フォームからは生成し得ない回答を弾くついでにアカウントだけが作られる、という副作用を残さないためです。
 
 ## 7. 保存済み定義からのフォーム再構築
 

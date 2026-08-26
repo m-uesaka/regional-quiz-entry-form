@@ -74,6 +74,11 @@ describe.skipIf(!(await isDbReachable()))(
           )
         )
       )`;
+      await sql`delete from form_field_defs where tournament_id in (
+        select id from tournaments where region_id in (
+          select id from regions where slug like ${testRegionSlug + '%'}
+        )
+      )`;
       await sql`delete from entries where tournament_id in (
         select id from tournaments where region_id in (
           select id from regions where slug like ${testRegionSlug + '%'}
@@ -153,6 +158,32 @@ describe.skipIf(!(await isDbReachable()))(
         customFieldValues: {},
         ...overrides,
       };
+    }
+
+    /**
+     * Adds a required `t_shirt_size` radio and an optional `topics` checkbox
+     * to the fixture's tournament, so `createEntry()` has a form definition
+     * to check the submitted answers against.
+     */
+    async function addFormFieldDefs(tournamentId: string): Promise<void> {
+      await sql`
+        insert into form_field_defs (
+          tournament_id, field_key, label, field_type, required, options,
+          display_order
+        ) values (
+          ${tournamentId}, 't_shirt_size', 'Tシャツサイズ', 'radio', true,
+          ${['S', 'M', 'L']}::jsonb, 0
+        )
+      `;
+      await sql`
+        insert into form_field_defs (
+          tournament_id, field_key, label, field_type, required, options,
+          display_order
+        ) values (
+          ${tournamentId}, 'topics', '興味のある分野', 'checkbox', false,
+          ${['歴史', '科学']}::jsonb, 1
+        )
+      `;
     }
 
     it('rejects entry outside the entry period', async () => {
@@ -294,6 +325,124 @@ describe.skipIf(!(await isDbReachable()))(
 
       expect(retryResult.ok).toBe(true);
       expect(mailSendCount).toBe(1);
+    });
+
+    it('accepts empty answers when the tournament defines no custom fields', async () => {
+      const fixture = await createFixture('no-custom-fields');
+
+      const result = await createEntry(
+        env,
+        fixture.tournamentId,
+        validInput({regulationId: fixture.regulationId, customFieldValues: {}}),
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const [row] = await sql`
+        select custom_field_values from entries where id = ${result.entry.id}
+      `;
+      expect(row.custom_field_values).toEqual({});
+    });
+
+    it('stores custom field answers that match the form definition', async () => {
+      const fixture = await createFixture('custom-fields-valid');
+      await addFormFieldDefs(fixture.tournamentId);
+
+      const result = await createEntry(
+        env,
+        fixture.tournamentId,
+        validInput({
+          regulationId: fixture.regulationId,
+          customFieldValues: {t_shirt_size: 'M', topics: ['歴史']},
+        }),
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const [row] = await sql`
+        select status, custom_field_values from entries
+        where id = ${result.entry.id}
+      `;
+      expect(row.status).toBe('pending_verification');
+      expect(row.custom_field_values).toEqual({
+        t_shirt_size: 'M',
+        topics: ['歴史'],
+      });
+    });
+
+    it('rejects custom field answers the tournament does not define', async () => {
+      const fixture = await createFixture('custom-fields-unknown-key');
+      await addFormFieldDefs(fixture.tournamentId);
+      const input = validInput({
+        regulationId: fixture.regulationId,
+        customFieldValues: {t_shirt_size: 'M', junk: 'x'},
+      });
+
+      const result = await createEntry(env, fixture.tournamentId, input);
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.status).toBe(400);
+      const entryRows = await sql`
+        select id from entries where tournament_id = ${fixture.tournamentId}
+      `;
+      expect(entryRows.length).toBe(0);
+      // The answers are checked before the participant lookup, so a rejected
+      // submission doesn't leave an account behind either.
+      const participantRows = await sql`
+        select id from participants where email = ${input.email}
+      `;
+      expect(participantRows.length).toBe(0);
+    });
+
+    it('rejects an answer outside the field definition options', async () => {
+      const fixture = await createFixture('custom-fields-unknown-option');
+      await addFormFieldDefs(fixture.tournamentId);
+
+      const result = await createEntry(
+        env,
+        fixture.tournamentId,
+        validInput({
+          regulationId: fixture.regulationId,
+          customFieldValues: {t_shirt_size: 'XXL'},
+        }),
+      );
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.status).toBe(400);
+    });
+
+    it('rejects a required custom field left blank', async () => {
+      const fixture = await createFixture('custom-fields-required');
+      await addFormFieldDefs(fixture.tournamentId);
+
+      const result = await createEntry(
+        env,
+        fixture.tournamentId,
+        validInput({
+          regulationId: fixture.regulationId,
+          customFieldValues: {topics: ['歴史']},
+        }),
+      );
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.status).toBe(400);
+    });
+
+    it('rejects a scalar answer to a checkbox field', async () => {
+      const fixture = await createFixture('custom-fields-scalar-checkbox');
+      await addFormFieldDefs(fixture.tournamentId);
+
+      const result = await createEntry(
+        env,
+        fixture.tournamentId,
+        validInput({
+          regulationId: fixture.regulationId,
+          customFieldValues: {t_shirt_size: 'M', topics: '歴史'},
+        }),
+      );
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.status).toBe(400);
     });
 
     it('rejects a second entry for a tournament the participant is already in', async () => {
