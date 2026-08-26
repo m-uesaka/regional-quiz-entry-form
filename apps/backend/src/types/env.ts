@@ -4,6 +4,10 @@ export interface Bindings {
   SUPABASE_URL: string;
   SUPABASE_SERVICE_ROLE_KEY: string;
   MAIL_API_KEY: string;
+  // Non-secret and normally unset: the mail provider's API origin. Only
+  // the end-to-end tests set it, pointing `createMailSender()` at a local
+  // stub so a test run neither needs a real API key nor delivers mail.
+  MAIL_API_BASE_URL?: string;
   // Secret: used to authenticate `values.get` reads against the Google
   // Sheets API v4 for Task 2-3's spreadsheet-to-YAML preview tool.
   GOOGLE_SHEETS_API_KEY: string;

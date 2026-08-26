@@ -467,6 +467,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 | `SUPABASE_SERVICE_ROLE_KEY` | ✅ | RLS を貫通する service_role キー。フロントエンドに渡さないこと |
 | `SESSION_SECRET` | ✅ | セッション JWT の HS256 署名鍵 |
 | `MAIL_API_KEY` | ✅ | Resend の API キー |
+| `MAIL_API_BASE_URL` | | メール送信 API のオリジン。**本番では設定しません**(未設定なら Resend 本体 `https://api.resend.com`)。`apps/e2e` の E2E テストだけがローカルの stub を指すために設定します |
 | `MAIL_FROM_ADDRESS` | | 送信元アドレス |
 | `GOOGLE_SHEETS_API_KEY` | ✅ | Google Sheets API v4 の API キー |
 | `FRONTEND_URL` | | メール本文中のリンク(確認リンク等)を組み立てるためのフロントエンド URL |

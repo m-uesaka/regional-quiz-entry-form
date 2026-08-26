@@ -1,3 +1,8 @@
+import type {Bindings} from '../types/env';
+
+/** The Resend API origin every send goes to unless overridden. */
+const RESEND_API_BASE_URL = 'https://api.resend.com';
+
 export interface SendMailInput {
   to: string;
   subject: string;
@@ -66,13 +71,28 @@ function parseRetryAfterMs(headers: Headers): number | undefined {
  * `MailSender` interface above, not on Resend specifically.
  */
 export class ResendMailSender implements MailSender {
+  private readonly baseUrl: string;
+
+  /**
+   * @param apiKey The Resend API key.
+   * @param fromAddress The "From" address every send goes out as.
+   * @param baseUrl The API origin to post to. Only the end-to-end tests
+   *     pass this, pointing the sender at a local stub so a test run
+   *     neither needs a real API key nor delivers mail; production leaves
+   *     it at Resend's own origin.
+   */
   constructor(
     private readonly apiKey: string,
     private readonly fromAddress: string,
-  ) {}
+    baseUrl: string = RESEND_API_BASE_URL,
+  ) {
+    // A configured origin may or may not carry a trailing slash, and
+    // `https://api.resend.com//emails` is not the same path to Resend.
+    this.baseUrl = baseUrl.replace(/\/+$/, '');
+  }
 
   async send(input: SendMailInput): Promise<void> {
-    const res = await fetch('https://api.resend.com/emails', {
+    const res = await fetch(`${this.baseUrl}/emails`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
@@ -84,4 +104,24 @@ export class ResendMailSender implements MailSender {
       throw new MailSendError(res.status, parseRetryAfterMs(res.headers));
     }
   }
+}
+
+/**
+ * Builds the mail sender the app sends through, from the Worker bindings.
+ *
+ * Every caller goes through this rather than constructing
+ * `ResendMailSender` directly, so that `MAIL_API_BASE_URL` — the binding
+ * the end-to-end tests point at their own stub — takes effect everywhere
+ * mail is sent, not just where a test happened to look.
+ * @param env The Worker bindings.
+ */
+export function createMailSender(env: Bindings): MailSender {
+  // An unset binding arrives as `undefined`, and a blank one as an empty
+  // string; neither is a usable origin, so both fall back to Resend.
+  const baseUrl = env.MAIL_API_BASE_URL?.trim();
+  return new ResendMailSender(
+    env.MAIL_API_KEY,
+    env.MAIL_FROM_ADDRESS,
+    baseUrl || undefined,
+  );
 }

@@ -1,0 +1,21 @@
+{
+  "name": "@regional-quiz/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:e2e": "playwright test",
+    "typecheck": "tsc --noEmit",
+    "lint": "gts lint",
+    "fix": "gts fix"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "@regional-quiz/backend": "workspace:*",
+    "@regional-quiz/shared": "workspace:*",
+    "@supabase/supabase-js": "^2.112.3",
+    "@types/bun": "^1.1.0",
+    "typescript": "^5.5.0",
+    "wrangler": "^3.78.0"
+  }
+}

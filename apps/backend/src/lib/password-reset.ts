@@ -1,7 +1,7 @@
 import type {PasswordResetConfirmInput} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
-import {ResendMailSender} from './mailer';
+import {createMailSender} from './mailer';
 import {hashPassword} from './password';
 import {generateToken, hashToken} from './token';
 
@@ -107,7 +107,7 @@ export async function requestPasswordReset(
     return;
   }
 
-  const mailer = new ResendMailSender(env.MAIL_API_KEY, env.MAIL_FROM_ADDRESS);
+  const mailer = createMailSender(env);
   try {
     await mailer.send({
       to: email,

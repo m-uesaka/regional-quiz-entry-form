@@ -1,6 +1,6 @@
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
-import {ResendMailSender} from './mailer';
+import {createMailSender} from './mailer';
 import {generateToken, hashToken} from './token';
 
 const TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
@@ -30,7 +30,7 @@ export async function sendVerificationEmail(
     throw new Error(`failed to persist verification token: ${error.message}`);
   }
 
-  const mailer = new ResendMailSender(env.MAIL_API_KEY, env.MAIL_FROM_ADDRESS);
+  const mailer = createMailSender(env);
   await mailer.send({
     to: email,
     subject: 'エントリー確認メール',

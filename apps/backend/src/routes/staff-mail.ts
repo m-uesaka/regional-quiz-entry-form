@@ -7,7 +7,7 @@ import {
 } from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireStaffForTournament} from '../middleware/staff-auth';
-import {ResendMailSender} from '../lib/mailer';
+import {createMailSender} from '../lib/mailer';
 import {MAX_BACKGROUND_RECIPIENTS, sendBulkMail} from '../lib/bulk-mail';
 import {fetchTournamentRecipients} from '../lib/entry-recipients';
 
@@ -54,10 +54,7 @@ export const staffMailRoute = new Hono<StaffEnv>().post(
       );
     }
 
-    const mailer = new ResendMailSender(
-      c.env.MAIL_API_KEY,
-      c.env.MAIL_FROM_ADDRESS,
-    );
+    const mailer = createMailSender(c.env);
     // Handed to `waitUntil()` rather than awaited: `sendBulkMail()` paces
     // itself against the mail provider's rate limit, so even a list at the
     // ceiling above spends most of a minute waiting between batches --

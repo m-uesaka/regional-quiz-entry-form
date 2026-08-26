@@ -8,6 +8,7 @@ TypeScript + Hono のバックエンドと SvelteKit のフロントエンドか
 - バックエンド: `apps/backend` — **Hono**、**Cloudflare Workers** にデプロイ。永続化は D1/KV/R2 ではなく **Supabase**(`@supabase/supabase-js`)を使用し、接続情報(`SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` 等)は Worker の `Bindings`(`src/types/env.ts`)経由の secrets として渡す
 - フロントエンド: `apps/frontend` — **SvelteKit**。API ルートは自前で持たず、`apps/backend` の Hono API を呼び出す(SvelteKit の `+page.server.ts` 等から叩くか、クライアントから直接叩くかは実装時に決定)
 - 共有パッケージ: `packages/shared` — バックエンド/フロントエンド間で共有する Zod スキーマと型定義
+- E2E テスト: `apps/e2e` — **Playwright**。`wrangler dev` で起動した `apps/backend` と、`bun run db:start` で起動したローカル Supabase を相手に主要フローを通す。現状は UI が未実装のためブラウザを使わず API レベル(詳細と経緯は `apps/e2e/README.md`)。実行は `bun run test:e2e`(通常の `bun run test` には含まれない)
 
 ## 型安全な API 連携
 
