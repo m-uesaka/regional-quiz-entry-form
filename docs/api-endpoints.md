@@ -236,6 +236,7 @@ if ('yaml' in body) {
 | 409 | `already registered in another region` | そのメールアドレスが別地域の participant として登録済み |
 | 409 | `already entered` | 同じ大会にキャンセル以外のエントリーが既にある |
 | 409 | (Supabase のメッセージ) | participant / entry の作成に失敗 |
+| 500 | (Supabase のメッセージ) | 大会の `form_field_defs` の取得に失敗 |
 | 500 | `failed to send verification email: ...` | 確認メールの送信に失敗 |
 
 処理の流れ:
