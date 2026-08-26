@@ -85,6 +85,17 @@ describe('fetchAllRows', () => {
     expect(calls).toBe(2);
   });
 
+  it('rejects a page size that would not produce a valid range', async () => {
+    for (const pageSize of [0, -1, 1.5, Number.NaN]) {
+      const {ranges, selectPage} = pageOver([1, 2, 3]);
+
+      await expect(fetchAllRows(selectPage, pageSize)).rejects.toThrow(
+        RangeError,
+      );
+      expect(ranges).toEqual([]);
+    }
+  });
+
   it('treats a null page as the end of the rows', async () => {
     const selectPage = () =>
       Promise.resolve({data: null as number[] | null, error: null});

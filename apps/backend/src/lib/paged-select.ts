@@ -20,7 +20,8 @@ export type AllRowsResult<T> =
  * repeated across page boundaries.
  * @param selectPage Builds the query for one batch, given the inclusive
  *     row offsets to pass to `range()`.
- * @param pageSize Rows to request per batch.
+ * @param pageSize Rows to request per batch; must be a positive integer.
+ * @throws RangeError If `pageSize` is not a positive integer.
  */
 export async function fetchAllRows<T>(
   selectPage: (
@@ -29,6 +30,17 @@ export async function fetchAllRows<T>(
   ) => PromiseLike<{data: T[] | null; error: {message: string} | null}>,
   pageSize = SELECT_PAGE_SIZE,
 ): Promise<AllRowsResult<T>> {
+  // A page size of 0 asks for the empty range `(0, -1)`, so the first batch
+  // comes back empty and the loop reports success with no rows even though
+  // the query matches some; a fractional or negative size builds an equally
+  // meaningless range. Reject them up front rather than silently dropping
+  // rows.
+  if (!Number.isInteger(pageSize) || pageSize < 1) {
+    throw new RangeError(
+      `pageSize must be a positive integer, got ${pageSize}`,
+    );
+  }
+
   const rows: T[] = [];
   for (;;) {
     const {data, error} = await selectPage(
