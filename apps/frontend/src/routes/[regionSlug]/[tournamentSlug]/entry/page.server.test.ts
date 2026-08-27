@@ -340,6 +340,85 @@ describe('entry +page.server default action', () => {
     });
   });
 
+  it('refuses a required checkbox group left blank, naming the control', async () => {
+    // The group carries no `required` until the client bundle has taken the
+    // form over (#95), so this is the submission a visitor who beat
+    // hydration — or has JS off — actually makes, and the action is what has
+    // to answer it.
+    const requests: string[] = [];
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          formFieldDefs: [
+            {
+              fieldKey: 'workshops',
+              label: '参加したい企画',
+              fieldType: 'checkbox',
+              required: true,
+              options: ['早押し', '筆記'],
+              displayOrder: 0,
+            },
+          ],
+          requests,
+        }),
+        fields: validFormData(),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 400,
+      data: {
+        fieldErrors: {'custom.workshops': ['「参加したい企画」は必須です']},
+      },
+    });
+    // Refused here, so the API is never asked to create the entry.
+    expect(requests.some(url => url.includes('/entries'))).toBe(false);
+  });
+
+  it('reports every rejected field, custom and built-in, in one answer', async () => {
+    // The participants this check exists for get no browser-side complaints
+    // at all, and the two password fields are never echoed back, so a
+    // one-at-a-time answer would make them retype both passwords once per
+    // problem.
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          formFieldDefs: [
+            {
+              fieldKey: 'workshops',
+              label: '参加したい企画',
+              fieldType: 'checkbox',
+              required: true,
+              options: ['早押し', '筆記'],
+              displayOrder: 0,
+            },
+            {
+              fieldKey: 't_shirt_size',
+              label: 'Tシャツサイズ',
+              fieldType: 'radio',
+              required: true,
+              options: ['S', 'M'],
+              displayOrder: 1,
+            },
+          ],
+          entryResponse: {status: 500, body: {error: 'must not be reached'}},
+        }),
+        fields: validFormData({passwordConfirm: 'different123'}),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 400,
+      data: {
+        fieldErrors: {
+          'custom.workshops': ['「参加したい企画」は必須です'],
+          'custom.t_shirt_size': ['「Tシャツサイズ」は必須です'],
+          passwordConfirm: ['パスワードが一致しません'],
+        },
+      },
+    });
+  });
+
   it('falls back to a status-based message for an unknown error string', async () => {
     const result = await actions.default(
       buildActionEvent({

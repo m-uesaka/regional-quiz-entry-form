@@ -20,7 +20,11 @@
      and saving would write them to that other entry; keying on the entry
      builds the form afresh instead. See #94. -->
 {#key data.entry.id}
-  <EntryEditForm entry={data.entry} values={form?.values} />
+  <EntryEditForm
+    entry={data.entry}
+    values={form?.values}
+    fieldErrors={form?.fieldErrors}
+  />
 {/key}
 
 <a href="/mypage">マイページへ戻る</a>

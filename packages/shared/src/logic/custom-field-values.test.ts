@@ -1,6 +1,9 @@
 import {describe, expect, it} from 'bun:test';
 import type {FormFieldDef} from '../schemas/form-definition';
-import {findCustomFieldValuesError} from './custom-field-values';
+import {
+  findCustomFieldValuesError,
+  findCustomFieldValuesErrors,
+} from './custom-field-values';
 
 const FIELD_DEFS: FormFieldDef[] = [
   {
@@ -64,7 +67,11 @@ describe('findCustomFieldValuesError', () => {
       injected: 'x',
     });
 
-    expect(error).toContain('injected');
+    expect(error).toEqual({
+      reason: 'unknown-field',
+      fieldKey: 'injected',
+      message: 'unknown custom field: injected',
+    });
   });
 
   it('rejects an option the field does not offer', () => {
@@ -73,7 +80,10 @@ describe('findCustomFieldValuesError', () => {
       t_shirt_size: 'XXL',
     });
 
-    expect(error).toContain('t_shirt_size');
+    expect(error).toMatchObject({
+      reason: 'unknown-option',
+      fieldKey: 't_shirt_size',
+    });
   });
 
   it('rejects a boolean checkbox checked with a foreign value', () => {
@@ -82,7 +92,10 @@ describe('findCustomFieldValuesError', () => {
       agree_to_rules: ['yes'],
     });
 
-    expect(error).toContain('agree_to_rules');
+    expect(error).toMatchObject({
+      reason: 'unknown-option',
+      fieldKey: 'agree_to_rules',
+    });
   });
 
   it('rejects a blank required field', () => {
@@ -91,7 +104,10 @@ describe('findCustomFieldValuesError', () => {
       t_shirt_size: '',
     });
 
-    expect(error).toContain('required');
+    expect(error).toMatchObject({
+      reason: 'required',
+      fieldKey: 't_shirt_size',
+    });
   });
 
   it('rejects an unchecked required boolean checkbox', () => {
@@ -100,7 +116,10 @@ describe('findCustomFieldValuesError', () => {
       agree_to_rules: [],
     });
 
-    expect(error).toContain('required');
+    expect(error).toMatchObject({
+      reason: 'required',
+      fieldKey: 'agree_to_rules',
+    });
   });
 
   it('rejects a list answer for a single-value field', () => {
@@ -109,7 +128,10 @@ describe('findCustomFieldValuesError', () => {
       t_shirt_size: ['S', 'M'],
     });
 
-    expect(error).toContain('single value');
+    expect(error).toMatchObject({
+      reason: 'expects-single',
+      fieldKey: 't_shirt_size',
+    });
   });
 
   it('rejects a scalar answer for a checkbox field', () => {
@@ -118,7 +140,10 @@ describe('findCustomFieldValuesError', () => {
       allergies: '卵',
     });
 
-    expect(error).toContain('list of values');
+    expect(error).toMatchObject({
+      reason: 'expects-list',
+      fieldKey: 'allergies',
+    });
   });
 
   it('rejects a scalar answer for a boolean checkbox', () => {
@@ -127,7 +152,10 @@ describe('findCustomFieldValuesError', () => {
       agree_to_rules: 'agree_to_rules',
     });
 
-    expect(error).toContain('list of values');
+    expect(error).toMatchObject({
+      reason: 'expects-list',
+      fieldKey: 'agree_to_rules',
+    });
   });
 
   it('accepts any text for a free-text field', () => {
@@ -137,5 +165,40 @@ describe('findCustomFieldValuesError', () => {
     });
 
     expect(error).toBeNull();
+  });
+});
+
+describe('findCustomFieldValuesErrors', () => {
+  it('reports no rejection for answers matching the field definitions', () => {
+    expect(findCustomFieldValuesErrors(FIELD_DEFS, VALID_VALUES)).toEqual([]);
+  });
+
+  it('reports every rejected field, not just the first', () => {
+    // A form page marks each control that caused one, so a participant can
+    // fix them all in a single pass.
+    const errors = findCustomFieldValuesErrors(FIELD_DEFS, {
+      injected: 'x',
+      allergies: ['寿司'],
+    });
+
+    expect(errors).toMatchObject([
+      {reason: 'unknown-field', fieldKey: 'injected'},
+      {reason: 'required', fieldKey: 't_shirt_size'},
+      {reason: 'unknown-option', fieldKey: 'allergies'},
+      {reason: 'required', fieldKey: 'agree_to_rules'},
+    ]);
+  });
+
+  it('reports one rejection per field, since a control shows one message', () => {
+    // `agree_to_rules` is both the wrong shape and empty; only the first
+    // reason is worth wording.
+    const errors = findCustomFieldValuesErrors(FIELD_DEFS, {
+      ...VALID_VALUES,
+      agree_to_rules: '',
+    });
+
+    expect(errors).toMatchObject([
+      {reason: 'expects-list', fieldKey: 'agree_to_rules'},
+    ]);
   });
 });

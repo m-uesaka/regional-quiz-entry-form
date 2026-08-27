@@ -6,15 +6,20 @@
     type MypageEntryDetail,
   } from '@regional-quiz/shared';
   import DynamicFormField from '$lib/components/DynamicFormField.svelte';
-  import type {EntryEditFormValues} from '$lib/types/entry-form';
+  import {customFieldName} from '$lib/custom-field-name';
+  import type {
+    EntryEditFormValues,
+    EntryFieldErrors,
+  } from '$lib/types/entry-form';
 
   interface Props {
     entry: MypageEntryDetail;
     /** What the last rejected submission carried back, if there was one. */
     values?: EntryEditFormValues;
+    fieldErrors?: EntryFieldErrors;
   }
 
-  const {entry, values}: Props = $props();
+  const {entry, values, fieldErrors}: Props = $props();
 
   // The stored definitions carry API-shaped keys (`fieldKey` / `fieldType`);
   // `DynamicFormField` renders the shape the form was authored in.
@@ -39,6 +44,10 @@
   let displayName = $state(initial.displayName);
   let freeText = $state(initial.freeText ?? '');
   let customFieldValues = $state(initialCustomFieldValues());
+
+  function fieldError(field: string): string | undefined {
+    return fieldErrors?.[field]?.[0];
+  }
 
   /**
    * The answer every custom field starts out with, keyed by field key.
@@ -84,7 +93,13 @@
   </div>
 
   {#each fields as field (field.key)}
-    <DynamicFormField {field} bind:value={customFieldValues[field.key]} />
+    <!-- Keyed by the control's namespaced name, the same key the action
+         files a custom field's message under. -->
+    <DynamicFormField
+      {field}
+      bind:value={customFieldValues[field.key]}
+      error={fieldError(customFieldName(field.key))}
+    />
   {/each}
 
   <button type="submit">保存する</button>

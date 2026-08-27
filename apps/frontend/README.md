@@ -75,6 +75,30 @@ server-rendered page would come back blank. That breaks the pages that have to
 work before (or without) the client bundle, e.g. the staff login form echoing a
 rejected address back.
 
+### A constraint that needs a re-render doesn't belong in the server's HTML
+
+The same rule applies to `required`, and the one control that got it wrong was
+the required multi-option checkbox group. HTML has no "at least one of this
+group is checked", so `DynamicFormField.svelte` spells it as a `required` on
+every box that is *dropped again* the moment one is checked — and dropping it
+takes a re-render, which only the client bundle can do. Before hydration (and
+with JS off), checking one box left the others carrying a `required` nothing
+would ever remove, so the browser's constraint validation silently refused to
+submit the form at all. See #95.
+
+So that `required` is never rendered on the server: `hydrated` starts `false`
+and an `$effect` turns it on, which puts the constraint in place only once the
+form is live. What holds for everyone instead is the form action, which runs
+the shared `findCustomFieldValuesErrors()` before it calls the API and files
+each refusal under the offending control's own name. It reports the schema's
+complaints and the custom fields' together, so a visitor who gets no
+browser-side validation at all still learns everything wrong with a submission
+in one round trip — which matters because the entry form never echoes the two
+password fields back, and so makes them retype both on every failed attempt.
+
+A boolean checkbox and a `radio` group keep their plain `required`: their rule
+is one the browser already expresses, so it survives without a script.
+
 ## A seeded form lives in a child component, keyed by what it was seeded from
 
 Seeding once means the controls stop following `data`. SvelteKit re-uses a page

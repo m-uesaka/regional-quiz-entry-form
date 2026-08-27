@@ -70,8 +70,9 @@ export const SHINJINOU: TournamentFixture = {
   capacity: null,
   regulationId: '33333333-3333-4333-8333-3333333333aa',
   regulationLabel: '一般',
-  // `shirt_size` below is required; `note` is optional and left out.
-  defaultCustomFieldValues: {shirt_size: 'M'},
+  // `shirt_size` and `workshops` below are required; `note` is optional and
+  // left out.
+  defaultCustomFieldValues: {shirt_size: 'M', workshops: ['早押し']},
 };
 
 export const TOURNAMENTS: readonly TournamentFixture[] = [SAIKYOI, SHINJINOU];
@@ -99,6 +100,22 @@ export const SHINJINOU_FORM_FIELD_DEFS: readonly FormFieldDefFixture[] = [
     required: false,
     options: null,
     displayOrder: 1,
+  },
+  // A required checkbox group, which is the one control whose "at least
+  // one checked" rule the browser can't express on its own — it is left
+  // unconstrained in the server-rendered HTML and only picks up its
+  // `required` once the client bundle has taken the form over (#95). This
+  // is what gives `entry-flow.spec.ts` something to submit before that
+  // happens.
+  {
+    id: '44444444-4444-4444-8444-444444444403',
+    tournamentId: SHINJINOU.id,
+    fieldKey: 'workshops',
+    label: '参加したい企画',
+    fieldType: 'checkbox',
+    required: true,
+    options: ['早押し', '筆記', 'ボードクイズ'],
+    displayOrder: 2,
   },
 ];
 

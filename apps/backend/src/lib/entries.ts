@@ -146,7 +146,7 @@ export async function createEntry(
     input.customFieldValues,
   );
   if (customFieldValuesError) {
-    return {ok: false, status: 400, error: customFieldValuesError};
+    return {ok: false, status: 400, error: customFieldValuesError.message};
   }
 
   const {data: existingParticipant} = await db
@@ -385,7 +385,7 @@ export async function updateOwnEntry(
     patch.customFieldValues,
   );
   if (customFieldValuesError) {
-    return {ok: false, status: 400, error: customFieldValuesError};
+    return {ok: false, status: 400, error: customFieldValuesError.message};
   }
 
   const {error} = await db

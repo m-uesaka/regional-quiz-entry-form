@@ -1,6 +1,7 @@
 import {error, fail} from '@sveltejs/kit';
 import {
   EntryInputSchema,
+  findCustomFieldValuesErrors,
   isWithinEntryPeriod,
   TournamentTypeSchema,
   type FormFieldDef,
@@ -8,7 +9,10 @@ import {
   type Tournament,
 } from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
-import {readCustomFieldValues} from '$lib/server/custom-field-values';
+import {
+  customFieldErrors,
+  readCustomFieldValues,
+} from '$lib/server/custom-field-values';
 import type {EntryFieldErrors, EntryFormValues} from '$lib/types/entry-form';
 import type {Actions, PageServerLoad, RequestEvent} from './$types';
 
@@ -187,11 +191,38 @@ export const actions = {
       passwordConfirm: String(formData.get('passwordConfirm') ?? ''),
       freeText: freeText === '' ? undefined : freeText,
     });
-    if (!parsed.success) {
+
+    // The API checks the custom fields too, but it answers in identifiers
+    // that name no field the page can point at, so the same rule is applied
+    // here to get the refusal onto the control that caused it.
+    //
+    // It is also the only check standing behind a required checkbox group:
+    // that group carries no `required` until the client bundle has taken
+    // the form over (#95), so an unanswered one submitted before then — or
+    // with JS off — reaches this action instead of being stopped by the
+    // browser.
+    const customFieldValuesErrors = findCustomFieldValuesErrors(
+      formFieldDefs,
+      values.customFieldValues,
+    );
+
+    // Both checks are reported together rather than the custom fields
+    // short-circuiting the schema, so everything wrong with a submission
+    // comes back in one round trip. That matters most for exactly the
+    // participants this check exists for — those submitting before
+    // hydration or with JS off, who get no browser-side complaints at all —
+    // since the two password fields are never echoed back and so have to be
+    // retyped on every failed attempt.
+    if (!parsed.success || customFieldValuesErrors.length > 0) {
       // Surfaced per field so a mismatched password confirmation — the one
       // failure the participant can't locate from a generic message —
-      // points at the field that caused it.
-      const fieldErrors: EntryFieldErrors = parsed.error.flatten().fieldErrors;
+      // points at the field that caused it. The custom fields' messages are
+      // keyed by their namespaced control names, so they can't collide with
+      // the schema's.
+      const fieldErrors: EntryFieldErrors = {
+        ...(parsed.success ? {} : parsed.error.flatten().fieldErrors),
+        ...customFieldErrors(customFieldValuesErrors, formFieldDefs),
+      };
       return fail(400, {
         error: '入力内容を確認してください',
         fieldErrors,

@@ -2,13 +2,28 @@ import {error, fail, redirect} from '@sveltejs/kit';
 import {
   EDITABLE_ENTRY_STATUSES,
   EntryEditInputSchema,
+  findCustomFieldValuesErrors,
   isWithinEntryPeriod,
 } from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
-import {readCustomFieldValues} from '$lib/server/custom-field-values';
+import {
+  customFieldErrors,
+  readCustomFieldValues,
+} from '$lib/server/custom-field-values';
 import {redirectToParticipantLogin} from '$lib/server/participant-session';
 import type {EntryEditFormValues} from '$lib/types/entry-form';
 import type {Actions, PageServerLoad} from './$types';
+
+/**
+ * Per-field validation messages, keyed by the control's name. Every failure
+ * this action returns carries one (empty when the refusal is about the
+ * submission as a whole) so the page can index it without narrowing across
+ * the action's result union.
+ */
+type EditFieldErrors = Record<string, string[] | undefined>;
+
+/** Nothing to attach per field — the refusal is about the whole edit. */
+const NO_FIELD_ERRORS: EditFieldErrors = {};
 
 /**
  * Loads the participant's own entry, applying the same editability rule as
@@ -89,8 +104,31 @@ export const actions = {
       ...values,
       freeText: freeText === '' ? undefined : freeText,
     });
-    if (!parsed.success) {
-      return fail(400, {error: '入力内容を確認してください', values});
+
+    // The API checks the custom fields too, but it answers in identifiers
+    // that name no field the page can point at, so the same rule is applied
+    // here to get the refusal onto the control that caused it. It is also
+    // the only check standing behind a required checkbox group, which
+    // carries no `required` until the client bundle has taken the form over
+    // (#95).
+    const customFieldValuesErrors = findCustomFieldValuesErrors(
+      formFieldDefs,
+      values.customFieldValues,
+    );
+
+    // Both checks are reported together rather than the custom fields
+    // short-circuiting the schema, so every rejected field is marked in one
+    // round trip instead of one per submission.
+    if (!parsed.success || customFieldValuesErrors.length > 0) {
+      const fieldErrors: EditFieldErrors = customFieldErrors(
+        customFieldValuesErrors,
+        formFieldDefs,
+      );
+      return fail(400, {
+        error: '入力内容を確認してください',
+        fieldErrors,
+        values,
+      });
     }
 
     const res = await api.api.mypage.entries[':entryId'].$patch({
@@ -103,7 +141,11 @@ export const actions = {
         redirectToParticipantLogin(cookies);
       }
       if (res.status === 400) {
-        return fail(400, {error: '入力内容を確認してください', values});
+        return fail(400, {
+          error: '入力内容を確認してください',
+          fieldErrors: NO_FIELD_ERRORS,
+          values,
+        });
       }
       // The API answers 403 both when the entry period has closed and when
       // the entry was cancelled, and the two can only be told apart from a
@@ -112,13 +154,22 @@ export const actions = {
       if (res.status === 403) {
         return fail(403, {
           error: 'エントリー期間外またはキャンセル済みのため編集できません',
+          fieldErrors: NO_FIELD_ERRORS,
           values,
         });
       }
       if (res.status === 404) {
-        return fail(404, {error: 'エントリーが見つかりません', values});
+        return fail(404, {
+          error: 'エントリーが見つかりません',
+          fieldErrors: NO_FIELD_ERRORS,
+          values,
+        });
       }
-      return fail(502, {error: 'エントリーの更新に失敗しました', values});
+      return fail(502, {
+        error: 'エントリーの更新に失敗しました',
+        fieldErrors: NO_FIELD_ERRORS,
+        values,
+      });
     }
 
     throw redirect(303, '/mypage');

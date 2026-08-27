@@ -84,6 +84,7 @@ describe('mypage entry edit +page.svelte', () => {
   it('shows the action error when an update fails', () => {
     renderPage({
       error: 'エントリー期間外のため編集できません',
+      fieldErrors: {},
       values: {
         name: ENTRY.name,
         furigana: ENTRY.furigana,
@@ -98,9 +99,31 @@ describe('mypage entry edit +page.svelte', () => {
     );
   });
 
+  it("shows a custom field's message under its own control", () => {
+    // Filed under the namespaced control name, which is also what the form
+    // looks the message up by — so a custom field keyed `name` can't land
+    // under the real 氏名 field.
+    renderPage({
+      error: '入力内容を確認してください',
+      fieldErrors: {'custom.agree_to_rules': ['「規約に同意する」は必須です']},
+      values: {
+        name: ENTRY.name,
+        furigana: ENTRY.furigana,
+        displayName: ENTRY.displayName,
+        freeText: ENTRY.freeText ?? '',
+        customFieldValues: {t_shirt_size: 'M', agree_to_rules: []},
+      },
+    });
+
+    expect(
+      screen.getByText('「規約に同意する」は必須です'),
+    ).toBeInTheDocument();
+  });
+
   it('keeps what was typed when the update is rejected', () => {
     renderPage({
       error: '入力内容を確認してください',
+      fieldErrors: {},
       values: {
         name: '山田花子',
         furigana: 'ヤマダハナコ',

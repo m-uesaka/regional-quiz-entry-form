@@ -46,7 +46,11 @@ test('staff sign in, read their tournament roster, and export it as CSV', async 
     name: '出力花子',
     furigana: 'しゅつりょくはなこ',
     displayName: 'はなこ',
-    customFieldValues: {shirt_size: 'L', note: '会場まで徒歩'},
+    customFieldValues: {
+      shirt_size: 'L',
+      note: '会場まで徒歩',
+      workshops: ['早押し', 'ボードクイズ'],
+    },
   });
   expect(confirmed.status).toBe('confirmed');
 
@@ -56,7 +60,7 @@ test('staff sign in, read their tournament roster, and export it as CSV', async 
     name: '未確認次郎',
     furigana: 'みかくにんじろう',
     displayName: 'じろう',
-    customFieldValues: {shirt_size: 'S'},
+    customFieldValues: {shirt_size: 'S', workshops: ['筆記']},
   });
 
   // The roster carries participants' real names and addresses, so both
@@ -125,6 +129,7 @@ test('staff sign in, read their tournament roster, and export it as CSV', async 
     'ステータス',
     'Tシャツサイズ',
     '備考',
+    '参加したい企画',
   ]);
 
   expect(rows).toContainEqual([
@@ -134,6 +139,8 @@ test('staff sign in, read their tournament roster, and export it as CSV', async 
     '確定',
     'L',
     '会場まで徒歩',
+    // A checkbox group's selections share one cell, joined by `;`.
+    '早押し;ボードクイズ',
   ]);
   // The unanswered `note` field still gets its (empty) column, so every row
   // lines up with the header.
@@ -144,6 +151,7 @@ test('staff sign in, read their tournament roster, and export it as CSV', async 
     'メール確認待ち',
     'S',
     '',
+    '筆記',
   ]);
 
   // This account is scoped to 東京 × 新人王, so the neighbouring tournament
