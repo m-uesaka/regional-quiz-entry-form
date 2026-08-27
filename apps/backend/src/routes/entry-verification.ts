@@ -10,7 +10,15 @@ export const entryVerificationRoute = new Hono<Env>().get(
   async c => {
     const result = await confirmEntryByToken(c.env, c.req.valid('query').token);
     if (!result.ok) {
-      return c.json({error: result.error}, 400);
+      // Only a token the database actually refused is reported as a client
+      // error: a 400 is what tells the participant their link is dead and
+      // that they should enter again, and saying that after a transient
+      // Supabase failure would strand an entry that is still
+      // `pending_verification` (a re-entry is refused as a duplicate).
+      if (result.reason === 'invalid_token') {
+        return c.json({error: result.error}, 400);
+      }
+      return c.json({error: result.error}, 500);
     }
     return c.json({status: result.status});
   },
