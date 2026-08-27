@@ -42,26 +42,18 @@
   let regionId = $state(initial.regionId ?? '');
   let type = $state<TournamentType>(initial.type ?? 'saikyoi');
   let name = $state(initial.name ?? '');
-  // Kept as free text (not bound as a number input) so an empty field can be
-  // distinguished from `0` and mapped to `capacity: null` on submit.
-  let capacityInput = $state(
-    initial.capacity != null ? String(initial.capacity) : '',
-  );
+  // An empty number input binds as `null` rather than as `0`, which is
+  // exactly the "no limit" the API takes.
+  let capacity = $state<number | null>(initial.capacity ?? null);
   let entryOpensAt = $state(toDatetimeLocalValue(initial.entryOpensAt));
   let entryClosesAt = $state(toDatetimeLocalValue(initial.entryClosesAt));
   let submitting = $state(false);
   let error = $state<string | null>(null);
 
-  function handleCapacityInput(event: Event): void {
-    capacityInput = (event.currentTarget as HTMLInputElement).value;
-  }
-
   async function handleSubmit(event: SubmitEvent): Promise<void> {
     event.preventDefault();
     submitting = true;
     error = null;
-    const capacity =
-      capacityInput.trim() === '' ? null : Number(capacityInput);
     try {
       error = await onSubmit({
         regionId,
@@ -105,12 +97,7 @@
 
   <label>
     定員(空欄で無制限)
-    <input
-      type="number"
-      min="1"
-      value={capacityInput}
-      oninput={handleCapacityInput}
-    />
+    <input type="number" min="1" bind:value={capacity} />
   </label>
 
   <label>

@@ -8,8 +8,9 @@ import {customFieldName} from '$lib/custom-field-name';
  *
  * Checkbox fields are read with `getAll()` since a multi-option group
  * submits one value per checked box; a plain boolean checkbox (no options)
- * submits the browser's default `"on"`, which is normalized to the
- * `[fieldKey]` / `[]` representation `DynamicFormField.svelte` uses.
+ * submits a single value, which is normalized to the `[fieldKey]` / `[]`
+ * representation `DynamicFormField.svelte` uses regardless of what that
+ * value is.
  *
  * The controls are read under their namespaced `custom.`-prefixed names
  * (see `$lib/custom-field-name`), so a field key that collides with one of

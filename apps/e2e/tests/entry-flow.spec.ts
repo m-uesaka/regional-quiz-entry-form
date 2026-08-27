@@ -3,7 +3,9 @@
 import {expect, test} from '@playwright/test';
 import {SHINJINOU} from '../support/fixtures';
 import {
+  entryFormPath,
   entryListPath,
+  holdClientBundle,
   loginParticipantThroughForm,
   openVerificationLink,
   submitEntryForm,
@@ -59,4 +61,30 @@ test('a verification link cannot be followed twice', async ({
 
   await page.goto(link);
   await expect(page.getByText('この確認リンクは無効です。')).toBeVisible();
+});
+
+// #90 の回帰テスト。
+test('keeps what was answered before the client bundle took over', async ({
+  page,
+}) => {
+  // Held until the form has been answered, so hydration is guaranteed to
+  // land after the typing instead of only doing so on a slow machine.
+  const releaseClientBundle = await holdClientBundle(page);
+  await page.goto(entryFormPath(SHINJINOU), {waitUntil: 'commit'});
+
+  const name = page.getByLabel('氏名', {exact: true});
+  await name.fill('先走り太郎');
+  const regulation = page
+    .getByRole('group', {name: 'レギュレーションを選択してください'})
+    .getByLabel(SHINJINOU.regulationLabel, {exact: true});
+  await regulation.check();
+
+  releaseClientBundle();
+  // Waits for the hydration the answers above raced. Where the wait this
+  // replaced kept hydration from eating them, this one gives it every
+  // chance to: the assertions below are what say it didn't.
+  await page.waitForLoadState('networkidle');
+
+  await expect(name).toHaveValue('先走り太郎');
+  await expect(regulation).toBeChecked();
 });

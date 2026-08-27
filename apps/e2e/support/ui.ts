@@ -63,7 +63,7 @@ export interface EntryFormParticipant {
  * The entry form for one tournament.
  * @param tournament The tournament being entered.
  */
-function entryFormPath(tournament: TournamentFixture): string {
+export function entryFormPath(tournament: TournamentFixture): string {
   return `/${REGION.slug}/${tournament.type}/entry`;
 }
 
@@ -84,56 +84,45 @@ export function staffEntriesPath(tournament: TournamentFixture): string {
 }
 
 /**
- * Waits for the client bundle to take over the server-rendered page.
+ * Holds back every module the client bundle is assembled from, so that a
+ * spec can drive the server-rendered page before it has hydrated.
  *
- * Every text input on these forms renders its value from a Svelte
- * expression (`value={form?.email ?? ''}` and the like), so hydration
- * assigns that expression — for a form nobody has submitted yet, the empty
- * string — over whatever the field happens to hold at that moment. Typing
- * before then is silently thrown away, and the submit that follows is then
- * blocked by the form's own `required` attributes.
+ * This is what pins down #90 — where hydration overwrote every field
+ * rendered from a `value={...}` expression — rather than leaving it to
+ * whether the machine happened to be slow. Under `vite dev` the bundle is
+ * an unbundled module graph served over HTTP, so withholding those
+ * responses withholds hydration.
  *
- * `networkidle` stands in for a hydration signal because SvelteKit exposes
- * none, and under `vite dev` the module graph the client bundle is
- * assembled from is exactly what the page is still fetching. It is a
- * heuristic, not a guarantee: parsing and running those modules happens
- * after the last response, so a loaded machine could still hydrate inside
- * the idle window. `expectStillFilled()` is what catches that.
- * @param page The page to wait on.
+ * `page.goto()` has to be given `waitUntil: 'commit'` while the hold is on:
+ * the page's module scripts are what `load` and `domcontentloaded` wait for.
+ * @param page The page to hold the bundle back on.
+ * @return Releases the held modules, letting the page hydrate.
  */
-async function waitForHydration(page: Page): Promise<void> {
-  await page.waitForLoadState('networkidle');
+export async function holdClientBundle(page: Page): Promise<() => void> {
+  let release = (): void => {};
+  const released = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  await page.route(/\.(js|ts|svelte)(\?|$)/, async route => {
+    await released;
+    await route.continue();
+  });
+  return release;
 }
 
 /**
  * Types into one field and checks that what was typed stayed there.
+ *
+ * The check is also what would catch a return of #90, where hydrating the
+ * server-rendered page overwrote every field rendered from a `value={...}`
+ * expression: nothing here waits for the client bundle to take over, so
+ * these forms are filled in exactly as fast as Playwright can drive them.
  * @param field The control to type into.
  * @param value The text to type.
  */
 async function fillField(field: Locator, value: string): Promise<void> {
   await field.fill(value);
   await expect(field).toHaveValue(value);
-}
-
-/**
- * Re-checks a filled field just before the form is submitted.
- *
- * `fillField()`'s own check resolves as soon as the value is there, so it
- * cannot see a hydration that lands afterwards — and `waitForHydration()`
- * only makes that unlikely, not impossible. Hydration wipes every
- * value-bound field on the form at once, so one field is enough to catch it.
- *
- * Without this the loss surfaces as the submit doing nothing (the emptied
- * field is `required`) and the assertion after it timing out with nothing
- * pointing at the cause.
- * @param field The control to re-check.
- * @param value The text that should still be in it.
- */
-async function expectStillFilled(field: Locator, value: string): Promise<void> {
-  await expect(
-    field,
-    'the form was emptied before it could be submitted — see waitForHydration()',
-  ).toHaveValue(value);
 }
 
 /**
@@ -165,7 +154,6 @@ export async function submitEntryForm(
   await expect(
     page.getByRole('heading', {name: `${tournament.name} へのエントリー`}),
   ).toBeVisible();
-  await waitForHydration(page);
 
   await fillField(page.getByLabel('氏名', {exact: true}), participant.name);
   await fillField(
@@ -210,10 +198,6 @@ export async function submitEntryForm(
     await fillField(page.getByLabel('自由記述', {exact: true}), input.freeText);
   }
 
-  await expectStillFilled(
-    page.getByLabel('メールアドレス', {exact: true}),
-    participant.email,
-  );
   await page.getByRole('button', {name: 'エントリーする'}).click();
   await expect(page.getByRole('status')).toContainText(participant.email);
   return participant;
@@ -297,7 +281,6 @@ export async function loginParticipantThroughForm(
 ): Promise<void> {
   await page.goto(MYPAGE_PATH);
   await expect(page).toHaveURL(PARTICIPANT_LOGIN_PATH);
-  await waitForHydration(page);
 
   await fillField(
     page.getByLabel('メールアドレス', {exact: true}),
@@ -306,10 +289,6 @@ export async function loginParticipantThroughForm(
   await fillField(
     page.getByLabel('パスワード', {exact: true}),
     participant.password,
-  );
-  await expectStillFilled(
-    page.getByLabel('メールアドレス', {exact: true}),
-    participant.email,
   );
   await page.getByRole('button', {name: 'ログイン'}).click();
   await expect(page).toHaveURL(MYPAGE_PATH);
@@ -331,11 +310,9 @@ export async function loginStaffThroughForm(
   await expect(
     page.getByRole('heading', {name: 'スタッフログイン'}),
   ).toBeVisible();
-  await waitForHydration(page);
 
   await fillField(page.getByLabel('メールアドレス'), staff.email);
   await fillField(page.getByLabel('パスワード'), staff.password);
-  await expectStillFilled(page.getByLabel('メールアドレス'), staff.email);
   await page.getByRole('button', {name: 'ログイン'}).click();
   await page.waitForURL(url => !url.pathname.startsWith(STAFF_LOGIN_PATH));
 }

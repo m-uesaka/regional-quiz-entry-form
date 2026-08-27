@@ -1,7 +1,13 @@
 <script lang="ts">
+  import {untrack} from 'svelte';
   import type {PageProps} from './$types';
 
   let {form}: PageProps = $props();
+
+  // Seeded from the action result once, then owned by the field itself. See
+  // "Form controls are bound, not rendered from an expression" in
+  // `apps/frontend/README.md` for why this isn't `value={form?.email ?? ''}`.
+  let email = $state(untrack(() => form?.email ?? ''));
 </script>
 
 <h1>スタッフログイン</h1>
@@ -20,7 +26,7 @@
     <input
       type="email"
       name="email"
-      value={form?.email ?? ''}
+      bind:value={email}
       required
       autocomplete="username"
     />
