@@ -1,4 +1,5 @@
 import {render, screen} from '@testing-library/svelte';
+import userEvent from '@testing-library/user-event';
 import {describe, expect, it} from 'vitest';
 import type {MypageEntryDetail} from '@regional-quiz/shared';
 import Page from './+page.svelte';
@@ -43,8 +44,19 @@ const ENTRY: MypageEntryDetail = {
 
 type ActionResult = Parameters<typeof Page>[1]['form'];
 
+/** A second entry, reached by a link that only changes the route parameter. */
+const OTHER_ENTRY: MypageEntryDetail = {
+  ...ENTRY,
+  id: '00000000-0000-0000-0000-0000000000ff',
+  name: '鈴木一郎',
+  furigana: 'スズキイチロウ',
+  displayName: '一郎',
+  freeText: null,
+  customFieldValues: {t_shirt_size: 'S', agree_to_rules: []},
+};
+
 function renderPage(form: ActionResult = null) {
-  render(Page, {
+  return render(Page, {
     props: {params: {entryId: ENTRY.id}, data: {entry: ENTRY}, form},
   });
 }
@@ -110,5 +122,28 @@ describe('mypage entry edit +page.svelte', () => {
     renderPage();
 
     expect(screen.getByText(/一般の部/)).toBeInTheDocument();
+  });
+
+  // SvelteKit re-uses this page component across a navigation that only
+  // changes the route parameters, so a move to another entry has to re-seed
+  // the controls — otherwise saving would write the first entry's answers to
+  // the second one. See #94.
+  it('re-seeds from the entry the route moves to', async () => {
+    const {rerender} = renderPage();
+    await userEvent.clear(screen.getByLabelText('氏名'));
+    await userEvent.type(screen.getByLabelText('氏名'), '書きかけの氏名');
+
+    await rerender({
+      params: {entryId: OTHER_ENTRY.id},
+      data: {entry: OTHER_ENTRY},
+      form: null,
+    });
+
+    expect(screen.getByLabelText('氏名')).toHaveValue('鈴木一郎');
+    expect(screen.getByLabelText('自由記述')).toHaveValue('');
+    expect(screen.getByRole('radio', {name: 'S'})).toBeChecked();
+    expect(
+      screen.getByRole('checkbox', {name: /規約に同意する/}),
+    ).not.toBeChecked();
   });
 });

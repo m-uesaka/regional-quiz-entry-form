@@ -3,33 +3,14 @@ import {
   EntryInputSchema,
   isWithinEntryPeriod,
   TournamentTypeSchema,
-  type CustomFieldValues,
   type FormFieldDef,
   type Regulation,
   type Tournament,
 } from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
 import {readCustomFieldValues} from '$lib/server/custom-field-values';
+import type {EntryFieldErrors, EntryFormValues} from '$lib/types/entry-form';
 import type {Actions, PageServerLoad, RequestEvent} from './$types';
-
-/**
- * Per-field validation messages, keyed by field name. Spelled out as a
- * record (rather than left as Zod's per-schema shape) so every failure this
- * action returns carries the same type and the page can index it by a
- * field name.
- */
-type EntryFieldErrors = Record<string, string[] | undefined>;
-
-/** The entry form's own fields, echoed back verbatim after a failure. */
-interface EntryFormValues {
-  name: string;
-  furigana: string;
-  displayName: string;
-  email: string;
-  regulationId: string;
-  freeText: string;
-  customFieldValues: CustomFieldValues;
-}
 
 /**
  * The backend's `error` strings mapped to what the form shows. The API
