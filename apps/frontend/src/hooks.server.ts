@@ -2,7 +2,10 @@ import type {Handle, HandleFetch} from '@sveltejs/kit';
 import {env} from '$env/dynamic/private';
 import {readStaffClaims} from '$lib/server/staff-session';
 import {readParticipantClaims} from '$lib/server/participant-session';
-import {rewriteApiRequest} from '$lib/server/backend-fetch';
+import {
+  forwardBackendCookies,
+  rewriteApiRequest,
+} from '$lib/server/backend-fetch';
 
 // Matches `STAFF_SESSION_COOKIE` in
 // `apps/backend/src/middleware/staff-auth.ts`.
@@ -34,5 +37,13 @@ export const handleFetch: HandleFetch = async ({event, request, fetch}) => {
     backendUrl: env.BACKEND_URL,
     cookie: event.request.headers.get('cookie'),
   });
-  return fetch(rewritten ?? request);
+  if (!rewritten) return fetch(request);
+
+  const response = await fetch(rewritten);
+  // Only calls SvelteKit resolves internally get their `Set-Cookie` headers
+  // applied to the page response for free; a rewritten one is cross-origin
+  // by definition, so the session cookie a login answers with is carried
+  // over by hand.
+  forwardBackendCookies(response, event.cookies);
+  return response;
 };
