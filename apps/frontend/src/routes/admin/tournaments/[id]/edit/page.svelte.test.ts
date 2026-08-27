@@ -94,6 +94,56 @@ describe('admin tournament edit +page.svelte', () => {
     expect(await screen.findByText(/取り込み先: 新人王/)).toBeInTheDocument();
   });
 
+  it('retracts the update notice when a later save fails', async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(TOURNAMENT))
+      .mockResolvedValueOnce(jsonResponse({error: 'regionId が不正です'}, 400));
+
+    renderPage();
+    await user.click(screen.getByRole('button', {name: '更新'}));
+    await screen.findByText('更新しました');
+
+    await user.clear(screen.getByLabelText(/地域ID/));
+    await user.type(screen.getByLabelText(/地域ID/), 'not-a-uuid');
+    await user.click(screen.getByRole('button', {name: '更新'}));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'regionId が不正です',
+    );
+    expect(screen.queryByText('更新しました')).not.toBeInTheDocument();
+  });
+
+  // The previewed YAML carries the type it was fetched with as its
+  // `tournamentSlug`, and the API refuses an upload whose slug doesn't match
+  // the target tournament — so a preview that outlived the type it was built
+  // for is one the panel can no longer save.
+  it('drops a preview built for the type a save replaced', async () => {
+    const user = userEvent.setup();
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({yaml: 'tournamentSlug: saikyoi\n'}))
+      .mockResolvedValueOnce(jsonResponse({...TOURNAMENT, type: 'shinjinou'}));
+
+    renderPage();
+    await user.type(
+      screen.getByPlaceholderText('スプレッドシートID'),
+      'sheet-123',
+    );
+    await user.click(screen.getByRole('button', {name: 'YAMLプレビュー'}));
+    await screen.findByText('tournamentSlug: saikyoi');
+
+    await user.selectOptions(screen.getByLabelText('種別'), 'shinjinou');
+    await user.click(screen.getByRole('button', {name: '更新'}));
+    await screen.findByText(/取り込み先: 新人王/);
+
+    expect(
+      screen.queryByText('tournamentSlug: saikyoi'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', {name: '保存'}),
+    ).not.toBeInTheDocument();
+  });
+
   // SvelteKit re-uses this page component across a navigation that only
   // changes the route parameters, so a move to another tournament has to
   // re-seed everything the first one left behind — otherwise saving would

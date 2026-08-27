@@ -33,6 +33,10 @@
   async function handleUpdate(
     values: TournamentFormValues,
   ): Promise<string | null> {
+    // Retracted for the duration of the request: a second save that fails
+    // would otherwise leave the notice standing under the error message,
+    // reporting a change the API refused.
+    updated = false;
     const res = await api.api.tournaments[':id'].$patch({
       param: {id: tournament.id},
       json: values,
@@ -61,4 +65,11 @@
 {/if}
 
 <h2>フォーム定義の取り込み</h2>
-<SheetImportPanel tournamentId={tournament.id} tournamentType={currentType} />
+<!-- The panel's preview is YAML with the confirmed type baked in as its
+     `tournamentSlug`, so a saved type change invalidates it: the panel would
+     go on offering a preview whose upload the API now rejects as a slug
+     mismatch, under a label already showing the new type. Keying on the type
+     drops that preview along with the id it was fetched for. -->
+{#key currentType}
+  <SheetImportPanel tournamentId={tournament.id} tournamentType={currentType} />
+{/key}
