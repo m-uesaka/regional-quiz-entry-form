@@ -21,6 +21,12 @@ bun run test:e2e
 
 Supabase は起動しません(Docker イメージの取得を毎回のテスト実行に巻き込まないため)。起動していない場合は `support/seed.ts` が起動コマンドを添えて落ちます。
 
+### ローカルスタックは Postgres と Data API だけ
+
+`supabase/config.toml` で **Auth (GoTrue) / Storage / Realtime を `enabled = false`** にしてあります。本プロジェクトはいずれも使っておらず(セッションはバックエンド自前の HS256 JWT、ファイルアップロードなし、realtime チャンネルなし)、有効にしたままだとコンテナを起動しなくても CLI がスキーマ用マイグレーションのためにイメージを取得してしまい、CI の `supabase start` が約 40 秒延びるためです。
+
+そのため `bun run db:start` で立ち上がるのは Postgres / Kong / PostgREST の 3 つだけです。Studio(`http://127.0.0.1:54323`)は起動しますが、Authentication・Storage のページは対応するサービスが居ないためエラーになります。これらの機能を使う機能を実装することになったら、`supabase/config.toml` で該当サービスを `enabled = true` に戻してください(`.github/workflows/ci.yml` の `-x` にはこの 3 つを入れていないので、CI 側は自動的に追随します)。
+
 ブラウザは起動しないので `playwright install` は不要です(下の「現状は API レベル」を参照)。
 
 ### 環境変数
