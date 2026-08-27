@@ -48,7 +48,10 @@ export const regulationsRoute = new Hono<Env>().get(
       .order('display_order', {ascending: true})
       .returns<RegulationRow[]>();
     if (error) {
-      return c.json({error: error.message}, 500);
+      // Anonymously reachable, so the raw Supabase message stays in the
+      // log rather than in the response.
+      console.error('failed to read regulations', error);
+      return c.json({error: 'internal server error'}, 500);
     }
     return c.json(data.map(rowToRegulation));
   },

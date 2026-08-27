@@ -38,7 +38,11 @@ export const formDefinitionsRoute = new Hono<StaffEnv>()
         .order('display_order', {ascending: true})
         .returns<FormFieldDefRow[]>();
       if (error) {
-        return c.json({error: error.message}, 500);
+        // Anonymously reachable, so the raw Supabase message stays in the
+        // log rather than in the response — the same rule the PUT below
+        // applies to its own unexpected failures.
+        console.error('failed to read form field defs', error);
+        return c.json({error: 'internal server error'}, 500);
       }
       return c.json(data.map(toFormFieldDef));
     },
