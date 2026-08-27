@@ -2,7 +2,7 @@ import {error, fail, redirect} from '@sveltejs/kit';
 import {
   EDITABLE_ENTRY_STATUSES,
   EntryEditInputSchema,
-  findCustomFieldValuesError,
+  findCustomFieldValuesErrors,
   isWithinEntryPeriod,
 } from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
@@ -99,35 +99,33 @@ export const actions = {
       customFieldValues: readCustomFieldValues(formData, formFieldDefs),
     };
 
-    // The API checks these too, but it answers in identifiers that name no
-    // field the page can point at, so the same rule is applied here to get
-    // the refusal onto the control that caused it. It is also the only
-    // check standing behind a required checkbox group, which carries no
-    // `required` until the client bundle has taken the form over (#95).
-    const customFieldValuesError = findCustomFieldValuesError(
+    const parsed = EntryEditInputSchema.safeParse({
+      ...values,
+      freeText: freeText === '' ? undefined : freeText,
+    });
+
+    // The API checks the custom fields too, but it answers in identifiers
+    // that name no field the page can point at, so the same rule is applied
+    // here to get the refusal onto the control that caused it. It is also
+    // the only check standing behind a required checkbox group, which
+    // carries no `required` until the client bundle has taken the form over
+    // (#95).
+    const customFieldValuesErrors = findCustomFieldValuesErrors(
       formFieldDefs,
       values.customFieldValues,
     );
-    if (customFieldValuesError) {
+
+    // Both checks are reported together rather than the custom fields
+    // short-circuiting the schema, so every rejected field is marked in one
+    // round trip instead of one per submission.
+    if (!parsed.success || customFieldValuesErrors.length > 0) {
       const fieldErrors: EditFieldErrors = customFieldErrors(
-        customFieldValuesError,
+        customFieldValuesErrors,
         formFieldDefs,
       );
       return fail(400, {
         error: '入力内容を確認してください',
         fieldErrors,
-        values,
-      });
-    }
-
-    const parsed = EntryEditInputSchema.safeParse({
-      ...values,
-      freeText: freeText === '' ? undefined : freeText,
-    });
-    if (!parsed.success) {
-      return fail(400, {
-        error: '入力内容を確認してください',
-        fieldErrors: NO_FIELD_ERRORS,
         values,
       });
     }

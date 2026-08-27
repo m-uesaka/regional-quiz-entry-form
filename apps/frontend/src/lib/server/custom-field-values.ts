@@ -67,25 +67,30 @@ const CUSTOM_FIELD_ERROR_MESSAGES: Record<
 };
 
 /**
- * Turns a rejected custom field answer into the per-field messages a form
- * page renders, keyed by the namespaced control name the answer was
+ * Turns rejected custom field answers into the per-field messages a form
+ * page renders, keyed by the namespaced control name each answer was
  * submitted under — the same keys the form's own fields use, so a custom
  * field keyed `name` can't overwrite the real name field's message.
  *
  * A rejection naming a key the tournament doesn't define has no control to
  * point at, so it produces no per-field message and is left to the
  * form-level one.
- * @param error The rejection `findCustomFieldValuesError()` returned.
+ * @param errors The rejections `findCustomFieldValuesErrors()` returned.
  * @param fieldDefs The tournament's custom form field definitions.
  */
 export function customFieldErrors(
-  error: CustomFieldValuesError,
+  errors: CustomFieldValuesError[],
   fieldDefs: FormFieldDef[],
 ): Record<string, string[]> {
-  const fieldDef = fieldDefs.find(def => def.fieldKey === error.fieldKey);
-  if (!fieldDef) {
-    return {};
+  const messages: Record<string, string[]> = {};
+  for (const error of errors) {
+    const fieldDef = fieldDefs.find(def => def.fieldKey === error.fieldKey);
+    if (!fieldDef) {
+      continue;
+    }
+    messages[customFieldName(fieldDef.fieldKey)] = [
+      CUSTOM_FIELD_ERROR_MESSAGES[error.reason](fieldDef.label),
+    ];
   }
-  const message = CUSTOM_FIELD_ERROR_MESSAGES[error.reason](fieldDef.label);
-  return {[customFieldName(fieldDef.fieldKey)]: [message]};
+  return messages;
 }

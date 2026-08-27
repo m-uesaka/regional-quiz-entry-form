@@ -1,6 +1,9 @@
 import {describe, expect, it} from 'bun:test';
 import type {FormFieldDef} from '../schemas/form-definition';
-import {findCustomFieldValuesError} from './custom-field-values';
+import {
+  findCustomFieldValuesError,
+  findCustomFieldValuesErrors,
+} from './custom-field-values';
 
 const FIELD_DEFS: FormFieldDef[] = [
   {
@@ -162,5 +165,40 @@ describe('findCustomFieldValuesError', () => {
     });
 
     expect(error).toBeNull();
+  });
+});
+
+describe('findCustomFieldValuesErrors', () => {
+  it('reports no rejection for answers matching the field definitions', () => {
+    expect(findCustomFieldValuesErrors(FIELD_DEFS, VALID_VALUES)).toEqual([]);
+  });
+
+  it('reports every rejected field, not just the first', () => {
+    // A form page marks each control that caused one, so a participant can
+    // fix them all in a single pass.
+    const errors = findCustomFieldValuesErrors(FIELD_DEFS, {
+      injected: 'x',
+      allergies: ['寿司'],
+    });
+
+    expect(errors).toMatchObject([
+      {reason: 'unknown-field', fieldKey: 'injected'},
+      {reason: 'required', fieldKey: 't_shirt_size'},
+      {reason: 'unknown-option', fieldKey: 'allergies'},
+      {reason: 'required', fieldKey: 'agree_to_rules'},
+    ]);
+  });
+
+  it('reports one rejection per field, since a control shows one message', () => {
+    // `agree_to_rules` is both the wrong shape and empty; only the first
+    // reason is worth wording.
+    const errors = findCustomFieldValuesErrors(FIELD_DEFS, {
+      ...VALID_VALUES,
+      agree_to_rules: '',
+    });
+
+    expect(errors).toMatchObject([
+      {reason: 'expects-list', fieldKey: 'agree_to_rules'},
+    ]);
   });
 });

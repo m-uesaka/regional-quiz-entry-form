@@ -242,6 +242,25 @@ describe('mypage entry edit form action', () => {
     expect(log.patchBodies).toEqual([]);
   });
 
+  it('names every required custom field left blank in one answer', async () => {
+    const log: FetchLog = {patchBodies: []};
+    const formData = validFormData();
+    formData.delete('custom.t_shirt_size');
+    formData.delete('custom.agree_to_rules');
+    const event = buildActionEvent(fakeFetch({}, log), formData);
+
+    await expect(actions.default(event)).resolves.toMatchObject({
+      status: 400,
+      data: {
+        fieldErrors: {
+          'custom.t_shirt_size': ['「Tシャツサイズ」は必須です'],
+          'custom.agree_to_rules': ['「規約に同意する」は必須です'],
+        },
+      },
+    });
+    expect(log.patchBodies).toEqual([]);
+  });
+
   it('fails with 400 and keeps the submitted values when a required field is empty', async () => {
     const formData = validFormData();
     formData.set('displayName', '');

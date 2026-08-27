@@ -53,7 +53,7 @@
   // The server-rendered HTML therefore carries no `required` on these
   // boxes at all, and the constraint is installed only once this effect
   // has run; the "at least one" rule is enforced for everyone by
-  // `findCustomFieldValuesError()` in the form action either way, so an
+  // `findCustomFieldValuesErrors()` in the form action either way, so an
   // early submission is answered with that message rather than dropped.
   //
   // Only the multi-option group needs this: a lone boolean checkbox and a

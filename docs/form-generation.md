@@ -232,9 +232,11 @@ required={hydrated && field.required && !hasCheckboxSelection}
 - 単独ブールチェックボックス(`options` が**省略されているか空配列**の `checkbox`)は、「自分のキー1つだけを選択肢に持つ」ものとして照合されます。つまり `[field.key]` か `[]` 以外は弾かれます。
 - `checkbox` にスカラー値が来た場合は、選択肢の照合自体は通ってしまうものの弾いています。保存できてしまうと、エントリーを開き直したときに描画側(配列しか見ない)が選択を認識できず、回答が黙って消えたように見えるためです。
 
-**エントリーフォームと編集フォームの form action も、API を叩く前に同じ `findCustomFieldValuesError()` を通します。** 目的は2つあります。1つは、API の英語識別子ではどの項目が弾かれたか画面から分からないので、`fieldErrors` に該当コントロール名で日本語メッセージを積むこと。もう1つは、**必須チェックボックス群にとってはこれが唯一の検証だから**です(前述のとおり `required` はハイドレーション後にしか付きません)。キーは送信時と同じ名前空間付きコントロール名(`custom.{key}`)なので、`name` のようなキーの項目がフォーム本体の氏名欄のメッセージを上書きすることはありません。
+**エントリーフォームと編集フォームの form action も、API を叩く前に同じ照合を通します**(こちらは弾かれた項目を全部返す `findCustomFieldValuesErrors()` を使います)。目的は2つあります。1つは、API の英語識別子ではどの項目が弾かれたか画面から分からないので、`fieldErrors` に該当コントロール名で日本語メッセージを積むこと。もう1つは、**必須チェックボックス群にとってはこれが唯一の検証だから**です(前述のとおり `required` はハイドレーション後にしか付きません)。キーは送信時と同じ名前空間付きコントロール名(`custom.{key}`)なので、`name` のようなキーの項目がフォーム本体の氏名欄のメッセージを上書きすることはありません。
 
-`EntryInputSchema` / `EntryEditInputSchema` の `z.record()` は形(`Record<string, string | string[]>`)しか見ないため、大会のフォーム定義との照合はこの関数が担っています。新しい入力形式を足すときに `findCustomFieldValuesError()` の更新を忘れると、その形式だけ素通りする点に注意してください。
+この照合は Zod スキーマの検証を短絡させず、**両方の結果をまとめて1回で返します**。ブラウザ側の検証が一切効かない(ハイドレーション前・JS 無効の)送信こそこの照合の対象なので、1項目ずつ突き返すと往復のたびにエラーが1つずつしか分かりません。エントリーフォームはパスワード2欄を再表示しない方針なので、往復のたびにパスワードの打ち直しを強いることにもなります。
+
+`EntryInputSchema` / `EntryEditInputSchema` の `z.record()` は形(`Record<string, string | string[]>`)しか見ないため、大会のフォーム定義との照合はこの関数が担っています。新しい入力形式を足すときに `findFieldError()`(`findCustomFieldValuesError()` / `findCustomFieldValuesErrors()` の中身)の更新を忘れると、その形式だけ素通りする点に注意してください。
 
 `createEntry()` はこの照合をレギュレーション検証の直後、participant の検索・作成より**前**に行います。フォームからは生成し得ない回答を弾くついでにアカウントだけが作られる、という副作用を残さないためです。
 
@@ -290,7 +292,7 @@ flowchart LR
    - `FormFieldTypeSchema` の enum に値を足す。
    - `FormFieldDefYamlSchema` の discriminated union にバリアントを足し、`options` の要否を決める。
    - `toFormFieldDefYaml()` に、必要なら `radio` と同様の特別扱いを足す。
-3. `packages/shared/src/logic/custom-field-values.ts` の `findCustomFieldValuesError()` に、値の形(配列かスカラーか)と選択肢照合の要否を追加する。
+3. `packages/shared/src/logic/custom-field-values.ts` の `findFieldError()` に、値の形(配列かスカラーか)と選択肢照合の要否を追加する。
 4. `apps/frontend/src/lib/components/DynamicFormField.svelte` に描画分岐を追加する。
 5. スプレッドシート取り込みを使う場合は、`apps/backend/src/lib/sheet-to-form-definition.ts` の `TYPE_LABELS` に日本語ラベルを追加し、スプレッドシートのテンプレートのプルダウンも更新する。
 

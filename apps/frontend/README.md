@@ -89,8 +89,12 @@ submit the form at all. See #95.
 So that `required` is never rendered on the server: `hydrated` starts `false`
 and an `$effect` turns it on, which puts the constraint in place only once the
 form is live. What holds for everyone instead is the form action, which runs
-the shared `findCustomFieldValuesError()` before it calls the API and files the
-refusal under the offending control's own name.
+the shared `findCustomFieldValuesErrors()` before it calls the API and files
+each refusal under the offending control's own name. It reports the schema's
+complaints and the custom fields' together, so a visitor who gets no
+browser-side validation at all still learns everything wrong with a submission
+in one round trip — which matters because the entry form never echoes the two
+password fields back, and so makes them retype both on every failed attempt.
 
 A boolean checkbox and a `radio` group keep their plain `required`: their rule
 is one the browser already expresses, so it survives without a script.
