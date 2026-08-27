@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import type {HttpError} from '@sveltejs/kit';
+import type {HttpError, Redirect} from '@sveltejs/kit';
 import type {Entry, StaffClaims, Tournament} from '@regional-quiz/shared';
 import {load} from './+page.server';
 
@@ -68,26 +68,41 @@ function buildEvent(options: {
   staff: StaffClaims | null;
   tournamentSlug?: string;
 }): Parameters<typeof load>[0] {
+  const tournamentSlug = options.tournamentSlug ?? 'saikyoi';
   return {
-    params: {
-      regionSlug: 'tokyo',
-      tournamentSlug: options.tournamentSlug ?? 'saikyoi',
-    },
+    params: {regionSlug: 'tokyo', tournamentSlug},
     fetch: options.fetch,
     locals: {staff: options.staff},
+    url: new URL(`http://localhost/staff/tokyo/${tournamentSlug}/entries`),
   } as Parameters<typeof load>[0];
 }
 
+const LOGIN_REDIRECT =
+  '/staff/login?redirectTo=%2Fstaff%2Ftokyo%2Fsaikyoi%2Fentries';
+
 describe('staff entries +page.server load', () => {
-  it('throws 401 when there is no staff session', async () => {
+  it('redirects to the login screen when there is no staff session', async () => {
     const event = buildEvent({
       fetch: fakeFetch({tournament: TOURNAMENT, entries: ENTRIES}),
       staff: null,
     });
 
     await expect(load(event)).rejects.toMatchObject({
-      status: 401,
-    } satisfies Partial<HttpError>);
+      status: 303,
+      location: LOGIN_REDIRECT,
+    } satisfies Partial<Redirect>);
+  });
+
+  it('redirects to the login screen when the session expired before the API call', async () => {
+    const event = buildEvent({
+      fetch: fakeFetch({tournament: TOURNAMENT, entriesStatus: 401}),
+      staff: GENERAL_STAFF,
+    });
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 303,
+      location: LOGIN_REDIRECT,
+    } satisfies Partial<Redirect>);
   });
 
   it('returns the full entry list for authorized staff', async () => {

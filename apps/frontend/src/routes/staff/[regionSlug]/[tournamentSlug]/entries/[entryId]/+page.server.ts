@@ -1,11 +1,12 @@
-import {error} from '@sveltejs/kit';
+import {error, redirect} from '@sveltejs/kit';
 import {TournamentTypeSchema} from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
+import {staffLoginPath} from '$lib/server/staff-login';
 import type {PageServerLoad} from './$types';
 
-export const load: PageServerLoad = async ({params, fetch, locals}) => {
+export const load: PageServerLoad = async ({params, fetch, locals, url}) => {
   if (!locals.staff) {
-    throw error(401, 'ログインが必要です');
+    redirect(303, staffLoginPath(url));
   }
 
   // Same slug-narrowing rationale as the list route's `load`: the RPC
@@ -38,6 +39,11 @@ export const load: PageServerLoad = async ({params, fetch, locals}) => {
     param: {entryId: params.entryId},
   });
   if (!res.ok) {
+    // The claims check above cannot rule this out: the JWT may expire between
+    // `hooks.server.ts` parsing it and this request reaching the backend.
+    if (res.status === 401) {
+      redirect(303, staffLoginPath(url));
+    }
     if (res.status === 404) {
       throw error(404, 'エントリーが見つかりません');
     }
