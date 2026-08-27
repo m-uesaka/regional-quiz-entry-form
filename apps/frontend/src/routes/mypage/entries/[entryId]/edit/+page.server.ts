@@ -3,42 +3,10 @@ import {
   EDITABLE_ENTRY_STATUSES,
   EntryEditInputSchema,
   isWithinEntryPeriod,
-  type FormFieldDef,
 } from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
+import {readCustomFieldValues} from '$lib/server/custom-field-values';
 import type {Actions, PageServerLoad} from './$types';
-
-/**
- * Rebuilds the `customFieldValues` map from the submitted form, driven by
- * the tournament's own field definitions rather than by whatever keys the
- * request happens to carry.
- *
- * Checkbox fields are read with `getAll()` since a multi-option group
- * submits one value per checked box; a plain boolean checkbox (no options)
- * submits the browser's default `"on"`, which is normalized to the
- * `[fieldKey]` / `[]` representation `DynamicFormField.svelte` uses.
- * @param formData The submitted form body.
- * @param fieldDefs The tournament's custom form field definitions.
- */
-function readCustomFieldValues(
-  formData: FormData,
-  fieldDefs: FormFieldDef[],
-): Record<string, string | string[]> {
-  const values: Record<string, string | string[]> = {};
-  for (const fieldDef of fieldDefs) {
-    if (fieldDef.fieldType !== 'checkbox') {
-      values[fieldDef.fieldKey] = String(formData.get(fieldDef.fieldKey) ?? '');
-      continue;
-    }
-    const checked = formData.getAll(fieldDef.fieldKey).map(String);
-    if (fieldDef.options && fieldDef.options.length > 0) {
-      values[fieldDef.fieldKey] = checked;
-    } else {
-      values[fieldDef.fieldKey] = checked.length > 0 ? [fieldDef.fieldKey] : [];
-    }
-  }
-  return values;
-}
 
 /**
  * Loads the participant's own entry, applying the same editability rule as
