@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import type {HttpError} from '@sveltejs/kit';
+import type {HttpError, Redirect} from '@sveltejs/kit';
 import type {MypageEntry} from '@regional-quiz/shared';
 import {actions, load} from './+page.server';
 
@@ -73,12 +73,13 @@ describe('mypage +page.server load', () => {
     await expect(load(event)).resolves.toEqual({entries: ENTRIES});
   });
 
-  it('throws 401 when not logged in', async () => {
+  it('redirects to the login page when not logged in', async () => {
     const event = buildEvent(fakeFetch({status: 401}));
 
     await expect(load(event)).rejects.toMatchObject({
-      status: 401,
-    } satisfies Partial<HttpError>);
+      status: 303,
+      location: '/mypage/login',
+    } satisfies Partial<Redirect>);
   });
 
   it('throws 502 when the entries request fails', async () => {
@@ -123,10 +124,13 @@ describe('mypage +page.server cancel action', () => {
     expect(called).toBe(false);
   });
 
-  it('throws 401 when not logged in', async () => {
+  it('redirects to the login page when not logged in', async () => {
     await expect(
       actions.cancel(buildCancelEvent(fakeDeleteFetch(401))),
-    ).rejects.toMatchObject({status: 401} satisfies Partial<HttpError>);
+    ).rejects.toMatchObject({
+      status: 303,
+      location: '/mypage/login',
+    } satisfies Partial<Redirect>);
   });
 
   it('fails with 404 when the entry is gone', async () => {

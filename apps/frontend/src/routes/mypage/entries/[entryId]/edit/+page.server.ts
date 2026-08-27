@@ -52,7 +52,9 @@ export const load: PageServerLoad = async ({params, fetch}) => {
   });
   if (!res.ok) {
     if (res.status === 401) {
-      throw error(401, 'ログインが必要です');
+      // No session (or an expired one): the participant is sent to the login
+      // form rather than shown an error they can do nothing about.
+      throw redirect(303, '/mypage/login');
     }
     if (res.status === 404) {
       throw error(404, 'エントリーが見つかりません');
@@ -90,7 +92,8 @@ export const actions = {
     });
     if (!detailRes.ok) {
       if (detailRes.status === 401) {
-        throw error(401, 'ログインが必要です');
+        // The session can expire between the page load and this submission.
+        throw redirect(303, '/mypage/login');
       }
       if (detailRes.status === 404) {
         throw error(404, 'エントリーが見つかりません');

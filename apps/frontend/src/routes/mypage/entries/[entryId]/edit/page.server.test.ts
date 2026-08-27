@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import type {HttpError} from '@sveltejs/kit';
+import type {HttpError, Redirect} from '@sveltejs/kit';
 import type {MypageEntryDetail} from '@regional-quiz/shared';
 import {actions, load} from './+page.server';
 
@@ -115,12 +115,13 @@ describe('mypage entry edit +page.server load', () => {
     await expect(load(event)).resolves.toEqual({entry: ENTRY});
   });
 
-  it('throws 401 when not logged in', async () => {
+  it('redirects to the login page when not logged in', async () => {
     const event = buildLoadEvent(fakeFetch({detailStatus: 401}));
 
     await expect(load(event)).rejects.toMatchObject({
-      status: 401,
-    } satisfies Partial<HttpError>);
+      status: 303,
+      location: '/mypage/login',
+    } satisfies Partial<Redirect>);
   });
 
   it("throws 404 when the entry is not the participant's own", async () => {
@@ -213,6 +214,18 @@ describe('mypage entry edit form action', () => {
         },
       },
     });
+  });
+
+  it('redirects to the login page when the session expired', async () => {
+    const event = buildActionEvent(
+      fakeFetch({detailStatus: 401}),
+      validFormData(),
+    );
+
+    await expect(actions.default(event)).rejects.toMatchObject({
+      status: 303,
+      location: '/mypage/login',
+    } satisfies Partial<Redirect>);
   });
 
   it('fails with 400 when the backend rejects the custom field answers', async () => {

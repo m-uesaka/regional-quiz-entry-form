@@ -1,4 +1,4 @@
-import {error, fail} from '@sveltejs/kit';
+import {error, fail, redirect} from '@sveltejs/kit';
 import {MypageEntrySchema} from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
 import type {Actions, PageServerLoad} from './$types';
@@ -8,7 +8,9 @@ export const load: PageServerLoad = async ({fetch}) => {
   const res = await api.api.mypage.entries.$get();
   if (!res.ok) {
     if (res.status === 401) {
-      throw error(401, 'ログインが必要です');
+      // No session (or an expired one): the participant is sent to the login
+      // form rather than shown an error they can do nothing about.
+      throw redirect(303, '/mypage/login');
     }
     throw error(502, 'マイページ情報の取得に失敗しました');
   }
@@ -37,7 +39,8 @@ export const actions = {
     });
     if (!res.ok) {
       if (res.status === 401) {
-        throw error(401, 'ログインが必要です');
+        // The session can expire between the page load and this submission.
+        throw redirect(303, '/mypage/login');
       }
       if (res.status === 404) {
         return fail(404, {error: 'エントリーが見つかりません'});
