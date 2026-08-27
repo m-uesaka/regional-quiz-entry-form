@@ -18,7 +18,8 @@
 	"dependencies": {
 		"@regional-quiz/backend": "workspace:*",
 		"@regional-quiz/shared": "workspace:*",
-		"hono": "^4.6.0"
+		"hono": "^4.6.0",
+		"set-cookie-parser": "^3.1.2"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-cloudflare": "^7.2.8",

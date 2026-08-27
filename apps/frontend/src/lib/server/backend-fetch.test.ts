@@ -1,5 +1,6 @@
 import {describe, expect, it} from 'vitest';
-import {rewriteApiRequest} from './backend-fetch';
+import type {Cookies} from '@sveltejs/kit';
+import {forwardBackendCookies, rewriteApiRequest} from './backend-fetch';
 
 const FRONTEND_URL = new URL('https://entry.example/staff/dashboard');
 const BACKEND_URL = 'https://backend.workers.example';
@@ -102,5 +103,112 @@ describe('rewriteApiRequest', () => {
         backendUrl: '/api',
       }),
     ).toThrow(/not an absolute URL/);
+  });
+});
+
+interface RecordedCookie {
+  name: string;
+  value: string;
+  options: Parameters<Cookies['set']>[2];
+}
+
+/**
+ * Builds a stand-in for `event.cookies` that records what was set on it.
+ * @param recorded The array every `set()` call is appended to.
+ */
+function fakeCookies(recorded: RecordedCookie[]): Cookies {
+  return {
+    set: (
+      name: string,
+      value: string,
+      options: Parameters<Cookies['set']>[2],
+    ) => recorded.push({name, value, options}),
+  } as unknown as Cookies;
+}
+
+/** Builds a response carrying the given `Set-Cookie` headers. */
+function responseWithCookies(...setCookies: string[]): Response {
+  const headers = new Headers();
+  for (const setCookie of setCookies) headers.append('set-cookie', setCookie);
+  return new Response(null, {headers});
+}
+
+const SESSION_COOKIE =
+  'participant_session=eyJhbG.eyJzdWI.c2ln; Max-Age=604800; Path=/; ' +
+  'HttpOnly; Secure; SameSite=Lax';
+
+describe('forwardBackendCookies', () => {
+  it("copies the backend's session cookie with its attributes", () => {
+    const recorded: RecordedCookie[] = [];
+
+    forwardBackendCookies(
+      responseWithCookies(SESSION_COOKIE),
+      fakeCookies(recorded),
+    );
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].name).toBe('participant_session');
+    expect(recorded[0].value).toBe('eyJhbG.eyJzdWI.c2ln');
+    expect(recorded[0].options).toMatchObject({
+      maxAge: 604800,
+      path: '/',
+      httpOnly: true,
+      secure: true,
+      sameSite: 'lax',
+    });
+  });
+
+  it('leaves the value untouched rather than encoding it a second time', () => {
+    const recorded: RecordedCookie[] = [];
+
+    forwardBackendCookies(
+      responseWithCookies('token=a%2Bb; Path=/'),
+      fakeCookies(recorded),
+    );
+
+    expect(recorded[0].value).toBe('a%2Bb');
+    expect(recorded[0].options?.encode?.('a%2Bb')).toBe('a%2Bb');
+  });
+
+  it('copies every cookie when the backend sets more than one', () => {
+    const recorded: RecordedCookie[] = [];
+
+    forwardBackendCookies(
+      responseWithCookies('first=1; Path=/', 'second=2; Path=/mypage'),
+      fakeCookies(recorded),
+    );
+
+    expect(recorded.map(cookie => cookie.name)).toEqual(['first', 'second']);
+    expect(recorded[1].options).toMatchObject({path: '/mypage'});
+  });
+
+  it('falls back to the widest path when the cookie carries none', () => {
+    const recorded: RecordedCookie[] = [];
+
+    forwardBackendCookies(
+      responseWithCookies('pathless=1'),
+      fakeCookies(recorded),
+    );
+
+    expect(recorded[0].options).toMatchObject({path: '/'});
+  });
+
+  it('drops a SameSite value that is not one of the three allowed ones', () => {
+    const recorded: RecordedCookie[] = [];
+
+    forwardBackendCookies(
+      responseWithCookies('odd=1; Path=/; SameSite=Whenever'),
+      fakeCookies(recorded),
+    );
+
+    expect(recorded[0].options?.sameSite).toBeUndefined();
+  });
+
+  it('sets nothing when the response carries no cookies', () => {
+    const recorded: RecordedCookie[] = [];
+
+    forwardBackendCookies(new Response(null), fakeCookies(recorded));
+
+    expect(recorded).toEqual([]);
   });
 });

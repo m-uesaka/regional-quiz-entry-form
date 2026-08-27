@@ -1,3 +1,6 @@
+import {parseSetCookie} from 'set-cookie-parser';
+import type {Cookies} from '@sveltejs/kit';
+
 // Mirrors `basePath('/api')` in `apps/backend/src/index.ts`: every URL the
 // `hono/client` RPC client builds starts with this.
 const API_PATH = '/api';
@@ -65,4 +68,75 @@ function backendOrigin(backendUrl: string | undefined): URL {
     // frontend origin and silently 404 again.
     throw new Error(`BACKEND_URL is not an absolute URL: ${backendUrl}`);
   }
+}
+
+/**
+ * Copies the `Set-Cookie` headers of a backend response into SvelteKit's
+ * cookie jar, so that they reach the browser on the page response being
+ * built.
+ *
+ * SvelteKit does this on its own for `event.fetch` calls it resolves
+ * internally, but not for ones that leave the origin — and
+ * `rewriteApiRequest` sends every `/api/*` call to the backend Worker's
+ * origin. Without this, the `participant_session` cookie
+ * `POST /api/auth/participant/login` answers with would be dropped on the
+ * floor and the participant would stay logged out.
+ *
+ * The parsing is delegated to `set-cookie-parser` — the same library
+ * SvelteKit itself uses for this exact job — rather than hand-rolled,
+ * because a `Set-Cookie` value is only comma-separable by looking at what
+ * each attribute means.
+ *
+ * @param response The response the backend answered with.
+ * @param cookies `event.cookies`, i.e. the jar applied to the response this
+ *     request is serving.
+ */
+export function forwardBackendCookies(
+  response: Response,
+  cookies: Cookies,
+): void {
+  const header = response.headers.get('set-cookie');
+  if (!header) return;
+
+  for (const {name, value, sameSite, ...attributes} of parseSetCookie(header, {
+    decodeValues: false,
+  })) {
+    cookies.set(name, value, {
+      ...attributes,
+      // `Cookies.set` requires an explicit path. A `Set-Cookie` without one
+      // is scoped by the browser to the directory of the request that
+      // carried it, which isn't reconstructible here (the request went to
+      // the backend origin, the cookie is being set on this one), so the
+      // widest scope is used instead. Every cookie the backend sets carries
+      // `Path=/` anyway (see `apps/backend/src/routes/participant-auth.ts`).
+      path: attributes.path ?? '/',
+      sameSite: toSameSite(sameSite),
+      // The parsed value is taken verbatim: it was already encoded by
+      // whoever set it, and `Cookies.set` would otherwise encode it a second
+      // time.
+      encode: cookieValue => cookieValue,
+    });
+  }
+}
+
+/**
+ * Narrows a parsed `SameSite` attribute, which is a free-form string, to the
+ * values `Cookies.set` accepts.
+ *
+ * @param value The attribute as it appeared in the header, if at all.
+ * @return The lower-cased attribute, or `undefined` when it was absent or
+ *     unrecognized — in which case the browser applies its own default.
+ */
+function toSameSite(
+  value: string | undefined,
+): 'lax' | 'strict' | 'none' | undefined {
+  const normalized = value?.toLowerCase();
+  if (
+    normalized === 'lax' ||
+    normalized === 'strict' ||
+    normalized === 'none'
+  ) {
+    return normalized;
+  }
+  return undefined;
 }

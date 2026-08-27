@@ -121,11 +121,13 @@ if ('yaml' in body) {
 スタッフのログイン。成功時に `staff_session` Cookie を発行します。
 
 - リクエスト: `StaffLoginInputSchema` — `{email: string(email), password: string(min 1)}`
-- `200`: `{"ok": true, "role": "regional" | "general"}`
+- `200`: `StaffLoginResponseSchema` — `{"ok": true, "role": "regional" | "general", "regionSlug": string | null, "tournamentType": "saikyoi" | "shinjinou" | null}`
 - `401`: `{"error": "invalid credentials"}`
 - `500`: `{"error": "internal server error"}`
 
 該当アカウントが存在しない場合もダミーのハッシュに対して PBKDF2 を実行してから 401 を返します。これにより「メールアドレスが存在しない」場合と「パスワードが違う」場合の応答時間が揃い、タイミング差からのアカウント列挙を防ぎます。
+
+`regionSlug` / `tournamentType` は `regional` スタッフの担当範囲で、`general` スタッフでは両方 `null` です。スタッフ画面は `/staff/{regionSlug}/{tournamentType}/entries` のように**スラッグ**で引くため、JWT クレームが持つ `regionId` ではなく `regions` を join したスラッグを返しています。ログイン画面(`/staff/login`)はこれを見て、`general` を `/staff/dashboard` へ、`regional` を担当大会のエントリー一覧へリダイレクトします。
 
 ### `POST /api/auth/participant/login`
 

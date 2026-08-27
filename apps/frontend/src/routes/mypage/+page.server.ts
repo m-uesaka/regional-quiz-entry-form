@@ -1,14 +1,18 @@
 import {error, fail} from '@sveltejs/kit';
 import {MypageEntrySchema} from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
+import {redirectToParticipantLogin} from '$lib/server/participant-session';
 import type {Actions, PageServerLoad} from './$types';
 
-export const load: PageServerLoad = async ({fetch}) => {
+export const load: PageServerLoad = async ({cookies, fetch}) => {
   const api = createApiClient(fetch);
   const res = await api.api.mypage.entries.$get();
   if (!res.ok) {
     if (res.status === 401) {
-      throw error(401, 'ログインが必要です');
+      // No session (or one the API no longer honours): the participant is
+      // sent to the login form rather than shown an error they can do
+      // nothing about.
+      redirectToParticipantLogin(cookies);
     }
     throw error(502, 'マイページ情報の取得に失敗しました');
   }
@@ -17,7 +21,7 @@ export const load: PageServerLoad = async ({fetch}) => {
 };
 
 export const actions = {
-  cancel: async ({request, fetch}) => {
+  cancel: async ({cookies, request, fetch}) => {
     const formData = await request.formData();
     // The id travels in the body (one form per listed entry), so it's
     // validated against the same schema the API answers with rather than
@@ -37,7 +41,8 @@ export const actions = {
     });
     if (!res.ok) {
       if (res.status === 401) {
-        throw error(401, 'ログインが必要です');
+        // The session can die between the page load and this submission.
+        redirectToParticipantLogin(cookies);
       }
       if (res.status === 404) {
         return fail(404, {error: 'エントリーが見つかりません'});

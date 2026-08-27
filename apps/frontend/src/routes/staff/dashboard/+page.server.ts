@@ -1,10 +1,11 @@
-import {error} from '@sveltejs/kit';
+import {error, redirect} from '@sveltejs/kit';
 import {createApiClient} from '$lib/api';
+import {staffLoginPath} from '$lib/server/staff-login';
 import type {PageServerLoad} from './$types';
 
-export const load: PageServerLoad = async ({fetch, locals}) => {
+export const load: PageServerLoad = async ({fetch, locals, url}) => {
   if (!locals.staff) {
-    throw error(401, 'ログインが必要です');
+    redirect(303, staffLoginPath(url));
   }
   // The backend answers regional staff with a 403 anyway; checking the
   // claims already parsed by `hooks.server.ts` turns that into the same
@@ -19,7 +20,7 @@ export const load: PageServerLoad = async ({fetch, locals}) => {
     // The claims check above cannot rule this out: the JWT may expire between
     // `hooks.server.ts` parsing it and this request reaching the backend.
     if (res.status === 401) {
-      throw error(401, 'ログインが必要です');
+      redirect(303, staffLoginPath(url));
     }
     if (res.status === 403) {
       throw error(403, '全地域ダッシュボードは統括スタッフ専用です');

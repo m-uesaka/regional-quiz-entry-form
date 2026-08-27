@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import type {HttpError} from '@sveltejs/kit';
+import type {HttpError, Redirect} from '@sveltejs/kit';
 import type {
   DashboardTournamentSummary,
   StaffClaims,
@@ -52,16 +52,18 @@ function buildEvent(options: {
   return {
     fetch: options.fetch,
     locals: {staff: options.staff},
+    url: new URL('http://localhost/staff/dashboard'),
   } as Parameters<typeof load>[0];
 }
 
 describe('staff dashboard +page.server load', () => {
-  it('throws 401 when there is no staff session', async () => {
+  it('redirects to the login screen when there is no staff session', async () => {
     const event = buildEvent({fetch: fakeFetch(), staff: null});
 
     await expect(load(event)).rejects.toMatchObject({
-      status: 401,
-    } satisfies Partial<HttpError>);
+      status: 303,
+      location: '/staff/login?redirectTo=%2Fstaff%2Fdashboard',
+    } satisfies Partial<Redirect>);
   });
 
   it('throws 403 for regional staff without calling the API', async () => {
@@ -86,12 +88,13 @@ describe('staff dashboard +page.server load', () => {
     await expect(load(event)).resolves.toEqual({summaries: SUMMARIES});
   });
 
-  it('throws 401 when the session expired before the API call', async () => {
+  it('redirects to the login screen when the session expired before the API call', async () => {
     const event = buildEvent({fetch: fakeFetch(401), staff: GENERAL_STAFF});
 
     await expect(load(event)).rejects.toMatchObject({
-      status: 401,
-    } satisfies Partial<HttpError>);
+      status: 303,
+      location: '/staff/login?redirectTo=%2Fstaff%2Fdashboard',
+    } satisfies Partial<Redirect>);
   });
 
   it('throws 403 when the API rejects the session as out of scope', async () => {

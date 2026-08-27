@@ -6,6 +6,7 @@ import {
 } from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
 import {readCustomFieldValues} from '$lib/server/custom-field-values';
+import {redirectToParticipantLogin} from '$lib/server/participant-session';
 import type {Actions, PageServerLoad} from './$types';
 
 /**
@@ -13,14 +14,17 @@ import type {Actions, PageServerLoad} from './$types';
  * the API (`isEntryEditable`) so a directly opened URL cannot render a form
  * whose every save the backend would refuse.
  */
-export const load: PageServerLoad = async ({params, fetch}) => {
+export const load: PageServerLoad = async ({cookies, params, fetch}) => {
   const api = createApiClient(fetch);
   const res = await api.api.mypage.entries[':entryId'].$get({
     param: {entryId: params.entryId},
   });
   if (!res.ok) {
     if (res.status === 401) {
-      throw error(401, 'ログインが必要です');
+      // No session (or one the API no longer honours): the participant is
+      // sent to the login form rather than shown an error they can do
+      // nothing about.
+      redirectToParticipantLogin(cookies);
     }
     if (res.status === 404) {
       throw error(404, 'エントリーが見つかりません');
@@ -47,7 +51,7 @@ export const load: PageServerLoad = async ({params, fetch}) => {
 };
 
 export const actions = {
-  default: async ({params, request, fetch}) => {
+  default: async ({cookies, params, request, fetch}) => {
     const api = createApiClient(fetch);
 
     // The field definitions decide how the submitted body is interpreted,
@@ -58,7 +62,8 @@ export const actions = {
     });
     if (!detailRes.ok) {
       if (detailRes.status === 401) {
-        throw error(401, 'ログインが必要です');
+        // The session can die between the page load and this submission.
+        redirectToParticipantLogin(cookies);
       }
       if (detailRes.status === 404) {
         throw error(404, 'エントリーが見つかりません');
@@ -92,6 +97,10 @@ export const actions = {
       json: parsed.data,
     });
     if (!res.ok) {
+      if (res.status === 401) {
+        // The session can die between the two calls this action makes.
+        redirectToParticipantLogin(cookies);
+      }
       if (res.status === 400) {
         return fail(400, {error: '入力内容を確認してください', values});
       }

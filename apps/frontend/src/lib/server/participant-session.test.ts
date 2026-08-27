@@ -1,7 +1,12 @@
 import {describe, expect, it} from 'vitest';
 import {sign} from 'hono/jwt';
+import type {Cookies} from '@sveltejs/kit';
 import type {ParticipantClaims} from '@regional-quiz/shared';
-import {readParticipantClaims} from './participant-session';
+import {
+  clearParticipantSession,
+  readParticipantClaims,
+  redirectToParticipantLogin,
+} from './participant-session';
 
 const SESSION_SECRET = 'test-session-secret';
 const WRONG_SECRET = 'wrong-session-secret';
@@ -101,5 +106,44 @@ describe('readParticipantClaims', () => {
     await expect(
       readParticipantClaims(token, SESSION_SECRET),
     ).resolves.toBeNull();
+  });
+});
+
+interface DeletedCookie {
+  name: string;
+  options: Parameters<Cookies['delete']>[1];
+}
+
+/** Builds a stand-in for `event.cookies` that records what it deleted. */
+function fakeCookies(deleted: DeletedCookie[]): Cookies {
+  return {
+    delete: (name: string, options: Parameters<Cookies['delete']>[1]) =>
+      deleted.push({name, options}),
+  } as unknown as Cookies;
+}
+
+describe('clearParticipantSession', () => {
+  it('deletes the session cookie under the path the backend set it on', () => {
+    const deleted: DeletedCookie[] = [];
+
+    clearParticipantSession(fakeCookies(deleted));
+
+    expect(deleted).toEqual([
+      {name: 'participant_session', options: {path: '/'}},
+    ]);
+  });
+});
+
+describe('redirectToParticipantLogin', () => {
+  it('clears the refused session on the way to the login form', () => {
+    const deleted: DeletedCookie[] = [];
+
+    expect(() => redirectToParticipantLogin(fakeCookies(deleted))).toThrow(
+      expect.objectContaining({status: 303, location: '/mypage/login'}),
+    );
+    // A cookie left in place would be read as a session by
+    // `readParticipantClaims`, which cannot see that the API has stopped
+    // honouring it -- so the login page would send it straight back.
+    expect(deleted.map(cookie => cookie.name)).toEqual(['participant_session']);
   });
 });
