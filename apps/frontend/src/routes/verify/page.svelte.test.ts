@@ -34,6 +34,14 @@ describe('verify +page.svelte', () => {
     ).toBeInTheDocument();
   });
 
+  it('warns that the mypage guidance for an invalid token needs a login', () => {
+    renderPage('invalid');
+
+    expect(
+      screen.getByText(/まずはマイページ\(閲覧にはログインが必要です\)/),
+    ).toBeInTheDocument();
+  });
+
   it('always links to mypage', () => {
     renderPage('confirmed');
 
@@ -42,4 +50,17 @@ describe('verify +page.svelte', () => {
       '/mypage',
     );
   });
+
+  it.each(['confirmed', 'waitlisted', 'invalid'] as const)(
+    'warns that the mypage link leads through a login (%s)',
+    status => {
+      renderPage(status);
+
+      expect(
+        screen.getByText(
+          /マイページの閲覧にはログインが必要です。ログインしていない場合はログイン画面に移動します。/,
+        ),
+      ).toBeInTheDocument();
+    },
+  );
 });
