@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import type {HttpError} from '@sveltejs/kit';
+import type {HttpError, Redirect} from '@sveltejs/kit';
 import type {
   StaffClaims,
   StaffEntryDetail,
@@ -72,27 +72,49 @@ function buildEvent(options: {
   tournamentSlug?: string;
   entryId?: string;
 }): Parameters<typeof load>[0] {
+  const tournamentSlug = options.tournamentSlug ?? 'saikyoi';
+  const entryId = options.entryId ?? ENTRY.id;
   return {
-    params: {
-      regionSlug: 'tokyo',
-      tournamentSlug: options.tournamentSlug ?? 'saikyoi',
-      entryId: options.entryId ?? ENTRY.id,
-    },
+    params: {regionSlug: 'tokyo', tournamentSlug, entryId},
     fetch: options.fetch,
     locals: {staff: options.staff},
+    url: new URL(
+      `http://localhost/staff/tokyo/${tournamentSlug}/entries/${entryId}`,
+    ),
   } as Parameters<typeof load>[0];
 }
 
+const LOGIN_REDIRECT = `/staff/login?redirectTo=${encodeURIComponent(
+  `/staff/tokyo/saikyoi/entries/${ENTRY.id}`,
+)}`;
+
 describe('staff entry detail +page.server load', () => {
-  it('throws 401 when there is no staff session', async () => {
+  it('redirects to the login screen when there is no staff session', async () => {
     const event = buildEvent({
       fetch: fakeFetch({tournament: TOURNAMENT, entry: ENTRY}),
       staff: null,
     });
 
     await expect(load(event)).rejects.toMatchObject({
-      status: 401,
-    } satisfies Partial<HttpError>);
+      status: 303,
+      location: LOGIN_REDIRECT,
+    } satisfies Partial<Redirect>);
+  });
+
+  it('redirects to the login screen when the session expired before the API call', async () => {
+    const event = buildEvent({
+      fetch: fakeFetch({
+        tournament: TOURNAMENT,
+        entry: {error: 'unauthorized'} as unknown as StaffEntryDetail,
+        entryStatus: 401,
+      }),
+      staff: GENERAL_STAFF,
+    });
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 303,
+      location: LOGIN_REDIRECT,
+    } satisfies Partial<Redirect>);
   });
 
   it('returns the entry for authorized staff', async () => {

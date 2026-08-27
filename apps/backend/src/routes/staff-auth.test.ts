@@ -15,6 +15,7 @@ const ENV: Bindings = {
 
 const STAFF_ID = '33333333-3333-3333-3333-333333333333';
 const REGION_ID = '11111111-1111-1111-1111-111111111111';
+const REGION_SLUG = 'tokyo';
 
 function decodeJwtPayload(token: string): Record<string, unknown> {
   const payloadSegment = token.split('.')[1];
@@ -22,11 +23,43 @@ function decodeJwtPayload(token: string): Record<string, unknown> {
   return JSON.parse(atob(base64)) as Record<string, unknown>;
 }
 
+/** A `regional` staff row as the login query selects it. */
+function regionalStaffRow(passwordHash: string): Record<string, unknown> {
+  return {
+    id: STAFF_ID,
+    password_hash: passwordHash,
+    role: 'regional',
+    region_id: REGION_ID,
+    tournament_type: 'saikyoi',
+    regions: {slug: REGION_SLUG},
+  };
+}
+
 function mockStaffAccountFetch(row: Record<string, unknown> | null): void {
   globalThis.fetch = (() =>
     Promise.resolve(
       Response.json(row ? [row] : []),
     )) as unknown as typeof fetch;
+}
+
+/**
+ * Posts a login request for the mocked account.
+ * @param password The password to submit.
+ * @param email The address to submit.
+ */
+async function login(
+  password: string,
+  email = 'staff@example.com',
+): Promise<Response> {
+  return staffAuthRoute.request(
+    '/login',
+    {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({email, password}),
+    },
+    ENV,
+  );
 }
 
 describe('POST /login', () => {
@@ -37,26 +70,11 @@ describe('POST /login', () => {
   });
 
   it('issues a JWT cookie whose claims include role, regionId, and tournamentType', async () => {
-    mockStaffAccountFetch({
-      id: STAFF_ID,
-      password_hash: await hashPassword('correct-password'),
-      role: 'regional',
-      region_id: REGION_ID,
-      tournament_type: 'saikyoi',
-    });
-
-    const res = await staffAuthRoute.request(
-      '/login',
-      {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          email: 'staff@example.com',
-          password: 'correct-password',
-        }),
-      },
-      ENV,
+    mockStaffAccountFetch(
+      regionalStaffRow(await hashPassword('correct-password')),
     );
+
+    const res = await login('correct-password');
 
     expect(res.status).toBe(200);
 
@@ -73,27 +91,49 @@ describe('POST /login', () => {
     });
   });
 
-  it('returns 401 for a wrong password', async () => {
+  it("answers regional staff with their own tournament's region slug", async () => {
+    mockStaffAccountFetch(
+      regionalStaffRow(await hashPassword('correct-password')),
+    );
+
+    const res = await login('correct-password');
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as Record<string, unknown>).toEqual({
+      ok: true,
+      role: 'regional',
+      regionSlug: REGION_SLUG,
+      tournamentType: 'saikyoi',
+    });
+  });
+
+  it('answers general staff with a null region slug and tournament type', async () => {
     mockStaffAccountFetch({
       id: STAFF_ID,
       password_hash: await hashPassword('correct-password'),
-      role: 'regional',
-      region_id: REGION_ID,
-      tournament_type: 'saikyoi',
+      role: 'general',
+      region_id: null,
+      tournament_type: null,
+      regions: null,
     });
 
-    const res = await staffAuthRoute.request(
-      '/login',
-      {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          email: 'staff@example.com',
-          password: 'wrong-password',
-        }),
-      },
-      ENV,
+    const res = await login('correct-password');
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as Record<string, unknown>).toEqual({
+      ok: true,
+      role: 'general',
+      regionSlug: null,
+      tournamentType: null,
+    });
+  });
+
+  it('returns 401 for a wrong password', async () => {
+    mockStaffAccountFetch(
+      regionalStaffRow(await hashPassword('correct-password')),
     );
+
+    const res = await login('wrong-password');
 
     expect(res.status).toBe(401);
   });
@@ -101,18 +141,7 @@ describe('POST /login', () => {
   it('returns 401 when no staff account matches the email', async () => {
     mockStaffAccountFetch(null);
 
-    const res = await staffAuthRoute.request(
-      '/login',
-      {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          email: 'unknown@example.com',
-          password: 'anything',
-        }),
-      },
-      ENV,
-    );
+    const res = await login('anything', 'unknown@example.com');
 
     expect(res.status).toBe(401);
   });

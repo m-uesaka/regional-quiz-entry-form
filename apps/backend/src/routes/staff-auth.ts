@@ -5,6 +5,7 @@ import {setCookie} from 'hono/cookie';
 import {
   StaffLoginInputSchema,
   type StaffClaims,
+  type StaffLoginResponse,
   type StaffRole,
   type TournamentType,
 } from '@regional-quiz/shared';
@@ -25,6 +26,9 @@ interface StaffAccountRow {
   role: StaffRole;
   region_id: string | null;
   tournament_type: TournamentType | null;
+  // The joined `regions` row, null for `general` staff (who have no
+  // `region_id`). Only the slug is read: the staff screens are keyed by it.
+  regions: {slug: string} | null;
 }
 
 export const staffAuthRoute = new Hono<Env>().post(
@@ -35,7 +39,9 @@ export const staffAuthRoute = new Hono<Env>().post(
     const db = createDbClient(c.env);
     const {data: staff, error} = await db
       .from('staff_accounts')
-      .select('id, password_hash, role, region_id, tournament_type')
+      .select(
+        'id, password_hash, role, region_id, tournament_type, regions(slug)',
+      )
       .eq('email', email)
       .returns<StaffAccountRow[]>()
       .maybeSingle();
@@ -71,6 +77,15 @@ export const staffAuthRoute = new Hono<Env>().post(
       sameSite: 'Lax',
       maxAge: SESSION_TTL_SECONDS,
     });
-    return c.json({ok: true, role: staff.role});
+    // The scope travels back as a slug rather than the `regionId` the claims
+    // carry so that the login screen can build the entry-list URL of a
+    // regional account's own tournament without a second round trip.
+    const body: StaffLoginResponse = {
+      ok: true,
+      role: staff.role,
+      regionSlug: staff.regions?.slug ?? null,
+      tournamentType: staff.tournament_type,
+    };
+    return c.json(body);
   },
 );

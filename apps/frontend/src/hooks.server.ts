@@ -14,13 +14,22 @@ import {
 // `apps/backend/src/middleware/staff-auth.ts`.
 const STAFF_SESSION_COOKIE = 'staff_session';
 export const handle: Handle = async ({event, resolve}) => {
+  // `$env/dynamic/private` first, for the same reason `handleFetch` below
+  // reads `BACKEND_URL` from it: `event.platform` only exists on Cloudflare,
+  // so reading the secret from there alone left every session unrecognized
+  // under `vite dev` — and a `/staff/*` page that can't see the session it
+  // just issued redirects straight back to the login screen. The platform
+  // binding stays as a fallback so a deployment that only sets the secret as
+  // a Worker secret keeps working.
+  const sessionSecret =
+    env.SESSION_SECRET ?? event.platform?.env?.SESSION_SECRET;
   event.locals.staff = await readStaffClaims(
     event.cookies.get(STAFF_SESSION_COOKIE),
-    event.platform?.env?.SESSION_SECRET,
+    sessionSecret,
   );
   event.locals.participant = await readParticipantClaims(
     event.cookies.get(PARTICIPANT_SESSION_COOKIE),
-    event.platform?.env?.SESSION_SECRET,
+    sessionSecret,
   );
   return resolve(event);
 };
