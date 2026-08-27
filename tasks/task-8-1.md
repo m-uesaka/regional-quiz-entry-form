@@ -59,7 +59,7 @@ export async function openVerificationLink(
 }
 ```
 
-もう一点、当初バックエンドは `wrangler dev --local-protocol https` で **HTTPS** 起動していた。セッション Cookie は本番同様 `Secure` 付きで発行され、Playwright の API request context はそうした Cookie を `http://` に送り返さないため、`http://` だとアプリ側に無い理由で認証付きステップが全部 401 になっていたからである。#74 でセッションをブラウザが持つようになりこの理由は消え、逆に自己署名証明書だと SvelteKit のサーバ側 `fetch` が全て落ちるため、平文の HTTP に戻した。
+もう一点、当初バックエンドは `wrangler dev --local-protocol https` で **HTTPS** 起動していた。セッション Cookie は本番同様 `Secure` 付きで発行され、Playwright の API request context はそうした Cookie を `http://` に送り返さないため、`http://` だとアプリ側に無い理由で認証付きステップが全部 401 になっていたからである。#74 でセッションをブラウザが持つようになりこの理由は消え、逆に自己署名証明書だと SvelteKit のサーバ側 `fetch` が全て落ちるため、平文の HTTP に戻した。ただし `participant_session` は `Secure` を保ったままフロントエンドのオリジンに発行し直されるので、これが成立するのは `127.0.0.1`(Chromium が trustworthy origin とみなすアドレス)に限られる。詳細は [`apps/e2e/README.md`](../apps/e2e/README.md) の該当節を参照。
 
 #### テスト
 

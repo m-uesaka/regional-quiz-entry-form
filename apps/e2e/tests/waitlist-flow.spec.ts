@@ -23,9 +23,12 @@ test('a cancellation promotes the waitlisted entry behind it', async ({
   request,
 }) => {
   // The two participants hold different session cookies, so the second one
-  // needs a browser context of its own. `browser.newContext()` inherits
-  // nothing from the config, hence the explicit origin for its relative
-  // paths.
+  // needs a browser context of its own. `browser.newContext()` does not pick
+  // up the config's `use` options, hence the explicit origin for its
+  // relative paths. Artifacts are a different matter: the runner instruments
+  // contexts made from the `browser` fixture, so `use.trace` covers this one
+  // too and starting a trace by hand here fails with "Tracing has been
+  // already started".
   const waitlistedContext = await browser.newContext({baseURL: FRONTEND_URL});
   try {
     const waitlistedPage = await waitlistedContext.newPage();

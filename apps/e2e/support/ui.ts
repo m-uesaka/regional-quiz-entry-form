@@ -95,7 +95,10 @@ export function staffEntriesPath(tournament: TournamentFixture): string {
  *
  * `networkidle` stands in for a hydration signal because SvelteKit exposes
  * none, and under `vite dev` the module graph the client bundle is
- * assembled from is exactly what the page is still fetching.
+ * assembled from is exactly what the page is still fetching. It is a
+ * heuristic, not a guarantee: parsing and running those modules happens
+ * after the last response, so a loaded machine could still hydrate inside
+ * the idle window. `expectStillFilled()` is what catches that.
  * @param page The page to wait on.
  */
 async function waitForHydration(page: Page): Promise<void> {
@@ -104,17 +107,33 @@ async function waitForHydration(page: Page): Promise<void> {
 
 /**
  * Types into one field and checks that what was typed stayed there.
- *
- * The check is what keeps the hydration race described in
- * `waitForHydration()` legible: were the input ever lost again, this says so
- * at the field, instead of surfacing much later as a submit that did
- * nothing.
  * @param field The control to type into.
  * @param value The text to type.
  */
 async function fillField(field: Locator, value: string): Promise<void> {
   await field.fill(value);
   await expect(field).toHaveValue(value);
+}
+
+/**
+ * Re-checks a filled field just before the form is submitted.
+ *
+ * `fillField()`'s own check resolves as soon as the value is there, so it
+ * cannot see a hydration that lands afterwards — and `waitForHydration()`
+ * only makes that unlikely, not impossible. Hydration wipes every
+ * value-bound field on the form at once, so one field is enough to catch it.
+ *
+ * Without this the loss surfaces as the submit doing nothing (the emptied
+ * field is `required`) and the assertion after it timing out with nothing
+ * pointing at the cause.
+ * @param field The control to re-check.
+ * @param value The text that should still be in it.
+ */
+async function expectStillFilled(field: Locator, value: string): Promise<void> {
+  await expect(
+    field,
+    'the form was emptied before it could be submitted — see waitForHydration()',
+  ).toHaveValue(value);
 }
 
 /**
@@ -191,6 +210,10 @@ export async function submitEntryForm(
     await fillField(page.getByLabel('自由記述', {exact: true}), input.freeText);
   }
 
+  await expectStillFilled(
+    page.getByLabel('メールアドレス', {exact: true}),
+    participant.email,
+  );
   await page.getByRole('button', {name: 'エントリーする'}).click();
   await expect(page.getByRole('status')).toContainText(participant.email);
   return participant;
@@ -284,6 +307,10 @@ export async function loginParticipantThroughForm(
     page.getByLabel('パスワード', {exact: true}),
     participant.password,
   );
+  await expectStillFilled(
+    page.getByLabel('メールアドレス', {exact: true}),
+    participant.email,
+  );
   await page.getByRole('button', {name: 'ログイン'}).click();
   await expect(page).toHaveURL(MYPAGE_PATH);
 }
@@ -308,6 +335,7 @@ export async function loginStaffThroughForm(
 
   await fillField(page.getByLabel('メールアドレス'), staff.email);
   await fillField(page.getByLabel('パスワード'), staff.password);
+  await expectStillFilled(page.getByLabel('メールアドレス'), staff.email);
   await page.getByRole('button', {name: 'ログイン'}).click();
   await page.waitForURL(url => !url.pathname.startsWith(STAFF_LOGIN_PATH));
 }

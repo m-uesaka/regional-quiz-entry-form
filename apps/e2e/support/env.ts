@@ -43,14 +43,25 @@ export const MAIL_SINK_URL = `http://127.0.0.1:${MAIL_SINK_PORT}`;
 /** The port `vite dev` serves `apps/frontend` on for the test run. */
 export const FRONTEND_PORT = Number(process.env.E2E_FRONTEND_PORT ?? 5173);
 
-// Plain HTTP, unlike the backend: this is the origin the browser is pointed
-// at, and it is also what the backend builds the `/verify?token=...` link
-// in the confirmation mail from, so the two have to agree.
+// The origin the browser is pointed at, and also what the backend builds the
+// `/verify?token=...` link in the confirmation mail from, so the two have to
+// agree.
 //
-// The session cookies are re-issued by the frontend under its own origin
-// (see `forwardSetCookies()` in `apps/frontend/src/lib/server`), which drops
-// `Secure` when it is serving over HTTP, so they survive the hand-off that
-// `BACKEND_URL` needs HTTPS for.
+// It has to be a *loopback* address, not merely a plain-HTTP one. The two
+// session cookies reach the browser by different routes, and only one of
+// them drops `Secure`:
+//
+//   - `staff_session` goes through `forwardSetCookies()`
+//     (`apps/frontend/src/lib/server/backend-cookies.ts`), which decides
+//     `Secure` from the frontend's own protocol and so drops it here.
+//   - `participant_session` goes through `forwardBackendCookies()`
+//     (`.../backend-fetch.ts`, called from `handleFetch`), which copies the
+//     backend's attributes verbatim and so keeps `Secure`. It survives only
+//     because Chromium counts `127.0.0.1` as a trustworthy origin and takes
+//     a `Secure` cookie from it over plain HTTP.
+//
+// Serving this from a LAN address instead (`vite dev --host`) would
+// therefore leave participant login silently looping back to the form.
 export const FRONTEND_URL = `http://127.0.0.1:${FRONTEND_PORT}`;
 
 /** The HS256 key the backend signs session JWTs with during the run. */

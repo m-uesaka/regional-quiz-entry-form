@@ -68,7 +68,16 @@ API を直接叩いているのは2箇所だけです(`support/api.ts`)。
 
 ### セッション Cookie とプロトコル
 
-ブラウザが直接触るのは `vite dev`(`http://127.0.0.1:5173`)だけです。`/api/*` は SSR なら `hooks.server.ts` の `handleFetch`、ブラウザからなら vite の dev proxy が Worker に転送します。セッション Cookie はフロントエンド側で自分のオリジンに発行し直され(`src/lib/server/backend-cookies.ts`)、その際 HTTP なら `Secure` が落ちるので、平文でも成立します。
+ブラウザが直接触るのは `vite dev`(`http://127.0.0.1:5173`)だけです。`/api/*` は SSR なら `hooks.server.ts` の `handleFetch`、ブラウザからなら vite の dev proxy が Worker に転送します。
+
+セッション Cookie はフロントエンドが自分のオリジンに発行し直しますが、**2つの Cookie で経路が違い、`Secure` が落ちるのは片方だけです**。
+
+| Cookie | 経路 | `Secure` |
+| --- | --- | --- |
+| `staff_session` | `forwardSetCookies()`(`src/lib/server/backend-cookies.ts`) | フロントエンドのプロトコルから判断するので HTTP では落ちる |
+| `participant_session` | `forwardBackendCookies()`(`src/lib/server/backend-fetch.ts`、`handleFetch` から) | バックエンドの属性をそのまま写すので残る |
+
+つまり `participant_session` が平文で通るのは、Chromium が `127.0.0.1` を trustworthy origin とみなして `Secure` Cookie を受け取るからです。**ループバックである**ことが条件で、単に平文であればよいわけではありません。`vite dev --host` で LAN のアドレスに出すと、参加者ログインが黙ってログイン画面に戻り続けます。
 
 以前は Worker を `--local-protocol https` で起動していました。Playwright の API request context が `Secure` Cookie を `http://` に送り返さず、認証付きのステップが**アプリ側に無い理由で**全部 401 になっていたためです。セッションをブラウザが持つようになった今その理由は無く、逆に自己署名証明書だと SvelteKit のサーバ側 `fetch` が全部落ちるので、平文の HTTP に戻してあります。
 

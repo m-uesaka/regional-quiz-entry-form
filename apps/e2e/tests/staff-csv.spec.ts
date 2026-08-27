@@ -3,6 +3,7 @@
 import {readFile} from 'node:fs/promises';
 import {expect, test, type Download} from '@playwright/test';
 import {enterAndVerify, submitEntry} from '../support/api';
+import {BACKEND_URL} from '../support/env';
 import {SAIKYOI, SHINJINOU, SHINJINOU_STAFF} from '../support/fixtures';
 import {loginStaffThroughForm, staffEntriesPath} from '../support/ui';
 
@@ -58,10 +59,23 @@ test('staff sign in, read their tournament roster, and export it as CSV', async 
     customFieldValues: {shirt_size: 'S'},
   });
 
-  // The roster carries participants' real names and addresses, so a visitor
-  // without a staff session is sent to the login screen instead of being
-  // shown it — carrying where they were headed, so the login can hand it
-  // back.
+  // The roster carries participants' real names and addresses, so both
+  // endpoints behind it are closed to a caller without a staff session.
+  //
+  // Asked directly rather than through the page, because the route's `load`
+  // redirects on `!locals.staff` before it ever calls the API: driving this
+  // through the browser alone would leave the backend's own guard
+  // unexercised, and a roster that lost it would still look fine from here.
+  for (const path of [
+    `/api/staff/tournaments/${SHINJINOU.id}/entries`,
+    `/api/staff/tournaments/${SHINJINOU.id}/entries.csv`,
+  ]) {
+    const anonymous = await request.get(`${BACKEND_URL}${path}`);
+    expect(anonymous.status(), `${path}: ${await anonymous.text()}`).toBe(401);
+  }
+
+  // The screen itself sends such a visitor to the login form, carrying where
+  // they were headed so the login can hand it back.
   await page.goto(staffEntriesPath(SHINJINOU));
   await expect(page).toHaveURL(
     `/staff/login?redirectTo=${encodeURIComponent(staffEntriesPath(SHINJINOU))}`,
