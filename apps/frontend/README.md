@@ -75,6 +75,26 @@ server-rendered page would come back blank. That breaks the pages that have to
 work before (or without) the client bundle, e.g. the staff login form echoing a
 rejected address back.
 
+## A seeded form lives in a child component, keyed by what it was seeded from
+
+Seeding once means the controls stop following `data`. SvelteKit re-uses a page
+component across a navigation that changes only the route parameters, so on
+such a move the seed is never re-read and the previous page's answers stay in
+the controls — on the edit form, saving would then write one entry's answers to
+another's, with the labels (`$derived`) already switched over so the failure
+looks like nothing went wrong. See #94.
+
+So the seeded `$state` and the controls that own it live in a child component
+(`EntryEditForm`, `TournamentEntryForm`), and the page renders that child
+inside `{#key data.entry.id}` / `{#key data.tournament.id}`. `{#key}` around
+the markup alone would not do: it re-creates the elements but not the
+`<script>` block's `$state`, which is exactly what has to be built afresh.
+Re-seeding from an `$effect` would work too, but it means writing state from an
+effect, which this app avoids.
+
+Any new form built this way needs the same shape: state in a child, the child
+keyed on whatever identifies the record it was seeded from.
+
 ## Building
 
 To create a production version of your app (from the repo root):

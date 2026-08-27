@@ -1,4 +1,5 @@
 import {render, screen} from '@testing-library/svelte';
+import userEvent from '@testing-library/user-event';
 import {describe, expect, it} from 'vitest';
 import type {FormFieldDef, Regulation, Tournament} from '@regional-quiz/shared';
 import Page from './+page.svelte';
@@ -12,6 +13,9 @@ const TOURNAMENT: Tournament = {
   entryOpensAt: '2020-01-01T00:00:00.000Z',
   entryClosesAt: '2099-01-01T00:00:00.000Z',
 };
+
+/** A second tournament, reached by a link that only changes the slug. */
+const OTHER_TOURNAMENT_ID = '00000000-0000-0000-0000-0000000000ff';
 
 const REGULATIONS: Regulation[] = [
   {
@@ -54,7 +58,7 @@ const FORM_FIELD_DEFS: FormFieldDef[] = [
 type ActionResult = Parameters<typeof Page>[1]['form'];
 
 function renderPage(form: ActionResult = null) {
-  render(Page, {
+  return render(Page, {
     props: {
       params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
       data: {
@@ -151,5 +155,28 @@ describe('entry +page.svelte', () => {
 
     expect(screen.getByRole('status')).toHaveTextContent('taro@example.com');
     expect(screen.queryByLabelText('氏名')).not.toBeInTheDocument();
+  });
+
+  // SvelteKit re-uses this page component across a navigation that only
+  // changes the route parameters, so a move to another tournament's form has
+  // to build the controls afresh rather than leave the previous tournament's
+  // answers standing in them. See #94.
+  it('starts over when the route moves to another tournament', async () => {
+    const {rerender} = renderPage();
+    await userEvent.type(screen.getByLabelText('氏名'), '山田太郎');
+    await userEvent.click(screen.getByRole('radio', {name: 'M'}));
+
+    await rerender({
+      params: {regionSlug: 'tokyo', tournamentSlug: 'shinjinou'},
+      data: {
+        tournament: {...TOURNAMENT, id: OTHER_TOURNAMENT_ID, type: 'shinjinou'},
+        regulations: REGULATIONS,
+        formFieldDefs: FORM_FIELD_DEFS,
+      },
+      form: null,
+    });
+
+    expect(screen.getByLabelText('氏名')).toHaveValue('');
+    expect(screen.getByRole('radio', {name: 'M'})).not.toBeChecked();
   });
 });
