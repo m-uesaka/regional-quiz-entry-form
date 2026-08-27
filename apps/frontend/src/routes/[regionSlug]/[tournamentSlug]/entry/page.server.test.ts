@@ -62,6 +62,8 @@ interface FakeApiOptions {
   entryResponse?: {status: number; body: unknown};
   /** The tournament's custom form field definitions. */
   formFieldDefs?: FormFieldDef[];
+  /** Collects every requested URL, for asserting which endpoints ran. */
+  requests?: string[];
 }
 
 /**
@@ -74,6 +76,7 @@ function fakeApi(options: FakeApiOptions = {}): typeof fetch {
   return (async (input: RequestInfo | URL) => {
     const url =
       typeof input === 'string' ? input : new URL(String(input)).pathname;
+    options.requests?.push(url);
     if (url.includes('/regulations')) {
       return Response.json(REGULATIONS);
     }
@@ -223,6 +226,16 @@ describe('entry +page.server default action', () => {
       status: 400,
       data: {fieldErrors: {passwordConfirm: ['パスワードが一致しません']}},
     });
+  });
+
+  it('does not read the regulations while handling a submission', async () => {
+    const requests: string[] = [];
+
+    await actions.default(
+      buildActionEvent({fetch: fakeApi({requests}), fields: validFormData()}),
+    );
+
+    expect(requests.some(url => url.includes('/regulations'))).toBe(false);
   });
 
   it('reports a per-field failure in Japanese', async () => {

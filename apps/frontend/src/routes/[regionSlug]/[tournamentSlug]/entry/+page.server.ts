@@ -116,32 +116,46 @@ async function fetchTournament(
 }
 
 /**
- * Fetches everything the form itself is built from: the regulations to
- * choose between and the tournament's custom form fields. Both are public
- * reads, so they run concurrently.
+ * Fetches the regulations the form offers to choose between. Only `load`
+ * needs these: the submitted `regulationId` is validated by the API, not
+ * against this list.
  * @param tournamentId The tournament the form belongs to.
  * @param fetch SvelteKit's `event.fetch`.
  */
-async function fetchFormSources(
+async function fetchRegulations(
   tournamentId: string,
   fetch: RequestEvent['fetch'],
-): Promise<{regulations: Regulation[]; formFieldDefs: FormFieldDef[]}> {
+): Promise<Regulation[]> {
   const api = createApiClient(fetch);
-  const [regulationsRes, formFieldDefsRes] = await Promise.all([
-    api.api.tournaments[':tournamentId'].regulations.$get({
-      param: {tournamentId},
-    }),
-    api.api['form-definitions'][':tournamentId'].$get({
-      param: {tournamentId},
-    }),
-  ]);
-  if (!regulationsRes.ok || !formFieldDefsRes.ok) {
+  const res = await api.api.tournaments[':tournamentId'].regulations.$get({
+    param: {tournamentId},
+  });
+  if (!res.ok) {
     throw error(502, 'エントリーフォームの取得に失敗しました');
   }
-  return {
-    regulations: await regulationsRes.json(),
-    formFieldDefs: await formFieldDefsRes.json(),
-  };
+  return res.json();
+}
+
+/**
+ * Fetches the tournament's custom form fields. Needed by `load` to render
+ * them and by the action to interpret what came back, so it's kept
+ * separate from `fetchRegulations` — a submission shouldn't pay for a
+ * regulations read it throws away.
+ * @param tournamentId The tournament the form belongs to.
+ * @param fetch SvelteKit's `event.fetch`.
+ */
+async function fetchFormFieldDefs(
+  tournamentId: string,
+  fetch: RequestEvent['fetch'],
+): Promise<FormFieldDef[]> {
+  const api = createApiClient(fetch);
+  const res = await api.api['form-definitions'][':tournamentId'].$get({
+    param: {tournamentId},
+  });
+  if (!res.ok) {
+    throw error(502, 'エントリーフォームの取得に失敗しました');
+  }
+  return res.json();
 }
 
 export const load: PageServerLoad = async ({params, fetch, locals}) => {
@@ -154,10 +168,12 @@ export const load: PageServerLoad = async ({params, fetch, locals}) => {
     throw error(403, 'エントリー期間外です');
   }
 
-  const {regulations, formFieldDefs} = await fetchFormSources(
-    tournament.id,
-    fetch,
-  );
+  // Both are public reads and neither depends on the other, so they run
+  // concurrently.
+  const [regulations, formFieldDefs] = await Promise.all([
+    fetchRegulations(tournament.id, fetch),
+    fetchFormFieldDefs(tournament.id, fetch),
+  ]);
   return {tournament, regulations, formFieldDefs};
 };
 
@@ -166,7 +182,7 @@ export const actions = {
     const tournament = await fetchTournament(params, fetch);
     // The field definitions decide how the submitted body is interpreted,
     // so they're re-read from the API rather than trusted from the client.
-    const {formFieldDefs} = await fetchFormSources(tournament.id, fetch);
+    const formFieldDefs = await fetchFormFieldDefs(tournament.id, fetch);
 
     const formData = await request.formData();
     const freeText = String(formData.get('freeText') ?? '');
