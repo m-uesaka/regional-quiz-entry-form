@@ -1,6 +1,6 @@
 # `@regional-quiz/e2e`
 
-Playwright による E2E テスト(Task 8-1 / #74)。`apps/frontend` を `vite dev`、`apps/backend` を `wrangler dev` で実際に起動し、ローカルの Supabase を相手に主要フローをブラウザ操作で通します。
+Playwright による E2E テスト(Task 8-1 / #74)。`apps/frontend` を `vite dev`、`apps/backend` を `wrangler dev --local-protocol https` で実際に起動し、ローカルの Supabase を相手に主要フローをブラウザ操作で通します。
 
 ## 実行方法
 
