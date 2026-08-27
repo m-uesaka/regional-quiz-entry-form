@@ -9,7 +9,9 @@ on:
 # Supersede an in-flight run when new commits land on the same ref.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Only on PR branches. Cancelling on `main` would leave a merge commit with
+  # no completed verdict whenever two PRs land close together.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   check:
@@ -33,7 +35,10 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          # Pinned rather than `latest` so CI runs the same CLI the root
+          # `package.json` devDependency gives local devs, against the same
+          # `supabase/config.toml`. Bump both together.
+          version: 2.115.0
       - run: bun install
       # Applies every migration in `supabase/migrations` to a throwaway
       # local stack. `apps/e2e` seeds it and talks to it over the Data API.
@@ -44,15 +49,22 @@ jobs:
       # (`apps/e2e/support/mail-sink.ts`). Not pulling the rest is most of
       # this job's wall clock.
       #
-      # `-x` alone is not enough for auth/storage/realtime: the CLI pulls
-      # those three images anyway to run their schema migrations, which cost
-      # ~40s here. They are switched off in `supabase/config.toml` instead,
-      # which skips the migration and so the pull. `-x` still covers the
-      # services that stay enabled for local use (studio, mailpit, ...) —
-      # the CLI does not need their images to start the stack.
+      # Two mechanisms, and they are not interchangeable. auth/storage/
+      # realtime are off in `supabase/config.toml`, because `-x` does NOT
+      # stop the CLI pulling their images to run their schema migrations
+      # (~40s here). They are deliberately absent from the list below, so
+      # that re-enabling one in `config.toml` restores it here too instead
+      # of silently reintroducing that pull.
+      #
+      # `-x` covers only services that stay enabled for local use. The CLI
+      # does not need their images to bring the stack up, so listing them
+      # skips the pull. Names are CLI identifiers and have been renamed
+      # upstream before (`inbucket` -> `mailpit`); an unknown name is
+      # ignored silently rather than erroring, so a rename would show up as
+      # this step getting slower again, not as a failure.
       - run: >
           supabase start
-          -x gotrue,realtime,storage-api,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
+          -x mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
       # Prefer the stack's own service role key over the default
       # `apps/e2e/support/env.ts` falls back to, so a CLI that issues a
       # different one still works. If `status` doesn't name one, the
