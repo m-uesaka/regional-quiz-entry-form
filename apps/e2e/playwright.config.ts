@@ -43,6 +43,19 @@ const FRONTEND_ENV: Record<string, string> = {
   // session cookies it is handed and every `/staff/*` page bounces back to
   // the login screen.
   SESSION_SECRET,
+  // Turns off certificate verification for this `vite dev` process — and
+  // only for it: Playwright passes this to the server it spawns here, not
+  // to the developer's shell.
+  //
+  // `handleFetch` in `apps/frontend/src/hooks.server.ts` forwards every SSR
+  // `/api/*` call with the runtime's own `fetch`, which has no per-request
+  // way to accept the self-signed certificate `wrangler dev
+  // --local-protocol https` presents. Without this, every such call throws
+  // (`DEPTH_ZERO_SELF_SIGNED_CERT` under node, `self signed certificate`
+  // under bun) and every page renders as a 500. The browser's own `/api/*`
+  // calls are unaffected: they go through `vite.config.ts`'s dev proxy,
+  // which already sets `secure: false`.
+  NODE_TLS_REJECT_UNAUTHORIZED: '0',
 };
 
 const frontendCommand = [
@@ -59,6 +72,10 @@ const backendCommand = [
   'bunx wrangler dev',
   `--port ${BACKEND_PORT}`,
   '--ip 127.0.0.1',
+  // Serves the Worker over TLS behind a self-signed certificate wrangler
+  // generates, so the session cookies it sets travel the way they do in
+  // production. `BACKEND_URL` in `support/env.ts` names the same scheme.
+  '--local-protocol https',
   '--show-interactive-dev-session false',
   ...Object.entries(BACKEND_VARS).map(
     ([key, value]) => `--var ${key}:${value}`,
@@ -90,6 +107,11 @@ export default defineConfig({
     // calls left (reading the mail stub, arranging a roster for the staff
     // spec) name their origin in full, so they are unaffected.
     baseURL: FRONTEND_URL,
+    // The `request` fixture in `support/api.ts` calls the Worker directly,
+    // so it meets the same self-signed certificate the frontend does. The
+    // browser never does — it only ever talks to `vite dev` over plain HTTP
+    // — but the flag is set on `use`, which covers both contexts.
+    ignoreHTTPSErrors: true,
     // Attached to the HTML report CI uploads when the job fails, which for
     // a browser-driven run is the difference between a readable failure and
     // a line number.
@@ -108,6 +130,10 @@ export default defineConfig({
       command: backendCommand,
       cwd: '../backend',
       url: `${BACKEND_URL}/api/healthz`,
+      // This readiness probe is made by Playwright itself rather than by a
+      // context `use` applies to, so it needs the certificate waved through
+      // separately.
+      ignoreHTTPSErrors: true,
       // Never reused: an already running Worker on this port would be
       // started from a developer's own `.dev.vars`, so it could point at
       // remote Supabase data or a real mail provider instead of the
