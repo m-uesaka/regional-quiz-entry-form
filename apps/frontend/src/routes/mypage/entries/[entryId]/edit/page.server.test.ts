@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import type {HttpError} from '@sveltejs/kit';
+import type {Cookies, HttpError, Redirect} from '@sveltejs/kit';
 import type {MypageEntryDetail} from '@regional-quiz/shared';
 import {actions, load} from './+page.server';
 
@@ -77,11 +77,26 @@ function fakeFetch(
   }) as typeof fetch;
 }
 
+/**
+ * Builds a stand-in for `event.cookies` that records the names deleted on
+ * it, which is how a refused session is cleared.
+ * @param deleted The array every `delete()` call appends its name to.
+ */
+function fakeCookies(deleted: string[]): Cookies {
+  return {
+    delete: (name: string) => deleted.push(name),
+  } as unknown as Cookies;
+}
+
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
-function buildLoadEvent(fetchImpl: typeof fetch): Parameters<typeof load>[0] {
+function buildLoadEvent(
+  fetchImpl: typeof fetch,
+  deleted: string[] = [],
+): Parameters<typeof load>[0] {
   return {
     params: {entryId: ENTRY.id},
     fetch: fetchImpl,
+    cookies: fakeCookies(deleted),
   } as Parameters<typeof load>[0];
 }
 
@@ -89,10 +104,12 @@ function buildLoadEvent(fetchImpl: typeof fetch): Parameters<typeof load>[0] {
 function buildActionEvent(
   fetchImpl: typeof fetch,
   formData: FormData,
+  deleted: string[] = [],
 ): Parameters<typeof actions.default>[0] {
   return {
     params: {entryId: ENTRY.id},
     fetch: fetchImpl,
+    cookies: fakeCookies(deleted),
     request: {formData: async () => formData},
   } as Parameters<typeof actions.default>[0];
 }
@@ -115,12 +132,15 @@ describe('mypage entry edit +page.server load', () => {
     await expect(load(event)).resolves.toEqual({entry: ENTRY});
   });
 
-  it('throws 401 when not logged in', async () => {
-    const event = buildLoadEvent(fakeFetch({detailStatus: 401}));
+  it('redirects to the login page when not logged in', async () => {
+    const deleted: string[] = [];
+    const event = buildLoadEvent(fakeFetch({detailStatus: 401}), deleted);
 
     await expect(load(event)).rejects.toMatchObject({
-      status: 401,
-    } satisfies Partial<HttpError>);
+      status: 303,
+      location: '/mypage/login',
+    } satisfies Partial<Redirect>);
+    expect(deleted).toEqual(['participant_session']);
   });
 
   it("throws 404 when the entry is not the participant's own", async () => {
@@ -213,6 +233,36 @@ describe('mypage entry edit form action', () => {
         },
       },
     });
+  });
+
+  it('redirects to the login page when the session died before the read', async () => {
+    const deleted: string[] = [];
+    const event = buildActionEvent(
+      fakeFetch({detailStatus: 401}),
+      validFormData(),
+      deleted,
+    );
+
+    await expect(actions.default(event)).rejects.toMatchObject({
+      status: 303,
+      location: '/mypage/login',
+    } satisfies Partial<Redirect>);
+    expect(deleted).toEqual(['participant_session']);
+  });
+
+  it('redirects to the login page when the session died before the save', async () => {
+    const deleted: string[] = [];
+    const event = buildActionEvent(
+      fakeFetch({patchStatus: 401}),
+      validFormData(),
+      deleted,
+    );
+
+    await expect(actions.default(event)).rejects.toMatchObject({
+      status: 303,
+      location: '/mypage/login',
+    } satisfies Partial<Redirect>);
+    expect(deleted).toEqual(['participant_session']);
   });
 
   it('fails with 400 when the backend rejects the custom field answers', async () => {
