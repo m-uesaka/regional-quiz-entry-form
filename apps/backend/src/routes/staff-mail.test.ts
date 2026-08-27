@@ -369,7 +369,7 @@ describe('POST /staff/tournaments/:tournamentId/mail', () => {
     await settleBackgroundWork();
 
     expect(res.status).toBe(500);
-    expect(body).toEqual({error: 'db is down'});
+    expect(body).toEqual({error: 'internal server error'});
     expect(log.mails).toEqual([]);
   });
 });

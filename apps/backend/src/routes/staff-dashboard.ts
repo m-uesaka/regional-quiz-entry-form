@@ -7,6 +7,7 @@ import {
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
 import {createDbClient} from '../lib/db';
+import {internalError} from '../lib/errors';
 
 /** Shape of a `tournament_entry_summary()` row (snake_case). */
 interface TournamentEntrySummaryRow {
@@ -58,7 +59,10 @@ export const staffDashboardRoute = new Hono<StaffEnv>().get(
     // the entry CSV export this needs no paging.
     const {data, error} = await db.rpc('tournament_entry_summary');
     if (error) {
-      return c.json({error: error.message}, 500);
+      return c.json(
+        internalError('failed to aggregate the dashboard summary', error),
+        500,
+      );
     }
     // Same reason as `lib/waitlist.ts`: `db` isn't constructed with
     // generated `Database` types, so an untyped `.rpc()` result can't be

@@ -8,6 +8,7 @@ import {
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
 import {createDbClient} from '../lib/db';
+import {internalError} from '../lib/errors';
 import {
   syncFormFieldDefs,
   TournamentNotFoundError,
@@ -38,11 +39,10 @@ export const formDefinitionsRoute = new Hono<StaffEnv>()
         .order('display_order', {ascending: true})
         .returns<FormFieldDefRow[]>();
       if (error) {
-        // Anonymously reachable, so the raw Supabase message stays in the
-        // log rather than in the response — the same rule the PUT below
-        // applies to its own unexpected failures.
-        console.error('failed to read form field defs', error);
-        return c.json({error: 'internal server error'}, 500);
+        return c.json(
+          internalError('failed to read the form field defs', error),
+          500,
+        );
       }
       return c.json(data.map(toFormFieldDef));
     },
@@ -78,10 +78,11 @@ export const formDefinitionsRoute = new Hono<StaffEnv>()
           return c.json({error: e.message}, 400);
         }
         // Unexpected failures here (Supabase outage, unmapped insert
-        // errors, etc.) are server-side, not the client's fault, and
-        // shouldn't leak raw database error messages.
-        console.error('failed to sync form field defs', e);
-        return c.json({error: 'internal server error'}, 500);
+        // errors, etc.) are server-side, not the client's fault.
+        return c.json(
+          internalError('failed to sync the form field defs', e),
+          500,
+        );
       }
 
       return c.json({ok: true});

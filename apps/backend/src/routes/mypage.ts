@@ -11,6 +11,7 @@ import type {ParticipantEnv} from '../types/env';
 import {requireParticipant} from '../middleware/participant-auth';
 import {createDbClient} from '../lib/db';
 import {cancelOwnEntry, updateOwnEntry} from '../lib/entries';
+import {internalError} from '../lib/errors';
 import {
   FORM_FIELD_DEF_COLUMNS,
   toFormFieldDef,
@@ -79,7 +80,10 @@ export const mypageRoute = new Hono<ParticipantEnv>()
       .eq('participant_id', c.get('participantId'))
       .returns<MypageEntryRow[]>();
     if (error) {
-      return c.json({error: error.message}, 500);
+      return c.json(
+        internalError('failed to read the own entries', error),
+        500,
+      );
     }
     return c.json((data ?? []).map(rowToMypageEntry));
   })
@@ -98,7 +102,10 @@ export const mypageRoute = new Hono<ParticipantEnv>()
         .returns<MypageEntryDetailRow[]>()
         .maybeSingle();
       if (error) {
-        return c.json({error: error.message}, 500);
+        return c.json(
+          internalError('failed to read the own entry', error),
+          500,
+        );
       }
       if (!data) {
         return c.json({error: 'entry not found'}, 404);
@@ -113,7 +120,13 @@ export const mypageRoute = new Hono<ParticipantEnv>()
         .order('display_order', {ascending: true})
         .returns<FormFieldDefRow[]>();
       if (formFieldDefsError) {
-        return c.json({error: formFieldDefsError.message}, 500);
+        return c.json(
+          internalError(
+            'failed to read the form field defs',
+            formFieldDefsError,
+          ),
+          500,
+        );
       }
 
       return c.json(
@@ -142,6 +155,12 @@ export const mypageRoute = new Hono<ParticipantEnv>()
         c.req.valid('json'),
       );
       if (!result.ok) {
+        if (result.status === 500) {
+          return c.json(
+            internalError('failed to update the own entry', result.error),
+            500,
+          );
+        }
         return c.json({error: result.error}, result.status);
       }
       return c.json({ok: true});
@@ -157,6 +176,12 @@ export const mypageRoute = new Hono<ParticipantEnv>()
         c.req.valid('param').entryId,
       );
       if (!result.ok) {
+        if (result.status === 500) {
+          return c.json(
+            internalError('failed to cancel the own entry', result.error),
+            500,
+          );
+        }
         return c.json({error: result.error}, result.status);
       }
       return c.json({ok: true});

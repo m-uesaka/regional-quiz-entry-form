@@ -4,6 +4,7 @@ import {z} from 'zod';
 import {RegulationSchema, type Regulation} from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
+import {internalError} from '../lib/errors';
 
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 
@@ -48,10 +49,10 @@ export const regulationsRoute = new Hono<Env>().get(
       .order('display_order', {ascending: true})
       .returns<RegulationRow[]>();
     if (error) {
-      // Anonymously reachable, so the raw Supabase message stays in the
-      // log rather than in the response.
-      console.error('failed to read regulations', error);
-      return c.json({error: 'internal server error'}, 500);
+      return c.json(
+        internalError('failed to read the regulations', error),
+        500,
+      );
     }
     return c.json(data.map(rowToRegulation));
   },

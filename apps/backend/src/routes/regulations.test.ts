@@ -42,6 +42,14 @@ function mockRegulationsFetch(rows: unknown[]): void {
     Promise.resolve(Response.json(rows))) as unknown as typeof fetch;
 }
 
+/** Answers the same call with a Supabase-shaped failure instead. */
+function mockRegulationsFetchFailure(message: string): void {
+  globalThis.fetch = (() =>
+    Promise.resolve(
+      Response.json({message}, {status: 500}),
+    )) as unknown as typeof fetch;
+}
+
 // Reaching this handler at all already demonstrates route precedence: the
 // path also matches `tournamentsRoute`'s `/:regionSlug/:tournamentSlug`,
 // whose `tournamentSlug` enum validation would 400 on `regulations` before
@@ -92,6 +100,22 @@ describe('GET /tournaments/:tournamentId/regulations (mocked Supabase)', () => {
       displayOrder: 0,
     });
     expect(body[1].priorityStartsAt).toBeNull();
+  });
+
+  it('answers a query failure without the Supabase message', async () => {
+    mockRegulationsFetchFailure('relation "regulations" does not exist');
+
+    const res = await app.request(
+      `/api/tournaments/${tournamentId}/regulations`,
+      {},
+      env,
+    );
+    const body = await res.json();
+
+    // Anonymously reachable, so the database's own wording never reaches
+    // the caller.
+    expect(res.status).toBe(500);
+    expect(body).toEqual({error: 'internal server error'});
   });
 
   it('returns an empty list for a tournament with no regulations', async () => {

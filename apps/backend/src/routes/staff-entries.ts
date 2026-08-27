@@ -22,6 +22,7 @@ import {
 } from '../lib/form-field-defs';
 import {buildEntriesCsv} from '../lib/entries-csv';
 import {fetchAllRows, type AllRowsResult} from '../lib/paged-select';
+import {internalError} from '../lib/errors';
 
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 const EntryIdParamSchema = z.object({entryId: z.string().uuid()});
@@ -121,7 +122,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
           .returns<EntryRow[]>(),
       );
       if (error) {
-        return c.json({error: error.message}, 500);
+        return c.json(internalError('failed to read the entries', error), 500);
       }
       return c.json(rows.map(rowToEntry));
     },
@@ -138,7 +139,10 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
         tournamentId,
       );
       if (error) {
-        return c.json({error: error.message}, 500);
+        return c.json(
+          internalError('failed to read the entries for the CSV', error),
+          500,
+        );
       }
 
       // The tournament's custom form fields become the CSV's trailing
@@ -151,7 +155,13 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
         .order('display_order', {ascending: true})
         .returns<FormFieldDefRow[]>();
       if (formFieldDefsError) {
-        return c.json({error: formFieldDefsError.message}, 500);
+        return c.json(
+          internalError(
+            'failed to read the form field defs',
+            formFieldDefsError,
+          ),
+          500,
+        );
       }
 
       const csv = buildEntriesCsv(
@@ -187,7 +197,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
         .returns<EntryRow[]>()
         .maybeSingle();
       if (error) {
-        return c.json({error: error.message}, 500);
+        return c.json(internalError('failed to read the entry', error), 500);
       }
       if (!data) {
         return c.json({error: 'entry not found'}, 404);
@@ -204,7 +214,13 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
         .order('display_order', {ascending: true})
         .returns<FormFieldDefRow[]>();
       if (formFieldDefsError) {
-        return c.json({error: formFieldDefsError.message}, 500);
+        return c.json(
+          internalError(
+            'failed to read the form field defs',
+            formFieldDefsError,
+          ),
+          500,
+        );
       }
 
       return c.json(

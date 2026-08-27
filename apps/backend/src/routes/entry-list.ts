@@ -5,6 +5,7 @@ import {EntryListItemSchema, type EntryListItem} from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
 import {fetchAllRows} from '../lib/paged-select';
+import {internalError} from '../lib/errors';
 
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 
@@ -46,7 +47,7 @@ export const entryListRoute = new Hono<Env>().get(
         .returns<EntryListRow[]>(),
     );
     if (error) {
-      return c.json({error: error.message}, 500);
+      return c.json(internalError('failed to read the entry list', error), 500);
     }
     return c.json(rows.map(rowToEntryListItem));
   },

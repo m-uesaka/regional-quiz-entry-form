@@ -4,6 +4,7 @@ import {z} from 'zod';
 import {EntryInputSchema} from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {createEntry} from '../lib/entries';
+import {internalError} from '../lib/errors';
 
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 
@@ -18,6 +19,15 @@ export const entriesRoute = new Hono<Env>().post(
       c.req.valid('json'),
     );
     if (!result.ok) {
+      // Unauthenticated, and a 500 here carries whatever Supabase said
+      // about the insert — kept server-side. The 4xx messages are the
+      // ones the form maps to its own wording.
+      if (result.status === 500) {
+        return c.json(
+          internalError('failed to create the entry', result.error),
+          500,
+        );
+      }
       return c.json({error: result.error}, result.status);
     }
     return c.json(result.entry, 201);
