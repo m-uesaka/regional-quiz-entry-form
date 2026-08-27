@@ -41,11 +41,15 @@ jobs:
       # Only Postgres and the Data API (Kong + PostgREST) are needed: the
       # specs never touch `supabase.auth`/`.storage`/realtime, sessions are
       # self-issued JWTs (`apps/e2e/support/env.ts`) and mail is stubbed
-      # (`apps/e2e/support/mail-sink.ts`). Skipping the rest is most of the
-      # job's wall clock, since their images no longer have to be pulled.
-      # (`gotrue`'s image is still pulled — the CLI fetches it to run the
-      # auth schema migrations — but its container is not started, and at
-      # ~90MB it is a rounding error next to studio/edge-runtime/storage.)
+      # (`apps/e2e/support/mail-sink.ts`). Not pulling the rest is most of
+      # this job's wall clock.
+      #
+      # `-x` alone is not enough for auth/storage/realtime: the CLI pulls
+      # those three images anyway to run their schema migrations, which cost
+      # ~40s here. They are switched off in `supabase/config.toml` instead,
+      # which skips the migration and so the pull. `-x` still covers the
+      # services that stay enabled for local use (studio, mailpit, ...) —
+      # the CLI does not need their images to start the stack.
       - run: >
           supabase start
           -x gotrue,realtime,storage-api,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor

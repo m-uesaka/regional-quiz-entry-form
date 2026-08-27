@@ -84,8 +84,11 @@ allowed_cidrs_v6 = ["::/0"]
 # [db.ssl_enforcement]
 # enabled = true
 
+# Not used by this project (the backend never opens a realtime channel), so
+# it is left out of the local stack: the CLI then skips its image and its
+# schema migration entirely, which is most of `supabase start`'s wall clock.
 [realtime]
-enabled = true
+enabled = false
 # Bind realtime via either IPv4 or IPv6. (default: IPv4)
 # ip_version = "IPv6"
 # The maximum length in bytes of HTTP request headers. (default: 4096)
@@ -112,8 +115,10 @@ port = 54324
 # admin_email = "admin@email.com"
 # sender_name = "Admin"
 
+# Not used by this project (no file uploads), so it is left out of the local
+# stack — see the note on `[realtime]`.
 [storage]
-enabled = true
+enabled = false
 # The maximum file size allowed (e.g. "5MB", "500KB").
 file_size_limit = "50MiB"
 
@@ -152,8 +157,11 @@ max_indexes = 5
 # Vector Buckets is available to Supabase Pro plan.
 # [storage.vector.buckets.documents-openai]
 
+# Not used by this project: sessions are the backend's own HS256 JWTs
+# (`apps/backend/src/middleware`), not GoTrue's, and participants/staff live in
+# our own tables. Left out of the local stack — see the note on `[realtime]`.
 [auth]
-enabled = true
+enabled = false
 # The base URL of your website. Used as an allow-list for redirects and for constructing URLs used
 # in emails.
 site_url = "http://127.0.0.1:3000"
