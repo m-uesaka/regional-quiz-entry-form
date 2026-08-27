@@ -109,12 +109,25 @@ another's, with the labels (`$derived`) already switched over so the failure
 looks like nothing went wrong. See #94.
 
 So the seeded `$state` and the controls that own it live in a child component
-(`EntryEditForm`, `TournamentEntryForm`), and the page renders that child
-inside `{#key data.entry.id}` / `{#key data.tournament.id}`. `{#key}` around
-the markup alone would not do: it re-creates the elements but not the
-`<script>` block's `$state`, which is exactly what has to be built afresh.
-Re-seeding from an `$effect` would work too, but it means writing state from an
-effect, which this app avoids.
+(`EntryEditForm`, `TournamentEntryForm`, `TournamentEditor`), and the page
+renders that child inside `{#key data.entry.id}` / `{#key data.tournament.id}`.
+`{#key}` around the markup alone would not do: it re-creates the elements but
+not the `<script>` block's `$state`, which is exactly what has to be built
+afresh. Re-seeding from an `$effect` would work too, but it means writing state
+from an effect, which this app avoids.
+
+The controls are not the only thing that has to move into the child. Whatever
+else the page accumulated about the record it was showing goes with them —
+`TournamentEditor` also holds the "更新しました" notice, which would otherwise
+stand over a tournament that was never saved, and the type the API last
+confirmed. The child is where a component with state of its own goes too:
+`SheetImportPanel` keeps the YAML it previewed and uploads it under whatever
+`tournamentId` it is currently handed, so a preview built for one tournament
+and a prop that followed `data` to the next would file the first one's sheet
+rows as the second one's form definition. (Only between tournaments of the
+same type: the API rejects a `tournamentSlug` that doesn't match its target,
+which is what turns the same mistake between differing types into an error
+message rather than a silent misfile.) See #98.
 
 Any new form built this way needs the same shape: state in a child, the child
 keyed on whatever identifies the record it was seeded from.
