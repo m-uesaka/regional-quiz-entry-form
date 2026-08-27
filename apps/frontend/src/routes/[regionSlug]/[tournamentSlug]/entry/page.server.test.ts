@@ -60,6 +60,8 @@ interface FakeApiOptions {
   tournamentStatus?: number;
   /** The `POST .../entries` response, defaulting to a created entry. */
   entryResponse?: {status: number; body: unknown};
+  /** The tournament's custom form field definitions. */
+  formFieldDefs?: FormFieldDef[];
 }
 
 /**
@@ -76,7 +78,7 @@ function fakeApi(options: FakeApiOptions = {}): typeof fetch {
       return Response.json(REGULATIONS);
     }
     if (url.includes('/form-definitions/')) {
-      return Response.json(FORM_FIELD_DEFS);
+      return Response.json(options.formFieldDefs ?? FORM_FIELD_DEFS);
     }
     if (url.includes('/entries')) {
       const entry = options.entryResponse ?? {status: 201, body: {id: 'entry'}};
@@ -174,7 +176,7 @@ function validFormData(
     passwordConfirm: 'password123',
     regulationId: REGULATIONS[0].id,
     freeText: '',
-    agree_rules: 'on',
+    'custom.agree_rules': 'on',
     ...overrides,
   };
 }
@@ -278,6 +280,36 @@ describe('entry +page.server default action', () => {
       expect(result).toMatchObject({status, data: {error: message}});
     },
   );
+
+  it("reads a custom field whose key collides with one of the form's own inputs", async () => {
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          formFieldDefs: [
+            {
+              fieldKey: 'password',
+              label: '合言葉',
+              fieldType: 'textarea',
+              required: false,
+              options: null,
+              displayOrder: 0,
+            },
+          ],
+        }),
+        // The submission fails validation so the echoed-back `values` can
+        // be inspected.
+        fields: validFormData({
+          email: 'not-an-email',
+          'custom.password': 'ひらけごま',
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 400,
+      data: {values: {customFieldValues: {password: 'ひらけごま'}}},
+    });
+  });
 
   it('falls back to a status-based message for an unknown error string', async () => {
     const result = await actions.default(

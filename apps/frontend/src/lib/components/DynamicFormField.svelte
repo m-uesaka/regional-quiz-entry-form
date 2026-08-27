@@ -1,5 +1,6 @@
 <script lang="ts">
   import type {FormFieldDefYaml} from '@regional-quiz/shared';
+  import {customFieldName} from '$lib/custom-field-name';
 
   interface Props {
     field: FormFieldDefYaml;
@@ -8,6 +9,11 @@
   }
 
   const {field, value, onChange}: Props = $props();
+
+  // Namespaced so a field key that happens to match one of the form's own
+  // inputs (`name`, `email`, `password`, ...) can't submit under the same
+  // key as it. See `$lib/custom-field-name`.
+  const controlName = $derived(customFieldName(field.key));
 
   // A `checkbox` field with no `options` is a plain boolean toggle (e.g.
   // "I agree to the rules"). To keep the component's value type consistent
@@ -49,13 +55,13 @@
 
 {#if field.type === 'textarea'}
   <div class="form-field">
-    <label for={field.key}>
+    <label for={controlName}>
       {field.label}
       {#if field.required}<span aria-hidden="true">*</span>{/if}
     </label>
     <textarea
-      id={field.key}
-      name={field.key}
+      id={controlName}
+      name={controlName}
       required={field.required}
       value={typeof value === 'string' ? value : ''}
       oninput={handleTextareaInput}
@@ -71,7 +77,7 @@
       <label>
         <input
           type="radio"
-          name={field.key}
+          name={controlName}
           value={option}
           required={field.required}
           checked={value === option}
@@ -92,7 +98,7 @@
         <label>
           <input
             type="checkbox"
-            name={field.key}
+            name={controlName}
             value={option}
             required={field.required && !hasCheckboxSelection}
             checked={isChecked(option)}
@@ -107,7 +113,7 @@
       <label>
         <input
           type="checkbox"
-          name={field.key}
+          name={controlName}
           required={field.required}
           checked={isChecked(booleanCheckboxValue)}
           onchange={event =>
