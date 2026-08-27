@@ -1,4 +1,4 @@
-import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
+import {afterAll, afterEach, beforeAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
 import {sign} from 'hono/jwt';
 import type {TournamentType} from '@regional-quiz/shared';
@@ -94,6 +94,12 @@ const validYaml = yamlFor('saikyoi');
 describe('form-definitions routes (request validation)', () => {
   const fixedTournamentId = '00000000-0000-0000-0000-000000000000';
 
+  it('rejects a non-UUID tournamentId on the public read with 400', async () => {
+    const res = await app.request('/api/form-definitions/not-a-uuid', {}, env);
+
+    expect(res.status).toBe(400);
+  });
+
   it('rejects regional staff with 403', async () => {
     const cookie = await regionalStaffCookie(
       '11111111-1111-1111-1111-111111111111',
@@ -142,6 +148,87 @@ describe('form-definitions routes (request validation)', () => {
     );
 
     expect(res.status).toBe(400);
+  });
+});
+
+// Mocks the `fetch` call `@supabase/supabase-js` makes for
+// `.from('form_field_defs').select(...)` (same convention as
+// `routes/entry-list.test.ts`'s `mockEntriesFetch`), so these run
+// unconditionally in CI without a local Supabase stack.
+function mockFormFieldDefsFetch(rows: unknown[]): void {
+  globalThis.fetch = (() =>
+    Promise.resolve(Response.json(rows))) as unknown as typeof fetch;
+}
+
+describe('GET /form-definitions/:tournamentId (mocked Supabase)', () => {
+  const originalFetch = globalThis.fetch;
+  const tournamentId = '12345678-1234-1234-1234-123456789012';
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('serves the definitions without a staff session', async () => {
+    mockFormFieldDefsFetch([
+      {
+        field_key: 'agree_rules',
+        label: '規約に同意する',
+        field_type: 'checkbox',
+        required: true,
+        options: null,
+        display_order: 0,
+      },
+      {
+        field_key: 't_shirt_size',
+        label: 'Tシャツサイズ',
+        field_type: 'radio',
+        required: false,
+        options: ['S', 'M', 'L'],
+        display_order: 1,
+      },
+    ]);
+
+    const res = await app.request(
+      `/api/form-definitions/${tournamentId}`,
+      {},
+      env,
+    );
+    const body = (await res.json()) as Array<Record<string, unknown>>;
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual([
+      {
+        fieldKey: 'agree_rules',
+        label: '規約に同意する',
+        fieldType: 'checkbox',
+        required: true,
+        options: null,
+        displayOrder: 0,
+      },
+      {
+        fieldKey: 't_shirt_size',
+        label: 'Tシャツサイズ',
+        fieldType: 'radio',
+        required: false,
+        options: ['S', 'M', 'L'],
+        displayOrder: 1,
+      },
+    ]);
+  });
+
+  it('returns an empty list for a tournament with no definitions', async () => {
+    mockFormFieldDefsFetch([]);
+
+    const res = await app.request(
+      `/api/form-definitions/${tournamentId}`,
+      {},
+      env,
+    );
+
+    const body = (await res.json()) as unknown[];
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual([]);
   });
 });
 

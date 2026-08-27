@@ -3,6 +3,7 @@ import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
 import type {Env} from '../types/env';
 import {confirmEntryByToken} from '../lib/entry-confirmation';
+import {internalError} from '../lib/errors';
 
 export const entryVerificationRoute = new Hono<Env>().get(
   '/verify',
@@ -18,7 +19,12 @@ export const entryVerificationRoute = new Hono<Env>().get(
       if (result.reason === 'invalid_token') {
         return c.json({error: result.error}, 400);
       }
-      return c.json({error: result.error}, 500);
+      // Anything else is a Supabase message about the database, on an
+      // endpoint anyone with a link can reach, so it stays in the log.
+      return c.json(
+        internalError('failed to confirm the entry', result.error),
+        500,
+      );
     }
     return c.json({status: result.status});
   },

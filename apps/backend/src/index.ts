@@ -6,6 +6,7 @@ import {passwordResetRoute} from './routes/password-reset';
 import {tournamentsRoute} from './routes/tournaments';
 import {entriesRoute} from './routes/entries';
 import {entryListRoute} from './routes/entry-list';
+import {regulationsRoute} from './routes/regulations';
 import {staffEntriesRoute} from './routes/staff-entries';
 import {staffDashboardRoute} from './routes/staff-dashboard';
 import {staffMailRoute} from './routes/staff-mail';
@@ -23,6 +24,11 @@ const routes = app
   .route('/auth/participant', participantAuthRoute)
   .route('/auth/participant/password-reset', passwordResetRoute)
   .route('/tournaments', entryListRoute)
+  // Mounted before `tournamentsRoute` on purpose: its public
+  // `/:regionSlug/:tournamentSlug` route also matches two segments, and its
+  // `zValidator` would answer `/:tournamentId/regulations` with a 400
+  // before this handler ever ran.
+  .route('/tournaments', regulationsRoute)
   .route('/tournaments', tournamentsRoute)
   .route('/tournaments', entriesRoute)
   .route('/staff', staffDashboardRoute)

@@ -26,6 +26,32 @@ describe('EntryInputSchema', () => {
     }
   });
 
+  it('reports every field failure in Japanese', () => {
+    const result = EntryInputSchema.safeParse({
+      name: '',
+      furigana: '',
+      displayName: '',
+      email: 'taro@localhost',
+      password: 'short',
+      passwordConfirm: 'short',
+      regulationId: 'not-a-uuid',
+      customFieldValues: {},
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.flatten().fieldErrors).toEqual({
+        name: ['氏名を入力してください'],
+        furigana: ['ふりがなを入力してください'],
+        displayName: ['掲載名を入力してください'],
+        email: ['メールアドレスの形式が正しくありません'],
+        password: ['パスワードは8文字以上で入力してください'],
+        passwordConfirm: ['パスワードは8文字以上で入力してください'],
+        regulationId: ['レギュレーションを選択してください'],
+      });
+    }
+  });
+
   it('accepts a valid payload', () => {
     const result = EntryInputSchema.safeParse({
       name: '山田太郎',

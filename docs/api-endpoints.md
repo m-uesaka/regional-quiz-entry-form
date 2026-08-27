@@ -91,9 +91,11 @@ if ('yaml' in body) {
 | POST | `/api/tournaments` | 統括スタッフ |
 | PATCH | `/api/tournaments/:id` | 統括スタッフ |
 | GET | `/api/tournaments/:regionSlug/:tournamentSlug` | なし |
+| GET | `/api/tournaments/:tournamentId/regulations` | なし |
 | GET | `/api/tournaments/:tournamentId/entry-list` | なし |
 | POST | `/api/tournaments/:tournamentId/entries` | なし |
 | GET | `/api/entries/verify` | なし(トークン) |
+| GET | `/api/form-definitions/:tournamentId` | なし |
 | PUT | `/api/form-definitions/:tournamentId` | 統括スタッフ |
 | POST | `/api/sheet-import/preview` | 統括スタッフ |
 | GET | `/api/staff/tournaments/:tournamentId/entries` | スタッフ(担当範囲) |
@@ -204,6 +206,16 @@ if ('yaml' in body) {
 - `404`: `{"error": "tournament not found"}`(地域が無い場合も同じ応答)
 - `500`
 
+### `GET /api/tournaments/:tournamentId/regulations`
+
+公開ルート。大会に紐づくレギュレーションを `display_order` 昇順で返します。エントリーフォームは未ログインの訪問者にも選択肢を出す必要があり、レギュレーションは個人情報を含まない(ラベルと優先期間だけ)ため認証を課していません。
+
+- `200`: `Regulation[]` — `{id, tournamentId, label, priorityStartsAt, priorityEndsAt, displayOrder}`
+- `400`: `:tournamentId` が UUID でない
+- `500`
+
+`src/index.ts` では**`tournamentsRoute` より前**にマウントしています。`tournamentsRoute` の `/:regionSlug/:tournamentSlug` も2セグメントにマッチするため、後ろに置くとその `tournamentSlug` の enum バリデーションが先に 400 を返してしまいます(`entryListRoute` と同じ理由)。
+
 ## 6. エントリー(参加者向け)
 
 ### `POST /api/tournaments/:tournamentId/entries`
@@ -281,6 +293,16 @@ if ('yaml' in body) {
 ## 8. フォーム定義管理(統括スタッフ)
 
 詳細な仕組みは [`form-generation.md`](./form-generation.md) を参照してください。
+
+### `GET /api/form-definitions/:tournamentId`
+
+公開ルート。その大会の `form_field_defs` を `display_order` 昇順で返します。エントリーフォームが未ログインの訪問者にも追加項目を描画する必要があり、フォーム定義は個人情報を含まないため認証を課していません。
+
+- `200`: `FormFieldDef[]` — `{fieldKey, label, fieldType, required, options, displayOrder}`
+- `400`: `:tournamentId` が UUID でない
+- `500`
+
+この公開 GET があるため、`formDefinitionsRoute` は `requireGeneralStaff()` を `.use('*', ...)` ではなく**下の PUT にだけ**付けています。
 
 ### `PUT /api/form-definitions/:tournamentId`
 
@@ -505,5 +527,5 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 `tasks.md` 上で計画されているが、現時点で API が存在しないものです。
 
-- レギュレーション(`regulations`)の登録・編集 API — 現状はエントリー時の検証と表示ラベルの JOIN でのみ読み出しており、書き込みは Supabase 上で直接行う運用です。
+- レギュレーション(`regulations`)の**登録・編集** API — 読み出しは `GET /api/tournaments/:tournamentId/regulations` がありますが、書き込みは Supabase 上で直接行う運用です。
 - 地域(`regions`)・スタッフアカウント(`staff_accounts`)の管理 API — 同上。

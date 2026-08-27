@@ -10,6 +10,7 @@ import {requireStaffForTournament} from '../middleware/staff-auth';
 import {createMailSender} from '../lib/mailer';
 import {MAX_BACKGROUND_RECIPIENTS, sendBulkMail} from '../lib/bulk-mail';
 import {fetchTournamentRecipients} from '../lib/entry-recipients';
+import {internalError} from '../lib/errors';
 
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 
@@ -30,7 +31,10 @@ export const staffMailRoute = new Hono<StaffEnv>().post(
       statusFilter,
     );
     if (!result.ok) {
-      return c.json({error: result.error}, 500);
+      return c.json(
+        internalError('failed to read the mail recipients', result.error),
+        500,
+      );
     }
     const {recipients} = result;
 

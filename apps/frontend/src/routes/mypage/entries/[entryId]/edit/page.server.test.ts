@@ -120,8 +120,8 @@ function validFormData(): FormData {
   formData.set('furigana', 'ヤマダハナコ');
   formData.set('displayName', '花子');
   formData.set('freeText', '更新後の自由記述');
-  formData.set('t_shirt_size', 'L');
-  formData.set('agree_to_rules', 'on');
+  formData.set('custom.t_shirt_size', 'L');
+  formData.set('custom.agree_to_rules', 'on');
   return formData;
 }
 
@@ -205,7 +205,7 @@ describe('mypage entry edit form action', () => {
   it('records an unchecked boolean checkbox as an empty list', async () => {
     const log: FetchLog = {patchBodies: []};
     const formData = validFormData();
-    formData.delete('agree_to_rules');
+    formData.delete('custom.agree_to_rules');
     const event = buildActionEvent(fakeFetch({}, log), formData);
 
     await expect(actions.default(event)).rejects.toMatchObject({status: 303});
@@ -295,7 +295,7 @@ describe('mypage entry edit form action', () => {
   it('ignores form values for fields the tournament does not define', async () => {
     const log: FetchLog = {patchBodies: []};
     const formData = validFormData();
-    formData.set('not_a_real_field', 'injected');
+    formData.set('custom.not_a_real_field', 'injected');
     const event = buildActionEvent(fakeFetch({}, log), formData);
 
     await expect(actions.default(event)).rejects.toMatchObject({status: 303});

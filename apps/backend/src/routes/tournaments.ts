@@ -9,6 +9,7 @@ import {
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
 import {createDbClient} from '../lib/db';
+import {internalError} from '../lib/errors';
 
 const CreateTournamentSchema = TournamentSchema.omit({id: true});
 const UpdateTournamentSchema = CreateTournamentSchema.partial();
@@ -83,7 +84,10 @@ export const tournamentsRoute = new Hono<StaffEnv>()
     const db = createDbClient(c.env);
     const {data, error} = await db.from('tournaments').select('*');
     if (error) {
-      return c.json({error: error.message}, 500);
+      return c.json(
+        internalError('failed to read the tournaments', error),
+        500,
+      );
     }
     return c.json((data as TournamentRow[]).map(rowToTournament));
   })
@@ -118,9 +122,14 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         .select()
         .single();
       if (error) {
-        // PGRST116: `.single()` found no matching row to update.
-        const status = error.code === 'PGRST116' ? 404 : 400;
-        return c.json({error: error.message}, status);
+        // PGRST116: `.single()` found no matching row to update. Its
+        // message is about the query shape, so it's replaced with the same
+        // wording the reads above use for a missing tournament; a 400 is a
+        // constraint the staff UI can act on, so that message stays.
+        if (error.code === 'PGRST116') {
+          return c.json({error: 'tournament not found'}, 404);
+        }
+        return c.json({error: error.message}, 400);
       }
       return c.json(rowToTournament(data as TournamentRow));
     },
@@ -137,7 +146,10 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         .eq('slug', regionSlug)
         .maybeSingle();
       if (regionError) {
-        return c.json({error: regionError.message}, 500);
+        return c.json(
+          internalError('failed to read the region', regionError),
+          500,
+        );
       }
       if (!region) {
         return c.json({error: 'tournament not found'}, 404);
@@ -149,7 +161,10 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         .eq('type', tournamentSlug)
         .maybeSingle();
       if (tournamentError) {
-        return c.json({error: tournamentError.message}, 500);
+        return c.json(
+          internalError('failed to read the tournament', tournamentError),
+          500,
+        );
       }
       if (!tournament) {
         return c.json({error: 'tournament not found'}, 404);

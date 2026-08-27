@@ -191,6 +191,6 @@ describe('GET /staff/dashboard', () => {
     const body = await res.json();
 
     expect(res.status).toBe(500);
-    expect(body).toEqual({error: 'db is down'});
+    expect(body).toEqual({error: 'internal server error'});
   });
 });
