@@ -1,4 +1,6 @@
 import {z} from 'zod';
+import {StaffRoleSchema} from './staff';
+import {TournamentTypeSchema} from './tournament';
 
 export const StaffLoginInputSchema = z.object({
   email: z.string().email(),
@@ -29,3 +31,17 @@ export const PasswordResetConfirmInputSchema = z.object({
 export type PasswordResetConfirmInput = z.infer<
   typeof PasswordResetConfirmInputSchema
 >;
+
+// The answer to a successful staff login. `regionSlug` and `tournamentType`
+// name the single tournament a `regional` account is scoped to, so the login
+// screen can send it straight to that tournament's entry list; both are null
+// for `general` accounts, which land on the cross-region dashboard instead.
+// The slug (rather than the `regionId` the JWT claims carry) is what the
+// staff screens are keyed by: `/staff/{regionSlug}/{tournamentType}/entries`.
+export const StaffLoginResponseSchema = z.object({
+  ok: z.literal(true),
+  role: StaffRoleSchema,
+  regionSlug: z.string().nullable(),
+  tournamentType: TournamentTypeSchema.nullable(),
+});
+export type StaffLoginResponse = z.infer<typeof StaffLoginResponseSchema>;
