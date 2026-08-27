@@ -11,6 +11,7 @@ import {
   readCustomFieldValues,
 } from '$lib/server/custom-field-values';
 import {redirectToParticipantLogin} from '$lib/server/participant-session';
+import type {EntryEditFormValues} from '$lib/types/entry-form';
 import type {Actions, PageServerLoad} from './$types';
 
 /**
@@ -91,7 +92,7 @@ export const actions = {
     const freeText = String(formData.get('freeText') ?? '');
     // Echoed back with every failure so a rejected submission re-renders
     // what the participant typed instead of resetting to the stored entry.
-    const values = {
+    const values: EntryEditFormValues = {
       name: String(formData.get('name') ?? ''),
       furigana: String(formData.get('furigana') ?? ''),
       displayName: String(formData.get('displayName') ?? ''),
