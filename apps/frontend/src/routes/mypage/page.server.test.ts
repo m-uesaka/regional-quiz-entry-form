@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import type {HttpError, Redirect} from '@sveltejs/kit';
+import type {Cookies, HttpError, Redirect} from '@sveltejs/kit';
 import type {MypageEntry} from '@regional-quiz/shared';
 import {actions, load} from './+page.server';
 
@@ -31,9 +31,26 @@ function fakeFetch(options: {
     })) as typeof fetch;
 }
 
+/**
+ * Builds a stand-in for `event.cookies` that records the names deleted on
+ * it, which is how a refused session is cleared.
+ * @param deleted The array every `delete()` call appends its name to.
+ */
+function fakeCookies(deleted: string[]): Cookies {
+  return {
+    delete: (name: string) => deleted.push(name),
+  } as unknown as Cookies;
+}
+
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
-function buildEvent(fetchImpl: typeof fetch): Parameters<typeof load>[0] {
-  return {fetch: fetchImpl} as Parameters<typeof load>[0];
+function buildEvent(
+  fetchImpl: typeof fetch,
+  deleted: string[] = [],
+): Parameters<typeof load>[0] {
+  return {
+    fetch: fetchImpl,
+    cookies: fakeCookies(deleted),
+  } as Parameters<typeof load>[0];
 }
 
 const ENTRY_ID = ENTRIES[0].id;
@@ -45,11 +62,13 @@ const ENTRY_ID = ENTRIES[0].id;
 function buildCancelEvent(
   fetchImpl: typeof fetch,
   entryId: string = ENTRY_ID,
+  deleted: string[] = [],
 ): Parameters<typeof actions.cancel>[0] {
   const body = new FormData();
   body.set('entryId', entryId);
   return {
     fetch: fetchImpl,
+    cookies: fakeCookies(deleted),
     request: new Request('http://localhost/mypage?/cancel', {
       method: 'POST',
       body,
@@ -74,12 +93,16 @@ describe('mypage +page.server load', () => {
   });
 
   it('redirects to the login page when not logged in', async () => {
-    const event = buildEvent(fakeFetch({status: 401}));
+    const deleted: string[] = [];
+    const event = buildEvent(fakeFetch({status: 401}), deleted);
 
     await expect(load(event)).rejects.toMatchObject({
       status: 303,
       location: '/mypage/login',
     } satisfies Partial<Redirect>);
+    // Without this the login page would send the same cookie straight back
+    // here, since only the API can tell that it is no longer honoured.
+    expect(deleted).toEqual(['participant_session']);
   });
 
   it('throws 502 when the entries request fails', async () => {
@@ -125,12 +148,15 @@ describe('mypage +page.server cancel action', () => {
   });
 
   it('redirects to the login page when not logged in', async () => {
+    const deleted: string[] = [];
+
     await expect(
-      actions.cancel(buildCancelEvent(fakeDeleteFetch(401))),
+      actions.cancel(buildCancelEvent(fakeDeleteFetch(401), ENTRY_ID, deleted)),
     ).rejects.toMatchObject({
       status: 303,
       location: '/mypage/login',
     } satisfies Partial<Redirect>);
+    expect(deleted).toEqual(['participant_session']);
   });
 
   it('fails with 404 when the entry is gone', async () => {

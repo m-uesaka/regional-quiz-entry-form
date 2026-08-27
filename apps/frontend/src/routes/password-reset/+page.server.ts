@@ -4,6 +4,7 @@ import {
   PasswordResetRequestInputSchema,
 } from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
+import {clearParticipantSession} from '$lib/server/participant-session';
 import type {Actions, PageServerLoad} from './$types';
 
 /**
@@ -36,7 +37,7 @@ function readToken(url: URL): string | null {
 }
 
 export const actions = {
-  default: async ({fetch, request, url}) => {
+  default: async ({cookies, fetch, request, url}) => {
     const formData = await request.formData();
     const api = createApiClient(fetch);
     // The two forms this page can render are told apart the same way the
@@ -92,8 +93,14 @@ export const actions = {
       return fail(502, {error: 'パスワードの再設定に失敗しました'});
     }
 
-    // A reset cuts every session the participant had, so the only thing left
-    // to do is log in again with the password they have just chosen.
+    // A reset cuts every session the participant had, this browser's
+    // included, so the cookie goes before the redirect: the login page sends
+    // a visitor it still reads as logged in to `/mypage`, which would drop
+    // the notice below (and cost a pointless round trip through the 401 the
+    // API would answer there with).
+    clearParticipantSession(cookies);
+    // The only thing left to do is log in again with the password they have
+    // just chosen.
     throw redirect(303, '/mypage/login?reset=done');
   },
 } satisfies Actions;

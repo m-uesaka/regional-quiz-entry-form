@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import type {Redirect} from '@sveltejs/kit';
+import type {Cookies, Redirect} from '@sveltejs/kit';
 import {actions, load} from './+page.server';
 
 const TOKEN = 'b3f1c0de';
@@ -31,15 +31,28 @@ function buildLoadEvent(url: string): Parameters<typeof load>[0] {
   return {url: new URL(url)} as Parameters<typeof load>[0];
 }
 
+/**
+ * Builds a stand-in for `event.cookies` that records the names deleted on
+ * it, which is how a refused session is cleared.
+ * @param deleted The array every `delete()` call appends its name to.
+ */
+function fakeCookies(deleted: string[]): Cookies {
+  return {
+    delete: (name: string) => deleted.push(name),
+  } as unknown as Cookies;
+}
+
 /** Builds the partial `RequestEvent` the form action needs. */
 function buildActionEvent(
   url: string,
   fetchImpl: typeof fetch,
   formData: FormData,
+  deleted: string[] = [],
 ): Parameters<typeof actions.default>[0] {
   return {
     url: new URL(url),
     fetch: fetchImpl,
+    cookies: fakeCookies(deleted),
     request: {formData: async () => formData},
   } as Parameters<typeof actions.default>[0];
 }
@@ -128,16 +141,21 @@ describe('password reset +page.server action, without a token', () => {
 describe('password reset +page.server action, with a token', () => {
   it('confirms the reset and sends the participant back to the login page', async () => {
     const log: FetchLog = {urls: [], bodies: []};
+    const deleted: string[] = [];
     const event = buildActionEvent(
       RESET_URL,
       fakeFetch(200, log),
       passwordForm(),
+      deleted,
     );
 
     await expect(actions.default(event)).rejects.toMatchObject({
       status: 303,
       location: '/mypage/login?reset=done',
     } satisfies Partial<Redirect>);
+    // The reset cut this browser's own session too, so the cookie has to go
+    // or the login page would bounce the participant on to `/mypage`.
+    expect(deleted).toEqual(['participant_session']);
     expect(log.urls[0]).toContain(
       '/api/auth/participant/password-reset/confirm',
     );
