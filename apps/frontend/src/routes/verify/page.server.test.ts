@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import type {HttpError} from '@sveltejs/kit';
+import type {HttpError, Redirect} from '@sveltejs/kit';
 import {load} from './+page.server';
 
 /** Builds a fake `fetch` answering the single verify call `load` makes. */
@@ -28,8 +28,8 @@ function buildEvent(options: {
   } as Parameters<typeof load>[0];
 }
 
-describe('verify +page.server load', () => {
-  it('passes the token through to the backend and returns confirmed', async () => {
+describe('verify +page.server load (confirming a token)', () => {
+  it('passes the token through and redirects to the token-less result URL', async () => {
     const requested: string[] = [];
     const event = buildEvent({
       search: '?token=abc123',
@@ -39,7 +39,10 @@ describe('verify +page.server load', () => {
       }),
     });
 
-    await expect(load(event)).resolves.toEqual({status: 'confirmed'});
+    await expect(load(event)).rejects.toMatchObject({
+      status: 303,
+      location: '/verify?status=confirmed',
+    } satisfies Partial<Redirect>);
     expect(requested).toHaveLength(1);
     expect(requested[0]).toContain('/api/entries/verify');
     expect(
@@ -47,16 +50,19 @@ describe('verify +page.server load', () => {
     ).toBe('abc123');
   });
 
-  it('returns waitlisted when the tournament was full', async () => {
+  it('redirects with waitlisted when the tournament was full', async () => {
     const event = buildEvent({
       search: '?token=abc123',
       fetch: fakeFetch({body: {status: 'waitlisted'}}),
     });
 
-    await expect(load(event)).resolves.toEqual({status: 'waitlisted'});
+    await expect(load(event)).rejects.toMatchObject({
+      status: 303,
+      location: '/verify?status=waitlisted',
+    } satisfies Partial<Redirect>);
   });
 
-  it('returns invalid when the backend rejects the token', async () => {
+  it('redirects with invalid when the backend refuses the token', async () => {
     const event = buildEvent({
       search: '?token=abc123',
       fetch: fakeFetch({
@@ -65,20 +71,15 @@ describe('verify +page.server load', () => {
       }),
     });
 
-    await expect(load(event)).resolves.toEqual({status: 'invalid'});
+    await expect(load(event)).rejects.toMatchObject({
+      status: 303,
+      location: '/verify?status=invalid',
+    } satisfies Partial<Redirect>);
   });
 
-  it('returns invalid without calling the backend when the token is missing', async () => {
-    let called = false;
-    const event = buildEvent({
-      fetch: fakeFetch({onUrl: () => (called = true)}),
-    });
-
-    await expect(load(event)).resolves.toEqual({status: 'invalid'});
-    expect(called).toBe(false);
-  });
-
-  it('throws 502 when the backend fails for another reason', async () => {
+  it('throws 502 instead of redirecting when the backend fails', async () => {
+    // A 500 means the token may still be good, so it must not be reported to
+    // the participant as a dead link.
     const event = buildEvent({
       search: '?token=abc123',
       fetch: fakeFetch({status: 500, body: {error: 'boom'}}),
@@ -87,5 +88,33 @@ describe('verify +page.server load', () => {
     await expect(load(event)).rejects.toMatchObject({
       status: 502,
     } satisfies Partial<HttpError>);
+  });
+});
+
+describe('verify +page.server load (rendering a result)', () => {
+  it.each(['confirmed', 'waitlisted', 'invalid'] as const)(
+    'renders %s without calling the backend again',
+    async status => {
+      let called = false;
+      const event = buildEvent({
+        search: `?status=${status}`,
+        fetch: fakeFetch({onUrl: () => (called = true)}),
+      });
+
+      await expect(load(event)).resolves.toEqual({status});
+      expect(called).toBe(false);
+    },
+  );
+
+  it('falls back to invalid when the query string is missing', async () => {
+    const event = buildEvent({fetch: fakeFetch({})});
+
+    await expect(load(event)).resolves.toEqual({status: 'invalid'});
+  });
+
+  it('falls back to invalid for an unrecognised status', async () => {
+    const event = buildEvent({search: '?status=nope', fetch: fakeFetch({})});
+
+    await expect(load(event)).resolves.toEqual({status: 'invalid'});
   });
 });

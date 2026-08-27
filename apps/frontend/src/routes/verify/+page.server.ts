@@ -1,4 +1,4 @@
-import {error} from '@sveltejs/kit';
+import {error, redirect} from '@sveltejs/kit';
 import {createApiClient} from '$lib/api';
 import type {PageServerLoad} from './$types';
 
@@ -13,29 +13,56 @@ import type {PageServerLoad} from './$types';
  */
 export type VerifyStatus = 'confirmed' | 'waitlisted' | 'invalid';
 
+const VERIFY_STATUSES: readonly VerifyStatus[] = [
+  'confirmed',
+  'waitlisted',
+  'invalid',
+];
+
 export const load: PageServerLoad = async ({
   url,
   fetch,
 }): Promise<{status: VerifyStatus}> => {
   const token = url.searchParams.get('token');
-  // A link that lost its query string can't be told apart from a bad token
-  // by the participant, so it lands on the same "enter again" guidance
-  // instead of on an error page.
-  if (!token) {
-    return {status: 'invalid'};
+  if (token) {
+    const status = await confirmEntry(fetch, token);
+    // Confirming consumes the token, so the outcome is carried into a
+    // token-less URL before anything is rendered. A reload or a Back
+    // navigation re-runs this `load` (SvelteKit re-fetches the server data
+    // on popstate), and re-sending a spent token would answer 400 and tell
+    // a participant who was just confirmed that their link is invalid.
+    throw redirect(303, `/verify?status=${status}`);
   }
 
-  const api = createApiClient(fetch);
+  // A link that lost its query string -- or a hand-edited `status` -- can't
+  // be told apart from a dead token by the participant, so both land on the
+  // same "enter again" guidance instead of on an error page.
+  const status = url.searchParams.get('status');
+  return {status: isVerifyStatus(status) ? status : 'invalid'};
+};
+
+/** Confirms the entry the token was issued for, consuming the token. */
+async function confirmEntry(
+  fetchImpl: typeof fetch,
+  token: string,
+): Promise<VerifyStatus> {
+  const api = createApiClient(fetchImpl);
   const res = await api.api.entries.verify.$get({query: {token}});
-  // The confirmation itself happens here: the entry is only finalised once
-  // the participant opens the link, so this `load` is what performs it and a
-  // 400 is an expected outcome to render, not a failure to report.
   if (!res.ok) {
+    // The backend answers 400 only for a token the database actually
+    // refused, and 500 for anything else (a Supabase outage, say), so a 400
+    // is an outcome to render while everything else is a fault to report --
+    // telling a participant to enter again after a transient failure would
+    // strand an entry that is still `pending_verification`.
     if (res.status === 400) {
-      return {status: 'invalid'};
+      return 'invalid';
     }
     throw error(502, 'エントリーの確定に失敗しました');
   }
 
-  return {status: (await res.json()).status};
-};
+  return (await res.json()).status;
+}
+
+function isVerifyStatus(value: string | null): value is VerifyStatus {
+  return VERIFY_STATUSES.includes(value as VerifyStatus);
+}
