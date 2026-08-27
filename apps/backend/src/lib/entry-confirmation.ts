@@ -2,8 +2,21 @@ import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import {hashToken} from './token';
 
+/**
+ * `invalid_token` is the participant's problem -- the token is unknown,
+ * expired, already used, or its entry is no longer awaiting verification --
+ * and is the only failure the caller may present as "this link is no longer
+ * valid". `internal` is everything else (a Supabase outage, a timeout, a
+ * malformed response): the token may well still be good, so the caller must
+ * report a server fault instead, or the participant is told to enter again
+ * while their entry sits in `pending_verification` and a re-entry is refused
+ * as a duplicate.
+ */
+type ConfirmFailureReason = 'invalid_token' | 'internal';
+
 type ConfirmResult =
-  {ok: true; status: 'confirmed' | 'waitlisted'} | {ok: false; error: string};
+  | {ok: true; status: 'confirmed' | 'waitlisted'}
+  | {ok: false; reason: ConfirmFailureReason; error: string};
 
 /**
  * The SQLSTATE the `confirm_entry_by_token` Postgres function raises (see
@@ -42,9 +55,13 @@ export async function confirmEntryByToken(
   });
   if (error) {
     if (error.code === INVALID_TOKEN_SQLSTATE) {
-      return {ok: false, error: 'invalid or expired token'};
+      return {
+        ok: false,
+        reason: 'invalid_token',
+        error: 'invalid or expired token',
+      };
     }
-    return {ok: false, error: error.message};
+    return {ok: false, reason: 'internal', error: error.message};
   }
 
   return {ok: true, status: data as 'confirmed' | 'waitlisted'};
