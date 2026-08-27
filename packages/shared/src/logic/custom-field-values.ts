@@ -34,6 +34,61 @@ export function isBooleanCheckbox(fieldDef: FormFieldDef): boolean {
 export const BOOLEAN_CHECKBOX_LABELS = {checked: 'はい', unchecked: 'いいえ'};
 
 /**
+ * Why a submitted custom field answer was rejected. Only `required` is
+ * something the rendered form lets a participant produce (by submitting
+ * before the client bundle has taken the form over, or with JS off — see
+ * #95); the rest describe a body the form could never have sent.
+ */
+export type CustomFieldValuesErrorReason =
+  | 'unknown-field'
+  | 'expects-list'
+  | 'expects-single'
+  | 'required'
+  | 'unknown-option';
+
+/** The wording each reason is reported to an API client with. */
+const REASON_MESSAGES: Record<CustomFieldValuesErrorReason, string> = {
+  'unknown-field': 'unknown custom field',
+  'expects-list': 'custom field expects a list of values',
+  'expects-single': 'custom field expects a single value',
+  required: 'custom field is required',
+  'unknown-option': 'custom field has an unknown option',
+};
+
+/** A rejected custom field answer: which field, and why. */
+export interface CustomFieldValuesError {
+  reason: CustomFieldValuesErrorReason;
+  /**
+   * The field the rejected answer was given for. For `unknown-field` this
+   * is the submitted key itself, which no definition claims.
+   */
+  fieldKey: string;
+  /**
+   * The English identifier the API answers a rejected submission with. A
+   * caller showing this to a person is expected to word it from `reason`
+   * and the field's own label instead.
+   */
+  message: string;
+}
+
+/**
+ * Builds the rejection a caller sees, so `reason` and `message` can't drift
+ * apart.
+ * @param reason Why the answer was rejected.
+ * @param fieldKey The field the rejected answer was given for.
+ */
+function rejection(
+  reason: CustomFieldValuesErrorReason,
+  fieldKey: string,
+): CustomFieldValuesError {
+  return {
+    reason,
+    fieldKey,
+    message: `${REASON_MESSAGES[reason]}: ${fieldKey}`,
+  };
+}
+
+/**
  * Checks submitted custom field answers against the tournament's own form
  * field definitions, so an API client can't store answers the rendered form
  * could never have produced (unknown fields, options that aren't offered, or
@@ -43,17 +98,17 @@ export const BOOLEAN_CHECKBOX_LABELS = {checked: 'はい', unchecked: 'いいえ
  * field is required.
  * @param fieldDefs The tournament's custom form field definitions.
  * @param values The submitted answers.
- * @return `null` when the answers are valid, otherwise the reason they
- *     aren't.
+ * @return `null` when the answers are valid, otherwise which field was
+ *     rejected and why.
  */
 export function findCustomFieldValuesError(
   fieldDefs: FormFieldDef[],
   values: CustomFieldValues,
-): string | null {
+): CustomFieldValuesError | null {
   const definedKeys = new Set(fieldDefs.map(fieldDef => fieldDef.fieldKey));
   for (const key of Object.keys(values)) {
     if (!definedKeys.has(key)) {
-      return `unknown custom field: ${key}`;
+      return rejection('unknown-field', key);
     }
   }
 
@@ -64,15 +119,15 @@ export function findCustomFieldValuesError(
       // form only shows checkbox selections stored as a list, so the
       // selection would silently disappear when the entry is reopened.
       if (value !== undefined && !Array.isArray(value)) {
-        return `custom field expects a list of values: ${fieldDef.fieldKey}`;
+        return rejection('expects-list', fieldDef.fieldKey);
       }
     } else if (Array.isArray(value)) {
-      return `custom field expects a single value: ${fieldDef.fieldKey}`;
+      return rejection('expects-single', fieldDef.fieldKey);
     }
 
     const selected = selectedOptions(value);
     if (fieldDef.required && selected.length === 0) {
-      return `custom field is required: ${fieldDef.fieldKey}`;
+      return rejection('required', fieldDef.fieldKey);
     }
 
     // A `textarea` answer is free text, so only fields offering a fixed set
@@ -86,7 +141,7 @@ export function findCustomFieldValuesError(
     }
     for (const option of selected) {
       if (!allowed.includes(option)) {
-        return `custom field has an unknown option: ${fieldDef.fieldKey}`;
+        return rejection('unknown-option', fieldDef.fieldKey);
       }
     }
   }

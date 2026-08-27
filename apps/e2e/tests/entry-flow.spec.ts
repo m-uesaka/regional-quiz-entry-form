@@ -5,6 +5,7 @@ import {SHINJINOU} from '../support/fixtures';
 import {
   entryFormPath,
   entryListPath,
+  fillEntryForm,
   holdClientBundle,
   loginParticipantThroughForm,
   openVerificationLink,
@@ -19,7 +20,11 @@ test('an entry is confirmed through its mailed link and shows up on mypage', asy
     name: '確認太郎',
     furigana: 'かくにんたろう',
     displayName: 'かくにん',
-    customFieldValues: {shirt_size: 'M', note: 'よろしくお願いします'},
+    customFieldValues: {
+      shirt_size: 'M',
+      note: 'よろしくお願いします',
+      workshops: ['早押し', '筆記'],
+    },
     freeText: '当日は早めに伺います',
   });
 
@@ -94,4 +99,30 @@ test('keeps what was answered before the client bundle took over', async ({
 
   await expect(name).toHaveValue('先走り太郎');
   await expect(regulation).toBeChecked();
+});
+
+// #95 の回帰テスト。
+test('accepts a required checkbox group answered before the client bundle took over', async ({
+  page,
+}) => {
+  // A required checkbox group has no native "at least one checked", so the
+  // form spells it as a `required` on every box that is dropped again once
+  // one is checked — and dropping it takes a re-render. Held back here, so
+  // the whole form is answered and submitted against the server's HTML,
+  // exactly as it would be with JS off: the boxes left unchecked must not
+  // be carrying a `required` the browser then silently refuses to submit
+  // past.
+  const releaseClientBundle = await holdClientBundle(page);
+  await page.goto(entryFormPath(SHINJINOU), {waitUntil: 'commit'});
+
+  const participant = await fillEntryForm(page, SHINJINOU, {
+    displayName: '先回りさん',
+    customFieldValues: {shirt_size: 'M', workshops: ['筆記']},
+  });
+  // Two of the three boxes are unchecked, and the form is submitted with
+  // the client bundle still held.
+  await page.getByRole('button', {name: 'エントリーする'}).click();
+
+  await expect(page.getByRole('status')).toContainText(participant.email);
+  releaseClientBundle();
 });

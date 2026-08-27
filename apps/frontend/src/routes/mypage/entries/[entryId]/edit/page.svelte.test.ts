@@ -72,6 +72,7 @@ describe('mypage entry edit +page.svelte', () => {
   it('shows the action error when an update fails', () => {
     renderPage({
       error: 'エントリー期間外のため編集できません',
+      fieldErrors: {},
       values: {
         name: ENTRY.name,
         furigana: ENTRY.furigana,
@@ -89,6 +90,7 @@ describe('mypage entry edit +page.svelte', () => {
   it('keeps what was typed when the update is rejected', () => {
     renderPage({
       error: '入力内容を確認してください',
+      fieldErrors: {},
       values: {
         name: '山田花子',
         furigana: 'ヤマダハナコ',

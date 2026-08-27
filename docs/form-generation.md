@@ -193,10 +193,19 @@ Props は `{field, value, onChange}` の3つで、状態は親が持ちます(�
 「複数の選択肢のうち最低1つ」を表す HTML の標準機能はありません。そこで、**グループ内のどれも選択されていない間だけ全チェックボックスに `required` を付け、1つでも選択されたら全部から外す**、という方法を取っています。
 
 ```svelte
-required={field.required && !hasCheckboxSelection}
+required={hydrated && field.required && !hasCheckboxSelection}
 ```
 
 こうすると、未選択のときはブラウザの制約検証が発火し、1つ選べば満たされた扱いになります。
+
+`hydrated` が入っているのは、**「外す」側に再描画が要る**からです(#95)。サーバが描いた HTML のまま1つチェックしても、チェックしなかった箱の `required` を外す処理は誰も走らせません。結果としてブラウザの制約検証が黙って送信を止め、ハイドレーション前・JS 無効の環境ではこのフォームが**一切送信できなくなります**。
+
+そのため、この `required` は**サーバ側の描画には出さず**、クライアントバンドルがフォームを引き継いだ後(`$effect` が走った後)にだけ付けます。
+
+- **JS 有効**: ハイドレーション後は従来どおりネイティブの制約検証が即座に効きます。
+- **ハイドレーション前 / JS 無効**: 制約検証はかからず、そのままサーバへ飛びます。「1つ以上」は下記のサーバ側検証が弾き、フォームは該当項目の下にメッセージを表示します。
+
+同じ `required` でも、**単独ブールチェックボックス**(「規約に同意します」)と **`radio` グループ**はこの扱いをしません。前者は「この箱をチェックせよ」、後者は「グループのどれか1つ」がそのままブラウザ標準のルールなので、スクリプト無しで成立するためです。
 
 ## 6. 回答値の保存と検証
 
@@ -206,13 +215,15 @@ required={field.required && !hasCheckboxSelection}
 
 検証項目:
 
-| チェック | エラーメッセージ |
-| --- | --- |
-| 定義に無いキーが含まれていない | `unknown custom field: {key}` |
-| `checkbox` の値が配列である | `custom field expects a list of values: {key}` |
-| `checkbox` 以外の値が配列でない | `custom field expects a single value: {key}` |
-| 必須項目が空でない | `custom field is required: {key}` |
-| 選択肢が定義内の値である | `custom field has an unknown option: {key}` |
+| チェック | `reason` | `message` |
+| --- | --- | --- |
+| 定義に無いキーが含まれていない | `unknown-field` | `unknown custom field: {key}` |
+| `checkbox` の値が配列である | `expects-list` | `custom field expects a list of values: {key}` |
+| `checkbox` 以外の値が配列でない | `expects-single` | `custom field expects a single value: {key}` |
+| 必須項目が空でない | `required` | `custom field is required: {key}` |
+| 選択肢が定義内の値である | `unknown-option` | `custom field has an unknown option: {key}` |
+
+戻り値は `CustomFieldValuesError`(`{reason, fieldKey, message}`)か `null` です。API が答えるのは `message` の英語識別子だけですが、`reason` と `fieldKey` があるのは、フロントエンドの form action が同じ関数で検証した結果を**日本語で、しかも該当項目の直下に**出せるようにするためです(`customFieldErrors()` / `apps/frontend/src/lib/server/custom-field-values.ts`)。
 
 補足:
 
@@ -220,6 +231,8 @@ required={field.required && !hasCheckboxSelection}
 - `textarea` は自由記述なので選択肢の照合をスキップします。
 - 単独ブールチェックボックス(`options` が**省略されているか空配列**の `checkbox`)は、「自分のキー1つだけを選択肢に持つ」ものとして照合されます。つまり `[field.key]` か `[]` 以外は弾かれます。
 - `checkbox` にスカラー値が来た場合は、選択肢の照合自体は通ってしまうものの弾いています。保存できてしまうと、エントリーを開き直したときに描画側(配列しか見ない)が選択を認識できず、回答が黙って消えたように見えるためです。
+
+**エントリーフォームと編集フォームの form action も、API を叩く前に同じ `findCustomFieldValuesError()` を通します。** 目的は2つあります。1つは、API の英語識別子ではどの項目が弾かれたか画面から分からないので、`fieldErrors` に該当コントロール名で日本語メッセージを積むこと。もう1つは、**必須チェックボックス群にとってはこれが唯一の検証だから**です(前述のとおり `required` はハイドレーション後にしか付きません)。キーは送信時と同じ名前空間付きコントロール名(`custom.{key}`)なので、`name` のようなキーの項目がフォーム本体の氏名欄のメッセージを上書きすることはありません。
 
 `EntryInputSchema` / `EntryEditInputSchema` の `z.record()` は形(`Record<string, string | string[]>`)しか見ないため、大会のフォーム定義との照合はこの関数が担っています。新しい入力形式を足すときに `findCustomFieldValuesError()` の更新を忘れると、その形式だけ素通りする点に注意してください。
 

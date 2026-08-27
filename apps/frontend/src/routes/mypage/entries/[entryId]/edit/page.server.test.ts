@@ -202,16 +202,44 @@ describe('mypage entry edit form action', () => {
     ]);
   });
 
-  it('records an unchecked boolean checkbox as an empty list', async () => {
+  it('records an unchecked optional boolean checkbox as an empty list', async () => {
     const log: FetchLog = {patchBodies: []};
+    // Optional here, because a *required* one left unchecked is refused by
+    // the action itself — see the test below.
+    const entry: MypageEntryDetail = {
+      ...ENTRY,
+      formFieldDefs: ENTRY.formFieldDefs.map(fieldDef =>
+        fieldDef.fieldKey === 'agree_to_rules'
+          ? {...fieldDef, required: false}
+          : fieldDef,
+      ),
+    };
     const formData = validFormData();
     formData.delete('custom.agree_to_rules');
-    const event = buildActionEvent(fakeFetch({}, log), formData);
+    const event = buildActionEvent(fakeFetch({entry}, log), formData);
 
     await expect(actions.default(event)).rejects.toMatchObject({status: 303});
     expect(log.patchBodies[0]).toMatchObject({
       customFieldValues: {t_shirt_size: 'L', agree_to_rules: []},
     });
+  });
+
+  it('refuses a required custom field left blank, naming the control', async () => {
+    const log: FetchLog = {patchBodies: []};
+    const formData = validFormData();
+    formData.delete('custom.agree_to_rules');
+    const event = buildActionEvent(fakeFetch({}, log), formData);
+
+    await expect(actions.default(event)).resolves.toMatchObject({
+      status: 400,
+      data: {
+        fieldErrors: {
+          'custom.agree_to_rules': ['「規約に同意する」は必須です'],
+        },
+      },
+    });
+    // Refused here, so the API is never asked to store it.
+    expect(log.patchBodies).toEqual([]);
   });
 
   it('fails with 400 and keeps the submitted values when a required field is empty', async () => {

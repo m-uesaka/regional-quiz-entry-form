@@ -146,6 +146,21 @@ describe('entry +page.svelte', () => {
     expect(screen.getByText('パスワードが一致しません')).toBeInTheDocument();
   });
 
+  it("shows a custom field's message under its own control", () => {
+    // Filed under the namespaced control name, which is also what the
+    // page looks the message up by — so a custom field keyed `name` can't
+    // land under the real 氏名 field.
+    renderPage({
+      error: '入力内容を確認してください',
+      fieldErrors: {'custom.agree_rules': ['「規約に同意する」は必須です']},
+      values: SUBMITTED_VALUES,
+    });
+
+    expect(
+      screen.getByText('「規約に同意する」は必須です'),
+    ).toBeInTheDocument();
+  });
+
   it('replaces the form with a confirmation once the entry is accepted', () => {
     renderPage({submitted: true, email: 'taro@example.com'});
 

@@ -340,6 +340,41 @@ describe('entry +page.server default action', () => {
     });
   });
 
+  it('refuses a required checkbox group left blank, naming the control', async () => {
+    // The group carries no `required` until the client bundle has taken the
+    // form over (#95), so this is the submission a visitor who beat
+    // hydration — or has JS off — actually makes, and the action is what has
+    // to answer it.
+    const requests: string[] = [];
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          formFieldDefs: [
+            {
+              fieldKey: 'workshops',
+              label: '参加したい企画',
+              fieldType: 'checkbox',
+              required: true,
+              options: ['早押し', '筆記'],
+              displayOrder: 0,
+            },
+          ],
+          requests,
+        }),
+        fields: validFormData(),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 400,
+      data: {
+        fieldErrors: {'custom.workshops': ['「参加したい企画」は必須です']},
+      },
+    });
+    // Refused here, so the API is never asked to create the entry.
+    expect(requests.some(url => url.includes('/entries'))).toBe(false);
+  });
+
   it('falls back to a status-based message for an unknown error string', async () => {
     const result = await actions.default(
       buildActionEvent({

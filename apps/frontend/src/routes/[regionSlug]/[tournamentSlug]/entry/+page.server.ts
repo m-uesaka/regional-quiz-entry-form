@@ -1,6 +1,7 @@
 import {error, fail} from '@sveltejs/kit';
 import {
   EntryInputSchema,
+  findCustomFieldValuesError,
   isWithinEntryPeriod,
   TournamentTypeSchema,
   type CustomFieldValues,
@@ -9,7 +10,10 @@ import {
   type Tournament,
 } from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
-import {readCustomFieldValues} from '$lib/server/custom-field-values';
+import {
+  customFieldErrors,
+  readCustomFieldValues,
+} from '$lib/server/custom-field-values';
 import type {Actions, PageServerLoad, RequestEvent} from './$types';
 
 /**
@@ -199,6 +203,31 @@ export const actions = {
       freeText,
       customFieldValues: readCustomFieldValues(formData, formFieldDefs),
     };
+
+    // The API checks these too, but it answers in identifiers that name no
+    // field the page can point at, so the same rule is applied here to get
+    // the refusal onto the control that caused it.
+    //
+    // It is also the only check standing behind a required checkbox group:
+    // that group carries no `required` until the client bundle has taken
+    // the form over (#95), so an unanswered one submitted before then — or
+    // with JS off — reaches this action instead of being stopped by the
+    // browser.
+    const customFieldValuesError = findCustomFieldValuesError(
+      formFieldDefs,
+      values.customFieldValues,
+    );
+    if (customFieldValuesError) {
+      const fieldErrors: EntryFieldErrors = customFieldErrors(
+        customFieldValuesError,
+        formFieldDefs,
+      );
+      return fail(400, {
+        error: '入力内容を確認してください',
+        fieldErrors,
+        values,
+      });
+    }
 
     const parsed = EntryInputSchema.safeParse({
       ...values,

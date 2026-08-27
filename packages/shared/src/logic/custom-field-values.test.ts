@@ -64,7 +64,11 @@ describe('findCustomFieldValuesError', () => {
       injected: 'x',
     });
 
-    expect(error).toContain('injected');
+    expect(error).toEqual({
+      reason: 'unknown-field',
+      fieldKey: 'injected',
+      message: 'unknown custom field: injected',
+    });
   });
 
   it('rejects an option the field does not offer', () => {
@@ -73,7 +77,10 @@ describe('findCustomFieldValuesError', () => {
       t_shirt_size: 'XXL',
     });
 
-    expect(error).toContain('t_shirt_size');
+    expect(error).toMatchObject({
+      reason: 'unknown-option',
+      fieldKey: 't_shirt_size',
+    });
   });
 
   it('rejects a boolean checkbox checked with a foreign value', () => {
@@ -82,7 +89,10 @@ describe('findCustomFieldValuesError', () => {
       agree_to_rules: ['yes'],
     });
 
-    expect(error).toContain('agree_to_rules');
+    expect(error).toMatchObject({
+      reason: 'unknown-option',
+      fieldKey: 'agree_to_rules',
+    });
   });
 
   it('rejects a blank required field', () => {
@@ -91,7 +101,10 @@ describe('findCustomFieldValuesError', () => {
       t_shirt_size: '',
     });
 
-    expect(error).toContain('required');
+    expect(error).toMatchObject({
+      reason: 'required',
+      fieldKey: 't_shirt_size',
+    });
   });
 
   it('rejects an unchecked required boolean checkbox', () => {
@@ -100,7 +113,10 @@ describe('findCustomFieldValuesError', () => {
       agree_to_rules: [],
     });
 
-    expect(error).toContain('required');
+    expect(error).toMatchObject({
+      reason: 'required',
+      fieldKey: 'agree_to_rules',
+    });
   });
 
   it('rejects a list answer for a single-value field', () => {
@@ -109,7 +125,10 @@ describe('findCustomFieldValuesError', () => {
       t_shirt_size: ['S', 'M'],
     });
 
-    expect(error).toContain('single value');
+    expect(error).toMatchObject({
+      reason: 'expects-single',
+      fieldKey: 't_shirt_size',
+    });
   });
 
   it('rejects a scalar answer for a checkbox field', () => {
@@ -118,7 +137,10 @@ describe('findCustomFieldValuesError', () => {
       allergies: '卵',
     });
 
-    expect(error).toContain('list of values');
+    expect(error).toMatchObject({
+      reason: 'expects-list',
+      fieldKey: 'allergies',
+    });
   });
 
   it('rejects a scalar answer for a boolean checkbox', () => {
@@ -127,7 +149,10 @@ describe('findCustomFieldValuesError', () => {
       agree_to_rules: 'agree_to_rules',
     });
 
-    expect(error).toContain('list of values');
+    expect(error).toMatchObject({
+      reason: 'expects-list',
+      fieldKey: 'agree_to_rules',
+    });
   });
 
   it('accepts any text for a free-text field', () => {

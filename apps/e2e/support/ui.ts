@@ -126,18 +126,19 @@ async function fillField(field: Locator, value: string): Promise<void> {
 }
 
 /**
- * Fills the tournament's entry form in as a brand-new participant and
- * submits it.
+ * Fills in every control of the entry form the page is already showing, as
+ * a brand-new participant, without submitting it.
  *
- * The entry is created `pending_verification`, so the form answers with the
- * "check your mail" notice rather than by navigating anywhere;
- * `openVerificationLink()` is what carries it on.
- * @param page The page to drive.
+ * Split out from `submitEntryForm()` so a spec can drive the form while the
+ * client bundle is held back (`holdClientBundle()`) — nothing here waits for
+ * hydration, so it works against the server's HTML just as well.
+ * @param page The page to drive, already on the entry form.
  * @param tournament The tournament being entered.
  * @param input Fields the spec wants to pin down; anything left out gets a
  *     filler value.
+ * @return The participant the form was filled in as.
  */
-export async function submitEntryForm(
+export async function fillEntryForm(
   page: Page,
   tournament: TournamentFixture,
   input: EntryFormInput = {},
@@ -149,11 +150,6 @@ export async function submitEntryForm(
     furigana: input.furigana ?? 'てすとたろう',
     displayName: input.displayName ?? 'テスト太郎',
   };
-
-  await page.goto(entryFormPath(tournament));
-  await expect(
-    page.getByRole('heading', {name: `${tournament.name} へのエントリー`}),
-  ).toBeVisible();
 
   await fillField(page.getByLabel('氏名', {exact: true}), participant.name);
   await fillField(
@@ -198,6 +194,33 @@ export async function submitEntryForm(
     await fillField(page.getByLabel('自由記述', {exact: true}), input.freeText);
   }
 
+  return participant;
+}
+
+/**
+ * Opens the tournament's entry form, fills it in as a brand-new
+ * participant and submits it.
+ *
+ * The entry is created `pending_verification`, so the form answers with the
+ * "check your mail" notice rather than by navigating anywhere;
+ * `openVerificationLink()` is what carries it on.
+ * @param page The page to drive.
+ * @param tournament The tournament being entered.
+ * @param input Fields the spec wants to pin down; anything left out gets a
+ *     filler value.
+ */
+export async function submitEntryForm(
+  page: Page,
+  tournament: TournamentFixture,
+  input: EntryFormInput = {},
+): Promise<EntryFormParticipant> {
+  await page.goto(entryFormPath(tournament));
+  await expect(
+    page.getByRole('heading', {name: `${tournament.name} へのエントリー`}),
+  ).toBeVisible();
+
+  const participant = await fillEntryForm(page, tournament, input);
+
   await page.getByRole('button', {name: 'エントリーする'}).click();
   await expect(page.getByRole('status')).toContainText(participant.email);
   return participant;
@@ -215,32 +238,46 @@ async function answerCustomField(
   field: FormFieldDefFixture,
   answer: string | string[],
 ): Promise<void> {
-  if (Array.isArray(answer)) {
-    // Only a `checkbox` group takes several answers, and no fixture seeds
-    // one, so filling it in has never been exercised. Adding a checkbox
-    // field to `fixtures.ts` is what should bring the branch with it.
+  // Only a `checkbox` group offering options takes several answers; every
+  // other control holds one.
+  const options = Array.isArray(answer) ? answer : [answer];
+  const isCheckboxGroup =
+    field.fieldType === 'checkbox' && (field.options?.length ?? 0) > 0;
+  if (!isCheckboxGroup && options.length !== 1) {
     throw new Error(
-      `No seeded field type takes a list of answers, but ${field.fieldKey} ` +
+      `A ${field.fieldType} field holds one answer, but ${field.fieldKey} ` +
         `was given ${JSON.stringify(answer)}.`,
     );
   }
 
-  // Not `exact`, because a required field's label carries a trailing "*".
+  // Not `exact` on the group's own label, because a required field's label
+  // carries a trailing "*"; the options inside it are matched exactly.
   switch (field.fieldType) {
     case 'textarea':
-      await fillField(page.getByLabel(field.label), answer);
+      await fillField(page.getByLabel(field.label), options[0]);
       return;
     case 'radio':
       await page
         .getByRole('group', {name: field.label})
-        .getByLabel(answer, {exact: true})
+        .getByLabel(options[0], {exact: true})
         .check();
       return;
-    default:
-      throw new Error(
-        `Answering a ${field.fieldType} field is not implemented; ` +
-          `${field.fieldKey} needs one.`,
-      );
+    case 'checkbox': {
+      if (!isCheckboxGroup) {
+        // A `checkbox` field with no options is a lone yes/no box labelled
+        // by the field itself, not a group. No fixture seeds one, so how a
+        // spec would say "check it" is left to whoever adds the first.
+        throw new Error(
+          `Answering the option-less checkbox ${field.fieldKey} is not ` +
+            'implemented; no fixture seeds one.',
+        );
+      }
+      const group = page.getByRole('group', {name: field.label});
+      for (const option of options) {
+        await group.getByLabel(option, {exact: true}).check();
+      }
+      return;
+    }
   }
 }
 

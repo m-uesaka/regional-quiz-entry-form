@@ -3,6 +3,7 @@
   import {enhance} from '$app/forms';
   import {toFormFieldDefYaml} from '@regional-quiz/shared';
   import DynamicFormField from '$lib/components/DynamicFormField.svelte';
+  import {customFieldName} from '$lib/custom-field-name';
   import RegulationSelector from '$lib/components/RegulationSelector.svelte';
   import type {PageProps} from './$types';
 
@@ -149,7 +150,13 @@
     {/if}
 
     {#each fields as field (field.key)}
-      <DynamicFormField {field} bind:value={customFieldValues[field.key]} />
+      <!-- Keyed by the control's namespaced name, the same key the action
+           files a custom field's message under. -->
+      <DynamicFormField
+        {field}
+        bind:value={customFieldValues[field.key]}
+        error={fieldError(customFieldName(field.key))}
+      />
     {/each}
 
     <div class="form-field">

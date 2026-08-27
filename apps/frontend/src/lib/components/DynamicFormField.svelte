@@ -12,9 +12,15 @@
      * `apps/frontend/README.md`.
      */
     value: string | string[];
+    /**
+     * What the server said about this field's answer when it rejected the
+     * submission, shown under the control. Left out while nothing has been
+     * rejected.
+     */
+    error?: string;
   }
 
-  let {field, value = $bindable()}: Props = $props();
+  let {field, value = $bindable(), error}: Props = $props();
 
   // Namespaced so a field key that happens to match one of the form's own
   // inputs (`name`, `email`, `password`, ...) can't submit under the same
@@ -37,7 +43,34 @@
   const hasCheckboxSelection = $derived(
     Array.isArray(value) && value.length > 0,
   );
+
+  // Dropping that `required` again takes a re-render, which is something
+  // only the client bundle can do — so before hydration (and with JS off)
+  // the boxes the visitor left unchecked would keep a `required` the
+  // browser silently refuses to submit past, and nothing would ever come
+  // along to remove it. See #95.
+  //
+  // The server-rendered HTML therefore carries no `required` on these
+  // boxes at all, and the constraint is installed only once this effect
+  // has run; the "at least one" rule is enforced for everyone by
+  // `findCustomFieldValuesError()` in the form action either way, so an
+  // early submission is answered with that message rather than dropped.
+  //
+  // Only the multi-option group needs this: a lone boolean checkbox and a
+  // radio group both express their rule natively, so their `required`
+  // holds without any script.
+  let hydrated = $state(false);
+  $effect(() => {
+    hydrated = true;
+  });
 </script>
+
+<!-- The three branches below each render this under their control, so a
+     rejected answer is reported in the same place whatever the field
+     type is. -->
+{#snippet errorMessage()}
+  {#if error}<p class="field-error">{error}</p>{/if}
+{/snippet}
 
 {#if field.type === 'textarea'}
   <div class="form-field">
@@ -51,6 +84,7 @@
       required={field.required}
       bind:value
     ></textarea>
+    {@render errorMessage()}
   </div>
 {:else if field.type === 'radio'}
   <fieldset class="form-field">
@@ -70,6 +104,7 @@
         {option}
       </label>
     {/each}
+    {@render errorMessage()}
   </fieldset>
 {:else if field.type === 'checkbox'}
   {#if field.options && field.options.length > 0}
@@ -84,12 +119,13 @@
             type="checkbox"
             name={controlName}
             value={option}
-            required={field.required && !hasCheckboxSelection}
+            required={hydrated && field.required && !hasCheckboxSelection}
             bind:group={value}
           />
           {option}
         </label>
       {/each}
+      {@render errorMessage()}
     </fieldset>
   {:else}
     <div class="form-field">
@@ -103,6 +139,7 @@
         />
         {field.label}
       </label>
+      {@render errorMessage()}
     </div>
   {/if}
 {/if}
