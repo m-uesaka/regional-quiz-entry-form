@@ -22,25 +22,47 @@ export const SUPABASE_SERVICE_ROLE_KEY =
 /** The port `wrangler dev` serves `apps/backend` on for the test run. */
 export const BACKEND_PORT = Number(process.env.E2E_BACKEND_PORT ?? 8787);
 
-// Served over HTTPS (`wrangler dev --local-protocol https`, behind a
-// self-signed certificate) rather than plain HTTP, because both session
-// cookies are set `Secure` — as they are in production. Playwright's API
-// request context stores such a cookie but then declines to send it back
-// over `http://`, so every authenticated step would fail against an
-// `http://` backend for a reason the app does not actually have.
-export const BACKEND_URL = `https://127.0.0.1:${BACKEND_PORT}`;
+// Plain HTTP. Nothing in the run talks to the Worker over TLS: the browser
+// only ever reaches it through the frontend (`vite dev`'s `/api/*` proxy,
+// and `handleFetch` during SSR), and the API calls left in `./api.ts` are
+// all anonymous.
+//
+// It used to be HTTPS, because the session cookies are `Secure` — as they
+// are in production — and Playwright's API request context declines to send
+// such a cookie back over `http://`. Now that the sessions are held by the
+// browser instead, under the frontend's own origin, that no longer applies,
+// and a self-signed certificate would have to be waved through by every
+// server-side `fetch` the SvelteKit app makes.
+export const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
 
 /** The port the Resend stub in `./mail-sink.ts` listens on. */
 export const MAIL_SINK_PORT = Number(process.env.E2E_MAIL_SINK_PORT ?? 8788);
 
 export const MAIL_SINK_URL = `http://127.0.0.1:${MAIL_SINK_PORT}`;
 
-// Nothing is served here during an API-level run: the value only ends up
-// as the origin of the `/verify?token=...` link inside the confirmation
-// mail, which the tests parse the token out of. It becomes a real address
-// once the flows are driven through the UI (see the follow-up issue in
-// `README.md`).
-export const FRONTEND_URL = 'http://127.0.0.1:5173';
+/** The port `vite dev` serves `apps/frontend` on for the test run. */
+export const FRONTEND_PORT = Number(process.env.E2E_FRONTEND_PORT ?? 5173);
+
+// The origin the browser is pointed at, and also what the backend builds the
+// `/verify?token=...` link in the confirmation mail from, so the two have to
+// agree.
+//
+// It has to be a *loopback* address, not merely a plain-HTTP one. The two
+// session cookies reach the browser by different routes, and only one of
+// them drops `Secure`:
+//
+//   - `staff_session` goes through `forwardSetCookies()`
+//     (`apps/frontend/src/lib/server/backend-cookies.ts`), which decides
+//     `Secure` from the frontend's own protocol and so drops it here.
+//   - `participant_session` goes through `forwardBackendCookies()`
+//     (`.../backend-fetch.ts`, called from `handleFetch`), which copies the
+//     backend's attributes verbatim and so keeps `Secure`. It survives only
+//     because Chromium counts `127.0.0.1` as a trustworthy origin and takes
+//     a `Secure` cookie from it over plain HTTP.
+//
+// Serving this from a LAN address instead (`vite dev --host`) would
+// therefore leave participant login silently looping back to the form.
+export const FRONTEND_URL = `http://127.0.0.1:${FRONTEND_PORT}`;
 
 /** The HS256 key the backend signs session JWTs with during the run. */
 export const SESSION_SECRET = 'e2e-session-secret';

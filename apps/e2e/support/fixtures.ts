@@ -102,6 +102,27 @@ export const SHINJINOU_FORM_FIELD_DEFS: readonly FormFieldDefFixture[] = [
   },
 ];
 
+/**
+ * Every seeded custom form field, across all tournaments. `seed.ts` inserts
+ * these, and `formFieldDefsOf()` is how the UI helpers know which extra
+ * controls a tournament's entry form renders.
+ */
+export const FORM_FIELD_DEFS: readonly FormFieldDefFixture[] =
+  SHINJINOU_FORM_FIELD_DEFS;
+
+/**
+ * The custom form fields one tournament's entry form renders, in the order
+ * it renders them.
+ * @param tournament The tournament whose form is being filled in.
+ */
+export function formFieldDefsOf(
+  tournament: TournamentFixture,
+): FormFieldDefFixture[] {
+  return FORM_FIELD_DEFS.filter(
+    field => field.tournamentId === tournament.id,
+  ).sort((a, b) => a.displayOrder - b.displayOrder);
+}
+
 /** Scoped to 東京 × 新人王, so 最強位 is out of this account's reach. */
 export const SHINJINOU_STAFF: StaffFixture = {
   id: '55555555-5555-4555-8555-555555555501',
