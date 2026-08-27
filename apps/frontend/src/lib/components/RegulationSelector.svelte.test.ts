@@ -1,6 +1,6 @@
 import {render, screen} from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import {describe, expect, it, vi} from 'vitest';
+import {describe, expect, it} from 'vitest';
 import type {Regulation} from '@regional-quiz/shared';
 import RegulationSelector from './RegulationSelector.svelte';
 
@@ -37,7 +37,6 @@ describe('RegulationSelector', () => {
       props: {
         regulations: [priorityRegulation, generalRegulation],
         value: null,
-        onChange: vi.fn(),
         now,
       },
     });
@@ -52,7 +51,7 @@ describe('RegulationSelector', () => {
     expect(priorityOption).not.toBeDisabled();
   });
 
-  it('calls onChange with the selected id for an eligible regulation', async () => {
+  it('submits the selected id under the regulationId control name', async () => {
     const user = userEvent.setup();
     const regulationA = buildRegulation({
       id: '11111111-1111-1111-1111-111111111111',
@@ -64,19 +63,44 @@ describe('RegulationSelector', () => {
       label: 'B部門',
       displayOrder: 1,
     });
-    const onChange = vi.fn();
 
     render(RegulationSelector, {
       props: {
         regulations: [regulationA, regulationB],
         value: null,
-        onChange,
         now: new Date('2026-08-23T00:00:00Z'),
       },
     });
 
-    await user.click(screen.getByRole('radio', {name: 'B部門'}));
+    const chosen = screen.getByRole('radio', {name: 'B部門'});
+    await user.click(chosen);
 
-    expect(onChange).toHaveBeenCalledExactlyOnceWith(regulationB.id);
+    expect(chosen).toBeChecked();
+    expect(chosen).toHaveAttribute('name', 'regulationId');
+    expect(chosen).toHaveAttribute('value', regulationB.id);
+    expect(screen.getByRole('radio', {name: 'A部門'})).not.toBeChecked();
+  });
+
+  it('preselects the regulation it was given', () => {
+    const regulationA = buildRegulation({
+      id: '11111111-1111-1111-1111-111111111111',
+      label: 'A部門',
+      displayOrder: 0,
+    });
+    const regulationB = buildRegulation({
+      id: '22222222-2222-2222-2222-222222222222',
+      label: 'B部門',
+      displayOrder: 1,
+    });
+
+    render(RegulationSelector, {
+      props: {
+        regulations: [regulationA, regulationB],
+        value: regulationB.id,
+        now: new Date('2026-08-23T00:00:00Z'),
+      },
+    });
+
+    expect(screen.getByRole('radio', {name: 'B部門'})).toBeChecked();
   });
 });

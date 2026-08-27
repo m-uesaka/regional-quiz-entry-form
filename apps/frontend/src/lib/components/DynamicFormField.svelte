@@ -4,11 +4,17 @@
 
   interface Props {
     field: FormFieldDefYaml;
+    /**
+     * The field's answer: the chosen option for a `radio` field, the list of
+     * chosen ones for a `checkbox` field, the text for a `textarea` field.
+     * Bound, so answering the field writes it back to the caller — see "Form
+     * controls are bound, not rendered from an expression" in
+     * `apps/frontend/README.md`.
+     */
     value: string | string[];
-    onChange: (value: string | string[]) => void;
   }
 
-  const {field, value, onChange}: Props = $props();
+  let {field, value = $bindable()}: Props = $props();
 
   // Namespaced so a field key that happens to match one of the form's own
   // inputs (`name`, `email`, `password`, ...) can't submit under the same
@@ -19,7 +25,8 @@
   // "I agree to the rules"). To keep the component's value type consistent
   // (`string | string[]`) across all field types, "checked" is represented
   // as an array containing the field's own key, and "unchecked" as an
-  // empty array.
+  // empty array — which is what a one-checkbox group binding produces once
+  // the box carries the field key as its value.
   const booleanCheckboxValue = $derived(field.key);
 
   // A required multi-option checkbox group has no native HTML equivalent of
@@ -30,27 +37,6 @@
   const hasCheckboxSelection = $derived(
     Array.isArray(value) && value.length > 0,
   );
-
-  function isChecked(option: string): boolean {
-    return Array.isArray(value) && value.includes(option);
-  }
-
-  function toggleOption(option: string, checked: boolean): void {
-    const current = Array.isArray(value) ? value : [];
-    onChange(
-      checked
-        ? [...current, option]
-        : current.filter(selected => selected !== option),
-    );
-  }
-
-  function handleTextareaInput(event: Event): void {
-    onChange((event.currentTarget as HTMLTextAreaElement).value);
-  }
-
-  function handleCheckboxChange(option: string, event: Event): void {
-    toggleOption(option, (event.currentTarget as HTMLInputElement).checked);
-  }
 </script>
 
 {#if field.type === 'textarea'}
@@ -63,8 +49,7 @@
       id={controlName}
       name={controlName}
       required={field.required}
-      value={typeof value === 'string' ? value : ''}
-      oninput={handleTextareaInput}
+      bind:value
     ></textarea>
   </div>
 {:else if field.type === 'radio'}
@@ -80,8 +65,7 @@
           name={controlName}
           value={option}
           required={field.required}
-          checked={value === option}
-          onchange={() => onChange(option)}
+          bind:group={value}
         />
         {option}
       </label>
@@ -101,8 +85,7 @@
             name={controlName}
             value={option}
             required={field.required && !hasCheckboxSelection}
-            checked={isChecked(option)}
-            onchange={event => handleCheckboxChange(option, event)}
+            bind:group={value}
           />
           {option}
         </label>
@@ -114,10 +97,9 @@
         <input
           type="checkbox"
           name={controlName}
+          value={booleanCheckboxValue}
           required={field.required}
-          checked={isChecked(booleanCheckboxValue)}
-          onchange={event =>
-            handleCheckboxChange(booleanCheckboxValue, event)}
+          bind:group={value}
         />
         {field.label}
       </label>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import {untrack} from 'svelte';
   import {enhance} from '$app/forms';
   import {toFormFieldDefYaml} from '@regional-quiz/shared';
   import DynamicFormField from '$lib/components/DynamicFormField.svelte';
@@ -10,26 +11,42 @@
   // `DynamicFormField` renders the shape the form was authored in.
   const fields = $derived(data.entry.formFieldDefs.map(toFormFieldDefYaml));
 
-  // A rejected submission comes back with what was typed, so the form
-  // re-renders that rather than resetting to the stored entry.
-  const values = $derived(form?.values ?? data.entry);
+  // A rejected submission comes back with what was typed, so the form starts
+  // out showing that rather than resetting to the stored entry.
+  //
+  // Read once and owned by the controls from then on — the submitted body is
+  // built from their `name` attributes, so nothing below needs to be pushed
+  // back into them. See "Form controls are bound, not rendered from an
+  // expression" in `apps/frontend/README.md`.
+  //
+  // SvelteKit keeps this component across a navigation that changes only the
+  // route parameters, and nothing re-seeds these on such a move — so a link
+  // from one entry's edit form straight to another's would carry the first
+  // entry's answers over. Only `/mypage` links here today, and leaving for it
+  // destroys the component; a link that skips it needs this state moved into
+  // a child component wrapped in `{#key data.entry.id}`.
+  const initial = untrack(() => form?.values ?? data.entry);
 
-  // The submitted body is rebuilt server-side from the named inputs
-  // `DynamicFormField` renders, so this state only drives what the component
-  // shows as currently selected. Seeded once (through a function, so it
-  // isn't read as a reactive dependency) and owned by the form from then on.
-  function initialCustomFieldValues(): Record<string, string | string[]> {
-    return {...(form?.values?.customFieldValues ?? data.entry.customFieldValues)};
-  }
-
+  let name = $state(initial.name);
+  let furigana = $state(initial.furigana);
+  let displayName = $state(initial.displayName);
+  let freeText = $state(initial.freeText ?? '');
   let customFieldValues = $state(initialCustomFieldValues());
 
-  function valueFor(key: string): string | string[] {
-    return customFieldValues[key] ?? '';
-  }
-
-  function setValue(key: string, value: string | string[]): void {
-    customFieldValues = {...customFieldValues, [key]: value};
+  /**
+   * The answer every custom field starts out with, keyed by field key.
+   * Every key the form renders is seeded, unanswered ones included, so that
+   * `DynamicFormField` always has a value of the right shape to bind to.
+   */
+  function initialCustomFieldValues(): Record<string, string | string[]> {
+    const answered = initial.customFieldValues;
+    return Object.fromEntries(
+      data.entry.formFieldDefs.map(fieldDef => [
+        fieldDef.fieldKey,
+        answered[fieldDef.fieldKey] ??
+          (fieldDef.fieldType === 'checkbox' ? [] : ''),
+      ]),
+    );
   }
 </script>
 
@@ -44,12 +61,12 @@
 <form method="POST" use:enhance>
   <div class="form-field">
     <label for="name">氏名</label>
-    <input id="name" name="name" value={values.name} required />
+    <input id="name" name="name" bind:value={name} required />
   </div>
 
   <div class="form-field">
     <label for="furigana">ふりがな</label>
-    <input id="furigana" name="furigana" value={values.furigana} required />
+    <input id="furigana" name="furigana" bind:value={furigana} required />
   </div>
 
   <div class="form-field">
@@ -57,23 +74,18 @@
     <input
       id="displayName"
       name="displayName"
-      value={values.displayName}
+      bind:value={displayName}
       required
     />
   </div>
 
   <div class="form-field">
     <label for="freeText">自由記述</label>
-    <textarea id="freeText" name="freeText" value={values.freeText ?? ''}
-    ></textarea>
+    <textarea id="freeText" name="freeText" bind:value={freeText}></textarea>
   </div>
 
   {#each fields as field (field.key)}
-    <DynamicFormField
-      {field}
-      value={valueFor(field.key)}
-      onChange={value => setValue(field.key, value)}
-    />
+    <DynamicFormField {field} bind:value={customFieldValues[field.key]} />
   {/each}
 
   <button type="submit">保存する</button>

@@ -4,12 +4,16 @@
 
   interface Props {
     regulations: Regulation[];
+    /**
+     * The chosen regulation's id, or `null` while nothing is chosen. Bound,
+     * so picking one writes it back to the caller — see "Form controls are
+     * bound, not rendered from an expression" in `apps/frontend/README.md`.
+     */
     value: string | null;
-    onChange: (value: string) => void;
     now?: Date;
   }
 
-  const {regulations, value, onChange, now = new Date()}: Props = $props();
+  let {regulations, value = $bindable(), now = new Date()}: Props = $props();
 
   interface RegulationOption {
     regulation: Regulation;
@@ -36,14 +40,15 @@
   <legend>レギュレーションを選択してください</legend>
   {#each options as {regulation, allowed} (regulation.id)}
     <label class={{disabled: !allowed}}>
+      <!-- `value` is the option this radio stands for; `bind:group` is what
+           carries the chosen one back out. -->
       <input
         type="radio"
         name="regulationId"
         value={regulation.id}
         required
         disabled={!allowed}
-        checked={value === regulation.id}
-        onchange={() => onChange(regulation.id)}
+        bind:group={value}
       />
       {regulation.label}
       {#if !allowed}

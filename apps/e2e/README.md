@@ -59,6 +59,8 @@ Supabase は起動しません(Docker イメージの取得を毎回のテスト
 
 3本ともブラウザ操作です。画面の掴み方(ラベル・ボタン・リンク)は `support/ui.ts` にまとめてあり、CSS クラスやテスト専用の属性には依存していません。
 
+この3フローに加えて、`entry-flow.spec.ts` には #90(ハイドレーション前の入力が消える)の回帰テストが1本入っています(後述)。
+
 API を直接叩いているのは2箇所だけです(`support/api.ts`)。
 
 - メール stub の読み出し。確認リンクの生トークンはメール本文にしか無く、stub に画面は無いため
@@ -103,11 +105,13 @@ API を直接叩いているのは2箇所だけです(`support/api.ts`)。
 
 なお、開発者が `apps/frontend/.env` の `BACKEND_URL` を HTTPS の dev サーバに向けた場合は、`bun run dev:frontend` でも同じ理由で全ページが 500 になります。テスト実行と違って許可を仕込む場所が無いので、そのときは `BACKEND_URL` を平文に戻すか、`NODE_TLS_REJECT_UNAUTHORIZED=0 bun run dev:frontend` のように自分のプロセスに閉じて渡してください。
 
-### フォームはハイドレーションを待ってから入力する
+### フォームはハイドレーションを待たずに入力する
 
-各フォームのテキスト入力は値を Svelte の式(`value={form?.email ?? ''}` など)から描画しています。つまりハイドレーションの瞬間にその式の値 — 未送信のフォームなら空文字 — がフィールドに上書きされるので、それより前に入力した内容は黙って消えます。消えた結果 `required` に引っかかって送信自体が起きず、「ボタンを押したのに何も起きない」という読みにくい失敗になります。
+以前は各フォームのテキスト入力が値を Svelte の式(`value={form?.email ?? ''}` など)から描画していたため、ハイドレーションの瞬間にその式の値 — 未送信のフォームなら空文字 — がフィールドに上書きされ、それより前に入力した内容が黙って消えていました(#90)。そのため `support/ui.ts` には `networkidle` を待つ `waitForHydration()` がありました。
 
-`support/ui.ts` の `waitForHydration()`(`networkidle` 待ち)と `fillField()`(入力後に値が残っているか確認する)がこれを防いでいます。
+現在はどのフォームコントロールも `bind:value` / `bind:group` で書かれていて、Svelte のバインディングはハイドレーション時に DOM 側の値を採用します(`apps/frontend/README.md` の「Form controls are bound, not rendered from an expression」)。待ちは外してあり、**ハイドレーションを待たずに入力すること自体が #90 の回帰確認**になっています。`fillField()`(入力後に値が残っているか確認する)がその見張りです。
+
+ただしそれはタイミング頼みなので、`entry-flow.spec.ts` の「keeps what was answered before the client bundle took over」が回帰を確定的に捕まえます。`support/ui.ts` の `holdClientBundle()` がクライアントバンドルを構成するモジュールのレスポンスを止めておき、フォームに入力してから解放するので、ハイドレーションは必ず入力の後に来ます。解放後は `networkidle`(モジュールが届いたことしか言わない)ではなく、Svelte の `remove_input_defaults()` が bind 済み input から `value` 属性を落とすことをハイドレーション完了の合図として待ちます。修正前のコードではこのテストが確実に落ちます。
 
 ### シード
 

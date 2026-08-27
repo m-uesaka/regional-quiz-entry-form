@@ -48,6 +48,33 @@ because the two call sites take different routes:
 | `load` / `actions` (SSR) | `handleFetch` in `src/hooks.server.ts`. SvelteKit's `event.fetch` short-circuits same-origin requests into its own router instead of the network, so the rewrite has to happen in the hook; it also re-attaches the incoming cookies, which SvelteKit only forwards to the app's own host and its subdomains. |
 | The browser (CSV download links, client-side `createApiClient()`) | `server.proxy` in `vite.config.ts` for `vite dev`. In production the same-origin `/api/*` prefix is routed to the backend Worker by Cloudflare (Task 8-2 / #42), not by this app. |
 
+## Form controls are bound, not rendered from an expression
+
+Every form control on these pages takes its starting value from `$state` that
+is seeded once (`untrack(() => form?.values)` and the like) and is wired up
+with `bind:value` / `bind:group`, never with a one-way `value={...}` /
+`checked={...}` expression.
+
+That is not a style preference — a one-way expression loses what the visitor
+typed. Svelte's `set_value()` / `set_checked()` compare against the value they
+last wrote themselves, and on the very first run (which is hydration) there is
+no such value, so they always assign. Anything typed into the server-rendered
+page before the client bundle took over is overwritten at that moment: an
+unsubmitted form empties itself, an edit form silently rolls back to the stored
+answers, and the submit that follows is then blocked by the form's own
+`required` attributes. See #90.
+
+Svelte's bindings are the supported way out: `bind_value()` and `bind_group()`
+check `input.defaultValue !== input.value` (respectively `defaultChecked !==
+checked`) while hydrating and adopt what the control already holds instead of
+overwriting it.
+
+`defaultValue` / `defaultChecked` fix the overwrite too, but they are dropped
+by Svelte's *server* compiler — the attribute never reaches the HTML — so the
+server-rendered page would come back blank. That breaks the pages that have to
+work before (or without) the client bundle, e.g. the staff login form echoing a
+rejected address back.
+
 ## Building
 
 To create a production version of your app (from the repo root):
