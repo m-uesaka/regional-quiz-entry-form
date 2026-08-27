@@ -7,18 +7,45 @@ import {
 } from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
+import {createDbClient} from '../lib/db';
 import {
   syncFormFieldDefs,
   TournamentNotFoundError,
   TournamentSlugMismatchError,
 } from '../lib/form-definitions';
+import {
+  FORM_FIELD_DEF_COLUMNS,
+  toFormFieldDef,
+  type FormFieldDefRow,
+} from '../lib/form-field-defs';
 
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 
+// The staff-only upload gets `requireGeneralStaff()` attached per-route
+// rather than through `.use('*', ...)`, because the read below is public:
+// the entry form has to render a tournament's custom fields for a visitor
+// with no session, and a definition carries no personal data.
 export const formDefinitionsRoute = new Hono<StaffEnv>()
-  .use('*', requireGeneralStaff())
+  .get(
+    '/:tournamentId',
+    zValidator('param', TournamentIdParamSchema),
+    async c => {
+      const db = createDbClient(c.env);
+      const {data, error} = await db
+        .from('form_field_defs')
+        .select(FORM_FIELD_DEF_COLUMNS)
+        .eq('tournament_id', c.req.valid('param').tournamentId)
+        .order('display_order', {ascending: true})
+        .returns<FormFieldDefRow[]>();
+      if (error) {
+        return c.json({error: error.message}, 500);
+      }
+      return c.json(data.map(toFormFieldDef));
+    },
+  )
   .put(
     '/:tournamentId',
+    requireGeneralStaff(),
     zValidator('param', TournamentIdParamSchema),
     zValidator('json', FormDefinitionUploadSchema),
     async c => {
