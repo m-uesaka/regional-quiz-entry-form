@@ -34,11 +34,11 @@ describe('verify +page.svelte', () => {
     ).toBeInTheDocument();
   });
 
-  it('warns that the mypage guidance for an invalid token needs a login', () => {
+  it('tells an invalid token to log into mypage first', () => {
     renderPage('invalid');
 
     expect(
-      screen.getByText(/まずはマイページ\(閲覧にはログインが必要です\)/),
+      screen.getByText(/まずはマイページにログインしてエントリー状況を/),
     ).toBeInTheDocument();
   });
 
