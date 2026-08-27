@@ -3,15 +3,28 @@ import {isWithinEntryPeriod} from '../logic/entry-period';
 import {FormFieldDefSchema} from './form-definition';
 import {TournamentTypeSchema} from './tournament';
 
+// Every message is spelled out in Japanese because both consumers show
+// them to the participant as-is: the entry / mypage-edit forms render
+// `fieldErrors` under the field that failed, and the API returns the same
+// issues from its `zValidator`. Zod's English defaults ("Invalid email")
+// would otherwise surface in an entirely Japanese form.
 export const EntryInputSchema = z
   .object({
-    name: z.string().min(1),
-    furigana: z.string().min(1),
-    displayName: z.string().min(1),
-    email: z.string().email(),
-    password: z.string().min(8),
-    passwordConfirm: z.string().min(8),
-    regulationId: z.string().uuid(),
+    name: z.string().min(1, {message: '氏名を入力してください'}),
+    furigana: z.string().min(1, {message: 'ふりがなを入力してください'}),
+    displayName: z.string().min(1, {message: '掲載名を入力してください'}),
+    email: z
+      .string()
+      .email({message: 'メールアドレスの形式が正しくありません'}),
+    password: z
+      .string()
+      .min(8, {message: 'パスワードは8文字以上で入力してください'}),
+    passwordConfirm: z
+      .string()
+      .min(8, {message: 'パスワードは8文字以上で入力してください'}),
+    regulationId: z
+      .string()
+      .uuid({message: 'レギュレーションを選択してください'}),
     freeText: z.string().optional(),
     customFieldValues: z.record(
       z.string(),

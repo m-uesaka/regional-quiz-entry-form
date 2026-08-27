@@ -225,6 +225,22 @@ describe('entry +page.server default action', () => {
     });
   });
 
+  it('reports a per-field failure in Japanese', async () => {
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi(),
+        // Accepted by `<input type="email">` but not by the schema, so this
+        // reaches the action rather than being caught in the browser.
+        fields: validFormData({email: 'taro@localhost'}),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 400,
+      data: {fieldErrors: {email: ['メールアドレスの形式が正しくありません']}},
+    });
+  });
+
   it('echoes the submitted values back without the passwords', async () => {
     const result = await actions.default(
       buildActionEvent({
