@@ -22,18 +22,17 @@ export const SUPABASE_SERVICE_ROLE_KEY =
 /** The port `wrangler dev` serves `apps/backend` on for the test run. */
 export const BACKEND_PORT = Number(process.env.E2E_BACKEND_PORT ?? 8787);
 
-// Plain HTTP. Nothing in the run talks to the Worker over TLS: the browser
-// only ever reaches it through the frontend (`vite dev`'s `/api/*` proxy,
-// and `handleFetch` during SSR), and the API calls left in `./api.ts` are
-// all anonymous.
+// HTTPS, so the run exercises the deployed topology: in production the
+// frontend Worker reaches the backend Worker over TLS, and the session
+// cookies the backend sets are marked `Secure` unconditionally
+// (`secure: true` in `apps/backend/src/routes/*-auth.ts`) — an attribute
+// that only describes the hop it was actually set over.
 //
-// It used to be HTTPS, because the session cookies are `Secure` — as they
-// are in production — and Playwright's API request context declines to send
-// such a cookie back over `http://`. Now that the sessions are held by the
-// browser instead, under the frontend's own origin, that no longer applies,
-// and a self-signed certificate would have to be waved through by every
-// server-side `fetch` the SvelteKit app makes.
-export const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
+// `playwright.config.ts` starts `wrangler dev --local-protocol https` to
+// match. Wrangler's certificate is self-signed, so each of the three sides
+// that meets it has to be told to accept it; the comments there say which
+// and why.
+export const BACKEND_URL = `https://127.0.0.1:${BACKEND_PORT}`;
 
 /** The port the Resend stub in `./mail-sink.ts` listens on. */
 export const MAIL_SINK_PORT = Number(process.env.E2E_MAIL_SINK_PORT ?? 8788);

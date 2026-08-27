@@ -1,6 +1,6 @@
 # `@regional-quiz/e2e`
 
-Playwright による E2E テスト(Task 8-1 / #74)。`apps/frontend` を `vite dev`、`apps/backend` を `wrangler dev` で実際に起動し、ローカルの Supabase を相手に主要フローをブラウザ操作で通します。
+Playwright による E2E テスト(Task 8-1 / #74)。`apps/frontend` を `vite dev`、`apps/backend` を `wrangler dev --local-protocol https` で実際に起動し、ローカルの Supabase を相手に主要フローをブラウザ操作で通します。
 
 ## 実行方法
 
@@ -20,7 +20,7 @@ bun run test:e2e
 | プロセス | 用途 |
 | --- | --- |
 | `bun run support/mail-sink.ts`(`http://127.0.0.1:8788`) | Resend HTTP API の stub。送信されたメールを溜め、テストから読み出せるようにする |
-| `bunx wrangler dev`(`http://127.0.0.1:8787`) | `apps/backend` の Worker |
+| `bunx wrangler dev --local-protocol https`(`https://127.0.0.1:8787`) | `apps/backend` の Worker |
 | `bunx vite dev`(`http://127.0.0.1:5173`) | `apps/frontend` の SvelteKit アプリ。ブラウザが触るのはこちらだけで、`/api/*` は vite の dev proxy 経由で Worker に届く |
 
 Supabase は起動しません(Docker イメージの取得を毎回のテスト実行に巻き込まないため)。起動していない場合は `support/seed.ts` が起動コマンドを添えて落ちます。
@@ -76,6 +76,8 @@ API を直接叩いているのは2箇所だけです(`support/api.ts`)。
 
 ブラウザが直接触るのは `vite dev`(`http://127.0.0.1:5173`)だけです。`/api/*` は SSR なら `hooks.server.ts` の `handleFetch`、ブラウザからなら vite の dev proxy が Worker に転送します。
 
+バックエンドは **`wrangler dev --local-protocol https`** で起動します(#91)。本番と同じく、フロントエンド → バックエンドのホップが TLS になります。バックエンドのセッション Cookie は `secure: true` 固定(`apps/backend/src/routes/*-auth.ts`)で、`Secure` は「その Cookie が実際に通ったホップ」を指す属性なので、平文で通していると本番と違う経路を見ていることになります。
+
 セッション Cookie はフロントエンドが自分のオリジンに発行し直しますが、**2つの Cookie で経路が違い、`Secure` が落ちるのは片方だけです**。
 
 | Cookie | 経路 | `Secure` |
@@ -83,9 +85,23 @@ API を直接叩いているのは2箇所だけです(`support/api.ts`)。
 | `staff_session` | `forwardSetCookies()`(`src/lib/server/backend-cookies.ts`) | フロントエンドのプロトコルから判断するので HTTP では落ちる |
 | `participant_session` | `forwardBackendCookies()`(`src/lib/server/backend-fetch.ts`、`handleFetch` から) | バックエンドの属性をそのまま写すので残る |
 
-つまり `participant_session` が平文で通るのは、Chromium が `127.0.0.1` を trustworthy origin とみなして `Secure` Cookie を受け取るからです。**ループバックである**ことが条件で、単に平文であればよいわけではありません。`vite dev --host` で LAN のアドレスに出すと、参加者ログインが黙ってログイン画面に戻り続けます。
+つまり `participant_session` がフロントエンドの平文オリジンで通るのは、Chromium が `127.0.0.1` を trustworthy origin とみなして `Secure` Cookie を受け取るからです。**ループバックである**ことが条件で、単に平文であればよいわけではありません。`vite dev --host` で LAN のアドレスに出すと、参加者ログインが黙ってログイン画面に戻り続けます。
 
-以前は Worker を `--local-protocol https` で起動していました。Playwright の API request context が `Secure` Cookie を `http://` に送り返さず、認証付きのステップが**アプリ側に無い理由で**全部 401 になっていたためです。セッションをブラウザが持つようになった今その理由は無く、逆に自己署名証明書だと SvelteKit のサーバ側 `fetch` が全部落ちるので、平文の HTTP に戻してあります。
+### 自己署名証明書を通す3箇所
+
+`wrangler dev --local-protocol https` が出す証明書は自己署名なので、Worker に触る3者それぞれに個別の許可が要ります。
+
+| 触る側 | 通し方 | 場所 |
+| --- | --- | --- |
+| SvelteKit の SSR(`handleFetch`) | `NODE_TLS_REJECT_UNAUTHORIZED=0` | `playwright.config.ts` の `FRONTEND_ENV` |
+| Playwright の `request` フィクスチャ(`support/api.ts`) | `use.ignoreHTTPSErrors` | `playwright.config.ts` |
+| `webServer` の起動待ち(`/api/healthz`) | `webServer[].ignoreHTTPSErrors` | `playwright.config.ts` |
+
+ブラウザからの `/api/*`(CSV ダウンロードリンク)は vite の dev proxy が `secure: false` で通すので、ここには出てきません。
+
+`NODE_TLS_REJECT_UNAUTHORIZED=0` は**プロセス全体**の証明書検証を切ります。これが許されるのは、Playwright が `webServer.env` として渡す先が**このテスト実行が起動した `vite dev` プロセスだけ**で、開発者のシェルにも他のプロセスにも波及しないからです。リクエスト単位に証明書を受け入れる手段がランタイムの `fetch` に無い以上、代案は mkcert 等でローカル CA に信頼された証明書を配ることになりますが、CI を含む各環境のセットアップが増えるので採っていません。
+
+なお、開発者が `apps/frontend/.env` の `BACKEND_URL` を HTTPS の dev サーバに向けた場合は、`bun run dev:frontend` でも同じ理由で全ページが 500 になります。テスト実行と違って許可を仕込む場所が無いので、そのときは `BACKEND_URL` を平文に戻すか、`NODE_TLS_REJECT_UNAUTHORIZED=0 bun run dev:frontend` のように自分のプロセスに閉じて渡してください。
 
 ### フォームはハイドレーションを待ってから入力する
 
