@@ -33,8 +33,11 @@ jobs:
           if [ -n "$key" ]; then
             echo "SUPABASE_SERVICE_ROLE_KEY=$key" >> "$GITHUB_ENV"
           fi
-      # No browser is downloaded: the specs drive the HTTP API through
-      # Playwright's request context (see `apps/e2e/README.md`).
+      # Chromium only: the specs drive one browser, and downloading the
+      # other two would triple this step for nothing. `--with-deps` installs
+      # the shared libraries the runner image does not carry.
+      - run: bunx playwright install --with-deps chromium
+        working-directory: apps/e2e
       - run: bun run test:e2e
       - if: failure()
         uses: actions/upload-artifact@v4

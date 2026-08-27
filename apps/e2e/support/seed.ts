@@ -9,12 +9,7 @@
 import {createClient, type SupabaseClient} from '@supabase/supabase-js';
 import {hashPassword} from '@regional-quiz/backend/lib/password';
 import {SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL} from './env';
-import {
-  REGION,
-  SHINJINOU_FORM_FIELD_DEFS,
-  STAFF,
-  TOURNAMENTS,
-} from './fixtures';
+import {FORM_FIELD_DEFS, REGION, STAFF, TOURNAMENTS} from './fixtures';
 
 const ENTRY_OPENED_DAYS_AGO = 1;
 const ENTRY_CLOSES_IN_DAYS = 30;
@@ -192,7 +187,7 @@ export async function seedDatabase(): Promise<void> {
     'inserting the form field definitions',
     (
       await db.from('form_field_defs').insert(
-        SHINJINOU_FORM_FIELD_DEFS.map(field => ({
+        FORM_FIELD_DEFS.map(field => ({
           id: field.id,
           tournament_id: field.tournamentId,
           field_key: field.fieldKey,

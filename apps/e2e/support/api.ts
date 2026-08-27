@@ -1,18 +1,21 @@
-// The steps the specs share, expressed once. Each one drives the real HTTP
-// API on `apps/backend`; nothing here reaches into the database, so a step
-// that the API would refuse fails here too.
+// The API calls the specs still make directly, now that the three flows
+// themselves are driven through the browser (`./ui.ts`).
+//
+// Two things are left here. The mail stub has no UI at all, and a
+// participant's confirmation link only exists inside the mail it captured.
+// And `staff-csv.spec.ts` needs a roster to look at before it signs in;
+// that arrangement is not what the spec is about, and the participant side
+// of it is covered end-to-end by `entry-flow.spec.ts`.
+//
+// Every URL below names its origin in full, because the shared `request`
+// fixture's `baseURL` is the *frontend* (see `playwright.config.ts`).
 
-import {
-  expect,
-  type APIRequestContext,
-  type PlaywrightWorkerArgs,
-} from '@playwright/test';
+import {expect, type APIRequestContext} from '@playwright/test';
 import type {EntryStatus} from '@regional-quiz/shared';
 import {BACKEND_URL, MAIL_SINK_URL} from './env';
 import {
   PARTICIPANT_PASSWORD,
   uniqueEmail,
-  type StaffFixture,
   type TournamentFixture,
 } from './fixtures';
 
@@ -45,31 +48,17 @@ export interface EntryOverrides {
   customFieldValues?: Record<string, string | string[]>;
 }
 
+/** The subject `sendVerificationEmail()` sends the confirmation link under. */
+export const VERIFICATION_MAIL_SUBJECT = 'エントリー確認メール';
+
 const MAIL_WAIT_TIMEOUT_MS = 10_000;
 const MAIL_POLL_INTERVAL_MS = 100;
 
 // The link `sendVerificationEmail()` builds, whose token is generated per
 // request and stored only as a SHA-256 hash — so this mail body is the one
-// place the raw token can be read from.
-const VERIFICATION_LINK_PATTERN = /\/verify\?token=([0-9a-f]+)/;
-
-/**
- * Opens an API context of its own, pointed at the same backend as the
- * shared `request` fixture.
- *
- * That fixture has a single cookie jar, so a spec that needs two sessions
- * at once — two participants, or a participant and a staff member — needs
- * a second context rather than a second login.
- * @param playwright The `playwright` fixture.
- */
-export async function newApiContext(
-  playwright: PlaywrightWorkerArgs['playwright'],
-): Promise<APIRequestContext> {
-  return playwright.request.newContext({
-    baseURL: BACKEND_URL,
-    ignoreHTTPSErrors: true,
-  });
-}
+// place the raw token can be read from. Its origin is `FRONTEND_URL`, i.e.
+// the `vite dev` server the browser is already on.
+const VERIFICATION_LINK_PATTERN = /href="([^"]*\/verify\?token=[0-9a-f]+)"/;
 
 /**
  * Submits an entry to `tournament` as a brand-new participant.
@@ -90,7 +79,7 @@ export async function submitEntry(
   const name = overrides.name ?? 'テスト太郎';
   const displayName = overrides.displayName ?? 'テスト太郎';
   const response = await request.post(
-    `/api/tournaments/${tournament.id}/entries`,
+    `${BACKEND_URL}/api/tournaments/${tournament.id}/entries`,
     {
       data: {
         name,
@@ -173,10 +162,11 @@ export async function waitForMail(
 }
 
 /**
- * Pulls the one-time token out of a confirmation mail's link.
+ * Pulls the confirmation link out of a confirmation mail.
  * @param html The mail body.
+ * @return The link's `href`, ready to be opened with `page.goto()`.
  */
-export function extractVerificationToken(html: string): string {
+export function extractVerificationUrl(html: string): string {
   const match = VERIFICATION_LINK_PATTERN.exec(html);
   if (!match) {
     throw new Error(`No verification link in the mail body: ${html}`);
@@ -185,26 +175,37 @@ export function extractVerificationToken(html: string): string {
 }
 
 /**
- * Waits for a participant's confirmation mail and follows the link in it,
- * confirming the entry.
+ * Waits for a participant's confirmation mail and hands its token to the
+ * API, confirming the entry.
  *
- * The link points at a frontend page that does not exist yet (see #72), so
- * the token is handed to the API the page would call.
+ * Only the arrangement in `staff-csv.spec.ts` uses this; the flow of
+ * following the link in a browser is `openVerificationLink()` in `./ui.ts`.
  * @param request The API context to confirm through.
  * @param email The address the confirmation mail went to.
- * @returns The status the entry landed in: `confirmed` when the tournament
+ * @return The status the entry landed in: `confirmed` when the tournament
  *     had a free seat, `waitlisted` when it did not.
  */
 export async function verifyEntry(
   request: APIRequestContext,
   email: string,
 ): Promise<EntryStatus> {
-  const mail = await waitForMail(request, email, 'エントリー確認メール');
-  const token = extractVerificationToken(mail.html);
-  const response = await request.get(`/api/entries/verify?token=${token}`);
+  const mail = await waitForMail(request, email, VERIFICATION_MAIL_SUBJECT);
+  const response = await request.get(
+    `${BACKEND_URL}${extractVerificationPath(mail.html)}`,
+  );
   expect(response.status(), await response.text()).toBe(200);
   const body = (await response.json()) as {status: EntryStatus};
   return body.status;
+}
+
+/**
+ * The API path that confirms the entry the mailed link belongs to. The link
+ * itself points at the frontend's `/verify` page, which calls this.
+ * @param html The mail body.
+ */
+function extractVerificationPath(html: string): string {
+  const {searchParams} = new URL(extractVerificationUrl(html));
+  return `/api/entries/verify?token=${searchParams.get('token')}`;
 }
 
 /**
@@ -221,58 +222,4 @@ export async function enterAndVerify(
   const participant = await submitEntry(request, tournament, overrides);
   const status = await verifyEntry(request, participant.email);
   return {...participant, status};
-}
-
-/**
- * Logs a participant in, leaving the session cookie in `request`'s jar.
- * @param request The API context to log in through, and to carry the
- *     resulting session.
- * @param participant The participant to log in as.
- */
-export async function loginParticipant(
-  request: APIRequestContext,
-  participant: Pick<EnteredParticipant, 'email' | 'password'>,
-): Promise<void> {
-  const response = await request.post('/api/auth/participant/login', {
-    data: {email: participant.email, password: participant.password},
-  });
-  expect(response.status(), await response.text()).toBe(200);
-}
-
-/**
- * Logs a staff member in, leaving the session cookie in `request`'s jar.
- * @param request The API context to log in through, and to carry the
- *     resulting session.
- * @param staff The staff account to log in as.
- */
-export async function loginStaff(
-  request: APIRequestContext,
-  staff: StaffFixture,
-): Promise<void> {
-  const response = await request.post('/api/auth/staff/login', {
-    data: {email: staff.email, password: staff.password},
-  });
-  expect(response.status(), await response.text()).toBe(200);
-  expect(await response.json()).toMatchObject({ok: true, role: staff.role});
-}
-
-/** One entry as `GET /api/mypage/entries` reports it. */
-export interface MypageEntryResponse {
-  id: string;
-  tournamentId: string;
-  status: EntryStatus;
-  waitlistPosition: number | null;
-  tournament: {name: string; type: string};
-}
-
-/**
- * Reads the logged-in participant's own entries.
- * @param request An API context carrying a participant session.
- */
-export async function readMypageEntries(
-  request: APIRequestContext,
-): Promise<MypageEntryResponse[]> {
-  const response = await request.get('/api/mypage/entries');
-  expect(response.status(), await response.text()).toBe(200);
-  return (await response.json()) as MypageEntryResponse[];
 }

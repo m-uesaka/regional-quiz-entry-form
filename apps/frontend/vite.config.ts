@@ -41,8 +41,9 @@ export default defineConfig(({mode}) => {
         '^/api(?:[/?].*)?$': {
           target: backendUrl || DEFAULT_BACKEND_URL,
           changeOrigin: true,
-          // `apps/e2e` starts the backend with `wrangler dev
-          // --local-protocol https`, i.e. behind a self-signed certificate.
+          // A `BACKEND_URL` pointing at an HTTPS dev server (`wrangler dev
+          // --local-protocol https`) is behind a self-signed certificate,
+          // which is not worth failing the proxy over locally.
           secure: false,
         },
       },
