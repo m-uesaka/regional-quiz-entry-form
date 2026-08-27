@@ -20,6 +20,14 @@
   // built from their `name` attributes, so nothing below needs to be pushed
   // back into them. See "Form controls are bound, not rendered from an
   // expression" in `apps/frontend/README.md`.
+  //
+  // SvelteKit keeps this component across a navigation that changes only the
+  // route parameters, and nothing re-seeds these on such a move — so a link
+  // from one tournament's entry form straight to another's would carry the
+  // first tournament's answers over. Nothing links here today (participants
+  // arrive at a URL they were given, which is a fresh page load); a link that
+  // does needs this state moved into a child component wrapped in
+  // `{#key data.tournament.id}`.
   const initial = untrack(() => form?.values);
 
   let name = $state(initial?.name ?? '');

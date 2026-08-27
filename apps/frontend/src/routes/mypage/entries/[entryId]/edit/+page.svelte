@@ -18,6 +18,13 @@
   // built from their `name` attributes, so nothing below needs to be pushed
   // back into them. See "Form controls are bound, not rendered from an
   // expression" in `apps/frontend/README.md`.
+  //
+  // SvelteKit keeps this component across a navigation that changes only the
+  // route parameters, and nothing re-seeds these on such a move — so a link
+  // from one entry's edit form straight to another's would carry the first
+  // entry's answers over. Only `/mypage` links here today, and leaving for it
+  // destroys the component; a link that skips it needs this state moved into
+  // a child component wrapped in `{#key data.entry.id}`.
   const initial = untrack(() => form?.values ?? data.entry);
 
   let name = $state(initial.name);

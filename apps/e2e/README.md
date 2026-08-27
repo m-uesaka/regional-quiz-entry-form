@@ -95,7 +95,7 @@ API を直接叩いているのは2箇所だけです(`support/api.ts`)。
 
 現在はどのフォームコントロールも `bind:value` / `bind:group` で書かれていて、Svelte のバインディングはハイドレーション時に DOM 側の値を採用します(`apps/frontend/README.md` の「Form controls are bound, not rendered from an expression」)。待ちは外してあり、**ハイドレーションを待たずに入力すること自体が #90 の回帰確認**になっています。`fillField()`(入力後に値が残っているか確認する)がその見張りです。
 
-ただしそれはタイミング頼みなので、`entry-flow.spec.ts` の「keeps what was answered before the client bundle took over」が回帰を確定的に捕まえます。`support/ui.ts` の `holdClientBundle()` がクライアントバンドルを構成するモジュールのレスポンスを止めておき、フォームに入力してから解放するので、ハイドレーションは必ず入力の後に来ます。修正前のコードではこのテストが確実に落ちます。
+ただしそれはタイミング頼みなので、`entry-flow.spec.ts` の「keeps what was answered before the client bundle took over」が回帰を確定的に捕まえます。`support/ui.ts` の `holdClientBundle()` がクライアントバンドルを構成するモジュールのレスポンスを止めておき、フォームに入力してから解放するので、ハイドレーションは必ず入力の後に来ます。解放後は `networkidle`(モジュールが届いたことしか言わない)ではなく、Svelte の `remove_input_defaults()` が bind 済み input から `value` 属性を落とすことをハイドレーション完了の合図として待ちます。修正前のコードではこのテストが確実に落ちます。
 
 ### シード
 

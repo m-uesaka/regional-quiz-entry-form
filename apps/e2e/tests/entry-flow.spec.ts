@@ -80,10 +80,17 @@ test('keeps what was answered before the client bundle took over', async ({
   await regulation.check();
 
   releaseClientBundle();
-  // Waits for the hydration the answers above raced. Where the wait this
-  // replaced kept hydration from eating them, this one gives it every
-  // chance to: the assertions below are what say it didn't.
-  await page.waitForLoadState('networkidle');
+  // Waits for the hydration the answers above raced, so that what follows
+  // is asserted against a hydrated page rather than against the server's
+  // HTML — a wait that gives the bug every chance to happen, the opposite
+  // of the one #90 removed.
+  //
+  // SvelteKit publishes no hydration signal, but Svelte's own hydration
+  // does: `remove_input_defaults()` drops the `value` attribute from every
+  // bound input while keeping the property, so the attribute going away is
+  // the client bundle taking this form over. `networkidle` would only say
+  // the modules arrived, which is not the same as their having run.
+  await expect(name).not.toHaveAttribute('value');
 
   await expect(name).toHaveValue('先走り太郎');
   await expect(regulation).toBeChecked();
