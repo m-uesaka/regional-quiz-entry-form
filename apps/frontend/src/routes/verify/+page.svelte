@@ -23,8 +23,14 @@
        invalid token, so re-entry is guided through mypage rather than a
        direct link to the entry form. -->
   <p>
-    すでにエントリーが確定している場合もあるため、まずはマイページでエントリー状況をご確認ください。エントリーが残っていない場合は、大会のエントリーフォームからあらためてエントリーしてください。
+    すでにエントリーが確定している場合もあるため、まずはマイページにログインしてエントリー状況をご確認ください。エントリーが残っていない場合は、大会のエントリーフォームからあらためてエントリーしてください。
   </p>
 {/if}
 
 <p><a href="/mypage">マイページへ</a></p>
+<!-- Entry creation doesn't start a participant session, so a participant
+     arriving from the confirmation mail is usually logged out and will be
+     sent to /mypage/login first. -->
+<p>
+  マイページの閲覧にはログインが必要です。ログインしていない場合はログイン画面に移動します。
+</p>

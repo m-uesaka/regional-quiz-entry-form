@@ -1,15 +1,32 @@
 name: ci
-on: [push, pull_request]
+# `push` is limited to `main` so a PR branch doesn't run the whole workflow
+# twice (once for the push, once for the pull_request) on every commit.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Supersede an in-flight run when new commits land on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Only on PR branches. Cancelling on `main` would leave a merge commit with
+  # no completed verdict whenever two PRs land close together.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    strategy:
+      # `bun --filter '*'` already parallelises across packages, but the three
+      # tasks themselves are serial within a job, so run them side by side.
+      fail-fast: false
+      matrix:
+        task: [typecheck, lint, test]
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install
-      - run: bun run typecheck
-      - run: bun run lint
-      - run: bun run test
+      - run: bun run ${{ matrix.task }}
 
   e2e:
     runs-on: ubuntu-latest
@@ -18,11 +35,36 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          # Pinned rather than `latest` so CI runs the same CLI the root
+          # `package.json` devDependency gives local devs, against the same
+          # `supabase/config.toml`. Bump both together.
+          version: 2.115.0
       - run: bun install
       # Applies every migration in `supabase/migrations` to a throwaway
       # local stack. `apps/e2e` seeds it and talks to it over the Data API.
-      - run: supabase start
+      #
+      # Only Postgres and the Data API (Kong + PostgREST) are needed: the
+      # specs never touch `supabase.auth`/`.storage`/realtime, sessions are
+      # self-issued JWTs (`apps/e2e/support/env.ts`) and mail is stubbed
+      # (`apps/e2e/support/mail-sink.ts`). Not pulling the rest is most of
+      # this job's wall clock.
+      #
+      # Two mechanisms, and they are not interchangeable. auth/storage/
+      # realtime are off in `supabase/config.toml`, because `-x` does NOT
+      # stop the CLI pulling their images to run their schema migrations
+      # (~40s here). They are deliberately absent from the list below, so
+      # that re-enabling one in `config.toml` restores it here too instead
+      # of silently reintroducing that pull.
+      #
+      # `-x` covers only services that stay enabled for local use. The CLI
+      # does not need their images to bring the stack up, so listing them
+      # skips the pull. Names are CLI identifiers and have been renamed
+      # upstream before (`inbucket` -> `mailpit`); an unknown name is
+      # ignored silently rather than erroring, so a rename would show up as
+      # this step getting slower again, not as a failure.
+      - run: >
+          supabase start
+          -x mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
       # Prefer the stack's own service role key over the default
       # `apps/e2e/support/env.ts` falls back to, so a CLI that issues a
       # different one still works. If `status` doesn't name one, the
