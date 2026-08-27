@@ -1,15 +1,30 @@
 name: ci
-on: [push, pull_request]
+# `push` is limited to `main` so a PR branch doesn't run the whole workflow
+# twice (once for the push, once for the pull_request) on every commit.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Supersede an in-flight run when new commits land on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    strategy:
+      # `bun --filter '*'` already parallelises across packages, but the three
+      # tasks themselves are serial within a job, so run them side by side.
+      fail-fast: false
+      matrix:
+        task: [typecheck, lint, test]
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install
-      - run: bun run typecheck
-      - run: bun run lint
-      - run: bun run test
+      - run: bun run ${{ matrix.task }}
 
   e2e:
     runs-on: ubuntu-latest
@@ -22,7 +37,18 @@ jobs:
       - run: bun install
       # Applies every migration in `supabase/migrations` to a throwaway
       # local stack. `apps/e2e` seeds it and talks to it over the Data API.
-      - run: supabase start
+      #
+      # Only Postgres and the Data API (Kong + PostgREST) are needed: the
+      # specs never touch `supabase.auth`/`.storage`/realtime, sessions are
+      # self-issued JWTs (`apps/e2e/support/env.ts`) and mail is stubbed
+      # (`apps/e2e/support/mail-sink.ts`). Skipping the rest is most of the
+      # job's wall clock, since their images no longer have to be pulled.
+      # (`gotrue`'s image is still pulled — the CLI fetches it to run the
+      # auth schema migrations — but its container is not started, and at
+      # ~90MB it is a rounding error next to studio/edge-runtime/storage.)
+      - run: >
+          supabase start
+          -x gotrue,realtime,storage-api,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
       # Prefer the stack's own service role key over the default
       # `apps/e2e/support/env.ts` falls back to, so a CLI that issues a
       # different one still works. If `status` doesn't name one, the
