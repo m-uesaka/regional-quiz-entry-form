@@ -82,4 +82,45 @@ describe('staffLandingPath', () => {
       staffLandingPath(GENERAL, '/staff/login?redirectTo=%2Fstaff%2F'),
     ).toBe('/staff/dashboard');
   });
+
+  it('hands regional staff back a page within their own tournament', () => {
+    expect(
+      staffLandingPath(REGIONAL, '/staff/tokyo/saikyoi/entries/entry-1'),
+    ).toBe('/staff/tokyo/saikyoi/entries/entry-1');
+    expect(staffLandingPath(REGIONAL, '/staff/tokyo/saikyoi/entries?q=1')).toBe(
+      '/staff/tokyo/saikyoi/entries?q=1',
+    );
+  });
+
+  it('sends regional staff home instead of to a 403 they cannot pass', () => {
+    // A shared dashboard link, or another region's entry list: honouring
+    // either would land the login straight on an error page.
+    expect(staffLandingPath(REGIONAL, '/staff/dashboard')).toBe(
+      '/staff/tokyo/saikyoi/entries',
+    );
+    expect(staffLandingPath(REGIONAL, '/staff/osaka/saikyoi/entries')).toBe(
+      '/staff/tokyo/saikyoi/entries',
+    );
+    expect(staffLandingPath(REGIONAL, '/staff/tokyo/abc/entries')).toBe(
+      '/staff/tokyo/saikyoi/entries',
+    );
+  });
+
+  it("does not read a longer slug as being within the staff member's own", () => {
+    expect(staffLandingPath(REGIONAL, '/staff/tokyo/saikyoi-2/entries')).toBe(
+      '/staff/tokyo/saikyoi/entries',
+    );
+    expect(
+      staffLandingPath(REGIONAL, '/staff/tokyo-west/saikyoi/entries'),
+    ).toBe('/staff/tokyo/saikyoi/entries');
+  });
+
+  it('has nowhere to send an unassigned regional account, redirect or not', () => {
+    expect(
+      staffLandingPath(
+        {...REGIONAL, regionSlug: null, tournamentType: null},
+        '/staff/tokyo/saikyoi/entries',
+      ),
+    ).toBeNull();
+  });
 });

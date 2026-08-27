@@ -30,8 +30,17 @@ export function staffLandingPath(
   redirectTo: string | null,
 ): string | null {
   const requested = safeStaffPath(redirectTo);
-  if (requested) return requested;
+  if (requested && isReachableBy(session, requested)) return requested;
+  return staffHomePath(session);
+}
 
+/**
+ * The screen a staff member lands on when there is no page to hand back.
+ *
+ * @param session The backend's answer to the login request.
+ * @return The path, or `null` when the account has no screen to land on.
+ */
+function staffHomePath(session: StaffLoginResponse): string | null {
   // General staff see every region, so the cross-region dashboard is their
   // home; regional staff would only get a 403 there and are sent to the one
   // tournament they are scoped to instead.
@@ -40,6 +49,32 @@ export function staffLandingPath(
     return `/staff/${session.regionSlug}/${session.tournamentType}/entries`;
   }
   return null;
+}
+
+/**
+ * Whether this account would actually be let into the requested page.
+ *
+ * Handing back a page the account is scoped out of would land the login on a
+ * 403 instead of anywhere useful: a shared `/staff/dashboard` link that
+ * bounced a logged-out `regional` account through here comes back as
+ * `redirectTo`, and the dashboard is `general`-only. Regional staff are
+ * therefore only handed back pages under their own tournament, and sent to
+ * their home screen for anything else.
+ *
+ * @param session The backend's answer to the login request.
+ * @param target A path that already passed `safeStaffPath`.
+ * @return Whether to honour it.
+ */
+function isReachableBy(session: StaffLoginResponse, target: string): boolean {
+  if (session.role === 'general') return true;
+  if (!session.regionSlug || !session.tournamentType) return false;
+
+  const scope = `/staff/${session.regionSlug}/${session.tournamentType}`;
+  if (!target.startsWith(scope)) return false;
+  // Without this, `/staff/tokyo/saikyoi-2` would pass as being under
+  // `/staff/tokyo/saikyoi`.
+  const next = target.charAt(scope.length);
+  return next === '' || next === '/' || next === '?';
 }
 
 /**

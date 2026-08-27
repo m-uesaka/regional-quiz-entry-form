@@ -29,6 +29,11 @@ function responseWith(...headers: string[]): Response {
   return response;
 }
 
+// A development frontend origin, as `bun run dev` serves it. Not `localhost`
+// on purpose: `.env.example` points development at `127.0.0.1`, and that is
+// exactly the case SvelteKit's own `secure` default gets wrong.
+const DEV_URL = new URL('http://127.0.0.1:5173/staff/login');
+
 // The header `apps/backend/src/routes/staff-auth.ts` issues on login.
 const STAFF_SESSION_HEADER =
   'staff_session=header.payload.signature; Max-Age=43200; Path=/; ' +
@@ -38,7 +43,7 @@ describe('forwardSetCookies', () => {
   it('re-issues the session cookie the backend set', () => {
     const {cookies, set} = recordingCookies();
 
-    forwardSetCookies(responseWith(STAFF_SESSION_HEADER), cookies);
+    forwardSetCookies(responseWith(STAFF_SESSION_HEADER), cookies, DEV_URL);
 
     expect(set).toHaveLength(1);
     expect(set[0].name).toBe('staff_session');
@@ -54,28 +59,55 @@ describe('forwardSetCookies', () => {
   it('leaves the JWT value untouched instead of percent-encoding it again', () => {
     const {cookies, set} = recordingCookies();
 
-    forwardSetCookies(responseWith(STAFF_SESSION_HEADER), cookies);
+    forwardSetCookies(responseWith(STAFF_SESSION_HEADER), cookies, DEV_URL);
 
     const encode = set[0].options.encode ?? encodeURIComponent;
     expect(encode('a.b-c_d')).toBe('a.b-c_d');
   });
 
-  it('drops Domain and Secure so the frontend origin decides them', () => {
+  it("drops Domain so the frontend's own origin decides it", () => {
     const {cookies, set} = recordingCookies();
 
     forwardSetCookies(
       responseWith(`${STAFF_SESSION_HEADER}; Domain=api.example.com`),
       cookies,
+      DEV_URL,
     );
 
     expect(set[0].options).not.toHaveProperty('domain');
-    expect(set[0].options).not.toHaveProperty('secure');
+  });
+
+  it('leaves Secure off over plain HTTP, whatever the dev hostname is', () => {
+    const {cookies, set} = recordingCookies();
+
+    forwardSetCookies(responseWith(STAFF_SESSION_HEADER), cookies, DEV_URL);
+
+    // A `Secure` cookie over `http://` is discarded by the browser without an
+    // error, which would look like a login that succeeds and then loops back
+    // to the form.
+    expect(set[0].options.secure).toBe(false);
+  });
+
+  it('sets Secure over HTTPS even when the backend header omits it', () => {
+    const {cookies, set} = recordingCookies();
+
+    forwardSetCookies(
+      responseWith('staff_session=abc; Path=/; HttpOnly'),
+      cookies,
+      new URL('https://entry.example.com/staff/login'),
+    );
+
+    expect(set[0].options.secure).toBe(true);
   });
 
   it('forwards every cookie of a multi-cookie response', () => {
     const {cookies, set} = recordingCookies();
 
-    forwardSetCookies(responseWith('a=1; Path=/', 'b=2; Path=/staff'), cookies);
+    forwardSetCookies(
+      responseWith('a=1; Path=/', 'b=2; Path=/staff'),
+      cookies,
+      DEV_URL,
+    );
 
     expect(set.map(cookie => [cookie.name, cookie.options.path])).toEqual([
       ['a', '/'],
@@ -86,7 +118,11 @@ describe('forwardSetCookies', () => {
   it('defaults a path-less cookie to the site root', () => {
     const {cookies, set} = recordingCookies();
 
-    forwardSetCookies(responseWith('staff_session=abc; HttpOnly'), cookies);
+    forwardSetCookies(
+      responseWith('staff_session=abc; HttpOnly'),
+      cookies,
+      DEV_URL,
+    );
 
     expect(set[0].options.path).toBe('/');
   });
@@ -97,6 +133,7 @@ describe('forwardSetCookies', () => {
     forwardSetCookies(
       responseWith('a=1; Expires=Wed, 21 Oct 2026 07:28:00 GMT'),
       cookies,
+      DEV_URL,
     );
 
     expect(set[0].options.expires).toEqual(
@@ -104,10 +141,25 @@ describe('forwardSetCookies', () => {
     );
   });
 
+  it('drops an Expires attribute it cannot parse', () => {
+    const {cookies, set} = recordingCookies();
+
+    // `cookies.set()` throws on an `Invalid Date`, which would turn a
+    // successful login into a 500.
+    forwardSetCookies(
+      responseWith('a=1; Max-Age=60; Expires=not-a-date'),
+      cookies,
+      DEV_URL,
+    );
+
+    expect(set[0].options).not.toHaveProperty('expires');
+    expect(set[0].options.maxAge).toBe(60);
+  });
+
   it('ignores a header with no name=value pair', () => {
     const {cookies, set} = recordingCookies();
 
-    forwardSetCookies(responseWith('=nameless; Path=/'), cookies);
+    forwardSetCookies(responseWith('=nameless; Path=/'), cookies, DEV_URL);
 
     expect(set).toHaveLength(0);
   });
@@ -115,7 +167,7 @@ describe('forwardSetCookies', () => {
   it('sets nothing when the response carries no cookies', () => {
     const {cookies, set} = recordingCookies();
 
-    forwardSetCookies(responseWith(), cookies);
+    forwardSetCookies(responseWith(), cookies, DEV_URL);
 
     expect(set).toHaveLength(0);
   });

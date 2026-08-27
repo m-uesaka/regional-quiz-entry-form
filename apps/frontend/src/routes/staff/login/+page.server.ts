@@ -46,7 +46,7 @@ export const actions = {
     // `hooks.server.ts` sends `/api/*` to the backend Worker's own origin,
     // which is cross-origin as far as SvelteKit is concerned, so the session
     // cookie has to be re-issued here to reach the browser.
-    forwardSetCookies(res, cookies);
+    forwardSetCookies(res, cookies, url);
 
     const landing = staffLandingPath(
       await res.json(),

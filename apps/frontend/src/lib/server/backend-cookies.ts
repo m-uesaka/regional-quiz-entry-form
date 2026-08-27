@@ -22,13 +22,16 @@ interface SetCookieSource {
  *
  * @param response The backend response to copy `Set-Cookie` headers from.
  * @param cookies The request event's `cookies`.
+ * @param url The request event's `url`, i.e. the frontend origin the cookie
+ *     is being re-issued from. Only its protocol is read, to decide `Secure`.
  */
 export function forwardSetCookies(
   response: SetCookieSource,
   cookies: Cookies,
+  url: URL,
 ): void {
   for (const header of response.headers.getSetCookie()) {
-    const parsed = parseSetCookie(header);
+    const parsed = parseSetCookie(header, url);
     if (parsed) {
       cookies.set(parsed.name, parsed.value, parsed.options);
     }
@@ -38,18 +41,22 @@ export function forwardSetCookies(
 /**
  * Parses one `Set-Cookie` header value.
  *
- * `Domain` and `Secure` are deliberately dropped rather than copied: both
- * describe where the *backend's* cookie may travel, and this cookie is being
- * re-issued by the frontend instead. SvelteKit's own defaults fill them in
- * from the frontend's origin, which is what keeps the cookie usable over
- * plain `http://localhost` during development while still being `Secure` in
- * production.
+ * `Domain` and `Secure` are deliberately not copied: both describe where the
+ * *backend's* cookie may travel, and this cookie is being re-issued by the
+ * frontend instead. `Secure` is decided from the frontend's own protocol
+ * rather than left to SvelteKit's default, which only drops the flag for the
+ * literal hostname `localhost` — `http://127.0.0.1:5173` or `vite dev --host`
+ * on a LAN address would otherwise get a `Secure` cookie over plain HTTP,
+ * which the browser discards without a word, leaving login silently looping
+ * back to the form.
  *
  * @param header The raw header value.
+ * @param url The frontend origin the cookie is being re-issued from.
  * @return The cookie, or `null` if the header has no `name=value` pair.
  */
 function parseSetCookie(
   header: string,
+  url: URL,
 ): {name: string; value: string; options: CookieOptions} | null {
   const [pair, ...attributes] = header.split(';');
   const separator = pair.indexOf('=');
@@ -61,6 +68,7 @@ function parseSetCookie(
     // and hide it from every page. The backend always sends `Path=/`; this
     // only decides what an attribute-less header means.
     path: '/',
+    secure: url.protocol === 'https:',
     // The value is a JWT that SvelteKit would otherwise percent-encode a
     // second time on the way out.
     encode: value => value,
@@ -102,9 +110,17 @@ function applyAttribute(
     case 'max-age':
       options.maxAge = Number(value);
       break;
-    case 'expires':
-      options.expires = new Date(value);
+    case 'expires': {
+      // A date `Date` can't parse would reach `cookies.set()` as an
+      // `Invalid Date`, which makes the `cookie` package's serializer throw
+      // and turns a successful login into a 500. Losing one attribute of a
+      // cookie that also carries `Max-Age` is the better failure.
+      const expires = new Date(value);
+      if (!Number.isNaN(expires.getTime())) {
+        options.expires = expires;
+      }
       break;
+    }
     case 'httponly':
       options.httpOnly = true;
       break;
