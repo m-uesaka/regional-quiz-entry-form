@@ -143,6 +143,26 @@ describe('staff login action', () => {
     });
   });
 
+  it('asks the staff member to wait when the API rate limits the login', async () => {
+    // 429 rather than 401: the password was never checked, so "wrong
+    // credentials" would be both wrong and unhelpful.
+    const event = buildEvent({
+      ...CREDENTIALS,
+      fetch: fakeFetch({status: 429, body: {error: 'too many requests'}}),
+    });
+
+    const result = await actions.default(event);
+
+    expect(result).toMatchObject({
+      status: 429,
+      data: {
+        email: CREDENTIALS.email,
+        error:
+          'ログインの試行が集中しています。しばらく待ってから再度お試しください',
+      },
+    });
+  });
+
   it('keeps no session cookie when the login was rejected', async () => {
     const {cookies, set} = recordingCookies();
 

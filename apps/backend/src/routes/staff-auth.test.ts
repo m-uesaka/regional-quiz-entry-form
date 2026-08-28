@@ -2,8 +2,13 @@ import {afterEach, describe, expect, it} from 'bun:test';
 import {staffAuthRoute} from './staff-auth';
 import {hashPassword} from '../lib/password';
 import type {Bindings} from '../types/env';
+import {
+  PERMISSIVE_SECURITY_BINDINGS,
+  refusingRateLimiter,
+} from '../test-support/bindings';
 
 const ENV: Bindings = {
+  ...PERMISSIVE_SECURITY_BINDINGS,
   SUPABASE_URL: 'https://example.supabase.co',
   SUPABASE_SERVICE_ROLE_KEY: 'dummy-service-role-key',
   MAIL_API_KEY: 'dummy-mail-api-key',
@@ -144,5 +149,28 @@ describe('POST /login', () => {
     const res = await login('anything', 'unknown@example.com');
 
     expect(res.status).toBe(401);
+  });
+
+  it('returns 429 with Retry-After when the rate limiter refuses', async () => {
+    mockStaffAccountFetch(regionalStaffRow(await hashPassword('correct')));
+
+    const res = await staffAuthRoute.request(
+      '/login',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          email: 'staff@example.com',
+          password: 'correct',
+        }),
+      },
+      {...ENV, LOGIN_RATE_LIMITER: refusingRateLimiter()},
+    );
+
+    const body: unknown = await res.json();
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe('60');
+    expect(body).toEqual({error: 'too many requests'});
+    expect(res.headers.get('set-cookie')).toBeNull();
   });
 });

@@ -1,6 +1,7 @@
 import {afterEach, describe, expect, it} from 'bun:test';
 import type {Bindings} from '../types/env';
 import app from '../index';
+import {PERMISSIVE_SECURITY_BINDINGS} from '../test-support/bindings';
 
 // Publicly documented local-dev demo key for Supabase CLI's default stack
 // (fixed `super-secret-jwt-token-with-at-least-32-characters-long` JWT
@@ -10,6 +11,7 @@ const SUPABASE_SERVICE_ROLE_KEY =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
 
 const env: Bindings = {
+  ...PERMISSIVE_SECURITY_BINDINGS,
   SUPABASE_URL: process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321',
   SUPABASE_SERVICE_ROLE_KEY,
   MAIL_API_KEY: 'dummy-mail-api-key',

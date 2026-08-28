@@ -17,6 +17,22 @@ export interface Bindings {
   // (e.g. the entry verification link).
   FRONTEND_URL: string;
   SESSION_SECRET: string;
+  // Secret: the Turnstile secret key `lib/turnstile.ts` verifies the
+  // widget's tokens with. It is not among the `vars` of the deployed
+  // environments on purpose -- a `var` of the same name would overwrite the
+  // secret on the next deploy.
+  TURNSTILE_SECRET_KEY: string;
+  // Cloudflare's Rate Limiting bindings, declared in `wrangler.toml`. Both
+  // are shared by several endpoints, which is why every key built for them
+  // says what it is keyed on (see `middleware/rate-limit.ts`):
+  //
+  //   - `LOGIN_RATE_LIMITER` caps credential guessing on the two login
+  //     endpoints. Each attempt costs a PBKDF2 verification, so it is also
+  //     what stops an unauthenticated caller from spending the Worker's CPU.
+  //   - `MAIL_TRIGGER_RATE_LIMITER` caps the two endpoints that send mail to
+  //     an address the caller chose, and so is much tighter.
+  LOGIN_RATE_LIMITER: RateLimit;
+  MAIL_TRIGGER_RATE_LIMITER: RateLimit;
 }
 
 export interface Variables {

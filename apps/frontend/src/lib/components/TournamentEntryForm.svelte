@@ -9,6 +9,7 @@
   import DynamicFormField from '$lib/components/DynamicFormField.svelte';
   import {customFieldName} from '$lib/custom-field-name';
   import RegulationSelector from '$lib/components/RegulationSelector.svelte';
+  import Turnstile from '$lib/components/Turnstile.svelte';
   import type {EntryFieldErrors, EntryFormValues} from '$lib/types/entry-form';
 
   interface Props {
@@ -157,6 +158,12 @@
     <label for="freeText">自由記述</label>
     <textarea id="freeText" name="freeText" bind:value={freeText}></textarea>
   </div>
+
+  <!-- The widget drops a hidden `cf-turnstile-response` control into this
+       form, which the page's action forwards to the API. Entry registration
+       mails a confirmation to whatever address it is given, so it is one of
+       the two forms behind a challenge as well as a rate limit (#116). -->
+  <Turnstile />
 
   <button type="submit">エントリーする</button>
 </form>

@@ -2,10 +2,14 @@ import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
 import {sign} from 'hono/jwt';
 import {setCookie} from 'hono/cookie';
-import {ParticipantLoginInputSchema} from '@regional-quiz/shared';
+import {
+  ParticipantLoginInputSchema,
+  type ParticipantLoginInput,
+} from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
 import {verifyPassword} from '../lib/password';
+import {clientIp, rateLimit} from '../middleware/rate-limit';
 import {PARTICIPANT_SESSION_COOKIE} from '../middleware/participant-auth';
 
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
@@ -20,9 +24,29 @@ interface ParticipantRow {
   password_changed_at: string;
 }
 
+// The period `LOGIN_RATE_LIMITER` counts over (`wrangler.toml`), which is
+// also how long a refused caller is asked to wait.
+const LOGIN_LIMIT_PERIOD_SECONDS = 60;
+
 export const participantAuthRoute = new Hono<Env>().post(
   '/login',
+  // Two keys on the same limiter, because they stop different attacks: one
+  // address trying many accounts is only visible on the IP key, and many
+  // addresses trying one account only on the email key. Neither alone
+  // covers the other.
+  rateLimit(
+    env => env.LOGIN_RATE_LIMITER,
+    c => `ip:${clientIp(c)}`,
+    LOGIN_LIMIT_PERIOD_SECONDS,
+  ),
   zValidator('json', ParticipantLoginInputSchema),
+  // After the validator, so the address counted against is one the schema
+  // has already accepted rather than any string a caller cares to send.
+  rateLimit<{out: {json: ParticipantLoginInput}}>(
+    env => env.LOGIN_RATE_LIMITER,
+    c => `email:${c.req.valid('json').email}`,
+    LOGIN_LIMIT_PERIOD_SECONDS,
+  ),
   async c => {
     const {email, password} = c.req.valid('json');
     const db = createDbClient(c.env);

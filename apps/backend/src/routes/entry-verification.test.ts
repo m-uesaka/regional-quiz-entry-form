@@ -1,10 +1,12 @@
 import {describe, expect, it} from 'bun:test';
 import type {Bindings} from '../types/env';
 import app from '../index';
+import {PERMISSIVE_SECURITY_BINDINGS} from '../test-support/bindings';
 
 // Rejected by `zValidator()` before any database call, so it runs
 // unconditionally (including CI).
 const env: Bindings = {
+  ...PERMISSIVE_SECURITY_BINDINGS,
   SUPABASE_URL: 'https://example.supabase.co',
   SUPABASE_SERVICE_ROLE_KEY: 'dummy-service-role-key',
   MAIL_API_KEY: 'dummy-mail-api-key',

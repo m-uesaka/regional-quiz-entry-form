@@ -4,8 +4,18 @@ import {
   PasswordResetRequestInputSchema,
 } from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
+import {TURNSTILE_TOKEN_FIELD} from '$lib/turnstile';
 import {clearParticipantSession} from '$lib/server/participant-session';
 import type {Actions, PageServerLoad} from './$types';
+
+/**
+ * Shown for a 429 from the API. The request half of this flow mails a link
+ * to whatever address it is given, so it is rate limited per IP and per
+ * address (#116) -- and the limit can be met by someone who never submitted
+ * anything themselves, which the wording allows for.
+ */
+const TOO_MANY_REQUESTS_MESSAGE =
+  '送信が集中しています。しばらく待ってから再度お試しください';
 
 /**
  * Decides which half of the reset flow this page is showing.
@@ -53,10 +63,28 @@ export const actions = {
         return fail(400, {error: 'メールアドレスを正しく入力してください'});
       }
 
+      // Written into the form by the Turnstile widget
+      // (`$lib/components/Turnstile.svelte`), and forwarded as a header: the
+      // API takes it beside the body rather than in it.
+      const turnstileToken = String(formData.get(TURNSTILE_TOKEN_FIELD) ?? '');
       const res = await api.api.auth.participant[
         'password-reset'
-      ].request.$post({json: parsed.data});
+      ].request.$post(
+        {json: parsed.data},
+        {headers: {[TURNSTILE_TOKEN_FIELD]: turnstileToken}},
+      );
       if (!res.ok) {
+        if (res.status === 429) {
+          return fail(429, {error: TOO_MANY_REQUESTS_MESSAGE});
+        }
+        if (res.status === 400) {
+          // The body was checked above, so the only 400 left is the
+          // challenge in front of the endpoint refusing the token.
+          return fail(400, {
+            error:
+              '「私はロボットではありません」の確認に失敗しました。ページを再読み込みして、もう一度お試しください',
+          });
+        }
         return fail(502, {error: '再設定メールの送信に失敗しました'});
       }
       // Reported identically whether or not the address is registered: the

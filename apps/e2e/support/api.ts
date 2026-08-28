@@ -81,6 +81,11 @@ export async function submitEntry(
   const response = await request.post(
     `${BACKEND_URL}/api/tournaments/${tournament.id}/entries`,
     {
+      // The Turnstile token the browser would have sent. The run's secret
+      // key accepts any token (`./env.ts`), so an arrangement call that
+      // never opens a browser can name one and be believed; without it the
+      // endpoint refuses the entry outright (#116).
+      headers: {'cf-turnstile-response': 'e2e-turnstile-token'},
       data: {
         name,
         furigana: overrides.furigana ?? 'てすとたろう',

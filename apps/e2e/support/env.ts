@@ -67,3 +67,17 @@ export const FRONTEND_URL = `http://127.0.0.1:${FRONTEND_PORT}`;
 export const SESSION_SECRET = 'e2e-session-secret';
 
 export const MAIL_FROM_ADDRESS = 'entry@example.test';
+
+// Cloudflare's published Turnstile testing keys (#116). The site key renders
+// a widget that solves itself without any interaction, and the secret key
+// makes siteverify accept whatever token it is given, so the entry form and
+// the password-reset request form can be driven exactly as a participant
+// would drive them.
+//
+// They are a real pair against the real service: the widget's script is
+// fetched from `challenges.cloudflare.com` by the browser, and the Worker
+// verifies the token against the same host. A test run therefore needs to be
+// able to reach it — see `README.md`.
+export const TURNSTILE_SITE_KEY = '1x00000000000000000000AA';
+
+export const TURNSTILE_SECRET_KEY = '1x0000000000000000000000000000000AA';

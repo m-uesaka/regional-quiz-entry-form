@@ -1,5 +1,6 @@
 <script lang="ts">
   import {enhance} from '$app/forms';
+  import Turnstile from '$lib/components/Turnstile.svelte';
   import type {PageProps} from './$types';
 
   let {data, form}: PageProps = $props();
@@ -61,6 +62,12 @@
         required
       />
     </div>
+
+    <!-- Only this half of the flow is behind the challenge: it mails a link
+         to whatever address is typed in, while the form above is reached
+         only with a token that was already mailed to the account's own
+         address (#116). -->
+    <Turnstile />
 
     <button type="submit">再設定用リンクを送信する</button>
   </form>

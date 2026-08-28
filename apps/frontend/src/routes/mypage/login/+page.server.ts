@@ -41,6 +41,15 @@ export const actions = {
     const api = createApiClient(fetch);
     const res = await api.api.auth.participant.login.$post({json: parsed.data});
     if (!res.ok) {
+      if (res.status === 429) {
+        // Counted per IP and per address, so this can be met without this
+        // visitor having tried anything themselves (#116).
+        return fail(429, {
+          error:
+            'ログインの試行が集中しています。しばらく待ってから再度お試しください',
+          email,
+        });
+      }
       if (res.status === 401) {
         // Deliberately silent about which half was wrong: telling an
         // unregistered address apart from a wrong password here would undo

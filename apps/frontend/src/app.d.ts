@@ -17,6 +17,19 @@ declare global {
     // interface PageData {}
     // interface PageState {}
   }
+
+  // Cloudflare's Turnstile API, published by the script
+  // `$lib/components/Turnstile.svelte` adds to the head. Only the one call
+  // that component makes is declared; `window.turnstile` is absent until
+  // that script has loaded, which is why it is optional.
+  interface Window {
+    turnstile?: {
+      render(
+        container: HTMLElement,
+        options: {sitekey: string},
+      ): string | undefined;
+    };
+  }
 }
 
 // Merged into the ambient `Env` interface declared by the generated

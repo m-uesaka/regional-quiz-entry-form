@@ -64,6 +64,11 @@ interface FakeApiOptions {
   formFieldDefs?: FormFieldDef[];
   /** Collects every requested URL, for asserting which endpoints ran. */
   requests?: string[];
+  /**
+   * Collects the `cf-turnstile-response` header of every entry submission,
+   * which is how the widget's token reaches the API.
+   */
+  turnstileTokens?: Array<string | null>;
 }
 
 /**
@@ -73,7 +78,7 @@ interface FakeApiOptions {
  */
 function fakeApi(options: FakeApiOptions = {}): typeof fetch {
   const tournament = options.tournament ?? OPEN_TOURNAMENT;
-  return (async (input: RequestInfo | URL) => {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url =
       typeof input === 'string' ? input : new URL(String(input)).pathname;
     options.requests?.push(url);
@@ -84,6 +89,9 @@ function fakeApi(options: FakeApiOptions = {}): typeof fetch {
       return Response.json(options.formFieldDefs ?? FORM_FIELD_DEFS);
     }
     if (url.includes('/entries')) {
+      options.turnstileTokens?.push(
+        new Headers(init?.headers).get('cf-turnstile-response'),
+      );
       const entry = options.entryResponse ?? {status: 201, body: {id: 'entry'}};
       return Response.json(entry.body, {status: entry.status});
     }
@@ -180,6 +188,8 @@ function validFormData(
     regulationId: REGULATIONS[0].id,
     freeText: '',
     'custom.agree_rules': 'on',
+    // The control the Turnstile widget writes its token into.
+    'cf-turnstile-response': 'a-turnstile-token',
     ...overrides,
   };
 }
@@ -432,6 +442,81 @@ describe('entry +page.server default action', () => {
     expect(result).toMatchObject({
       status: 409,
       data: {error: '既にエントリー済みです'},
+    });
+  });
+
+  it("forwards the widget's token to the API", async () => {
+    const turnstileTokens: Array<string | null> = [];
+
+    await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({turnstileTokens}),
+        fields: validFormData(),
+      }),
+    );
+
+    expect(turnstileTokens).toEqual(['a-turnstile-token']);
+  });
+
+  it('sends an empty token when the widget produced none', async () => {
+    // What a submission with the widget unsolved (or never loaded) looks
+    // like. Refusing it is the API's job, not this page's, so nothing here
+    // stops the call from being made.
+    const turnstileTokens: Array<string | null> = [];
+
+    await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          turnstileTokens,
+          entryResponse: {
+            status: 400,
+            body: {error: 'turnstile verification failed'},
+          },
+        }),
+        fields: validFormData({'cf-turnstile-response': ''}),
+      }),
+    );
+
+    expect(turnstileTokens).toEqual(['']);
+  });
+
+  it('reports a refused Turnstile token as something to retry', async () => {
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          entryResponse: {
+            status: 400,
+            body: {error: 'turnstile verification failed'},
+          },
+        }),
+        fields: validFormData(),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 400,
+      data: {
+        error:
+          '「私はロボットではありません」の確認に失敗しました。ページを再読み込みして、もう一度お試しください',
+      },
+    });
+  });
+
+  it('asks the participant to wait when the API rate limits the submission', async () => {
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          entryResponse: {status: 429, body: {error: 'too many requests'}},
+        }),
+        fields: validFormData(),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 429,
+      data: {
+        error: '送信が集中しています。しばらく待ってから再度お試しください',
+      },
     });
   });
 });

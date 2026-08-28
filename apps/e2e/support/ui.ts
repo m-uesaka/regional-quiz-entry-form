@@ -25,12 +25,16 @@ import {
   type StaffFixture,
   type TournamentFixture,
 } from './fixtures';
+import {FRONTEND_URL} from './env';
 
 /** A participant's own view of their entries. */
 const MYPAGE_PATH = '/mypage';
 
 /** Matches `LOGIN_PATH` in `apps/frontend/src/lib/server/participant-session.ts`. */
 const PARTICIPANT_LOGIN_PATH = '/mypage/login';
+
+/** How long the Turnstile widget is given to produce its token. */
+const TURNSTILE_TOKEN_TIMEOUT_MS = 20_000;
 
 /** Matches `STAFF_LOGIN_PATH` in `apps/frontend/src/lib/server/staff-login.ts`. */
 const STAFF_LOGIN_PATH = '/staff/login';
@@ -103,7 +107,19 @@ export async function holdClientBundle(page: Page): Promise<() => void> {
   const released = new Promise<void>(resolve => {
     release = resolve;
   });
-  await page.route(/\.(js|ts|svelte)(\?|$)/, async route => {
+  await page.route(/\.(js|ts|svelte)(\?|$)/, async (route, request) => {
+    // Only this app's own modules are held. Turnstile's `api.js` is served
+    // from Cloudflare and is no part of the client bundle: holding it would
+    // leave the form with no token to submit, which is a different failure
+    // from the one these specs are about.
+    //
+    // Compared against `FRONTEND_URL` rather than `page.url()`, which is
+    // still `about:blank` for the requests of the very navigation this hold
+    // is set up for.
+    if (!request.url().startsWith(FRONTEND_URL)) {
+      await route.continue();
+      return;
+    }
     await released;
     await route.continue();
   });
@@ -194,7 +210,30 @@ export async function fillEntryForm(
     await fillField(page.getByLabel('自由記述', {exact: true}), input.freeText);
   }
 
+  await waitForTurnstileToken(page);
+
   return participant;
+}
+
+/**
+ * Waits for the Turnstile widget to have put its token in the form.
+ *
+ * Addressed by the control's name rather than by anything visible, because
+ * the widget has nothing to address: with the testing site key it solves
+ * itself and the participant never touches it. The name is Cloudflare's, and
+ * is what `apps/frontend`'s form actions read the token out of.
+ *
+ * Submitting before it lands would be refused by the API as a missing token,
+ * intermittently and for reasons that have nothing to do with the flow under
+ * test.
+ * @param page The page holding the form.
+ */
+async function waitForTurnstileToken(page: Page): Promise<void> {
+  await expect(
+    page.locator('input[name="cf-turnstile-response"]'),
+    // Longer than the default: this waits on a third-party script being
+    // fetched and run, which on a cold CI runner is not instant.
+  ).not.toHaveValue('', {timeout: TURNSTILE_TOKEN_TIMEOUT_MS});
 }
 
 /**

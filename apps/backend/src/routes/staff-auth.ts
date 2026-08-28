@@ -5,6 +5,7 @@ import {setCookie} from 'hono/cookie';
 import {
   StaffLoginInputSchema,
   type StaffClaims,
+  type StaffLoginInput,
   type StaffLoginResponse,
   type StaffRole,
   type TournamentType,
@@ -13,6 +14,7 @@ import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
 import {verifyPassword} from '../lib/password';
 import {STAFF_SESSION_COOKIE} from '../middleware/staff-auth';
+import {clientIp, rateLimit} from '../middleware/rate-limit';
 
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
 // A well-formed but unusable hash, run through `verifyPassword` when no
@@ -31,9 +33,24 @@ interface StaffAccountRow {
   regions: {slug: string} | null;
 }
 
+// Matches the period `LOGIN_RATE_LIMITER` counts over (`wrangler.toml`).
+const LOGIN_LIMIT_PERIOD_SECONDS = 60;
+
 export const staffAuthRoute = new Hono<Env>().post(
   '/login',
+  // Keyed both ways for the same reason as the participant login: see
+  // `routes/participant-auth.ts`.
+  rateLimit(
+    env => env.LOGIN_RATE_LIMITER,
+    c => `ip:${clientIp(c)}`,
+    LOGIN_LIMIT_PERIOD_SECONDS,
+  ),
   zValidator('json', StaffLoginInputSchema),
+  rateLimit<{out: {json: StaffLoginInput}}>(
+    env => env.LOGIN_RATE_LIMITER,
+    c => `email:${c.req.valid('json').email}`,
+    LOGIN_LIMIT_PERIOD_SECONDS,
+  ),
   async c => {
     const {email, password} = c.req.valid('json');
     const db = createDbClient(c.env);

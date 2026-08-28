@@ -116,6 +116,21 @@ describe('participant login +page.server action', () => {
     });
   });
 
+  it('asks the participant to wait when the API rate limits the login', async () => {
+    // 429 rather than 401: the credentials were never even checked, so
+    // "wrong password" would be both wrong and unhelpful.
+    const event = buildActionEvent(fakeLoginFetch(429), credentials());
+
+    await expect(actions.default(event)).resolves.toMatchObject({
+      status: 429,
+      data: {
+        error:
+          'ログインの試行が集中しています。しばらく待ってから再度お試しください',
+        email: 'sanka@example.com',
+      },
+    });
+  });
+
   it('never echoes the password back to the form', async () => {
     const event = buildActionEvent(fakeLoginFetch(401), credentials());
 
