@@ -11,6 +11,7 @@ import {regulationsRoute} from './routes/regulations';
 import {staffEntriesRoute} from './routes/staff-entries';
 import {staffDashboardRoute} from './routes/staff-dashboard';
 import {staffMailRoute} from './routes/staff-mail';
+import {staffAccountsRoute} from './routes/staff-accounts';
 import {entryVerificationRoute} from './routes/entry-verification';
 import {formDefinitionsRoute} from './routes/form-definitions';
 import {sheetImportRoute} from './routes/sheet-import';
@@ -36,6 +37,7 @@ const routes = app
   .route('/staff', staffDashboardRoute)
   .route('/staff', staffEntriesRoute)
   .route('/staff', staffMailRoute)
+  .route('/staff', staffAccountsRoute)
   .route('/entries', entryVerificationRoute)
   .route('/form-definitions', formDefinitionsRoute)
   .route('/sheet-import', sheetImportRoute)

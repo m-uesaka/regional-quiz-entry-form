@@ -84,6 +84,7 @@ if ('yaml' in body) {
 | --- | --- | --- |
 | GET | `/api/healthz` | なし |
 | POST | `/api/auth/staff/login` | なし |
+| POST | `/api/auth/staff/password-reset/confirm` | なし(トークン) |
 | POST | `/api/auth/participant/login` | なし |
 | POST | `/api/auth/participant/password-reset/request` | なし |
 | POST | `/api/auth/participant/password-reset/confirm` | なし(トークン) |
@@ -106,6 +107,9 @@ if ('yaml' in body) {
 | GET | `/api/staff/entries/:entryId` | スタッフ(担当範囲) |
 | POST | `/api/staff/tournaments/:tournamentId/mail` | スタッフ(担当範囲) |
 | GET | `/api/staff/dashboard` | 統括スタッフ |
+| GET | `/api/staff/accounts` | 統括スタッフ |
+| POST | `/api/staff/accounts` | 統括スタッフ |
+| POST | `/api/staff/accounts/:id/password-reset` | 統括スタッフ |
 | GET | `/api/mypage/entries` | 参加者 |
 | GET | `/api/mypage/entries/:entryId` | 参加者(本人) |
 | PATCH | `/api/mypage/entries/:entryId` | 参加者(本人) |
@@ -131,6 +135,21 @@ if ('yaml' in body) {
 該当アカウントが存在しない場合もダミーのハッシュに対して PBKDF2 を実行してから 401 を返します。これにより「メールアドレスが存在しない」場合と「パスワードが違う」場合の応答時間が揃い、タイミング差からのアカウント列挙を防ぎます。
 
 `regionSlug` / `tournamentType` は `regional` スタッフの担当範囲で、`general` スタッフでは両方 `null` です。スタッフ画面は `/staff/{regionSlug}/{tournamentType}/entries` のように**スラッグ**で引くため、JWT クレームが持つ `regionId` ではなく `regions` を join したスラッグを返しています。ログイン画面(`/staff/login`)はこれを見て、`general` を `/staff/dashboard` へ、`regional` を担当大会のエントリー一覧へリダイレクトします。
+
+### `POST /api/auth/staff/password-reset/confirm`
+
+スタッフが招待メール(`POST /api/staff/accounts`)またはリンク再発行(`POST /api/staff/accounts/:id/password-reset`)で受け取ったトークンを使い、自分のパスワードを設定します。
+
+- リクエスト: `StaffPasswordResetConfirmInputSchema` — `{token: string(min 1), newPassword: string(min 8)}`
+- `200`: `{"ok": true}`
+- `400`: `{"error": "invalid or expired token"}`(未知・使用済み・期限切れのトークン)
+- `500`: `{"error": "internal server error"}`
+
+**参加者側と違い `/request` はありません。** スタッフ向けのリンクは必ず統括スタッフが特定のアカウントに対して発行するため、このエンドポイントはメールアドレスを受け取らず、「どのアドレスが登録済みか」を問い合わせる手段にもなりません。
+
+トークンは参加者用の `password_reset_tokens` ではなく `staff_password_reset_tokens` に入ります(`participant_id` が not null の FK なので相乗りできません)。検証・パスワード更新・残りリンクの焼き捨ては DB 関数 `reset_staff_password()` が 1 トランザクションで行い、参加者側と同じくスタッフ行を先にロックしてからトークン行を読み直します(`supabase/migrations/0015_staff_accounts_scope_and_password_reset.sql`)。
+
+参加者側の `password_changed_at` に相当する打刻はまだありません。スタッフセッションは 12 時間の JWT を署名だけで受け付けているため、**再設定前に発行された Cookie は最大 12 時間そのまま使えます**。ここを塞ぐのは Task 11-3 です。
 
 ### `POST /api/auth/participant/login`
 
@@ -495,7 +514,63 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 行数は「大会数(地域数 × 大会種別)」に等しく Supabase の `max_rows` に届かないため、CSV エクスポートのようなページングは行っていません。
 
-## 12. マイページ(参加者本人)
+## 12. スタッフアカウント管理(統括スタッフ)
+
+`routes/staff-accounts.ts`。スタッフの発行を Supabase の直接操作から引き上げるためのエンドポイント群です。`password_hash` は `lib/password.ts` の PBKDF2 形式なので、この API が無い間はアプリのコードを動かさないとスタッフ 1 人すら増やせませんでした。
+
+**初期パスワードは API が決めず、レスポンスにも載せません。** 作成時はログインできない行を作り、本人のメールアドレスへ送ったワンタイムリンク(上記 `POST /api/auth/staff/password-reset/confirm`)で本人に設定させます。統括スタッフが地域スタッフのパスワードを知っている状態を作らないためです。
+
+ガードは `routes/regions.ts` と違い**ルート単位**で付けています。このサブアプリは `/staff` にマウントされており、同じ `/staff` に地域スタッフも使う `routes/staff-entries.ts` / `routes/staff-mail.ts` がマウントされているため、`.use('*', ...)` にすると地域スタッフが自分のエントリー一覧から締め出されます。
+
+**削除は提供しません。** 退任したスタッフのアカウントをどう扱うか(無効化か削除か、`entries` との関係をどうするか)は未決なので、この API では作成と再招待だけを扱います。
+
+### `GET /api/staff/accounts`
+
+全スタッフアカウントを `created_at` 昇順で返します。
+
+- `200`: `StaffAccount[]` — `{id, email, role, regionId, regionSlug, regionName, tournamentType, passwordSet}`
+- `401` / `403`
+- `500`: `{"error": "internal server error"}`
+
+`password_hash` は**返しません**。行からは `passwordSet`(招待リンクがまだ使われていなければ `false`)だけを組み立てます。誰にリンクを送り直すべきかは管理画面が知る必要があり、ハッシュそのものは必要ないためです。
+
+`regionSlug` / `regionName` は join した `regions` の値で、`general` スタッフでは `regionId` ともども `null` です。
+
+### `POST /api/staff/accounts`
+
+- リクエスト: `StaffAccountCreateInputSchema` — `role` による判別共用体
+  - `{role: 'general', email}`
+  - `{role: 'regional', email, regionId, tournamentType}`
+- `201`: 作成された `StaffAccount`(`passwordSet` は必ず `false`)
+- `400`: バリデーション違反(`zValidator`)、または `{"error": "unknown region"}`(存在しない `regionId` = Postgres の `23503`)
+- `409`: `{"error": "email already in use"}`(Postgres の `23505`)
+- `401` / `403`
+- `500`: `{"error": "internal server error"}`、またはメール送信に失敗した場合の `{"error": "account created but the setup mail could not be sent"}`
+
+`regional` は `regionId` と `tournamentType` の**両方が必須**、`general` は**両方持てません**。片方だけ埋まった行は「狭い担当範囲」ではなく壊れた行で、`middleware/staff-auth.ts` の範囲チェックがすべての大会で落ちるため、そのアカウントはどこへ行っても静かに 403 になります。判別共用体はこの body を型の側で作れなくし、同じ不変条件を DB の check 制約(`staff_accounts_scope_matches_role`)でも縛っています。
+
+行の `password_hash` には、`hashPassword()` の形式に合わない固定値(`UNUSABLE_PASSWORD_HASH`)を入れます。`verifyPassword()` は形式が合わない文字列に対して常に false を返すので、招待リンクでパスワードが設定されるまでこのアカウントではログインできません。
+
+招待メールは参加者の再設定要求と違い `waitUntil()` に逃がさず **await** し、失敗はステータス 500 で報告します。呼び出し元は認証済みの統括スタッフで、列挙されるアドレスも隠すべき結果もない一方、「アカウントは出来たがリンクが飛んでいない」ことは知らせないと運用が詰まるためです。この場合のメッセージが `internal server error` ではないのはそのためで、やり直すべきは作成(もう 409 になります)ではなくリンクの再発行です。
+
+### `POST /api/staff/accounts/:id/password-reset`
+
+パスワード設定リンクの再発行。招待メールが届かなかった場合と、スタッフがパスワードを忘れた場合の両方に使います。
+
+- パス: `id` は UUID
+- `200`: `{"ok": true}`
+- `400`: バリデーション違反(`zValidator`)
+- `404`: `{"error": "staff account not found"}`
+- `401` / `403`
+- `500`: `{"error": "internal server error"}`
+
+**送信先は body ではなく行から読みます。** リンクはそのアカウント自身のメールボックスにしか送られてはならないので、呼び出し側に指定させる余地を作っていません。
+
+リンクの有効期限は 24 時間です(参加者の再設定リンクの 1 時間より長め)。招待は本人が待っている操作ではないため、1 時間ではほとんどが読まれる前に切れてしまいます。発行のたびに、そのアカウントの期限切れトークンは削除され、設定が成功した時点で残りの未使用リンクも焼き捨てられます。
+
+**スタッフ自身がリンクを要求する経路はありません**(`/request` に相当するものが無い)。統括スタッフが 1 人しかいない状態でその人がパスワードを忘れると、Supabase を直接操作するしかありません。運用上、統括スタッフは 2 名以上作ってください。
+
+## 13. マイページ(参加者本人)
 
 `routes/mypage.ts`。このサブアプリは `.use('*', requireParticipant())` により全ルートが参加者ログイン必須です。
 
@@ -552,7 +627,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 - すでに `cancelled` の場合も 200 を返します(冪等)。誰も繰り上げません。
 - 繰り上げ処理が失敗しても**リクエスト自体は成功扱い**にし、ログ出力にとどめます。キャンセル自体は既にコミット済みであり、ここで失敗を返すと「キャンセルできていない」と参加者に誤解させるためです。失われるのは繰り上げ(またはその通知メール)だけで、参加者のキャンセル自体は成立しています。なお繰り上げが走るのはこのキャンセル処理だけで(`promoteNextWaitlistedEntry()` の呼び出し元は `cancelOwnEntry()` のみ)、スタッフが繰り上げをやり直すための API / UI は現状ありません。取りこぼした繰り上げは Supabase 上で直接対応する運用です。
 
-## 13. 環境変数(Bindings)
+## 14. 環境変数(Bindings)
 
 `apps/backend/src/types/env.ts`。Cloudflare Workers の Bindings 経由で渡します。
 
@@ -569,9 +644,8 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 登録手順は [`supabase-deployment.md`](./supabase-deployment.md) / [`google-sheets-integration.md`](./google-sheets-integration.md) を参照してください。
 
-## 14. 未実装のエンドポイント
+## 15. 未実装のエンドポイント
 
 `tasks.md` 上で計画されているが、現時点で API が存在しないものです。
 
 - レギュレーション(`regulations`)の**登録・編集** API — 読み出しは `GET /api/tournaments/:tournamentId/regulations` がありますが、書き込みは Supabase 上で直接行う運用です。
-- スタッフアカウント(`staff_accounts`)の管理 API — 同上。

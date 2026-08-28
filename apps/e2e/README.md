@@ -115,7 +115,7 @@ API を直接叩いているのは2箇所だけです(`support/api.ts`)。
 
 ### シード
 
-`support/global-setup.ts` が実行ごとに全テーブルを空にし、`support/fixtures.ts` の地域・大会・レギュレーション・フォーム項目定義・スタッフアカウントを固定 UUID で入れ直します。地域・大会・スタッフを作る API が無い(`docs/api-endpoints.md` の「未実装」節)ため、ここだけは Supabase の Data API を直接使っています。
+`support/global-setup.ts` が実行ごとに全テーブルを空にし、`support/fixtures.ts` の地域・大会・レギュレーション・フォーム項目定義・スタッフアカウントを固定 UUID で入れ直します。地域・大会・スタッフを作る API は揃っていますが(`POST /api/regions` / `POST /api/tournaments` / `POST /api/staff/accounts`)、シードはそれらを使わず Supabase の Data API を直接叩いています。テストが固定 UUID で行を引くこと、統括スタッフのセッションを先に作らないと API を呼べないこと、スタッフのパスワードは API 経由だと招待メールのリンクを踏まないと決まらないことが理由です。
 
 大会は2つあり、テスト同士が干渉しないよう用途を分けています。
 

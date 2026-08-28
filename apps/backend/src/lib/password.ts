@@ -54,12 +54,26 @@ export async function hashPassword(password: string): Promise<string> {
   return `${toHex(salt.buffer)}:${toHex(bits)}`;
 }
 
-export async function verifyPassword(
-  password: string,
-  stored: string,
-): Promise<boolean> {
+/**
+ * The placeholder written to a `password_hash` column for an account whose
+ * owner has not chosen a password yet.
+ *
+ * `POST /api/staff/accounts` creates the row before the new staff member has
+ * been anywhere near it, and the column is `not null`. This value is not a
+ * hash in the format `hashPassword()` produces, so `verifyPassword()` returns
+ * false for every password submitted against it and the account cannot be
+ * logged into until the invite link replaces it.
+ */
+export const UNUSABLE_PASSWORD_HASH = 'invalid';
+
+/**
+ * Splits a stored hash into its salt and hash halves, or null if `stored` is
+ * not in the format `hashPassword()` produces.
+ * @param stored The value of the account's `password_hash` column.
+ */
+function parseStoredHash(stored: string): {salt: string; hash: string} | null {
   const parts = stored.split(':');
-  if (parts.length !== 2) return false;
+  if (parts.length !== 2) return null;
   const [saltHex, hashHex] = parts;
   if (
     saltHex.length !== SALT_HEX_LENGTH ||
@@ -67,8 +81,31 @@ export async function verifyPassword(
     !HEX_PATTERN.test(saltHex) ||
     !HEX_PATTERN.test(hashHex)
   ) {
-    return false;
+    return null;
   }
-  const bits = await deriveBits(password, fromHex(saltHex));
-  return timingSafeEqualHex(toHex(bits), hashHex);
+  return {salt: saltHex, hash: hashHex};
+}
+
+/**
+ * Whether any password could match `stored` at all, i.e. whether it is a hash
+ * this module produced rather than `UNUSABLE_PASSWORD_HASH` (or anything else
+ * malformed).
+ *
+ * Callers need this separately from `verifyPassword()` because "no password
+ * set yet" is a state the staff account list reports and the login route has
+ * to spend equal time on — neither can ask by submitting a password.
+ * @param stored The value of the account's `password_hash` column.
+ */
+export function isPasswordHashUsable(stored: string): boolean {
+  return parseStoredHash(stored) !== null;
+}
+
+export async function verifyPassword(
+  password: string,
+  stored: string,
+): Promise<boolean> {
+  const parsed = parseStoredHash(stored);
+  if (!parsed) return false;
+  const bits = await deriveBits(password, fromHex(parsed.salt));
+  return timingSafeEqualHex(toHex(bits), parsed.hash);
 }

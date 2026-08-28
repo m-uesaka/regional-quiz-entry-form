@@ -1,6 +1,6 @@
 import {afterEach, describe, expect, it} from 'bun:test';
 import {staffAuthRoute} from './staff-auth';
-import {hashPassword} from '../lib/password';
+import {hashPassword, UNUSABLE_PASSWORD_HASH} from '../lib/password';
 import type {Bindings} from '../types/env';
 
 const ENV: Bindings = {
@@ -144,5 +144,19 @@ describe('POST /login', () => {
     const res = await login('anything', 'unknown@example.com');
 
     expect(res.status).toBe(401);
+  });
+
+  it('refuses an account that has not set a password yet', async () => {
+    // What `POST /api/staff/accounts` writes: the row exists, but its owner
+    // hasn't followed the invite link, so no password can match.
+    mockStaffAccountFetch(regionalStaffRow(UNUSABLE_PASSWORD_HASH));
+
+    const res = await login(UNUSABLE_PASSWORD_HASH);
+
+    expect(res.status).toBe(401);
+    expect((await res.json()) as Record<string, unknown>).toEqual({
+      error: 'invalid credentials',
+    });
+    expect(res.headers.get('set-cookie')).toBeNull();
   });
 });

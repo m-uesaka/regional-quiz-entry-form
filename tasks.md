@@ -65,7 +65,7 @@ Phase 9 以降のタスクファイルに書かれているマイグレーショ
 * Phase 9: 管理機能の欠落解消(運用ブロッカー) 🚧進行中
   * Task 9-1: レギュレーション登録・編集 API
   * Task 9-2: 地域(regions)管理 API ✅
-  * Task 9-3: スタッフアカウント管理 API
+  * Task 9-3: スタッフアカウント管理 API ✅
   * Task 9-4: 統括スタッフ向け管理画面(地域・レギュレーション・スタッフ)
   * Task 9-5: `/api/*` の Worker route 有効化(#101)
 * Phase 10: 要件との差分の解消 🚧未着手
@@ -210,7 +210,7 @@ graph TD
 ```mermaid
 graph TD
   T91["9-1 レギュレーションAPI"]:::next --> T94["9-4 管理画面"]:::todo
-  T92["9-2 地域API"]:::done --> T93["9-3 スタッフAPI"]:::next
+  T92["9-2 地域API"]:::done --> T93["9-3 スタッフAPI"]:::done
   T92 --> T94
   T93 --> T94
   T95["9-5 /api/* route 有効化 (#101)"]:::next
@@ -245,15 +245,15 @@ graph TD
 ```mermaid
 graph TD
   T111["11-1 レート制限/Turnstile"]:::next --> T112["11-2 メール列挙対策"]:::todo
-  T93["9-3 スタッフAPI"]:::prereq --> T113["11-3 スタッフセッション失効"]:::todo
+  T93["9-3 スタッフAPI"]:::done --> T113["11-3 スタッフセッション失効"]:::next
   T114["11-4 パスワードハッシュ強化"]:::next
   T115["11-5 CSRF/セキュリティヘッダ"]:::next
   T116["11-6 ルート網羅テスト"]:::next
   T117["11-7 軽微な堅牢化"]:::next
 
+  classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
   classDef todo fill:#e2e8f0,stroke:#4a5568,color:#1a202c;
   classDef next fill:#fef3c7,stroke:#d97706,color:#78350f;
-  classDef prereq fill:#ffffff,stroke:#a0aec0,color:#4a5568;
 ```
 
 11-1 → 11-2 の順序は必須(応答を統一しても、レート制限が無ければ処理時間差で列挙できるため)。他は独立。
@@ -344,7 +344,7 @@ graph TD
 
 * [Task 9-1: レギュレーション登録・編集 API](tasks/task-9-1.md) — 優先エントリー期間を含め、現状は Supabase を直接操作しないと設定できない
 * [Task 9-2: 地域(regions)管理 API ✅](tasks/task-9-2.md) — 地域が作れないと大会も作れない。`GET / POST / PATCH /api/regions` を追加済み
-* [Task 9-3: スタッフアカウント管理 API](tasks/task-9-3.md) — スタッフの発行にアプリのコード実行(パスワードハッシュ生成)が要る状態の解消
+* [Task 9-3: スタッフアカウント管理 API ✅](tasks/task-9-3.md) — スタッフの発行にアプリのコード実行(パスワードハッシュ生成)が要る状態の解消。`GET / POST /api/staff/accounts` と招待メールによる初期パスワード設定を追加済み
 * [Task 9-4: 統括スタッフ向け管理画面(地域・レギュレーション・スタッフ)](tasks/task-9-4.md) — `/admin/*` のサーバ側ガード追加を含む
 * [Task 9-5: `/api/*` の Worker route 有効化(#101)](tasks/task-9-5.md) — 本番で CSV ダウンロードと `/admin` のクライアント側 API 呼び出しが 404 になっている
 

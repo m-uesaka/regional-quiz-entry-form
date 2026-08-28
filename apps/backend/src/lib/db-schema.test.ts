@@ -238,3 +238,102 @@ describe.skipIf(!(await isDbReachable()))(
     });
   },
 );
+
+// The role/scope check constraint added by
+// `0015_staff_accounts_scope_and_password_reset.sql`. It exists because a
+// half-scoped `regional` row is refused by `middleware/staff-auth.ts` on
+// every tournament, so the account 403s silently instead of failing where it
+// was created — and rows can still be written straight through Supabase,
+// where `StaffAccountCreateInputSchema` isn't in the way.
+describe.skipIf(!(await isDbReachable()))(
+  'staff_accounts scope constraint (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const staffEmailPrefix = 'staff-scope-test-';
+    const staffRegionSlug = 'staff-scope-test-region';
+
+    afterAll(async () => {
+      await sql`delete from staff_accounts where email like ${staffEmailPrefix + '%'}`;
+      await sql`delete from regions where slug = ${staffRegionSlug}`;
+      await sql.close();
+    });
+
+    async function insertStaff(
+      email: string,
+      role: string,
+      regionId: string | null,
+      tournamentType: string | null,
+    ): Promise<void> {
+      await sql`
+        insert into staff_accounts (
+          email, password_hash, role, region_id, tournament_type
+        ) values (
+          ${email}, 'invalid', ${role}::staff_role, ${regionId},
+          ${tournamentType}::tournament_type
+        )
+      `;
+    }
+
+    async function insertThrew(insert: Promise<void>): Promise<boolean> {
+      try {
+        await insert;
+        return false;
+      } catch {
+        return true;
+      }
+    }
+
+    it('rejects a regional row without a region', async () => {
+      const [region] = await sql`
+        insert into regions (slug, name)
+        values (${staffRegionSlug}, 'スコープテスト地域')
+        returning id
+      `;
+
+      expect(
+        await insertThrew(
+          insertStaff(
+            `${staffEmailPrefix}no-region@example.com`,
+            'regional',
+            null,
+            'saikyoi',
+          ),
+        ),
+      ).toBe(true);
+      expect(
+        await insertThrew(
+          insertStaff(
+            `${staffEmailPrefix}no-type@example.com`,
+            'regional',
+            region.id,
+            null,
+          ),
+        ),
+      ).toBe(true);
+      // A `general` row carrying a scope is refused too: it would read as
+      // "restricted to this region" while the middleware waves it through
+      // everywhere.
+      expect(
+        await insertThrew(
+          insertStaff(
+            `${staffEmailPrefix}scoped-general@example.com`,
+            'general',
+            region.id,
+            'saikyoi',
+          ),
+        ),
+      ).toBe(true);
+      // Both halves present is what the API writes, and is accepted.
+      expect(
+        await insertThrew(
+          insertStaff(
+            `${staffEmailPrefix}ok@example.com`,
+            'regional',
+            region.id,
+            'saikyoi',
+          ),
+        ),
+      ).toBe(false);
+    });
+  },
+);

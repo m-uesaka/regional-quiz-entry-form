@@ -4,6 +4,7 @@ import {sign} from 'hono/jwt';
 import {setCookie} from 'hono/cookie';
 import {
   StaffLoginInputSchema,
+  StaffPasswordResetConfirmInputSchema,
   type StaffClaims,
   type StaffLoginResponse,
   type StaffRole,
@@ -11,7 +12,9 @@ import {
 } from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
-import {verifyPassword} from '../lib/password';
+import {isPasswordHashUsable, verifyPassword} from '../lib/password';
+import {internalError} from '../lib/errors';
+import {confirmStaffPasswordReset} from '../lib/staff-password-reset';
 import {STAFF_SESSION_COOKIE} from '../middleware/staff-auth';
 
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
@@ -31,10 +34,8 @@ interface StaffAccountRow {
   regions: {slug: string} | null;
 }
 
-export const staffAuthRoute = new Hono<Env>().post(
-  '/login',
-  zValidator('json', StaffLoginInputSchema),
-  async c => {
+export const staffAuthRoute = new Hono<Env>()
+  .post('/login', zValidator('json', StaffLoginInputSchema), async c => {
     const {email, password} = c.req.valid('json');
     const db = createDbClient(c.env);
     const {data: staff, error} = await db
@@ -50,10 +51,17 @@ export const staffAuthRoute = new Hono<Env>().post(
       return c.json({error: 'internal server error'}, 500);
     }
 
-    const passwordValid = await verifyPassword(
-      password,
-      staff?.password_hash ?? DUMMY_PASSWORD_HASH,
-    );
+    // An account created by `POST /api/staff/accounts` whose owner hasn't
+    // followed their invite link yet carries an unusable placeholder hash.
+    // `verifyPassword()` refuses it either way, but it refuses it before
+    // doing any PBKDF2 work, which would make "invited, not set up yet"
+    // distinguishable from "wrong password" by response time -- the same leak
+    // the dummy hash exists to close for an unknown email.
+    const storedHash =
+      staff && isPasswordHashUsable(staff.password_hash)
+        ? staff.password_hash
+        : DUMMY_PASSWORD_HASH;
+    const passwordValid = await verifyPassword(password, storedHash);
     if (!staff || !passwordValid) {
       return c.json({error: 'invalid credentials'}, 401);
     }
@@ -87,5 +95,33 @@ export const staffAuthRoute = new Hono<Env>().post(
       tournamentType: staff.tournament_type,
     };
     return c.json(body);
-  },
-);
+  })
+  // The counterpart to the invite mail `POST /api/staff/accounts` sends, and
+  // to the link a general staff member re-issues from
+  // `/api/staff/accounts/:id/password-reset`. There is no `/request` sibling:
+  // staff links are always issued by a general staff member for a named
+  // account, so this endpoint never has to take an address -- and can't be
+  // used to find out which ones are registered.
+  .post(
+    '/password-reset/confirm',
+    zValidator('json', StaffPasswordResetConfirmInputSchema),
+    async c => {
+      const result = await confirmStaffPasswordReset(
+        c.env,
+        c.req.valid('json'),
+      );
+      if (!result.ok) {
+        if (result.status === 500) {
+          return c.json(
+            internalError(
+              'failed to confirm the staff password reset',
+              result.error,
+            ),
+            500,
+          );
+        }
+        return c.json({error: result.error}, result.status);
+      }
+      return c.json({ok: true});
+    },
+  );
