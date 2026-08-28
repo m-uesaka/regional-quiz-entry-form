@@ -35,9 +35,10 @@ create table staff_password_reset_tokens (
 
 -- Same reason as `0012` on the participant table: both statements that
 -- address one account's links -- the burn inside `reset_staff_password()` and
--- the pruning of expired rows in `lib/staff-password-reset.ts` -- filter on
--- this column, and the table otherwise carries only its primary key and the
--- `token_hash` unique index.
+-- the delete that `lib/staff-password-reset.ts` clears an account's
+-- outstanding links with before issuing a new one -- filter on this column,
+-- and the table otherwise carries only its primary key and the `token_hash`
+-- unique index.
 create index staff_password_reset_tokens_staff_account_id_idx
   on staff_password_reset_tokens (staff_account_id);
 

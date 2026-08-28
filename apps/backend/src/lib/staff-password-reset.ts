@@ -55,23 +55,24 @@ export async function sendStaffPasswordLink(
 ): Promise<StaffPasswordLinkResult> {
   const db = createDbClient(env);
 
-  // Links this account let expire are dropped as they are replaced. Unlike
-  // the participant table this endpoint is general-staff-only, so the table
-  // can't be grown by an anonymous loop; the pruning is here so that
-  // re-sending an invite a few times doesn't accumulate rows that
-  // `reset_staff_password` would refuse anyway.
-  const {error: pruneError} = await db
+  // Every link this account already has is dropped before the new one is
+  // written, expired or not. `reset_staff_password` only burns an account's
+  // other links once one of them has been *redeemed*, so without this an
+  // invite sent to a mistyped address would stay usable for the rest of its
+  // day-long TTL even after the general staff member noticed and re-issued
+  // it to the right one -- and whoever holds the wrong link could redeem it
+  // first and take the account over. Clearing the whole account's rows also
+  // covers the pruning the expiry-only delete used to do, and this endpoint
+  // is general-staff-only, so the table can't be grown by an anonymous loop
+  // in the first place.
+  const {error: deleteError} = await db
     .from('staff_password_reset_tokens')
     .delete()
-    .eq('staff_account_id', staffAccountId)
-    .lt('expires_at', new Date().toISOString());
-  if (pruneError) {
-    // Housekeeping, not part of the invite: leaving rows behind must not stop
-    // the staff member from getting their link.
-    console.error('failed to prune expired staff password reset tokens', {
-      staffAccountId,
-      error: pruneError.message,
-    });
+    .eq('staff_account_id', staffAccountId);
+  if (deleteError) {
+    // Fail closed rather than mail a second live link: leaving two of them
+    // outstanding at once is exactly what this delete exists to prevent.
+    return {ok: false, error: deleteError.message};
   }
 
   const token = generateToken();

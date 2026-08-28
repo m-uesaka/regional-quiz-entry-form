@@ -185,6 +185,42 @@ describe.skipIf(!(await isDbReachable()))(
       );
     }
 
+    /**
+     * Re-issues a password link and returns the raw token out of the mail it
+     * was sent in, which is the only place the token is ever readable.
+     */
+    async function reissueLink(
+      staffAccountId: string,
+      cookie: string,
+    ): Promise<string> {
+      sentMail = [];
+      const res = await app.request(
+        `/api/staff/accounts/${staffAccountId}/password-reset`,
+        {method: 'POST', headers: {cookie}},
+        env,
+      );
+      expect(res.status).toBe(200);
+      expect(sentMail).toHaveLength(1);
+      const token = sentMail[0].html.match(/token=([0-9a-f]+)/)?.[1];
+      expect(token).toBeDefined();
+      return token as string;
+    }
+
+    async function confirmReset(
+      token: string,
+      newPassword: string,
+    ): Promise<Response> {
+      return app.request(
+        '/api/auth/staff/password-reset/confirm',
+        {
+          method: 'POST',
+          headers: {'content-type': 'application/json'},
+          body: JSON.stringify({token, newPassword}),
+        },
+        env,
+      );
+    }
+
     function generalAccountBody(suffix: string): Record<string, unknown> {
       return {role: 'general', email: `${emailPrefix}-${suffix}@example.com`};
     }
@@ -330,30 +366,12 @@ describe.skipIf(!(await isDbReachable()))(
         await createAccount({role: 'general', email})
       ).json()) as {id: string};
       const cookie = await generalStaffCookie();
-      sentMail = [];
 
-      const reset = await app.request(
-        `/api/staff/accounts/${created.id}/password-reset`,
-        {method: 'POST', headers: {cookie}},
-        env,
+      const token = await reissueLink(created.id, cookie);
+
+      expect((await confirmReset(token, 'new-staff-password')).status).toBe(
+        200,
       );
-
-      expect(reset.status).toBe(200);
-      expect(sentMail).toHaveLength(1);
-      const token = sentMail[0].html.match(/token=([0-9a-f]+)/)?.[1];
-      expect(token).toBeDefined();
-
-      const confirm = await app.request(
-        '/api/auth/staff/password-reset/confirm',
-        {
-          method: 'POST',
-          headers: {'content-type': 'application/json'},
-          body: JSON.stringify({token, newPassword: 'new-staff-password'}),
-        },
-        env,
-      );
-
-      expect(confirm.status).toBe(200);
 
       const login = await app.request(
         '/api/auth/staff/login',
@@ -368,17 +386,29 @@ describe.skipIf(!(await isDbReachable()))(
       expect(login.status).toBe(200);
       // The link is one-time: replaying it after the password is set answers
       // the same 400 an unknown token would.
-      const replay = await app.request(
-        '/api/auth/staff/password-reset/confirm',
-        {
-          method: 'POST',
-          headers: {'content-type': 'application/json'},
-          body: JSON.stringify({token, newPassword: 'another-password'}),
-        },
-        env,
-      );
+      expect((await confirmReset(token, 'another-password')).status).toBe(400);
+    });
 
-      expect(replay.status).toBe(400);
+    it('burns the link it replaces when one is re-issued', async () => {
+      const email = `${emailPrefix}-reissue@example.com`;
+      const created = (await (
+        await createAccount({role: 'general', email})
+      ).json()) as {id: string};
+      const cookie = await generalStaffCookie();
+
+      const firstToken = await reissueLink(created.id, cookie);
+      const secondToken = await reissueLink(created.id, cookie);
+      expect(secondToken).not.toBe(firstToken);
+
+      // The point of the re-issue: an invite that went to the wrong address
+      // must not stay redeemable for the rest of its day-long TTL just
+      // because nobody has clicked the replacement yet.
+      const stale = await confirmReset(firstToken, 'stale-link-password');
+      expect(stale.status).toBe(400);
+
+      expect((await confirmReset(secondToken, 'fresh-password')).status).toBe(
+        200,
+      );
     });
 
     it('returns 404 when resetting an account that does not exist', async () => {
