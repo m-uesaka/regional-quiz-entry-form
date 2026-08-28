@@ -1,4 +1,4 @@
-import {afterAll, describe, expect, it} from 'bun:test';
+import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
 import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
@@ -109,6 +109,14 @@ describe.skipIf(!(await isDbReachable()))(
     const sql = new SQL(DB_URL);
     const testSlugPrefix = 'regions-route-test';
 
+    // Cleaning up on the way in as well as on the way out: an interrupted
+    // run (or one where the `afterAll` delete itself failed) would otherwise
+    // leave rows behind and make the next run's create fail with a 409 for a
+    // reason that has nothing to do with the code under test.
+    beforeAll(async () => {
+      await sql`delete from regions where slug like ${testSlugPrefix + '%'}`;
+    });
+
     afterAll(async () => {
       await sql`delete from regions where slug like ${testSlugPrefix + '%'}`;
       await sql.close();
@@ -141,7 +149,9 @@ describe.skipIf(!(await isDbReachable()))(
 
     it('returns 409 for a duplicate slug', async () => {
       const slug = `${testSlugPrefix}-dup`;
-      await createRegion(slug, '重複テスト地域');
+      // Asserted so that a failure of the *first* insert can't be what makes
+      // the second one 409.
+      expect((await createRegion(slug, '重複テスト地域')).status).toBe(201);
 
       const res = await createRegion(slug, '重複テスト地域2');
       const body = (await res.json()) as Record<string, unknown>;

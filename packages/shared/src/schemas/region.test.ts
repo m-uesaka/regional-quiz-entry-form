@@ -24,6 +24,15 @@ describe('RegionSlugSchema', () => {
       expect(RegionSlugSchema.safeParse(slug).success).toBe(false);
     }
   });
+
+  it('names the length rule in the rejection message', () => {
+    const result = RegionSlugSchema.safeParse('a'.repeat(32));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('2〜31 文字');
+    }
+  });
 });
 
 describe('RegionCreateInputSchema', () => {

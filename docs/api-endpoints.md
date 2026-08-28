@@ -194,21 +194,25 @@ if ('yaml' in body) {
 ### `POST /api/regions`
 
 - リクエスト: `RegionCreateInputSchema` — `{slug, name}`
-  - `slug` は `/^[a-z][a-z0-9-]{1,30}$/`。エントリーフォーム URL(`/{regionSlug}/{tournamentSlug}/entry`)の1セグメントとしてそのまま使うため、パスやクエリで意味を持つ文字と大文字を弾きます。先頭を英字に固定しているのは UUID や数値 id と見分けるためです
+  - `slug` は `/^[a-z][a-z0-9-]{1,30}$/`(先頭の英字を含めて 2〜31 文字)。エントリーフォーム URL(`/{regionSlug}/{tournamentSlug}/entry`)の1セグメントとしてそのまま使うため、パスやクエリで意味を持つ文字と大文字を弾きます。先頭を英字に固定しているのは UUID や数値 id と見分けるためです
   - `name` は 1〜100 文字
 - `201`: 作成された `Region`
-- `400`: バリデーション違反、またはそれ以外の挿入失敗
+- `400`: バリデーション違反(`zValidator`)
 - `409`: `{"error": "slug already in use"}` — slug の重複(Postgres の `23505`)。スタッフが直せる入力ミスなので 500 ではなくこれを返します
 - `401` / `403`
+- `500`: `{"error": "internal server error"}`
+
+重複 slug 以外の挿入失敗は 400 ではなく 500 です。body は検証済み、`name` はただの `text` 列、`regions` に外部キーもないので、ここに残るのは Supabase に届かない・キーが弾かれたといったサーバ側の失敗だけで、生の Supabase メッセージを 400 で返すと管理画面がインフラ障害をフォームの入力エラーとして表示してしまいます。
 
 ### `PATCH /api/regions/:id`
 
 - パス: `id` は UUID
 - リクエスト: `RegionUpdateInputSchema` — `{name}`
 - `200`: 更新後の `Region`
+- `400`: バリデーション違反(`zValidator`)
 - `404`: `{"error": "region not found"}`(Supabase の `PGRST116` を変換)
-- `400`: それ以外の更新失敗
 - `401` / `403`
+- `500`: `{"error": "internal server error"}` — 作成時と同じ理由で、対象が無い以外の更新失敗はサーバ側の失敗として扱います
 
 **`slug` は更新できません。** 公開済みのエントリーフォーム URL の一部なので、後から変えると配布済みのリンクが壊れます。`RegionUpdateInputSchema` は `name` だけを `pick` しているため、body に `slug` を入れても 400 にはならず、単に無視されます。
 
@@ -471,7 +475,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 ## 11. 全地域横断ダッシュボード(統括スタッフ)
 
-`routes/staff-dashboard.ts`。セクション 9 のエントリー閲覧・メール送信が「1 大会ずつ」なのに対し、こちらは**全地域・全大会の集計を 1 回で**返します。地域スタッフには自分の地域外の情報を見せないため、`requireStaffForTournament()` ではなく `requireGeneralStaff()` で保護しています(地域スタッフは 403)。
+`routes/staff-dashboard.ts`。セクション 10 のエントリー閲覧・メール送信が「1 大会ずつ」なのに対し、こちらは**全地域・全大会の集計を 1 回で**返します。地域スタッフには自分の地域外の情報を見せないため、`requireStaffForTournament()` ではなく `requireGeneralStaff()` で保護しています(地域スタッフは 403)。
 
 ### `GET /api/staff/dashboard`
 
