@@ -7,7 +7,9 @@ function renderPage(
   form: {email: string; error: string} | null = null,
   passwordSet = false,
 ) {
-  render(Page, {props: {params: {}, data: {passwordSet}, form}});
+  render(Page, {
+    props: {params: {}, data: {loggedIn: false, passwordSet}, form},
+  });
 }
 
 describe('staff login +page.svelte', () => {
@@ -21,7 +23,11 @@ describe('staff login +page.svelte', () => {
 
   it('posts to its own URL so the redirectTo parameter survives', () => {
     const {container} = render(Page, {
-      props: {params: {}, data: {passwordSet: false}, form: null},
+      props: {
+        params: {},
+        data: {loggedIn: false, passwordSet: false},
+        form: null,
+      },
     });
 
     const form = container.querySelector('form');

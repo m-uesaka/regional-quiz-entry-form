@@ -115,15 +115,16 @@ describe('staff login action', () => {
     } satisfies Partial<Redirect>);
   });
 
-  it('re-issues the session cookie the backend set', async () => {
+  it('leaves re-issuing the session cookie to handleFetch', async () => {
     const {cookies, set} = recordingCookies();
 
     await expect(
       actions.default(buildEvent({...CREDENTIALS, cookies})),
     ).rejects.toMatchObject({status: 303} satisfies Partial<Redirect>);
-    expect(set).toEqual([
-      {name: 'staff_session', value: 'header.payload.signature'},
-    ]);
+    // `hooks.server.ts` moves the backend's `Set-Cookie` into SvelteKit's
+    // cookie jar as the call comes back (see `forwardBackendCookies()` in
+    // `$lib/server/backend-fetch`), so the action writes no cookie itself.
+    expect(set).toEqual([]);
   });
 
   it('reports a rejected login without saying which field was wrong', async () => {

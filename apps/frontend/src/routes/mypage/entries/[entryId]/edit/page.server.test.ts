@@ -97,6 +97,7 @@ function buildLoadEvent(
     params: {entryId: ENTRY.id},
     fetch: fetchImpl,
     cookies: fakeCookies(deleted),
+    url: new URL(`http://localhost/mypage/entries/${ENTRY.id}/edit`),
   } as Parameters<typeof load>[0];
 }
 
@@ -110,6 +111,7 @@ function buildActionEvent(
     params: {entryId: ENTRY.id},
     fetch: fetchImpl,
     cookies: fakeCookies(deleted),
+    url: new URL(`http://localhost/mypage/entries/${ENTRY.id}/edit`),
     request: {formData: async () => formData},
   } as Parameters<typeof actions.default>[0];
 }

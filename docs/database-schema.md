@@ -130,6 +130,8 @@ flowchart TB
 - `unique (id, tournament_id)`: 一見冗長ですが、これは `entries` 側の複合外部キー `foreign key (regulation_id, tournament_id) references regulations (id, tournament_id)` を張るために必要です。この複合 FK により、**ある大会のエントリーが別の大会のレギュレーションを参照することが DB レベルで不可能**になります。
 - 優先期間の判定ロジックは `packages/shared/src/logic/regulation-eligibility.ts` の `isRegulationSelectionAllowed()`。「いずれかのレギュレーションの優先期間が現在アクティブなら、そのレギュレーションしか選べない。アクティブなものが1つもなければ全て選べる」という規則です。
 - `priority_starts_at` / `priority_ends_at` は**両方揃っているときだけ**優先期間として扱われます(片方だけ設定されている行は優先期間なしと同じ扱い)。
+- `check (regulations_priority_window_complete)`(`0014`): 「両方 null」か「両方非 null かつ開始 < 終了」だけを許します。制約追加は既存行も検証するため、`0014` では制約を張る前に不完全な行(片方だけ / 逆順)を両方 null に正規化しています(`isRegulationSelectionAllowed()` は元々それらを「優先期間なし」として扱っていたので、挙動は変わりません)。片方だけ設定された行を `isRegulationSelectionAllowed()` が「優先期間なし」として扱ってしまうため、そもそも作らせません。Zod の `RegulationUpsertSchema` にも同じ規則がありますが、SQL を直接叩く運用が残るので DB 側にも持たせています。
+- `index (tournament_id, display_order)`(`0014`): `unique (id, tournament_id)` は先頭列が `id` なので `where tournament_id = ?` には使えません。エントリーフォームの表示のたびに走るクエリなので別途張っています。
 
 ### form_field_defs — 大会ごとの追加フォーム項目定義
 
@@ -298,6 +300,7 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | `cancel_own_entry(uuid, uuid)` | `0006` | `lib/entries.ts` | 参加者自身のエントリーをキャンセルする |
 | `reset_participant_password(text, text)` | `0009` → `0010` で再定義 | `lib/password-reset.ts` | 再設定トークンを消費してパスワードを更新し、残りのトークンを焼き捨てる |
 | `tournament_entry_summary()` | `0013` | `routes/staff-dashboard.ts` | 全大会のエントリー件数をステータス別に集計する(読み取り専用) |
+| `sync_regulations(uuid, jsonb)` | `0014` | `lib/regulations.ts` | 大会のレギュレーションを差分同期する(update / insert / 参照が無ければ delete) |
 
 ### sync_form_field_defs(p_tournament_id, p_rows)
 
@@ -305,6 +308,22 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 
 - 大会行を `for update` でロックしてから delete → insert するため、(1) 挿入に失敗しても削除だけが残ることがなく、(2) 同一大会への同時アップロードが直列化され、2つの定義がマージされた中途半端な状態になりません。
 - 大会が存在しない場合は SQLSTATE `P0002` を raise します。TypeScript 側はこれを `TournamentNotFoundError` に変換し、API は 404 を返します。
+
+### sync_regulations(p_tournament_id, p_regulations)
+
+指定大会の `regulations` を、渡された JSON 配列が「保存後にこうなっていてほしい状態」になるよう差分同期します。`sync_form_field_defs()` と違い delete → insert が使えないのは、`entries` が複合外部キー `(regulation_id, tournament_id)` でこのテーブルを参照しているためです(全削除は FK 違反になり、仮に消せてもエントリーの参照先 id が変わってしまう)。
+
+処理順:
+
+1. 大会行を `for update` でロック(存在しなければ SQLSTATE `P0002`)。同一大会への同時保存を直列化します。
+2. `id` 付き要素のうち、**この大会のレギュレーションでない** id を洗い出して SQLSTATE `P0003`(`detail` に id 一覧)。これが無いと、よその大会の行を `on conflict (id) do update` で書き換えてしまいます。
+3. `id` 付きは update、`id` 無しは insert(`display_order` は配列の添字)。
+4. 配列から消えた行のうち `entries` から参照されているものがあれば SQLSTATE `P0004`(`detail` にラベル一覧)を raise してロールバック。
+5. 残った「消えた行」を delete。
+
+エントリーの新規作成が 4 の検査をすり抜けることはありません。`entries.tournament_id` の外部キーにより、エントリーの insert は 1 でロックした大会行に対して `for key share` を取ります。これは `for update` と競合するため、保存中はエントリー作成が待たされ(逆に保存側が待たされ)、4 と 5 は必ず同じ状態を見ます。
+
+TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(404)、`P0003` → `UnknownRegulationError`(400)、`P0004` → `RegulationInUseError`(409)に変換します。スタッフ画面がそのまま表示するので、id / ラベルの一覧はメッセージ本体ではなく例外の `detail` に載せ、日本語の文面は TypeScript 側で組み立てています。
 
 ### confirm_entry_by_token(p_token_hash)
 
@@ -393,6 +412,5 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | `0011_participants_password_changed_at.sql` | `participants.password_changed_at` を追加し、再設定時に打刻(`0010` を再定義) |
 | `0012_password_reset_tokens_participant_id_idx.sql` | `password_reset_tokens.participant_id` のインデックス |
 | `0013_tournament_entry_summary_fn.sql` | `tournament_entry_summary()` |
+| `0014_sync_regulations_fn.sql` | `sync_regulations()`・`regulations` の優先期間 check 制約・`(tournament_id, display_order)` インデックス |
 | `0015_staff_accounts_scope_and_password_reset.sql` | `staff_accounts` の役割/担当範囲の check 制約、`staff_password_reset_tokens`、`reset_staff_password()` |
-
-`0014` は Task 9-1(レギュレーション登録・編集 API)が使う番号です。両タスクを別ブランチで並行して進めているため、9-3 側は 1 つ飛ばして `0015` を取っています。`supabase db push` はバージョン文字列の順に適用するので、先に `0015` が入った環境に後から `0014` を足すと CLI が「リモートより前に挿入されるマイグレーションがある」と警告します。その場合は `supabase migration repair` ではなく、マージ順に合わせて番号を振り直してください。

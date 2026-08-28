@@ -160,3 +160,26 @@ describe('POST /login', () => {
     expect(res.headers.get('set-cookie')).toBeNull();
   });
 });
+
+describe('POST /logout', () => {
+  it('clears the staff session cookie', async () => {
+    // No account lookup and no session are involved: the handler only
+    // answers with the deletion cookie.
+    const res = await staffAuthRoute.request('/logout', {method: 'POST'}, ENV);
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as Record<string, unknown>).toEqual({
+      ok: true,
+    });
+
+    const setCookieHeader = res.headers.get('set-cookie') ?? '';
+    expect(setCookieHeader).toContain('staff_session=;');
+    expect(setCookieHeader).toContain('Max-Age=0');
+    // The attributes have to match the ones `/login` issues, or the browser
+    // reads this as a different cookie and keeps the live session.
+    expect(setCookieHeader).toContain('Path=/');
+    expect(setCookieHeader).toContain('HttpOnly');
+    expect(setCookieHeader).toContain('Secure');
+    expect(setCookieHeader).toContain('SameSite=Lax');
+  });
+});
