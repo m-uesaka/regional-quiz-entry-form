@@ -94,8 +94,11 @@ flowchart TB
 | `id` | uuid | PK, default `gen_random_uuid()` | |
 | `slug` | text | unique, not null | URL に使う識別子(例: `kanto`)。`/{regionSlug}/{tournamentSlug}/entry` の第1セグメント |
 | `name` | text | not null | 表示名 |
+| `allows_dual_entry` | boolean | not null, default `false` | 同一地域の最強位と新人王の**両方**にエントリーできるか |
 
-現時点で regions を作成・編集する API はありません。Supabase 上で直接投入する運用です。
+`allows_dual_entry` は requirements.md の「両方に参加することができる**ような地域も存在します**」に対応します。既定を `false` にしているのは、現在の「どの地域でも両方に出られる」挙動が仕様の欠落であって意図された既定ではないためで、許可する地域には運用開始前に明示的に `true` を立ててもらいます。判定は `apps/backend/src/lib/entries.ts` の `createEntry()` が行い、`cancelled` 以外のエントリーが同一地域の別大会にあれば 409 を返します。
+
+作成・編集は統括スタッフ向けの `GET` / `POST` / `PATCH /api/regions`(`apps/backend/src/routes/regions.ts`)から行えます。`slug` だけは公開済み URL の一部なので作成時に固定され、更新できません。
 
 ### tournaments — 大会
 
@@ -387,3 +390,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0012_password_reset_tokens_participant_id_idx.sql` | `password_reset_tokens.participant_id` のインデックス |
 | `0013_tournament_entry_summary_fn.sql` | `tournament_entry_summary()` |
 | `0014_sync_regulations_fn.sql` | `sync_regulations()`・`regulations` の優先期間 check 制約・`(tournament_id, display_order)` インデックス |
+| `0015_regions_allows_dual_entry.sql` | `regions.allows_dual_entry`(既定 `false`) |

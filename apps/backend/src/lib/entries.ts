@@ -36,8 +36,23 @@ interface TournamentRow {
   region_id: string;
   entry_opens_at: string;
   entry_closes_at: string;
+  // A to-one embed, so PostgREST answers with the region object itself
+  // rather than a single-element array (unlike `regulations` below).
+  regions: {allows_dual_entry: boolean};
   regulations: RegulationRow[];
 }
+
+/**
+ * The entry statuses that occupy a participant's place in a region: every
+ * status but `cancelled`. `pending_verification` is included on purpose — it
+ * is a seat held before the mail was confirmed, and leaving it out would let
+ * a participant hold both tournaments by simply never following the link.
+ */
+const REGION_OCCUPYING_STATUSES: readonly EntryStatus[] = [
+  'pending_verification',
+  'confirmed',
+  'waitlisted',
+];
 
 interface ParticipantRow {
   id: string;
@@ -96,6 +111,7 @@ export async function createEntry(
     .from('tournaments')
     .select(
       'id, region_id, entry_opens_at, entry_closes_at, ' +
+        'regions(allows_dual_entry), ' +
         'regulations(id, priority_starts_at, priority_ends_at)',
     )
     .eq('id', tournamentId)
@@ -215,6 +231,32 @@ export async function createEntry(
   }
   if (existingEntry && existingEntry.status !== 'cancelled') {
     return {ok: false, status: 409, error: 'already entered'};
+  }
+
+  // requirements.md only says that regions allowing both 最強位 and 新人王
+  // exist, so the region decides. Where it doesn't allow both, an entry in
+  // the region's *other* tournament blocks this one. `tournament_id` is
+  // excluded rather than the whole region matched loosely, so re-entering
+  // this same tournament after cancelling still goes through — that row was
+  // already checked above.
+  if (!tournament.regions.allows_dual_entry) {
+    const {count, error: dualEntryError} = await db
+      .from('entries')
+      .select('id, tournaments!inner(region_id)', {count: 'exact', head: true})
+      .eq('participant_id', participantId)
+      .eq('tournaments.region_id', tournament.region_id)
+      .neq('tournament_id', tournamentId)
+      .in('status', REGION_OCCUPYING_STATUSES);
+    if (dualEntryError) {
+      return {ok: false, status: 500, error: dualEntryError.message};
+    }
+    if ((count ?? 0) > 0) {
+      return {
+        ok: false,
+        status: 409,
+        error: 'already entered another tournament in this region',
+      };
+    }
   }
 
   const entryValues = {

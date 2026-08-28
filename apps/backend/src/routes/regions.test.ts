@@ -122,14 +122,22 @@ describe.skipIf(!(await isDbReachable()))(
       await sql.close();
     });
 
-    async function createRegion(slug: string, name: string): Promise<Response> {
+    async function createRegion(
+      slug: string,
+      name: string,
+      allowsDualEntry?: boolean,
+    ): Promise<Response> {
       const cookie = await generalStaffCookie();
       return app.request(
         '/api/regions',
         {
           method: 'POST',
           headers: {cookie, 'content-type': 'application/json'},
-          body: JSON.stringify({slug, name}),
+          body: JSON.stringify(
+            allowsDualEntry === undefined
+              ? {slug, name}
+              : {slug, name, allowsDualEntry},
+          ),
         },
         env,
       );
@@ -145,6 +153,19 @@ describe.skipIf(!(await isDbReachable()))(
       expect(body.slug).toBe(slug);
       expect(body.name).toBe('作成テスト地域');
       expect(typeof body.id).toBe('string');
+      // Left out of the body, so it lands on the restrictive default rather
+      // than silently allowing double entries.
+      expect(body.allowsDualEntry).toBe(false);
+    });
+
+    it('creates a region that allows dual entry when asked to', async () => {
+      const slug = `${testSlugPrefix}-create-dual`;
+
+      const res = await createRegion(slug, '重複可テスト地域', true);
+      const body = (await res.json()) as Record<string, unknown>;
+
+      expect(res.status).toBe(201);
+      expect(body.allowsDualEntry).toBe(true);
     });
 
     it('returns 409 for a duplicate slug', async () => {
@@ -175,7 +196,7 @@ describe.skipIf(!(await isDbReachable()))(
     it('updates the name and leaves the slug untouched', async () => {
       const slug = `${testSlugPrefix}-update`;
       const created = (await (
-        await createRegion(slug, '更新前地域')
+        await createRegion(slug, '更新前地域', true)
       ).json()) as {id: string};
       const cookie = await generalStaffCookie();
 
@@ -197,6 +218,34 @@ describe.skipIf(!(await isDbReachable()))(
       expect(body.id).toBe(created.id);
       expect(body.name).toBe('更新後地域');
       expect(body.slug).toBe(slug);
+      // Not part of the body, so the rename left the region's dual-entry
+      // setting exactly as it was.
+      expect(body.allowsDualEntry).toBe(true);
+    });
+
+    it('updates allowsDualEntry', async () => {
+      const slug = `${testSlugPrefix}-update-dual`;
+      const created = (await (
+        await createRegion(slug, '重複設定更新地域')
+      ).json()) as {id: string};
+      const cookie = await generalStaffCookie();
+
+      const res = await app.request(
+        `/api/regions/${created.id}`,
+        {
+          method: 'PATCH',
+          headers: {cookie, 'content-type': 'application/json'},
+          body: JSON.stringify({
+            name: '重複設定更新地域',
+            allowsDualEntry: true,
+          }),
+        },
+        env,
+      );
+      const body = (await res.json()) as Record<string, unknown>;
+
+      expect(res.status).toBe(200);
+      expect(body.allowsDualEntry).toBe(true);
     });
 
     it('returns 404 for an unknown region', async () => {

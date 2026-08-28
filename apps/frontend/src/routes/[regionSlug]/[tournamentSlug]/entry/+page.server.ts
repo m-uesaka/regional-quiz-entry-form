@@ -33,6 +33,8 @@ const ENTRY_ERROR_MESSAGES: Record<string, string> = {
   'already registered in another region':
     'このメールアドレスは別の地域で登録済みです',
   'already entered': 'この大会には既にエントリー済みです',
+  'already entered another tournament in this region':
+    'この地域では、最強位と新人王のどちらか一方にのみエントリーできます',
 };
 
 /** Fallbacks for a status whose `error` string isn't one we know. */

@@ -1,6 +1,6 @@
 import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
-import type {EntryInput} from '@regional-quiz/shared';
+import type {EntryInput, TournamentType} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {cancelOwnEntry, createEntry, updateOwnEntry} from './entries';
 import {hashPassword} from './password';
@@ -111,18 +111,32 @@ describe.skipIf(!(await isDbReachable()))(
         capacity?: number | null;
         priorityStartsAt?: string | null;
         priorityEndsAt?: string | null;
+        allowsDualEntry?: boolean;
+        // `tournaments` is unique on (region_id, type), so the dual-entry
+        // tests — which need both of a region's tournaments — pass the
+        // region of an existing fixture together with the other type
+        // instead of letting a second region be created.
+        regionId?: string;
+        type?: TournamentType;
       } = {},
     ): Promise<TournamentFixture> {
-      const [region] = await sql`
-        insert into regions (slug, name)
-        values (${testRegionSlug + '-' + suffix}, 'テスト地域')
-        returning id
-      `;
+      let regionId = options.regionId;
+      if (regionId === undefined) {
+        const [region] = await sql`
+          insert into regions (slug, name, allows_dual_entry)
+          values (
+            ${testRegionSlug + '-' + suffix}, 'テスト地域',
+            ${options.allowsDualEntry ?? false}
+          )
+          returning id
+        `;
+        regionId = region.id as string;
+      }
       const [tournament] = await sql`
         insert into tournaments (
           region_id, type, name, capacity, entry_opens_at, entry_closes_at
         ) values (
-          ${region.id}, 'saikyoi', 'テスト大会',
+          ${regionId}, ${options.type ?? 'saikyoi'}, 'テスト大会',
           ${options.capacity ?? null},
           ${options.entryOpensAt ?? '2020-01-01T00:00:00Z'},
           ${options.entryClosesAt ?? '2099-01-01T00:00:00Z'}
@@ -140,10 +154,29 @@ describe.skipIf(!(await isDbReachable()))(
         returning id
       `;
       return {
-        regionId: region.id as string,
+        regionId,
         tournamentId: tournament.id as string,
         regulationId: regulation.id as string,
       };
+    }
+
+    /**
+     * Both tournaments of one region, with the region's dual-entry setting
+     * as asked for. The 新人王 tournament is the "other" one every
+     * dual-entry test enters second.
+     * @param suffix The region slug suffix, as in `createFixture()`.
+     * @param allowsDualEntry What the region's `allows_dual_entry` says.
+     */
+    async function createRegionPair(
+      suffix: string,
+      allowsDualEntry: boolean,
+    ): Promise<{saikyoi: TournamentFixture; shinjinou: TournamentFixture}> {
+      const saikyoi = await createFixture(suffix, {allowsDualEntry});
+      const shinjinou = await createFixture(suffix, {
+        regionId: saikyoi.regionId,
+        type: 'shinjinou',
+      });
+      return {saikyoi, shinjinou};
     }
 
     function validInput(overrides: Partial<EntryInput> = {}): EntryInput {
@@ -548,6 +581,141 @@ describe.skipIf(!(await isDbReachable()))(
       } finally {
         globalThis.fetch = previousFetch;
       }
+    });
+
+    it('refuses a second tournament in a region that disallows dual entry', async () => {
+      const {saikyoi, shinjinou} = await createRegionPair('dual-off', false);
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      const firstResult = await createEntry(
+        env,
+        saikyoi.tournamentId,
+        validInput({email, regulationId: saikyoi.regulationId}),
+      );
+      expect(firstResult.ok).toBe(true);
+      if (!firstResult.ok) return;
+      await sql`
+        update entries set status = 'confirmed', email_verified_at = now()
+        where id = ${firstResult.entry.id}
+      `;
+
+      const result = await createEntry(
+        env,
+        shinjinou.tournamentId,
+        validInput({email, regulationId: shinjinou.regulationId}),
+      );
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.status).toBe(409);
+      expect(!result.ok && result.error).toBe(
+        'already entered another tournament in this region',
+      );
+      const rows = await sql`
+        select id from entries where tournament_id = ${shinjinou.tournamentId}
+      `;
+      expect(rows.length).toBe(0);
+    });
+
+    it('allows a second tournament when the region allows dual entry', async () => {
+      const {saikyoi, shinjinou} = await createRegionPair('dual-on', true);
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      const firstResult = await createEntry(
+        env,
+        saikyoi.tournamentId,
+        validInput({email, regulationId: saikyoi.regulationId}),
+      );
+      expect(firstResult.ok).toBe(true);
+
+      const result = await createEntry(
+        env,
+        shinjinou.tournamentId,
+        validInput({email, regulationId: shinjinou.regulationId}),
+      );
+
+      expect(result.ok).toBe(true);
+    });
+
+    it('allows a second tournament when the first entry was cancelled', async () => {
+      const {saikyoi, shinjinou} = await createRegionPair(
+        'dual-off-cancelled',
+        false,
+      );
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      const firstResult = await createEntry(
+        env,
+        saikyoi.tournamentId,
+        validInput({email, regulationId: saikyoi.regulationId}),
+      );
+      expect(firstResult.ok).toBe(true);
+      if (!firstResult.ok) return;
+      // Cancelling frees the region: a participant who pulled out of one
+      // tournament should be able to take part in the other.
+      await sql`
+        update entries set status = 'cancelled', cancelled_at = now()
+        where id = ${firstResult.entry.id}
+      `;
+
+      const result = await createEntry(
+        env,
+        shinjinou.tournamentId,
+        validInput({email, regulationId: shinjinou.regulationId}),
+      );
+
+      expect(result.ok).toBe(true);
+    });
+
+    it('counts a pending_verification entry as occupying the region', async () => {
+      const {saikyoi, shinjinou} = await createRegionPair(
+        'dual-off-pending',
+        false,
+      );
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      // Left exactly as `createEntry()` made it: unverified, so this is the
+      // "hold both seats and never follow either link" case.
+      const firstResult = await createEntry(
+        env,
+        saikyoi.tournamentId,
+        validInput({email, regulationId: saikyoi.regulationId}),
+      );
+      expect(firstResult.ok).toBe(true);
+      if (!firstResult.ok) return;
+      const [firstRow] = await sql`
+        select status from entries where id = ${firstResult.entry.id}
+      `;
+      expect(firstRow.status).toBe('pending_verification');
+
+      const result = await createEntry(
+        env,
+        shinjinou.tournamentId,
+        validInput({email, regulationId: shinjinou.regulationId}),
+      );
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.status).toBe(409);
+      expect(!result.ok && result.error).toBe(
+        'already entered another tournament in this region',
+      );
+    });
+
+    it('still allows re-entering the same tournament after cancelling', async () => {
+      // The dual-entry check looks at the region's *other* tournaments, so
+      // it must not stand in the way of the reuse path above — the entry
+      // being re-created is the very one that would otherwise count.
+      const fixture = await createFixture('dual-off-same-tournament', {
+        allowsDualEntry: false,
+      });
+      const input = validInput({regulationId: fixture.regulationId});
+      const firstResult = await createEntry(env, fixture.tournamentId, input);
+      expect(firstResult.ok).toBe(true);
+      if (!firstResult.ok) return;
+      await sql`
+        update entries set status = 'cancelled', cancelled_at = now()
+        where id = ${firstResult.entry.id}
+      `;
+
+      const result = await createEntry(env, fixture.tournamentId, input);
+
+      expect(result.ok).toBe(true);
+      expect(result.ok && result.entry.id).toBe(firstResult.entry.id);
     });
   },
 );

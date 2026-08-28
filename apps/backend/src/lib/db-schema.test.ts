@@ -90,6 +90,38 @@ describe.skipIf(!(await isDbReachable()))(
   },
 );
 
+// The default is what the dual-entry rule in `lib/entries.ts` falls back to
+// for every region that predates the column, so it is pinned down here
+// rather than left to the migration being read correctly.
+describe.skipIf(!(await isDbReachable()))(
+  'regions table (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const testRegionSlug = 'db-schema-regions-test-region';
+
+    // Also cleaned up on the way in, so a run interrupted before `afterAll`
+    // doesn't leave a row that makes the next run fail on the unique slug.
+    beforeAll(async () => {
+      await sql`delete from regions where slug = ${testRegionSlug}`;
+    });
+
+    afterAll(async () => {
+      await sql`delete from regions where slug = ${testRegionSlug}`;
+      await sql.close();
+    });
+
+    it('defaults allows_dual_entry to false', async () => {
+      const [region] = await sql`
+        insert into regions (slug, name)
+        values (${testRegionSlug}, 'テスト地域')
+        returning allows_dual_entry
+      `;
+
+      expect(region.allows_dual_entry).toBe(false);
+    });
+  },
+);
+
 // Also requires a running local Supabase instance: `tournament_entry_summary()`
 // is pure SQL living in `supabase/migrations/`, so the aggregation it does
 // for the general-staff dashboard can only be checked against a real

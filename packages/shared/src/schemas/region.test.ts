@@ -44,6 +44,31 @@ describe('RegionCreateInputSchema', () => {
       RegionCreateInputSchema.safeParse({slug: 'kanto', name: '関東'}).success,
     ).toBe(true);
   });
+
+  it('defaults allowsDualEntry to false', () => {
+    const result = RegionCreateInputSchema.safeParse({
+      slug: 'kanto',
+      name: '関東',
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.allowsDualEntry).toBe(false);
+    }
+  });
+
+  it('keeps an explicit allowsDualEntry', () => {
+    const result = RegionCreateInputSchema.safeParse({
+      slug: 'kanto',
+      name: '関東',
+      allowsDualEntry: true,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.allowsDualEntry).toBe(true);
+    }
+  });
 });
 
 describe('RegionUpdateInputSchema', () => {
@@ -56,6 +81,29 @@ describe('RegionUpdateInputSchema', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data).toEqual({name: '関東'});
+    }
+  });
+
+  // Absent rather than defaulted, so `routes/regions.ts` can tell "leave it
+  // alone" apart from "set it to false".
+  it('leaves allowsDualEntry out when it was not sent', () => {
+    const result = RegionUpdateInputSchema.safeParse({name: '関東'});
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect('allowsDualEntry' in result.data).toBe(false);
+    }
+  });
+
+  it('accepts allowsDualEntry', () => {
+    const result = RegionUpdateInputSchema.safeParse({
+      name: '関東',
+      allowsDualEntry: true,
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.allowsDualEntry).toBe(true);
     }
   });
 });
