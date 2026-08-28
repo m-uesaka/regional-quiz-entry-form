@@ -4,7 +4,7 @@
 
 #### 実装・更新内容
 
-* `regions` への書き込み API が無く、地域の追加は Supabase を直接操作する運用になっている(`docs/api-endpoints.md` 13章)。地域を作らないと大会も作れないため、統括スタッフが自力で新地域を立ち上げられない。
+* `regions` への書き込み API が無く、地域の追加は Supabase を直接操作する運用になっている(`docs/api-endpoints.md` 14章)。地域を作らないと大会も作れないため、統括スタッフが自力で新地域を立ち上げられない。
 * 統括スタッフ限定の `GET / POST / PATCH /api/regions` を追加する。大会作成画面が `regionId` を選ぶために一覧を必要とするので、GET も同時に用意する(現状は地域一覧を返す API すら無く、大会作成フォームは UUID の直接入力になっている)。
 * `slug` はエントリーフォーム URL(`/{regionSlug}/{tournamentSlug}/entry`)の一部になる。後から変えると公開済み URL が壊れるため、**作成時のみ指定可・更新不可**とし、URL に使える文字だけに制限する。
 * 削除は提供しない。`tournaments` / `participants` / `staff_accounts` から参照されており、地域を消す運用は想定しない(誤操作の被害が大きい割に需要が無い)。
