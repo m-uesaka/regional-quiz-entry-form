@@ -93,17 +93,25 @@ jobs:
           (cd apps/e2e && bunx playwright install --with-deps chromium) >"$log" 2>&1 &
           playwright=$!
 
+          # Neither failure is allowed to abort the step on the spot: with
+          # `bash -e` an exiting `supabase start` would skip the `wait` below
+          # and take the held-back log with it, hiding a browser that failed
+          # to download behind whichever error happened to come first. Both
+          # statuses are collected, the log is always flushed, and the step
+          # fails afterwards if either side did.
+          supabase_status=0
           supabase start \
-            -x mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
+            -x mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor \
+            || supabase_status=$?
 
           # `wait` exits with the background job's status, so a browser that
           # failed to download fails the step here rather than surfacing as an
           # unexplained Playwright error two steps later.
-          wait "$playwright" || {
-            cat "$log"
-            exit 1
-          }
+          playwright_status=0
+          wait "$playwright" || playwright_status=$?
+
           cat "$log"
+          [ "$supabase_status" -eq 0 ] && [ "$playwright_status" -eq 0 ]
       # Prefer the stack's own service role key over the default
       # `apps/e2e/support/env.ts` falls back to, so a CLI that issues a
       # different one still works. If `status` doesn't name one, the
