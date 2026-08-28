@@ -3,7 +3,7 @@ import {StaffLoginInputSchema} from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
 import {forwardSetCookies} from '$lib/server/backend-cookies';
 import {staffLandingPath} from '$lib/server/staff-login';
-import type {Actions} from './$types';
+import type {Actions, PageServerLoad} from './$types';
 
 // Which of the two fields was wrong is deliberately not said. Telling them
 // apart would turn this form into an oracle for which addresses are staff
@@ -11,6 +11,16 @@ import type {Actions} from './$types';
 // unknown address as on a known one.
 const INVALID_CREDENTIALS_MESSAGE =
   'メールアドレスまたはパスワードが正しくありません';
+
+/**
+ * Reports a password that was just set from an invite (or reset) link, so the
+ * staff member is told to use the one they have only now chosen rather than
+ * left guessing whether the link worked. `routes/staff/password-reset` is
+ * what redirects here with it.
+ */
+export const load: PageServerLoad = ({url}) => {
+  return {passwordSet: url.searchParams.get('reset') === 'done'};
+};
 
 export const actions = {
   default: async ({request, fetch, cookies, url}) => {
