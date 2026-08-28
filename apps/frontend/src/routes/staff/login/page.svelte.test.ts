@@ -4,7 +4,7 @@ import Page from './+page.svelte';
 
 /** Renders the login screen with the given action result, if any. */
 function renderPage(form: {email: string; error: string} | null = null) {
-  render(Page, {props: {params: {}, data: {}, form}});
+  render(Page, {props: {params: {}, data: {loggedIn: false}, form}});
 }
 
 describe('staff login +page.svelte', () => {
@@ -18,7 +18,7 @@ describe('staff login +page.svelte', () => {
 
   it('posts to its own URL so the redirectTo parameter survives', () => {
     const {container} = render(Page, {
-      props: {params: {}, data: {}, form: null},
+      props: {params: {}, data: {loggedIn: false}, form: null},
     });
 
     const form = container.querySelector('form');

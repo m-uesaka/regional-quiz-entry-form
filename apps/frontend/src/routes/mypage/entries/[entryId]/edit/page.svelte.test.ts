@@ -57,7 +57,11 @@ const OTHER_ENTRY: MypageEntryDetail = {
 
 function renderPage(form: ActionResult = null) {
   return render(Page, {
-    props: {params: {entryId: ENTRY.id}, data: {entry: ENTRY}, form},
+    props: {
+      params: {entryId: ENTRY.id},
+      data: {loggedIn: true, entry: ENTRY},
+      form,
+    },
   });
 }
 
@@ -158,7 +162,7 @@ describe('mypage entry edit +page.svelte', () => {
 
     await rerender({
       params: {entryId: OTHER_ENTRY.id},
-      data: {entry: OTHER_ENTRY},
+      data: {loggedIn: true, entry: OTHER_ENTRY},
       form: null,
     });
 

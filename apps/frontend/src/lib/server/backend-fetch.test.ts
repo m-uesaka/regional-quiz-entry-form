@@ -144,6 +144,7 @@ describe('forwardBackendCookies', () => {
     forwardBackendCookies(
       responseWithCookies(SESSION_COOKIE),
       fakeCookies(recorded),
+      FRONTEND_URL,
     );
 
     expect(recorded).toHaveLength(1);
@@ -153,6 +154,7 @@ describe('forwardBackendCookies', () => {
       maxAge: 604800,
       path: '/',
       httpOnly: true,
+      // From `FRONTEND_URL`'s own protocol, not from the header.
       secure: true,
       sameSite: 'lax',
     });
@@ -164,6 +166,7 @@ describe('forwardBackendCookies', () => {
     forwardBackendCookies(
       responseWithCookies('token=a%2Bb; Path=/'),
       fakeCookies(recorded),
+      FRONTEND_URL,
     );
 
     expect(recorded[0].value).toBe('a%2Bb');
@@ -176,6 +179,7 @@ describe('forwardBackendCookies', () => {
     forwardBackendCookies(
       responseWithCookies('first=1; Path=/', 'second=2; Path=/mypage'),
       fakeCookies(recorded),
+      FRONTEND_URL,
     );
 
     expect(recorded.map(cookie => cookie.name)).toEqual(['first', 'second']);
@@ -188,6 +192,7 @@ describe('forwardBackendCookies', () => {
     forwardBackendCookies(
       responseWithCookies('pathless=1'),
       fakeCookies(recorded),
+      FRONTEND_URL,
     );
 
     expect(recorded[0].options).toMatchObject({path: '/'});
@@ -199,6 +204,7 @@ describe('forwardBackendCookies', () => {
     forwardBackendCookies(
       responseWithCookies('odd=1; Path=/; SameSite=Whenever'),
       fakeCookies(recorded),
+      FRONTEND_URL,
     );
 
     expect(recorded[0].options?.sameSite).toBeUndefined();
@@ -207,8 +213,84 @@ describe('forwardBackendCookies', () => {
   it('sets nothing when the response carries no cookies', () => {
     const recorded: RecordedCookie[] = [];
 
-    forwardBackendCookies(new Response(null), fakeCookies(recorded));
+    forwardBackendCookies(
+      new Response(null),
+      fakeCookies(recorded),
+      FRONTEND_URL,
+    );
 
     expect(recorded).toEqual([]);
+  });
+
+  it('leaves Secure off over plain HTTP, whatever the dev hostname is', () => {
+    const recorded: RecordedCookie[] = [];
+
+    // SvelteKit's own default only spares the literal hostname `localhost`,
+    // so a LAN address under `vite dev --host` would get a `Secure` cookie
+    // over plain HTTP and the browser would discard it without a word.
+    forwardBackendCookies(
+      responseWithCookies(SESSION_COOKIE),
+      fakeCookies(recorded),
+      new URL('http://192.168.1.20:5173/mypage'),
+    );
+
+    expect(recorded[0].options).toMatchObject({secure: false});
+  });
+
+  it('sets Secure over HTTPS even when the backend header omits it', () => {
+    const recorded: RecordedCookie[] = [];
+
+    forwardBackendCookies(
+      responseWithCookies('plain=1; Path=/'),
+      fakeCookies(recorded),
+      FRONTEND_URL,
+    );
+
+    expect(recorded[0].options).toMatchObject({secure: true});
+  });
+
+  it("drops Domain so the frontend's own origin decides it", () => {
+    const recorded: RecordedCookie[] = [];
+
+    // The attribute describes where the *backend's* cookie may travel; this
+    // one is being re-issued by the frontend instead.
+    forwardBackendCookies(
+      responseWithCookies('scoped=1; Path=/; Domain=backend.workers.example'),
+      fakeCookies(recorded),
+      FRONTEND_URL,
+    );
+
+    expect(recorded[0].options?.domain).toBeUndefined();
+  });
+
+  it('keeps an Expires attribute as a Date', () => {
+    const recorded: RecordedCookie[] = [];
+
+    forwardBackendCookies(
+      responseWithCookies(
+        'dated=1; Path=/; Expires=Wed, 09 Jun 2027 10:18:14 GMT',
+      ),
+      fakeCookies(recorded),
+      FRONTEND_URL,
+    );
+
+    expect(recorded[0].options?.expires).toEqual(
+      new Date('2027-06-09T10:18:14.000Z'),
+    );
+  });
+
+  it('drops an Expires attribute it cannot parse', () => {
+    const recorded: RecordedCookie[] = [];
+
+    // An `Invalid Date` would make the `cookie` serializer throw, turning a
+    // successful login into a 500.
+    forwardBackendCookies(
+      responseWithCookies('dated=1; Path=/; Max-Age=60; Expires=not-a-date'),
+      fakeCookies(recorded),
+      FRONTEND_URL,
+    );
+
+    expect(recorded[0].options?.expires).toBeUndefined();
+    expect(recorded[0].options).toMatchObject({maxAge: 60});
   });
 });
