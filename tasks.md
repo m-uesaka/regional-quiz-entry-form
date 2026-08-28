@@ -62,9 +62,9 @@ Phase 9 以降のタスクファイルに書かれているマイグレーショ
 * Phase 8: 非機能・仕上げ ✅完了
   * Task 8-1: E2E テスト整備 ✅(#74 でブラウザ操作の UI レベルに引き上げ済み)
   * Task 8-2: デプロイパイプライン整備 ✅(`/api/*` の Worker route の有効化は Task 9-5 / #101 に分離)
-* Phase 9: 管理機能の欠落解消(運用ブロッカー) 🚧未着手
+* Phase 9: 管理機能の欠落解消(運用ブロッカー) 🚧進行中
   * Task 9-1: レギュレーション登録・編集 API
-  * Task 9-2: 地域(regions)管理 API
+  * Task 9-2: 地域(regions)管理 API ✅
   * Task 9-3: スタッフアカウント管理 API
   * Task 9-4: 統括スタッフ向け管理画面(地域・レギュレーション・スタッフ)
   * Task 9-5: `/api/*` の Worker route 有効化(#101)
@@ -205,16 +205,17 @@ graph TD
   classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
 ```
 
-#### Phase 9: 管理機能の欠落解消(🚧 未着手)
+#### Phase 9: 管理機能の欠落解消(🚧 進行中)
 
 ```mermaid
 graph TD
   T91["9-1 レギュレーションAPI"]:::next --> T94["9-4 管理画面"]:::todo
-  T92["9-2 地域API"]:::next --> T93["9-3 スタッフAPI"]:::todo
+  T92["9-2 地域API"]:::done --> T93["9-3 スタッフAPI"]:::next
   T92 --> T94
   T93 --> T94
   T95["9-5 /api/* route 有効化 (#101)"]:::next
 
+  classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
   classDef todo fill:#e2e8f0,stroke:#4a5568,color:#1a202c;
   classDef next fill:#fef3c7,stroke:#d97706,color:#78350f;
 ```
@@ -225,12 +226,13 @@ graph TD
 
 ```mermaid
 graph TD
-  T92["9-2 地域API"]:::prereq --> T101["10-1 重複参加の可否"]:::todo
+  T92["9-2 地域API"]:::done --> T101["10-1 重複参加の可否"]:::next
   T91["9-1 レギュレーションAPI"]:::prereq --> T102["10-2 レギュレーション複数選択"]:::todo
   T103["10-3 ログアウト"]:::next
   T104["10-4 一斉メールQueue化"]:::next
   T105["10-5 期間外アクセス制御"]:::next
 
+  classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
   classDef todo fill:#e2e8f0,stroke:#4a5568,color:#1a202c;
   classDef next fill:#fef3c7,stroke:#d97706,color:#78350f;
   classDef prereq fill:#ffffff,stroke:#a0aec0,color:#4a5568;
@@ -337,12 +339,12 @@ graph TD
 * [Task 8-1: E2E テスト整備 ✅](tasks/task-8-1.md)
 * [Task 8-2: デプロイパイプライン整備 ✅](tasks/task-8-2.md) — ワークフローと環境定義は完了。`/api/*` を backend Worker へ振り分ける route の有効化は実ドメイン取得待ちのため #101 に分離した(`docs/supabase-deployment.md` 6.4)。[Task 9-5](tasks/task-9-5.md) として起票済み
 
-### Phase 9: 管理機能の欠落解消(運用ブロッカー) 🚧未着手
+### Phase 9: 管理機能の欠落解消(運用ブロッカー) 🚧進行中
 
 要件に定義がありながら API も画面も無く、運用開始を塞いでいるもの。
 
 * [Task 9-1: レギュレーション登録・編集 API](tasks/task-9-1.md) — 優先エントリー期間を含め、現状は Supabase を直接操作しないと設定できない
-* [Task 9-2: 地域(regions)管理 API](tasks/task-9-2.md) — 地域が作れないと大会も作れない
+* [Task 9-2: 地域(regions)管理 API ✅](tasks/task-9-2.md) — 地域が作れないと大会も作れない。`GET / POST / PATCH /api/regions` を追加済み
 * [Task 9-3: スタッフアカウント管理 API](tasks/task-9-3.md) — スタッフの発行にアプリのコード実行(パスワードハッシュ生成)が要る状態の解消
 * [Task 9-4: 統括スタッフ向け管理画面(地域・レギュレーション・スタッフ)](tasks/task-9-4.md) — `/admin/*` のサーバ側ガード追加を含む
 * [Task 9-5: `/api/*` の Worker route 有効化(#101)](tasks/task-9-5.md) — 本番で CSV ダウンロードと `/admin` のクライアント側 API 呼び出しが 404 になっている
