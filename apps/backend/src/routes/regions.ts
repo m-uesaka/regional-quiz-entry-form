@@ -43,8 +43,9 @@ function rowToRegion(row: RegionRow): Region {
 /**
  * Turns the API's camelCase input into the columns Supabase writes. Only
  * `allowsDualEntry` needs renaming — `slug` and `name` are spelled the same
- * on both sides — and it is left out when the caller omitted it, so a PATCH
- * that only renames a region keeps its current setting.
+ * on both sides — and every field the caller omitted is left out of the row,
+ * so a PATCH updates exactly what it sent. The update schema refuses a body
+ * that would leave nothing at all.
  * @param input The validated create or update body.
  */
 function toRegionRow(

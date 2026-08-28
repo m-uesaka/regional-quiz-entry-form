@@ -106,4 +106,24 @@ describe('RegionUpdateInputSchema', () => {
       expect(result.data.allowsDualEntry).toBe(true);
     }
   });
+
+  // Flipping the setting alone must not have to resend `name`: a `name`
+  // read before another staff member renamed the region would be written
+  // back on top of the rename.
+  it('accepts allowsDualEntry without a name', () => {
+    const result = RegionUpdateInputSchema.safeParse({allowsDualEntry: true});
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toEqual({allowsDualEntry: true});
+    }
+  });
+
+  it('rejects a body with nothing to update', () => {
+    expect(RegionUpdateInputSchema.safeParse({}).success).toBe(false);
+    // `slug` is stripped, so a body that only carries one updates nothing.
+    expect(
+      RegionUpdateInputSchema.safeParse({slug: 'kanto'}).success,
+    ).toBe(false);
+  });
 });

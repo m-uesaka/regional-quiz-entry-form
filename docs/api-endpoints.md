@@ -209,16 +209,16 @@ if ('yaml' in body) {
 ### `PATCH /api/regions/:id`
 
 - パス: `id` は UUID
-- リクエスト: `RegionUpdateInputSchema` — `{name, allowsDualEntry?}`
+- リクエスト: `RegionUpdateInputSchema` — `{name?, allowsDualEntry?}`(両方省略した空の body は 400)
 - `200`: 更新後の `Region`
 - `400`: バリデーション違反(`zValidator`)
 - `404`: `{"error": "region not found"}`(Supabase の `PGRST116` を変換)
 - `401` / `403`
 - `500`: `{"error": "internal server error"}` — 作成時と同じ理由で、対象が無い以外の更新失敗はサーバ側の失敗として扱います
 
-**`slug` は更新できません。** 公開済みのエントリーフォーム URL の一部なので、後から変えると配布済みのリンクが壊れます。`RegionUpdateInputSchema` は `name` と `allowsDualEntry` だけを `pick` しているため、body に `slug` を入れても 400 にはならず、単に無視されます。
+**`slug` は更新できません。** 公開済みのエントリーフォーム URL の一部なので、後から変えると配布済みのリンクが壊れます。`RegionUpdateInputSchema` は `name` と `allowsDualEntry` だけを `pick` しているため、body に `slug` を入れても(他に更新するフィールドがあれば)400 にはならず、単に無視されます。
 
-`allowsDualEntry` は PATCH なので**任意**です。省略すると `toRegionRow()` が列自体を UPDATE 文から落とすので、地域名だけを直したいときに重複参加の設定が巻き添えで変わることはありません。
+`name` / `allowsDualEntry` はどちらも PATCH なので**任意**です。省略したフィールドは `toRegionRow()` が UPDATE 文から落とすので、地域名だけを直したいときに重複参加の設定が巻き添えで変わることも、設定だけを切り替えたいときに(取得後に他のスタッフが改名した)古い `name` を書き戻してしまうこともありません。両方を省略した body は更新する対象が無く、クライアント側のバグでしかないので 400 で弾きます。
 
 ## 6. 大会管理(統括スタッフ)
 

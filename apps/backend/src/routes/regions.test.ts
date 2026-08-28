@@ -223,7 +223,10 @@ describe.skipIf(!(await isDbReachable()))(
       expect(body.allowsDualEntry).toBe(true);
     });
 
-    it('updates allowsDualEntry', async () => {
+    // Sent without a `name` on purpose: a client that had to resend one
+    // would write back whatever it read before, undoing a rename another
+    // staff member made in the meantime.
+    it('updates allowsDualEntry alone and leaves the name untouched', async () => {
       const slug = `${testSlugPrefix}-update-dual`;
       const created = (await (
         await createRegion(slug, '重複設定更新地域')
@@ -235,10 +238,7 @@ describe.skipIf(!(await isDbReachable()))(
         {
           method: 'PATCH',
           headers: {cookie, 'content-type': 'application/json'},
-          body: JSON.stringify({
-            name: '重複設定更新地域',
-            allowsDualEntry: true,
-          }),
+          body: JSON.stringify({allowsDualEntry: true}),
         },
         env,
       );
@@ -246,6 +246,27 @@ describe.skipIf(!(await isDbReachable()))(
 
       expect(res.status).toBe(200);
       expect(body.allowsDualEntry).toBe(true);
+      expect(body.name).toBe('重複設定更新地域');
+    });
+
+    it('rejects a body with nothing to update', async () => {
+      const slug = `${testSlugPrefix}-update-empty`;
+      const created = (await (
+        await createRegion(slug, '空更新地域')
+      ).json()) as {id: string};
+      const cookie = await generalStaffCookie();
+
+      const res = await app.request(
+        `/api/regions/${created.id}`,
+        {
+          method: 'PATCH',
+          headers: {cookie, 'content-type': 'application/json'},
+          body: JSON.stringify({}),
+        },
+        env,
+      );
+
+      expect(res.status).toBe(400);
     });
 
     it('returns 404 for an unknown region', async () => {

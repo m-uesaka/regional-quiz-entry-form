@@ -36,11 +36,17 @@ export type RegionCreateInput = z.infer<typeof RegionCreateInputSchema>;
 
 // `slug` is part of already-published URLs, so it is fixed at creation time:
 // picking only the editable fields means a `slug` sent by a client is
-// dropped rather than applied. `allowsDualEntry` is optional because this is
-// a PATCH: leaving it out keeps the region's current setting, which is what
-// a rename should do.
+// dropped rather than applied. Both fields are optional because this is a
+// PATCH: an omitted field keeps the region's current value, so flipping the
+// dual-entry setting does not have to resend a `name` read before another
+// staff member renamed the region — which would write the stale name back.
+// An empty body is refused instead, since it can only be a client bug.
 export const RegionUpdateInputSchema = RegionSchema.pick({
   name: true,
   allowsDualEntry: true,
-}).partial({allowsDualEntry: true});
+})
+  .partial()
+  .refine(input => Object.keys(input).length > 0, {
+    message: 'name または allowsDualEntry のどちらかは指定してください',
+  });
 export type RegionUpdateInput = z.infer<typeof RegionUpdateInputSchema>;
