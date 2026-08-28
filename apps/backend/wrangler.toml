@@ -2,10 +2,14 @@ name = "regional-quiz-backend"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
 
-# `vars` is one of Wrangler's non-inheritable keys: an `[env.*]` block that
-# doesn't restate it gets no vars at all rather than these. So each named
-# environment below carries its own copy, and this top-level block covers only
-# the unnamed environment `wrangler dev` runs.
+# `vars` and `routes` are non-inheritable keys: an `[env.*]` block that doesn't
+# restate them gets none at all rather than the top-level ones. So each named
+# environment below carries its own copy.
+#
+# This top-level block is what `wrangler dev` runs — but note it shares `name`
+# with `[env.production]`, so a bare `wrangler deploy` or `wrangler secret put`
+# in this directory (no `--env`) targets the *production* Worker. The deploy
+# workflows always pass `--env`; pass it by hand too.
 [vars]
 # 非機密の設定値のみここに記載し、機密情報は `wrangler secret put` で登録する
 MAIL_FROM_ADDRESS = "entry@entry.regionalquiz.example"
@@ -13,41 +17,41 @@ FRONTEND_URL = "https://entry.regionalquiz.example"
 
 # Deployed by `.github/workflows/deploy-staging.yml` on a push to any branch
 # other than `main`.
+#
+# The frontend calls the API at a same-origin `/api/*` (`$lib/api.ts`), and
+# nothing in `apps/frontend` proxies that in production — `vite.config.ts`'s
+# proxy is `vite dev` only. What routes it is the `routes` entry below: a
+# Workers route wins over the Pages project serving the same hostname, so
+# `/api/*` reaches Hono while every other path stays with Pages.
+#
+# It is commented out because `regionalquiz.example` is a placeholder, and a
+# `zone_name` the Cloudflare account doesn't hold fails `wrangler deploy`
+# outright — that would break the pipeline rather than the routing. Uncomment
+# it with the real hostname once the domain exists, and leave it where it is:
+# `routes` belongs directly under `[env.staging]`, not below the
+# `[env.staging.vars]` header, where TOML would read it as a var named
+# `routes`. See `docs/supabase-deployment.md` §6.4.
 [env.staging]
 name = "regional-quiz-backend-staging"
+# routes = [
+#   {pattern = "staging.entry.regionalquiz.example/api/*", zone_name = "regionalquiz.example"},
+# ]
 
 [env.staging.vars]
 MAIL_FROM_ADDRESS = "entry@staging.entry.regionalquiz.example"
 FRONTEND_URL = "https://staging.entry.regionalquiz.example"
 
-# `routes` is non-inheritable in the same way `vars` is, so the production
-# block below repeats this with its own hostname.
-#
-# The frontend calls the API at a same-origin `/api/*` (`$lib/api.ts`), and
-# nothing in `apps/frontend` proxies that in production — `vite.config.ts`'s
-# proxy is `vite dev` only. What routes it is this Worker route: a Workers
-# route wins over the Pages project serving the same hostname, so `/api/*`
-# reaches Hono while every other path stays with Pages.
-#
-# Commented out because `regionalquiz.example` is a placeholder. A `zone_name`
-# the Cloudflare account doesn't hold fails `wrangler deploy` outright, which
-# would break the pipeline rather than the routing. Uncomment with the real
-# hostnames once the domain exists — see `docs/supabase-deployment.md` §6.4.
-# routes = [
-#   {pattern = "staging.entry.regionalquiz.example/api/*", zone_name = "regionalquiz.example"},
-# ]
-
 # Deployed by `.github/workflows/deploy-production.yml` on a push to `main`.
 # `name` is set back to the unsuffixed one: without it, `--env production`
 # would deploy a Worker called `regional-quiz-backend-production`.
+#
+# `routes` carries the same caveats as `env.staging`'s above.
 [env.production]
 name = "regional-quiz-backend"
+# routes = [
+#   {pattern = "entry.regionalquiz.example/api/*", zone_name = "regionalquiz.example"},
+# ]
 
 [env.production.vars]
 MAIL_FROM_ADDRESS = "entry@entry.regionalquiz.example"
 FRONTEND_URL = "https://entry.regionalquiz.example"
-
-# See the note on `env.staging`'s routes above.
-# routes = [
-#   {pattern = "entry.regionalquiz.example/api/*", zone_name = "regionalquiz.example"},
-# ]

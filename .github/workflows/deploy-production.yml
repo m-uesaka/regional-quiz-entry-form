@@ -14,6 +14,13 @@ on:
 
 jobs:
   deploy:
+    # `workflow_dispatch` lets the caller pick any ref, and nothing about this
+    # file otherwise stops a run started from a feature branch from pushing
+    # that branch's migrations to the production database and its build to the
+    # production Worker and Pages project. The `push` trigger above is already
+    # `main`-only, so this only ever rejects a hand-started run — as a skipped
+    # job rather than a failed one.
+    if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/deploy.yml
     with:
       environment: production

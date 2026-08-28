@@ -57,7 +57,7 @@
   * Task 7-1: 全地域横断ダッシュボード ✅
 * Phase 8: 非機能・仕上げ ✅完了
   * Task 8-1: E2E テスト整備 ✅(#74 でブラウザ操作の UI レベルに引き上げ済み)
-  * Task 8-2: デプロイパイプライン整備 ✅
+  * Task 8-2: デプロイパイプライン整備 ✅(`/api/*` の Worker route だけは実ドメイン取得後に有効化する。#42 参照)
 
 ## Dependency graph
 
@@ -231,4 +231,4 @@ graph TD
 ### Phase 8: 非機能・仕上げ ✅完了
 
 * [Task 8-1: E2E テスト整備 ✅](tasks/task-8-1.md)
-* [Task 8-2: デプロイパイプライン整備 ✅](tasks/task-8-2.md)
+* [Task 8-2: デプロイパイプライン整備 ✅](tasks/task-8-2.md) — ワークフローと環境定義は完了。`/api/*` を backend Worker へ振り分ける route の有効化のみ、実ドメイン取得待ちで残っている(`docs/supabase-deployment.md` 6.4)
