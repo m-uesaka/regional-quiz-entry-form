@@ -128,20 +128,13 @@ describe.skipIf(!(await isDbReachable()))(
     // provider this way rather than replacing `globalThis.fetch` leaves the
     // Supabase client's own fetch alone, which these tests need to reach the
     // local stack.
-    const mailServer = Bun.serve({
-      port: 0,
-      async fetch(req) {
-        sentMail.push(
-          (await req.json()) as {to: string; subject: string; html: string},
-        );
-        return new Response(null, {status: mailStatus});
-      },
-    });
-
-    const env: Bindings = {
-      ...BASE_ENV,
-      MAIL_API_BASE_URL: `http://127.0.0.1:${mailServer.port}`,
-    };
+    //
+    // Started in `beforeAll` rather than here: the body of a skipped
+    // `describe` still runs, but its `afterAll` does not, so binding the port
+    // at this level would leak a listening socket on every CI run -- the runs
+    // where this suite is skipped for want of a local Supabase.
+    let mailServer: ReturnType<typeof Bun.serve>;
+    let env: Bindings;
 
     let regionId = '';
 
@@ -155,6 +148,20 @@ describe.skipIf(!(await isDbReachable()))(
     // fail with a 409 for a reason that has nothing to do with the code under
     // test.
     beforeAll(async () => {
+      mailServer = Bun.serve({
+        port: 0,
+        async fetch(req) {
+          sentMail.push(
+            (await req.json()) as {to: string; subject: string; html: string},
+          );
+          return new Response(null, {status: mailStatus});
+        },
+      });
+      env = {
+        ...BASE_ENV,
+        MAIL_API_BASE_URL: `http://127.0.0.1:${mailServer.port}`,
+      };
+
       await deleteTestRows();
       const [region] = await sql`
         insert into regions (slug, name)
