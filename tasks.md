@@ -2,7 +2,11 @@
 
 ## Overview
 
-`requirements.md` の要件を、`CLAUDE.md` に定義された技術構成(Bun workspaces + Hono/Cloudflare Workers + SvelteKit + Supabase)に基づいて実装するためのタスクリストです。現時点(2026-08-23)ではコードは未着手のため、Phase 0 でモノレポの土台を作るところから始めます。
+`requirements.md` の要件を、`CLAUDE.md` に定義された技術構成(Bun workspaces + Hono/Cloudflare Workers + SvelteKit + Supabase)に基づいて実装するためのタスクリストです。
+
+Phase 0〜8 は実装済みです。2026-08-28 に `requirements.md` と実装を突き合わせたレビューを行い、そこで洗い出した「要件に対して不足している機能」「セキュリティ上の懸念」「効率性の懸念」を Phase 9〜12 として追加しました。Phase 9 は運用開始のブロッカー、Phase 10 は要件との差分、Phase 11 はセキュリティ、Phase 12 は性能です。
+
+Phase 9 以降のタスクファイルに書かれているマイグレーション番号(`0014_...` 以降)は、各タスクを番号順に実施した場合の想定です。実際の着手順に応じて `bun run db:new` が採番する番号に読み替えてください。
 
 データモデルの設計方針(このタスクリスト全体で前提とする内容):
 
@@ -57,7 +61,32 @@
   * Task 7-1: 全地域横断ダッシュボード ✅
 * Phase 8: 非機能・仕上げ ✅完了
   * Task 8-1: E2E テスト整備 ✅(#74 でブラウザ操作の UI レベルに引き上げ済み)
-  * Task 8-2: デプロイパイプライン整備 ✅(`/api/*` の Worker route の有効化は #101 に分離)
+  * Task 8-2: デプロイパイプライン整備 ✅(`/api/*` の Worker route の有効化は Task 9-5 / #101 に分離)
+* Phase 9: 管理機能の欠落解消(運用ブロッカー) 🚧未着手
+  * Task 9-1: レギュレーション登録・編集 API
+  * Task 9-2: 地域(regions)管理 API
+  * Task 9-3: スタッフアカウント管理 API
+  * Task 9-4: 統括スタッフ向け管理画面(地域・レギュレーション・スタッフ)
+  * Task 9-5: `/api/*` の Worker route 有効化(#101)
+* Phase 10: 要件との差分の解消 🚧未着手
+  * Task 10-1: 地域ごとの「最強位・新人王 重複参加」可否の制御
+  * Task 10-2: レギュレーションの複数選択対応(要確認)
+  * Task 10-3: ログアウト機能(参加者・スタッフ)
+  * Task 10-4: 一斉メールの Cloudflare Queues 化(80 名上限の撤廃)
+  * Task 10-5: エントリー期間外アクセス制御をバックエンドにも実装する
+* Phase 11: セキュリティ強化 🚧未着手
+  * Task 11-1: レート制限と Turnstile(ログイン・エントリー・再設定要求)
+  * Task 11-2: エントリー登録のメールアドレス列挙対策
+  * Task 11-3: スタッフセッションの失効手段
+  * Task 11-4: パスワードハッシュの強化とアルゴリズム移行の余地
+  * Task 11-5: CSRF 対策の明示化とセキュリティヘッダ
+  * Task 11-6: 認可の抜け漏れを構造的に防ぐ(ルート網羅テスト)
+  * Task 11-7: 軽微な堅牢化(入力長上限・メール本文・robots.txt)
+* Phase 12: 性能・効率の改善 🚧未着手
+  * Task 12-1: 大会取得まわりの DB 往復削減
+  * Task 12-2: 一覧 API のページネーション
+  * Task 12-3: 公開エントリーリストのキャッシュ
+  * Task 12-4: 不足しているインデックスの追加
 
 ## Dependency graph
 
@@ -79,11 +108,18 @@ graph TD
   P5 --> P8
   P7 --> P8
 
+  P8 --> P9["Phase 9: 管理機能の欠落解消"]:::todo
+  P9 --> P10["Phase 10: 要件との差分の解消"]:::todo
+  P8 --> P11["Phase 11: セキュリティ強化"]:::todo
+  P9 --> P11
+  P8 --> P12["Phase 12: 性能・効率の改善"]:::todo
+
   classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
   classDef wip fill:#fef3c7,stroke:#d97706,color:#78350f;
+  classDef todo fill:#e2e8f0,stroke:#4a5568,color:#1a202c;
 ```
 
-凡例: 緑 = 完了、黄 = 進行中。Phase 0〜8 のすべてのタスクが完了している。
+凡例: 緑 = 完了、黄 = 進行中、灰 = 未着手。Phase 0〜8 は完了済み。Phase 9〜12 は 2026-08-28 のレビューで洗い出した積み残しで、Phase 9(運用ブロッカー)が最優先。Phase 11・12 は Phase 9 の完了を待たずに着手できるものが多いが、Task 11-3 は Task 9-3、Task 10-1/10-2 は Task 9-1/9-2 に依存する。
 
 ### Phase 内 Task の依存グラフ
 
@@ -169,6 +205,73 @@ graph TD
   classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
 ```
 
+#### Phase 9: 管理機能の欠落解消(🚧 未着手)
+
+```mermaid
+graph TD
+  T91["9-1 レギュレーションAPI"]:::next --> T94["9-4 管理画面"]:::todo
+  T92["9-2 地域API"]:::next --> T93["9-3 スタッフAPI"]:::todo
+  T92 --> T94
+  T93 --> T94
+  T95["9-5 /api/* route 有効化 (#101)"]:::next
+
+  classDef todo fill:#e2e8f0,stroke:#4a5568,color:#1a202c;
+  classDef next fill:#fef3c7,stroke:#d97706,color:#78350f;
+```
+
+9-1・9-2・9-5 は互いに独立で、並行して着手できる。9-5 だけはドメイン取得という外部要因が前提。
+
+#### Phase 10: 要件との差分の解消(🚧 未着手)
+
+```mermaid
+graph TD
+  T92["9-2 地域API"]:::prereq --> T101["10-1 重複参加の可否"]:::todo
+  T91["9-1 レギュレーションAPI"]:::prereq --> T102["10-2 レギュレーション複数選択"]:::todo
+  T103["10-3 ログアウト"]:::next
+  T104["10-4 一斉メールQueue化"]:::next
+  T105["10-5 期間外アクセス制御"]:::next
+
+  classDef todo fill:#e2e8f0,stroke:#4a5568,color:#1a202c;
+  classDef next fill:#fef3c7,stroke:#d97706,color:#78350f;
+  classDef prereq fill:#ffffff,stroke:#a0aec0,color:#4a5568;
+```
+
+白い枠は Phase 9 のタスク(前提)。10-3・10-4・10-5 は Phase 9 を待たずに着手できる。10-2 は要件の読み方の確認が先。
+
+#### Phase 11: セキュリティ強化(🚧 未着手)
+
+```mermaid
+graph TD
+  T111["11-1 レート制限/Turnstile"]:::next --> T112["11-2 メール列挙対策"]:::todo
+  T93["9-3 スタッフAPI"]:::prereq --> T113["11-3 スタッフセッション失効"]:::todo
+  T114["11-4 パスワードハッシュ強化"]:::next
+  T115["11-5 CSRF/セキュリティヘッダ"]:::next
+  T116["11-6 ルート網羅テスト"]:::next
+  T117["11-7 軽微な堅牢化"]:::next
+
+  classDef todo fill:#e2e8f0,stroke:#4a5568,color:#1a202c;
+  classDef next fill:#fef3c7,stroke:#d97706,color:#78350f;
+  classDef prereq fill:#ffffff,stroke:#a0aec0,color:#4a5568;
+```
+
+11-1 → 11-2 の順序は必須(応答を統一しても、レート制限が無ければ処理時間差で列挙できるため)。他は独立。
+
+#### Phase 12: 性能・効率の改善(🚧 未着手)
+
+```mermaid
+graph TD
+  T121["12-1 大会取得の往復削減"]:::next
+  T122["12-2 一覧のページネーション"]:::next
+  T115["11-5 CSRF/セキュリティヘッダ"]:::prereq --> T123["12-3 公開リストのキャッシュ"]:::todo
+  T91["9-1 レギュレーションAPI"]:::prereq --> T124["12-4 インデックス追加"]:::todo
+
+  classDef todo fill:#e2e8f0,stroke:#4a5568,color:#1a202c;
+  classDef next fill:#fef3c7,stroke:#d97706,color:#78350f;
+  classDef prereq fill:#ffffff,stroke:#a0aec0,color:#4a5568;
+```
+
+12-3 が 11-5 に依存するのは、キャッシュ可能にする前に「キャッシュしてはいけない画面」を閉じておく必要があるため。12-4 は 9-1 が張るインデックスと重複しないことの確認を含む。
+
 ## タスク詳細
 
 各タスクの実装内容・コードスニペット・テスト内容は個別ファイルに分割している。
@@ -191,7 +294,7 @@ graph TD
 ### Phase 2: 大会・フォーム定義管理(統括スタッフ) ✅完了
 
 * [Task 2-1: 大会(tournament)管理 API ✅](tasks/task-2-1.md)
-* [Task 2-2: フォーム定義・レギュレーション登録 API ✅](tasks/task-2-2.md)
+* [Task 2-2: フォーム定義・レギュレーション登録 API ✅](tasks/task-2-2.md) — 実装されたのは `form_field_defs` の同期のみ。表題にあるレギュレーションの書き込み API は未実装で、[Task 9-1](tasks/task-9-1.md) に切り出した
 * [Task 2-3: Google スプレッドシート → YAML 変換ツール ✅](tasks/task-2-3.md)
 * [Task 2-4: 大会作成・フォーム定義管理画面 ✅](tasks/task-2-4.md)
 
@@ -231,4 +334,41 @@ graph TD
 ### Phase 8: 非機能・仕上げ ✅完了
 
 * [Task 8-1: E2E テスト整備 ✅](tasks/task-8-1.md)
-* [Task 8-2: デプロイパイプライン整備 ✅](tasks/task-8-2.md) — ワークフローと環境定義は完了。`/api/*` を backend Worker へ振り分ける route の有効化は実ドメイン取得待ちのため #101 に分離した(`docs/supabase-deployment.md` 6.4)
+* [Task 8-2: デプロイパイプライン整備 ✅](tasks/task-8-2.md) — ワークフローと環境定義は完了。`/api/*` を backend Worker へ振り分ける route の有効化は実ドメイン取得待ちのため #101 に分離した(`docs/supabase-deployment.md` 6.4)。[Task 9-5](tasks/task-9-5.md) として起票済み
+
+### Phase 9: 管理機能の欠落解消(運用ブロッカー) 🚧未着手
+
+要件に定義がありながら API も画面も無く、運用開始を塞いでいるもの。
+
+* [Task 9-1: レギュレーション登録・編集 API](tasks/task-9-1.md) — 優先エントリー期間を含め、現状は Supabase を直接操作しないと設定できない
+* [Task 9-2: 地域(regions)管理 API](tasks/task-9-2.md) — 地域が作れないと大会も作れない
+* [Task 9-3: スタッフアカウント管理 API](tasks/task-9-3.md) — スタッフの発行にアプリのコード実行(パスワードハッシュ生成)が要る状態の解消
+* [Task 9-4: 統括スタッフ向け管理画面(地域・レギュレーション・スタッフ)](tasks/task-9-4.md) — `/admin/*` のサーバ側ガード追加を含む
+* [Task 9-5: `/api/*` の Worker route 有効化(#101)](tasks/task-9-5.md) — 本番で CSV ダウンロードと `/admin` のクライアント側 API 呼び出しが 404 になっている
+
+### Phase 10: 要件との差分の解消 🚧未着手
+
+実装はあるが `requirements.md` の記述と食い違っている、あるいは要件が求める運用に届いていないもの。
+
+* [Task 10-1: 地域ごとの「最強位・新人王 重複参加」可否の制御](tasks/task-10-1.md) — 現在は全地域で重複参加できてしまう
+* [Task 10-2: レギュレーションの複数選択対応](tasks/task-10-2.md) — 「どれか一つを最低限でも満たす」の読み方を統括スタッフに確認してから着手する
+* [Task 10-3: ログアウト機能(参加者・スタッフ)](tasks/task-10-3.md) — 現在セッションを終わらせる手段が無い
+* [Task 10-4: 一斉メールの Cloudflare Queues 化](tasks/task-10-4.md) — 1 リクエスト 80 名の上限を外す。課金判断を伴う
+* [Task 10-5: エントリー期間外アクセス制御をバックエンドにも実装する](tasks/task-10-5.md) — 現在はフロントの `load` のみで、スコープ判定も緩い
+
+### Phase 11: セキュリティ強化 🚧未着手
+
+* [Task 11-1: レート制限と Turnstile](tasks/task-11-1.md) — 総当たり・メール爆撃・CPU 枯渇のいずれにも今は無防備
+* [Task 11-2: エントリー登録のメールアドレス列挙対策](tasks/task-11-2.md) — ログインと再設定要求では潰してある穴が、ここだけ空いている
+* [Task 11-3: スタッフセッションの失効手段](tasks/task-11-3.md) — 参加者側にはある仕組みがスタッフ側に無い
+* [Task 11-4: パスワードハッシュの強化とアルゴリズム移行の余地](tasks/task-11-4.md) — 現在の保存形式ではパラメータを一度も変えられない
+* [Task 11-5: CSRF 対策の明示化とセキュリティヘッダ](tasks/task-11-5.md) — 今の安全性が暗黙の前提に依存している状態の解消
+* [Task 11-6: 認可の抜け漏れを構造的に防ぐ(ルート網羅テスト)](tasks/task-11-6.md) — 認可が 100% ミドルウェア頼みであることへの手当て
+* [Task 11-7: 軽微な堅牢化(入力長上限・メール本文・robots.txt)](tasks/task-11-7.md)
+
+### Phase 12: 性能・効率の改善 🚧未着手
+
+* [Task 12-1: 大会取得まわりの DB 往復削減](tasks/task-12-1.md) — ほぼ全ページの `load` の入口が 2 クエリになっている
+* [Task 12-2: 一覧 API のページネーション](tasks/task-12-2.md) — 公開リストもスタッフ一覧も現在は全件返す
+* [Task 12-3: 公開エントリーリストのキャッシュ](tasks/task-12-3.md) — `Cache-Control` がコードベースに 1 件も無い
+* [Task 12-4: 不足しているインデックスの追加](tasks/task-12-4.md)
