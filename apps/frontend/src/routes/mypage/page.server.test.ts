@@ -210,20 +210,13 @@ function buildLogoutEvent(
 }
 
 describe('mypage +page.server logout action', () => {
-  it('forwards the deletion cookie and redirects to the login page', async () => {
+  it('asks the API to end the session, then redirects to the login page', async () => {
     let requested: {url: string; method?: string} | undefined;
-    // What `POST /api/auth/participant/logout` answers with, attributes and
-    // all — the frontend has to re-issue it because the backend is a
-    // different origin.
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       requested = {url: String(input), method: init?.method};
       return new Response(JSON.stringify({ok: true}), {
         status: 200,
-        headers: {
-          'Content-Type': 'application/json',
-          'Set-Cookie':
-            'participant_session=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax',
-        },
+        headers: {'Content-Type': 'application/json'},
       });
     }) as typeof fetch;
 
@@ -239,13 +232,11 @@ describe('mypage +page.server logout action', () => {
 
     expect(requested?.method).toBe('POST');
     expect(requested?.url).toContain('/api/auth/participant/logout');
-    expect(set).toHaveLength(1);
-    expect(set[0]).toMatchObject({
-      name: 'participant_session',
-      value: '',
-      options: {maxAge: 0, path: '/', httpOnly: true, sameSite: 'lax'},
-    });
-    // The forwarded deletion is enough; nothing else had to be dropped.
+    // The deletion `Set-Cookie` the API answers with is carried into the
+    // cookie jar by `handleFetch`, not by the action -- so a successful
+    // logout touches no cookie here. `forwardBackendCookies` in
+    // `$lib/server/backend-fetch` is where that is covered.
+    expect(set).toEqual([]);
     expect(deleted).toEqual([]);
   });
 

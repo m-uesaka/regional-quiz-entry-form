@@ -49,6 +49,6 @@ export const handleFetch: HandleFetch = async ({event, request, fetch}) => {
   // applied to the page response for free; a rewritten one is cross-origin
   // by definition, so the session cookie a login answers with is carried
   // over by hand.
-  forwardBackendCookies(response, event.cookies);
+  forwardBackendCookies(response, event.cookies, event.url);
   return response;
 };

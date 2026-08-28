@@ -1,7 +1,6 @@
 import {fail, redirect} from '@sveltejs/kit';
 import {StaffLoginInputSchema} from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
-import {forwardSetCookies} from '$lib/server/backend-cookies';
 import {staffLandingPath} from '$lib/server/staff-login';
 import type {Actions} from './$types';
 
@@ -13,7 +12,7 @@ const INVALID_CREDENTIALS_MESSAGE =
   'メールアドレスまたはパスワードが正しくありません';
 
 export const actions = {
-  default: async ({request, fetch, cookies, url}) => {
+  default: async ({request, fetch, url}) => {
     const formData = await request.formData();
     const submitted = formData.get('email');
     // Echoed back on failure so a mistyped password doesn't cost the whole
@@ -42,11 +41,6 @@ export const actions = {
         error: 'ログインに失敗しました。時間をおいて再度お試しください',
       });
     }
-
-    // `hooks.server.ts` sends `/api/*` to the backend Worker's own origin,
-    // which is cross-origin as far as SvelteKit is concerned, so the session
-    // cookie has to be re-issued here to reach the browser.
-    forwardSetCookies(res, cookies, url);
 
     const landing = staffLandingPath(
       await res.json(),

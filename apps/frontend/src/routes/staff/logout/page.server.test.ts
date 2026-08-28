@@ -41,15 +41,7 @@ function fakeLogoutFetch(status: number): typeof fetch {
   return (async () =>
     new Response(JSON.stringify({ok: status === 200}), {
       status,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(status === 200
-          ? {
-              'Set-Cookie':
-                'staff_session=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax',
-            }
-          : {}),
-      },
+      headers: {'Content-Type': 'application/json'},
     })) as typeof fetch;
 }
 
@@ -65,7 +57,7 @@ describe('staff logout +page.server load', () => {
 });
 
 describe('staff logout +page.server action', () => {
-  it('forwards the deletion cookie and redirects to the login page', async () => {
+  it('asks the API to end the session, then redirects to the login page', async () => {
     let requested: {url: string; method?: string} | undefined;
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       requested = {url: String(input), method: init?.method};
@@ -84,12 +76,9 @@ describe('staff logout +page.server action', () => {
 
     expect(requested?.method).toBe('POST');
     expect(requested?.url).toContain('/api/auth/staff/logout');
-    expect(set).toHaveLength(1);
-    expect(set[0]).toMatchObject({
-      name: 'staff_session',
-      value: '',
-      options: {maxAge: 0, path: '/', httpOnly: true, sameSite: 'lax'},
-    });
+    // The deletion `Set-Cookie` rides back through `handleFetch`, not
+    // through this action, so nothing is touched here on success.
+    expect(set).toEqual([]);
     expect(deleted).toEqual([]);
   });
 

@@ -6,7 +6,6 @@ import {
   PARTICIPANT_LOGIN_PATH,
   redirectToParticipantLogin,
 } from '$lib/server/participant-session';
-import {forwardSetCookies} from '$lib/server/backend-cookies';
 import type {Actions, PageServerLoad} from './$types';
 
 export const load: PageServerLoad = async ({cookies, fetch, url}) => {
@@ -37,15 +36,13 @@ export const actions = {
     // to be logged out and leave the session standing -- the one outcome
     // not worth reporting back.
     const res = await api.api.auth.participant.logout.$post().catch(() => null);
-    if (res?.ok) {
-      // The API answers with the cookie deletion, and `/api/*` goes to the
-      // backend Worker's own origin, so the `Set-Cookie` is re-issued from
-      // this origin by hand to reach the browser at all.
-      forwardSetCookies(res, cookies, url);
-    } else {
-      // Nothing came back to forward, so the cookie is dropped here. The
-      // JWT stays signed either way (see
-      // `apps/backend/src/routes/participant-auth.ts`).
+    // On success the deletion `Set-Cookie` the API answered with is already
+    // on its way to the browser: `handleFetch` in `src/hooks.server.ts`
+    // moves it into SvelteKit's cookie jar as the call comes back. Only the
+    // case where nothing came back needs handling here. The JWT stays
+    // signed either way (see
+    // `apps/backend/src/routes/participant-auth.ts`).
+    if (!res?.ok) {
       clearParticipantSession(cookies, url);
     }
     redirect(303, PARTICIPANT_LOGIN_PATH);

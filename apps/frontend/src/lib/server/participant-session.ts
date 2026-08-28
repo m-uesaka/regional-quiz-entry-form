@@ -60,7 +60,7 @@ export async function readParticipantClaims(
  * delete only matches a cookie of the same name *and* path.
  *
  * `secure` is decided from the frontend's own protocol for the same reason
- * `forwardSetCookies()` does it (see `./backend-cookies.ts`): SvelteKit's
+ * `forwardBackendCookies()` does it (see `./backend-fetch.ts`): SvelteKit's
  * default only drops the flag for the literal hostname `localhost`, so on
  * `http://127.0.0.1:5173` or `vite dev --host` the deletion would go out as
  * a `Secure` cookie over plain HTTP and be discarded by the browser -- a

@@ -80,14 +80,7 @@ API を直接叩いているのは2箇所だけです(`support/api.ts`)。
 
 バックエンドは **`wrangler dev --local-protocol https`** で起動します(#91)。本番と同じく、フロントエンド → バックエンドのホップが TLS になります。バックエンドのセッション Cookie は `secure: true` 固定(`apps/backend/src/routes/*-auth.ts`)で、`Secure` は「その Cookie が実際に通ったホップ」を指す属性なので、平文で通していると本番と違う経路を見ていることになります。
 
-セッション Cookie はフロントエンドが自分のオリジンに発行し直しますが、**2つの Cookie で経路が違い、`Secure` が落ちるのは片方だけです**。
-
-| Cookie | 経路 | `Secure` |
-| --- | --- | --- |
-| `staff_session` | `forwardSetCookies()`(`src/lib/server/backend-cookies.ts`) | フロントエンドのプロトコルから判断するので HTTP では落ちる |
-| `participant_session` | `forwardBackendCookies()`(`src/lib/server/backend-fetch.ts`、`handleFetch` から) | バックエンドの属性をそのまま写すので残る |
-
-つまり `participant_session` がフロントエンドの平文オリジンで通るのは、Chromium が `127.0.0.1` を trustworthy origin とみなして `Secure` Cookie を受け取るからです。**ループバックである**ことが条件で、単に平文であればよいわけではありません。`vite dev --host` で LAN のアドレスに出すと、参加者ログインが黙ってログイン画面に戻り続けます。
+セッション Cookie はフロントエンドが自分のオリジンに発行し直します。`participant_session` も `staff_session` も経路は同じで、`handleFetch` から呼ばれる `forwardBackendCookies()`(`src/lib/server/backend-fetch.ts`)が SvelteKit の Cookie jar に載せ替えます。このとき `Secure` はバックエンドの属性をそのまま写すのではなく**フロントエンド自身のプロトコルから決め直す**ので、平文の `http://127.0.0.1:5173` では落ちます。`vite dev --host` で LAN のアドレスに出しても同じです。
 
 ### 自己署名証明書を通す3箇所
 

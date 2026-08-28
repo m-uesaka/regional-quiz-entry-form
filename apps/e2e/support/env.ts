@@ -46,21 +46,12 @@ export const FRONTEND_PORT = Number(process.env.E2E_FRONTEND_PORT ?? 5173);
 // `/verify?token=...` link in the confirmation mail from, so the two have to
 // agree.
 //
-// It has to be a *loopback* address, not merely a plain-HTTP one. The two
-// session cookies reach the browser by different routes, and only one of
-// them drops `Secure`:
-//
-//   - `staff_session` goes through `forwardSetCookies()`
-//     (`apps/frontend/src/lib/server/backend-cookies.ts`), which decides
-//     `Secure` from the frontend's own protocol and so drops it here.
-//   - `participant_session` goes through `forwardBackendCookies()`
-//     (`.../backend-fetch.ts`, called from `handleFetch`), which copies the
-//     backend's attributes verbatim and so keeps `Secure`. It survives only
-//     because Chromium counts `127.0.0.1` as a trustworthy origin and takes
-//     a `Secure` cookie from it over plain HTTP.
-//
-// Serving this from a LAN address instead (`vite dev --host`) would
-// therefore leave participant login silently looping back to the form.
+// Both session cookies reach the browser the same way -- SvelteKit's cookie
+// jar, filled by `forwardBackendCookies()`
+// (`apps/frontend/src/lib/server/backend-fetch.ts`, called from
+// `handleFetch`), which decides `Secure` from the frontend's own protocol
+// rather than copying the backend's. Over plain HTTP the flag is therefore
+// dropped and the cookies are accepted, loopback or not.
 export const FRONTEND_URL = `http://127.0.0.1:${FRONTEND_PORT}`;
 
 /** The HS256 key the backend signs session JWTs with during the run. */
