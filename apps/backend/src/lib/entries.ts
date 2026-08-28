@@ -36,8 +36,28 @@ interface TournamentRow {
   region_id: string;
   entry_opens_at: string;
   entry_closes_at: string;
+  // A to-one embed, so PostgREST answers with the region object itself
+  // rather than a single-element array (unlike `regulations` below).
+  regions: {allows_dual_entry: boolean};
   regulations: RegulationRow[];
 }
+
+/**
+ * The error the dual-entry rule answers with. Shared with the trigger's
+ * SQLSTATE mapping below so both paths give the entry form the same string
+ * to translate.
+ */
+const ALREADY_ENTERED_ANOTHER_TOURNAMENT =
+  'already entered another tournament in this region';
+
+/**
+ * The SQLSTATE `check_region_dual_entry()` (migration 0016) raises. The
+ * trigger only fires for a submission that slipped through the check below
+ * while a concurrent one was being inserted, so it is a race, not a bug in
+ * the caller — but the participant caused it and 409 is still the honest
+ * answer.
+ */
+const REGION_DUAL_ENTRY_SQLSTATE = 'P0005';
 
 interface ParticipantRow {
   id: string;
@@ -92,15 +112,23 @@ export async function createEntry(
 ): Promise<CreateEntryResult> {
   const db = createDbClient(env);
 
-  const {data: tournament} = await db
+  const {data: tournament, error: tournamentError} = await db
     .from('tournaments')
     .select(
       'id, region_id, entry_opens_at, entry_closes_at, ' +
+        'regions(allows_dual_entry), ' +
         'regulations(id, priority_starts_at, priority_ends_at)',
     )
     .eq('id', tournamentId)
     .returns<TournamentRow[]>()
     .maybeSingle();
+  // A failing select is not the same as an unknown tournament: the embeds
+  // read columns added by later migrations, so a stale PostgREST schema
+  // cache would otherwise turn every submission into 「大会が見つかりません」
+  // with nothing logged. Kept apart so the 500 says so.
+  if (tournamentError) {
+    return {ok: false, status: 500, error: tournamentError.message};
+  }
   if (!tournament) {
     return {ok: false, status: 400, error: 'invalid tournament'};
   }
@@ -217,6 +245,39 @@ export async function createEntry(
     return {ok: false, status: 409, error: 'already entered'};
   }
 
+  // requirements.md only says that regions allowing both 最強位 and 新人王
+  // exist, so the region decides. Where it doesn't allow both, an entry in
+  // the region's *other* tournament blocks this one. `tournament_id` is
+  // excluded rather than the whole region matched loosely, so re-entering
+  // this same tournament after cancelling still goes through — that row was
+  // already checked above.
+  if (!tournament.regions.allows_dual_entry) {
+    const {count, error: dualEntryError} = await db
+      .from('entries')
+      .select('id, tournaments!inner(region_id)', {count: 'exact', head: true})
+      .eq('participant_id', participantId)
+      .eq('tournaments.region_id', tournament.region_id)
+      .neq('tournament_id', tournamentId)
+      // Every status but `cancelled` occupies the region, expressed by
+      // exclusion rather than by listing the occupying ones: a status added
+      // to the `entry_status` enum later would otherwise fall out of the
+      // list silently and re-open double entry. `pending_verification`
+      // counts on purpose — it is a seat held before the mail was
+      // confirmed, and skipping it would let a participant hold both
+      // tournaments by simply never following the link.
+      .neq('status', 'cancelled');
+    if (dualEntryError) {
+      return {ok: false, status: 500, error: dualEntryError.message};
+    }
+    if ((count ?? 0) > 0) {
+      return {
+        ok: false,
+        status: 409,
+        error: ALREADY_ENTERED_ANOTHER_TOURNAMENT,
+      };
+    }
+  }
+
   const entryValues = {
     participant_id: participantId,
     tournament_id: tournamentId,
@@ -248,6 +309,12 @@ export async function createEntry(
         .select('id')
         .single()
     : await db.from('entries').insert(entryValues).select('id').single();
+  if (error?.code === REGION_DUAL_ENTRY_SQLSTATE) {
+    // The check above lost a race with a concurrent submission for the
+    // region's other tournament; the trigger is what actually kept the
+    // participant from holding both seats.
+    return {ok: false, status: 409, error: ALREADY_ENTERED_ANOTHER_TOURNAMENT};
+  }
   if (error || !entry) {
     return {
       ok: false,

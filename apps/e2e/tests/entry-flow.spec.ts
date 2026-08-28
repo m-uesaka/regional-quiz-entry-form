@@ -1,7 +1,7 @@
 // エントリー登録 → 確認メールのリンクをクリック → マイページで確認
 
 import {expect, test} from '@playwright/test';
-import {SHINJINOU} from '../support/fixtures';
+import {SAIKYOI, SHINJINOU} from '../support/fixtures';
 import {
   entryFormPath,
   entryListPath,
@@ -54,6 +54,30 @@ test('an entry is confirmed through its mailed link and shows up on mypage', asy
   await expect(
     page.getByRole('listitem').filter({hasText: participant.displayName}),
   ).toHaveCount(1);
+});
+
+// #111 の回帰テスト。東京は `allowsDualEntry: false` なので、同じ参加者が
+// 最強位と新人王の両方には出られない。
+test('refuses the second tournament of a region that disallows dual entry', async ({
+  page,
+}) => {
+  // Left unverified on purpose: a seat held before the mail was confirmed
+  // still occupies the region, so this is also what stops a participant
+  // from holding both tournaments by never following either link.
+  const participant = await submitEntryForm(page, SHINJINOU, {
+    displayName: '重複太郎',
+  });
+
+  await page.goto(entryFormPath(SAIKYOI));
+  await fillEntryForm(page, SAIKYOI, {email: participant.email});
+  await page.getByRole('button', {name: 'エントリーする'}).click();
+
+  await expect(page.getByRole('alert')).toHaveText(
+    'この地域では、最強位と新人王のどちらか一方にのみエントリーできます',
+  );
+  // The refusal re-renders the form rather than the "check your mail"
+  // notice, so nothing suggests a second entry was taken.
+  await expect(page.getByRole('status')).toHaveCount(0);
 });
 
 test('a verification link cannot be followed twice', async ({

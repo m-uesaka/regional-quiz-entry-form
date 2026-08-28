@@ -1,4 +1,4 @@
-import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
+import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
 
 // Local Supabase Postgres connection (`supabase start` default). Overridable
@@ -86,6 +86,202 @@ describe.skipIf(!(await isDbReachable()))(
         duplicateInsertThrew = true;
       }
       expect(duplicateInsertThrew).toBe(true);
+    });
+  },
+);
+
+// The default is what the dual-entry rule in `lib/entries.ts` falls back to
+// for every region that predates the column, so it is pinned down here
+// rather than left to the migration being read correctly.
+describe.skipIf(!(await isDbReachable()))(
+  'regions table (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const testRegionSlug = 'db-schema-regions-test-region';
+
+    // Also cleaned up on the way in, so a run interrupted before `afterAll`
+    // doesn't leave a row that makes the next run fail on the unique slug.
+    beforeAll(async () => {
+      await sql`delete from regions where slug = ${testRegionSlug}`;
+    });
+
+    afterAll(async () => {
+      await sql`delete from regions where slug = ${testRegionSlug}`;
+      await sql.close();
+    });
+
+    it('defaults allows_dual_entry to false', async () => {
+      const [region] = await sql`
+        insert into regions (slug, name)
+        values (${testRegionSlug}, 'テスト地域')
+        returning allows_dual_entry
+      `;
+
+      expect(region.allows_dual_entry).toBe(false);
+    });
+  },
+);
+
+// The DB-level backstop for `regions.allows_dual_entry` (migration 0017).
+// `createEntry()` checks the rule before inserting, so what is exercised here
+// is the window that check leaves open: an insert that arrives as if a
+// concurrent submission had already taken the region's other seat.
+describe.skipIf(!(await isDbReachable()))(
+  'check_region_dual_entry() (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const testEmail = 'db-schema-dual-entry-test@example.com';
+    const testRegionSlug = 'db-schema-dual-entry-test-region';
+
+    /**
+     * Creates a region with both of its tournaments, a participant in it and
+     * one regulation per tournament, and returns a builder for the columns
+     * of that participant's entry into either tournament.
+     * @param allowsDualEntry The region's dual-entry setting.
+     */
+    async function seedRegion(allowsDualEntry: boolean) {
+      const [region] = await sql`
+        insert into regions (slug, name, allows_dual_entry)
+        values (${testRegionSlug}, 'テスト地域', ${allowsDualEntry})
+        returning id
+      `;
+      const seedTournament = async (type: string) => {
+        const [tournament] = await sql`
+          insert into tournaments (
+            region_id, type, name, entry_opens_at, entry_closes_at
+          ) values (
+            ${region.id}, ${type}, ${'テスト' + type}, now(), now()
+          )
+          returning id
+        `;
+        const [regulation] = await sql`
+          insert into regulations (tournament_id, label)
+          values (${tournament.id}, 'テストレギュレーション')
+          returning id
+        `;
+        return {
+          tournament_id: tournament.id as string,
+          regulation_id: regulation.id as string,
+        };
+      };
+      const tournaments = {
+        saikyoi: await seedTournament('saikyoi'),
+        shinjinou: await seedTournament('shinjinou'),
+      };
+      const [participant] = await sql`
+        insert into participants (region_id, email, password_hash)
+        values (${region.id}, ${testEmail}, 'hash')
+        returning id
+      `;
+      const participantId = participant.id as string;
+
+      /**
+       * The insertable columns of an entry into one of the two tournaments.
+       * @param type Which of the region's tournaments to enter.
+       * @param status The status to insert the entry with.
+       */
+      const entryFor = (
+        type: keyof typeof tournaments,
+        status = 'pending_verification',
+      ) => ({
+        participant_id: participantId,
+        ...tournaments[type],
+        name: '山田太郎',
+        furigana: 'ヤマダタロウ',
+        display_name: '太郎',
+        status,
+      });
+      return {participantId, entryFor};
+    }
+
+    // Between tests rather than only at the end: each one seeds the same
+    // region slug and email, and a run interrupted earlier would otherwise
+    // leave rows that make the next insert fail on the unique constraints.
+    async function cleanup() {
+      await sql`delete from entries where participant_id in (
+        select id from participants where email = ${testEmail}
+      )`;
+      await sql`delete from participants where email = ${testEmail}`;
+      await sql`delete from regulations where tournament_id in (
+        select id from tournaments where region_id in (
+          select id from regions where slug = ${testRegionSlug}
+        )
+      )`;
+      await sql`delete from tournaments where region_id in (
+        select id from regions where slug = ${testRegionSlug}
+      )`;
+      await sql`delete from regions where slug = ${testRegionSlug}`;
+    }
+
+    beforeEach(cleanup);
+
+    afterAll(async () => {
+      await cleanup();
+      await sql.close();
+    });
+
+    it('rejects a second entry in a region that disallows dual entry', async () => {
+      const {entryFor} = await seedRegion(false);
+      await sql`insert into entries ${sql(entryFor('saikyoi'))}`;
+
+      // `errno` is where Bun's SQL client puts the SQLSTATE; the same code
+      // reaches `lib/entries.ts` as `error.code` through supabase-js.
+      let raised: {errno?: string; message?: string} | undefined;
+      try {
+        await sql`insert into entries ${sql(entryFor('shinjinou'))}`;
+      } catch (error) {
+        raised = error as {errno?: string; message?: string};
+      }
+
+      expect(raised?.errno).toBe('P0005');
+      expect(raised?.message).toBe(
+        'already entered another tournament in this region',
+      );
+    });
+
+    it('allows both entries where the region allows dual entry', async () => {
+      const {participantId, entryFor} = await seedRegion(true);
+
+      await sql`insert into entries ${sql(entryFor('saikyoi'))}`;
+      await sql`insert into entries ${sql(entryFor('shinjinou'))}`;
+
+      const [{count}] = await sql`
+        select count(*)::int as count from entries
+        where participant_id = ${participantId}
+      `;
+      expect(count).toBe(2);
+    });
+
+    it('does not count a cancelled entry as occupying the region', async () => {
+      const {participantId, entryFor} = await seedRegion(false);
+      await sql`insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}`;
+
+      await sql`insert into entries ${sql(entryFor('shinjinou'))}`;
+
+      const [{count}] = await sql`
+        select count(*)::int as count from entries
+        where participant_id = ${participantId} and status <> 'cancelled'
+      `;
+      expect(count).toBe(1);
+    });
+
+    // The status changes on a seat the participant already holds must not go
+    // through the check again: `confirm_entry_by_token()` and
+    // `promote_next_waitlisted_entry()` run them while holding the
+    // tournament lock, and re-taking the participant lock there would invite
+    // a deadlock.
+    it('leaves a status change on an entry that already holds a seat alone', async () => {
+      const {entryFor} = await seedRegion(false);
+      const [entry] = await sql`
+        insert into entries ${sql(entryFor('saikyoi'))} returning id
+      `;
+
+      await sql`update entries set status = 'confirmed' where id = ${entry.id}`;
+
+      const [updated] = await sql`
+        select status from entries where id = ${entry.id}
+      `;
+      expect(updated.status).toBe('confirmed');
     });
   },
 );

@@ -17,14 +17,36 @@ export const RegionSchema = z.object({
   id: z.string().uuid(),
   slug: RegionSlugSchema,
   name: z.string().min(1).max(100),
+  // Whether a participant may hold an entry in both of the region's
+  // tournaments at once. requirements.md says only that regions where both
+  // are allowed *exist*, so this is a per-region setting rather than a
+  // global rule; `createEntry()` is what enforces it.
+  allowsDualEntry: z.boolean(),
 });
 export type Region = z.infer<typeof RegionSchema>;
 
-export const RegionCreateInputSchema = RegionSchema.omit({id: true});
+// `allowsDualEntry` defaults to false rather than being required, so a
+// region can still be created from `{slug, name}` alone. The default is the
+// restrictive side on purpose: a region whose staff never thought about the
+// question must not silently accept double entries.
+export const RegionCreateInputSchema = RegionSchema.omit({id: true}).extend({
+  allowsDualEntry: z.boolean().default(false),
+});
 export type RegionCreateInput = z.infer<typeof RegionCreateInputSchema>;
 
 // `slug` is part of already-published URLs, so it is fixed at creation time:
-// picking only `name` means a `slug` sent by a client is dropped rather than
-// applied.
-export const RegionUpdateInputSchema = RegionSchema.pick({name: true});
+// picking only the editable fields means a `slug` sent by a client is
+// dropped rather than applied. Both fields are optional because this is a
+// PATCH: an omitted field keeps the region's current value, so flipping the
+// dual-entry setting does not have to resend a `name` read before another
+// staff member renamed the region — which would write the stale name back.
+// An empty body is refused instead, since it can only be a client bug.
+export const RegionUpdateInputSchema = RegionSchema.pick({
+  name: true,
+  allowsDualEntry: true,
+})
+  .partial()
+  .refine(input => Object.keys(input).length > 0, {
+    message: 'name または allowsDualEntry のどちらかは指定してください',
+  });
 export type RegionUpdateInput = z.infer<typeof RegionUpdateInputSchema>;

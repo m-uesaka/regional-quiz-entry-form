@@ -118,10 +118,15 @@ describe.skipIf(!(await isDbReachable()))(
       await sql.close();
     });
 
-    async function createRegion(suffix: string): Promise<string> {
+    async function createRegion(
+      suffix: string,
+      allowsDualEntry = false,
+    ): Promise<string> {
       const [region] = await sql`
-        insert into regions (slug, name)
-        values (${testRegionSlug + '-' + suffix}, 'テスト地域')
+        insert into regions (slug, name, allows_dual_entry)
+        values (
+          ${testRegionSlug + '-' + suffix}, 'テスト地域', ${allowsDualEntry}
+        )
         returning id
       `;
       return region.id as string;
@@ -233,7 +238,9 @@ describe.skipIf(!(await isDbReachable()))(
     });
 
     it('returns entries for both saikyoi and shinjinou in the same region', async () => {
-      const regionId = await createRegion('both-types');
+      // Only a dual-entry region can hold this shape at all: everywhere else
+      // `check_region_dual_entry()` (migration 0016) refuses the second row.
+      const regionId = await createRegion('both-types', true);
       const saikyoiId = await createTournament(regionId, 'saikyoi');
       const shinjinouId = await createTournament(regionId, 'shinjinou');
       const saikyoiRegulationId = await createRegulation(saikyoiId);
