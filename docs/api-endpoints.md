@@ -87,6 +87,9 @@ if ('yaml' in body) {
 | POST | `/api/auth/participant/login` | なし |
 | POST | `/api/auth/participant/password-reset/request` | なし |
 | POST | `/api/auth/participant/password-reset/confirm` | なし(トークン) |
+| GET | `/api/regions` | 統括スタッフ |
+| POST | `/api/regions` | 統括スタッフ |
+| PATCH | `/api/regions/:id` | 統括スタッフ |
 | GET | `/api/tournaments` | 統括スタッフ |
 | POST | `/api/tournaments` | 統括スタッフ |
 | PATCH | `/api/tournaments/:id` | 統括スタッフ |
@@ -170,7 +173,46 @@ if ('yaml' in body) {
 
 同じ UPDATE 文で `participants.password_changed_at` も打刻され、**その参加者の既存セッションがすべて無効になります**。参加者セッションは 7 日有効なステートレス JWT なので、これがないと Cookie を盗まれた参加者がパスワードを変えても攻撃者のアクセスは最大 7 日間続きます。
 
-## 5. 大会管理(統括スタッフ)
+## 5. 地域管理(統括スタッフ)
+
+`routes/regions.ts`。`regions` は列名も API のフィールド名も `id` / `slug` / `name` で一致するため、大会管理のような camelCase ↔ snake_case の変換はありません。地域を作らないと大会も作れないので、統括スタッフが自力で新地域を立ち上げられるようにするためのエンドポイント群です。大会作成画面が `regionId` を選ぶための一覧もここで返します。
+
+**削除は提供しません。** `tournaments` / `participants` / `staff_accounts` から参照されており、地域を消す運用は想定していません。
+
+アプリ全体が統括スタッフ限定なので、`routes/tournaments.ts` と違いガードは `.use('*', requireGeneralStaff())` の1か所です(あちらは公開ルートと同じ `/tournaments` にマウントされているため、ルートごとに付けています)。
+
+### `GET /api/regions`
+
+全地域を `name` 昇順で返します。
+
+- `200`: `Region[]` — `{id, slug, name}`
+- `401` / `403`
+- `500`: `{"error": "internal server error"}`
+
+読み出しでは行を `RegionSchema` で parse し直していません。slug の文字種ルール(下記)は**作成時の入力規則**であってカラム制約ではないので、この API が無かった頃に Supabase から直接入れた行が引っかかると、実際には問題なく使えている地域の一覧が 500 になってしまいます。
+
+### `POST /api/regions`
+
+- リクエスト: `RegionCreateInputSchema` — `{slug, name}`
+  - `slug` は `/^[a-z][a-z0-9-]{1,30}$/`。エントリーフォーム URL(`/{regionSlug}/{tournamentSlug}/entry`)の1セグメントとしてそのまま使うため、パスやクエリで意味を持つ文字と大文字を弾きます。先頭を英字に固定しているのは UUID や数値 id と見分けるためです
+  - `name` は 1〜100 文字
+- `201`: 作成された `Region`
+- `400`: バリデーション違反、またはそれ以外の挿入失敗
+- `409`: `{"error": "slug already in use"}` — slug の重複(Postgres の `23505`)。スタッフが直せる入力ミスなので 500 ではなくこれを返します
+- `401` / `403`
+
+### `PATCH /api/regions/:id`
+
+- パス: `id` は UUID
+- リクエスト: `RegionUpdateInputSchema` — `{name}`
+- `200`: 更新後の `Region`
+- `404`: `{"error": "region not found"}`(Supabase の `PGRST116` を変換)
+- `400`: それ以外の更新失敗
+- `401` / `403`
+
+**`slug` は更新できません。** 公開済みのエントリーフォーム URL の一部なので、後から変えると配布済みのリンクが壊れます。`RegionUpdateInputSchema` は `name` だけを `pick` しているため、body に `slug` を入れても 400 にはならず、単に無視されます。
+
+## 6. 大会管理(統括スタッフ)
 
 `routes/tournaments.ts`。camelCase の API 形状と snake_case のカラム名の相互変換はこのファイル内の `rowToTournament()` / `toTournamentRow()` が担当します。
 
@@ -216,7 +258,7 @@ if ('yaml' in body) {
 
 `src/index.ts` では**`tournamentsRoute` より前**にマウントしています。`tournamentsRoute` の `/:regionSlug/:tournamentSlug` も2セグメントにマッチするため、後ろに置くとその `tournamentSlug` の enum バリデーションが先に 400 を返してしまいます(`entryListRoute` と同じ理由)。
 
-## 6. エントリー(参加者向け)
+## 7. エントリー(参加者向け)
 
 ### `POST /api/tournaments/:tournamentId/entries`
 
@@ -275,7 +317,7 @@ if ('yaml' in body) {
 
 定員に空きがあれば `confirmed`、埋まっていれば `waitlisted`(順位付き)になります。
 
-## 7. 公開エントリーリスト
+## 8. 公開エントリーリスト
 
 ### `GET /api/tournaments/:tournamentId/entry-list`
 
@@ -290,7 +332,7 @@ if ('yaml' in body) {
 - `pending_verification` のエントリーは除外します(メール確認前の申し込みを公開しないため)。
 - `cancelled` の行は削除せず、`displayName` を `"キャンセル"` に**マスクして返します**。行自体を落とさないのは、繰り上げ処理が更新するのは繰り上がった側の行だけで、キャンセルされた行はそのまま残るためです。
 
-## 8. フォーム定義管理(統括スタッフ)
+## 9. フォーム定義管理(統括スタッフ)
 
 詳細な仕組みは [`form-generation.md`](./form-generation.md) を参照してください。
 
@@ -335,7 +377,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 詳細は [`google-sheets-integration.md`](./google-sheets-integration.md) を参照。
 
-## 9. スタッフ向けエントリー閲覧・一斉メール送信
+## 10. スタッフ向けエントリー閲覧・一斉メール送信
 
 `routes/staff-entries.ts` と `routes/staff-mail.ts`。`requireStaffForTournament()` / `requireStaffForEntry()` により、地域スタッフは担当大会のエントリーしか見られず、担当外の大会にはメールも送れません。統括スタッフは全大会が対象です。
 
@@ -427,7 +469,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 `body` を無害化していないのは、この項目が**スタッフの書いたものを信頼する**前提だからです。投稿には担当大会のスタッフセッションが必要で、同じアカウントは既にエントリー一覧から全参加者のアドレスを読めます。ただし送信元は組織の検証済みドメインなので、他所からコピーしてきた HTML はスタッフ側で確認してから貼る運用が前提になります。
 
-## 10. 全地域横断ダッシュボード(統括スタッフ)
+## 11. 全地域横断ダッシュボード(統括スタッフ)
 
 `routes/staff-dashboard.ts`。セクション 9 のエントリー閲覧・メール送信が「1 大会ずつ」なのに対し、こちらは**全地域・全大会の集計を 1 回で**返します。地域スタッフには自分の地域外の情報を見せないため、`requireStaffForTournament()` ではなく `requireGeneralStaff()` で保護しています(地域スタッフは 403)。
 
@@ -449,7 +491,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 行数は「大会数(地域数 × 大会種別)」に等しく Supabase の `max_rows` に届かないため、CSV エクスポートのようなページングは行っていません。
 
-## 11. マイページ(参加者本人)
+## 12. マイページ(参加者本人)
 
 `routes/mypage.ts`。このサブアプリは `.use('*', requireParticipant())` により全ルートが参加者ログイン必須です。
 
@@ -506,7 +548,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 - すでに `cancelled` の場合も 200 を返します(冪等)。誰も繰り上げません。
 - 繰り上げ処理が失敗しても**リクエスト自体は成功扱い**にし、ログ出力にとどめます。キャンセル自体は既にコミット済みであり、ここで失敗を返すと「キャンセルできていない」と参加者に誤解させるためです。失われるのは繰り上げ(またはその通知メール)だけで、参加者のキャンセル自体は成立しています。なお繰り上げが走るのはこのキャンセル処理だけで(`promoteNextWaitlistedEntry()` の呼び出し元は `cancelOwnEntry()` のみ)、スタッフが繰り上げをやり直すための API / UI は現状ありません。取りこぼした繰り上げは Supabase 上で直接対応する運用です。
 
-## 12. 環境変数(Bindings)
+## 13. 環境変数(Bindings)
 
 `apps/backend/src/types/env.ts`。Cloudflare Workers の Bindings 経由で渡します。
 
@@ -523,9 +565,9 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 登録手順は [`supabase-deployment.md`](./supabase-deployment.md) / [`google-sheets-integration.md`](./google-sheets-integration.md) を参照してください。
 
-## 13. 未実装のエンドポイント
+## 14. 未実装のエンドポイント
 
 `tasks.md` 上で計画されているが、現時点で API が存在しないものです。
 
 - レギュレーション(`regulations`)の**登録・編集** API — 読み出しは `GET /api/tournaments/:tournamentId/regulations` がありますが、書き込みは Supabase 上で直接行う運用です。
-- 地域(`regions`)・スタッフアカウント(`staff_accounts`)の管理 API — 同上。
+- スタッフアカウント(`staff_accounts`)の管理 API — 同上。
