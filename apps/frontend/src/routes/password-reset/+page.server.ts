@@ -4,7 +4,7 @@ import {
   PasswordResetRequestInputSchema,
 } from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
-import {TURNSTILE_TOKEN_FIELD} from '$lib/turnstile';
+import {readTurnstileToken, TURNSTILE_TOKEN_FIELD} from '$lib/turnstile';
 import {clearParticipantSession} from '$lib/server/participant-session';
 import type {Actions, PageServerLoad} from './$types';
 
@@ -65,8 +65,9 @@ export const actions = {
 
       // Written into the form by the Turnstile widget
       // (`$lib/components/Turnstile.svelte`), and forwarded as a header: the
-      // API takes it beside the body rather than in it.
-      const turnstileToken = String(formData.get(TURNSTILE_TOKEN_FIELD) ?? '');
+      // API takes it beside the body rather than in it. Read through a
+      // helper, which is where a value no header could carry is dropped.
+      const turnstileToken = readTurnstileToken(formData);
       const res = await api.api.auth.participant[
         'password-reset'
       ].request.$post(

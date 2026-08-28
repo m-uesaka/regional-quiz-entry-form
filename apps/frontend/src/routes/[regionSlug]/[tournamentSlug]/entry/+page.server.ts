@@ -9,7 +9,7 @@ import {
   type Tournament,
 } from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
-import {TURNSTILE_TOKEN_FIELD} from '$lib/turnstile';
+import {readTurnstileToken, TURNSTILE_TOKEN_FIELD} from '$lib/turnstile';
 import {
   customFieldErrors,
   readCustomFieldValues,
@@ -189,8 +189,10 @@ export const actions = {
     const formData = await request.formData();
     // Written into the form by the Turnstile widget
     // (`$lib/components/Turnstile.svelte`). Not part of the entry, so it
-    // travels as a header rather than in the body the schema describes.
-    const turnstileToken = String(formData.get(TURNSTILE_TOKEN_FIELD) ?? '');
+    // travels as a header rather than in the body the schema describes --
+    // which is why it is read through a helper that refuses what a header
+    // cannot carry.
+    const turnstileToken = readTurnstileToken(formData);
     const freeText = String(formData.get('freeText') ?? '');
     // Echoed back with every failure so a rejected submission re-renders
     // what the participant typed. The two password fields are deliberately

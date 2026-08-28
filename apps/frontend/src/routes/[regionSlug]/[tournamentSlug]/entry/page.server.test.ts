@@ -480,6 +480,31 @@ describe('entry +page.server default action', () => {
     expect(turnstileTokens).toEqual(['']);
   });
 
+  it('drops a token that could not travel in a header', async () => {
+    // A direct POST to this action, rather than anything the widget wrote:
+    // forwarded as it stands, `new Request()` throws on the newline and the
+    // participant gets a 500 error page instead of the challenge's 400.
+    const turnstileTokens: Array<string | null> = [];
+
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          turnstileTokens,
+          entryResponse: {
+            status: 400,
+            body: {error: 'turnstile verification failed'},
+          },
+        }),
+        fields: validFormData({
+          'cf-turnstile-response': 'token\r\nX-Injected: 1',
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({status: 400});
+    expect(turnstileTokens).toEqual(['']);
+  });
+
   it('reports a refused Turnstile token as something to retry', async () => {
     const result = await actions.default(
       buildActionEvent({

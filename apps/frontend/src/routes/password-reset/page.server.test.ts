@@ -134,6 +134,21 @@ describe('password reset +page.server action, without a token', () => {
     expect(log.turnstileTokens).toEqual(['']);
   });
 
+  it('drops a token that could not travel in a header', async () => {
+    // A direct POST to this action, rather than anything the widget wrote:
+    // forwarded as it stands, `new Request()` throws on the newline and the
+    // caller gets a 500 error page instead of the challenge's 400.
+    const log: FetchLog = emptyLog();
+    const event = buildActionEvent(
+      REQUEST_URL,
+      fakeFetch(400, log),
+      emailForm('sanka@example.com', 'token\r\nX-Injected: 1'),
+    );
+
+    await expect(actions.default(event)).resolves.toMatchObject({status: 400});
+    expect(log.turnstileTokens).toEqual(['']);
+  });
+
   it('reports a refused Turnstile token as something to retry', async () => {
     const event = buildActionEvent(REQUEST_URL, fakeFetch(400), emailForm());
 
