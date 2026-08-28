@@ -14,7 +14,7 @@ import {
 import {clientIp, rateLimit} from '../middleware/rate-limit';
 import {requireTurnstile} from '../middleware/turnstile';
 
-// Matches the period `MAIL_TRIGGER_RATE_LIMITER` counts over
+// Matches the period both mail-trigger limiters count over
 // (`wrangler.toml`).
 const MAIL_TRIGGER_LIMIT_PERIOD_SECONDS = 60;
 
@@ -27,14 +27,14 @@ export const passwordResetRoute = new Hono<Env>()
     // token that was mailed to the account's own address, and it sends
     // nothing.
     rateLimit(
-      env => env.MAIL_TRIGGER_RATE_LIMITER,
+      env => env.MAIL_TRIGGER_IP_RATE_LIMITER,
       c => `ip:${clientIp(c)}`,
       MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
     ),
     requireTurnstile(),
     zValidator('json', PasswordResetRequestInputSchema),
     rateLimit<{out: {json: PasswordResetRequestInput}}>(
-      env => env.MAIL_TRIGGER_RATE_LIMITER,
+      env => env.MAIL_TRIGGER_EMAIL_RATE_LIMITER,
       c => `email:${c.req.valid('json').email}`,
       MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
     ),

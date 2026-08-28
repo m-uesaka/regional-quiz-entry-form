@@ -65,9 +65,15 @@ namespace_id = "3003"
 simple = {limit = 1000, period = 60}
 
 [[unsafe.bindings]]
-name = "MAIL_TRIGGER_RATE_LIMITER"
+name = "MAIL_TRIGGER_IP_RATE_LIMITER"
 type = "ratelimit"
 namespace_id = "3002"
+simple = {limit = 1000, period = 60}
+
+[[unsafe.bindings]]
+name = "MAIL_TRIGGER_EMAIL_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "3004"
 simple = {limit = 1000, period = 60}
 
 # Deployed by `.github/workflows/deploy-staging.yml` on a push to any branch
@@ -122,14 +128,31 @@ type = "ratelimit"
 namespace_id = "2003"
 simple = {limit = 60, period = 60}
 
-# Much tighter: every call that gets through here sends mail to an address
-# the caller chose. Three a minute covers a participant who resubmits the
-# entry form after a validation error; it does not cover a mail bomb.
+# The per-address limit is the tight one, and it is the one that matters:
+# every call that gets through here sends mail to an address the caller
+# chose, so what has to be capped is how much of that one inbox can be
+# spent. Three a minute covers a participant who resubmits the entry form
+# after a validation error; it does not cover a mail bomb.
 [[env.staging.unsafe.bindings]]
-name = "MAIL_TRIGGER_RATE_LIMITER"
+name = "MAIL_TRIGGER_EMAIL_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "2004"
+simple = {limit = 3, period = 60}
+
+# The per-IP limit is looser, because an IP is not one person. Entries open
+# at an announced time and are filled in from shared networks — a club or a
+# school behind one NAT, several participants behind one carrier's CGNAT —
+# and this limit is checked before Turnstile and before validation, so every
+# attempt counts against it whether or not it was ever going to send mail.
+# At 3/60s the fourth submission from such a network is refused for a reason
+# the participant cannot act on. Twenty leaves room for that while still
+# capping a single source; the challenge in front of the endpoint, not this
+# number, is what a script actually has to get past.
+[[env.staging.unsafe.bindings]]
+name = "MAIL_TRIGGER_IP_RATE_LIMITER"
 type = "ratelimit"
 namespace_id = "2002"
-simple = {limit = 3, period = 60}
+simple = {limit = 20, period = 60}
 
 # Deployed by `.github/workflows/deploy-production.yml` on a push to `main`.
 # `name` is set back to the unsuffixed one: without it, `--env production`
@@ -160,7 +183,13 @@ namespace_id = "1003"
 simple = {limit = 60, period = 60}
 
 [[env.production.unsafe.bindings]]
-name = "MAIL_TRIGGER_RATE_LIMITER"
+name = "MAIL_TRIGGER_EMAIL_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1004"
+simple = {limit = 3, period = 60}
+
+[[env.production.unsafe.bindings]]
+name = "MAIL_TRIGGER_IP_RATE_LIMITER"
 type = "ratelimit"
 namespace_id = "1002"
-simple = {limit = 3, period = 60}
+simple = {limit = 20, period = 60}

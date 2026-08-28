@@ -111,7 +111,7 @@ describe('POST /tournaments/:tournamentId/entries (request validation)', () => {
 
   it('returns 429 with Retry-After when the rate limiter refuses', async () => {
     const res = await postEntry(TOURNAMENT_PATH, validBody, {
-      env: {...env, MAIL_TRIGGER_RATE_LIMITER: refusingRateLimiter()},
+      env: {...env, MAIL_TRIGGER_IP_RATE_LIMITER: refusingRateLimiter()},
     });
 
     const body: unknown = await res.json();

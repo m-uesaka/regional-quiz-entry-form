@@ -36,11 +36,18 @@ export interface Bindings {
   //     because its number has to be far looser: a limit keyed on an email
   //     address is also a way to lock its owner out, and the tighter it is
   //     the cheaper that is to do (`wrangler.toml` has the numbers).
-  //   - `MAIL_TRIGGER_RATE_LIMITER` caps the two endpoints that send mail to
-  //     an address the caller chose, and so is much tighter.
+  //   - `MAIL_TRIGGER_EMAIL_RATE_LIMITER` caps how much of one inbox the two
+  //     endpoints that send mail to an address the caller chose can spend.
+  //     This is the tight one: it is the mail bomb it stops.
+  //   - `MAIL_TRIGGER_IP_RATE_LIMITER` caps the same two endpoints per
+  //     source address. Split off for the same reason as the login pair, and
+  //     looser than it looks like it should be: an IP is not one person, and
+  //     this limit is spent before the challenge and the schema have had a
+  //     say (`wrangler.toml` has the numbers).
   LOGIN_IP_RATE_LIMITER: RateLimit;
   LOGIN_EMAIL_RATE_LIMITER: RateLimit;
-  MAIL_TRIGGER_RATE_LIMITER: RateLimit;
+  MAIL_TRIGGER_IP_RATE_LIMITER: RateLimit;
+  MAIL_TRIGGER_EMAIL_RATE_LIMITER: RateLimit;
 }
 
 export interface Variables {

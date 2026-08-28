@@ -75,8 +75,12 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 | `POST /api/auth/staff/login` | `staff-login:email:` | `LOGIN_EMAIL_RATE_LIMITER` | 60 回 / 60 秒 | なし |
 | `POST /api/auth/participant/login` | `ip:` | `LOGIN_IP_RATE_LIMITER` | 10 回 / 60 秒 | なし |
 | `POST /api/auth/participant/login` | `participant-login:email:` | `LOGIN_EMAIL_RATE_LIMITER` | 60 回 / 60 秒 | なし |
-| `POST /api/tournaments/:tournamentId/entries` | `ip:` / `email:` | `MAIL_TRIGGER_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
-| `POST /api/auth/participant/password-reset/request` | `ip:` / `email:` | `MAIL_TRIGGER_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
+| `POST /api/tournaments/:tournamentId/entries` | `ip:` | `MAIL_TRIGGER_IP_RATE_LIMITER` | 20 回 / 60 秒 | **必須** |
+| `POST /api/tournaments/:tournamentId/entries` | `email:` | `MAIL_TRIGGER_EMAIL_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
+| `POST /api/auth/participant/password-reset/request` | `ip:` | `MAIL_TRIGGER_IP_RATE_LIMITER` | 20 回 / 60 秒 | **必須** |
+| `POST /api/auth/participant/password-reset/request` | `email:` | `MAIL_TRIGGER_EMAIL_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
+
+メール送信 2 本では、**厳しい数字は宛先(メール鍵)の側だけ**に置いています。抑えたいのは「1 つの受信箱をどれだけ消費できるか」だからです。IP 鍵の方を緩くしてあるのは、IP が 1 人とは限らないためです — エントリー開始時刻に部活動や学校の NAT・キャリアの CGNAT の裏から複数人が申し込むのは普通のことで、しかも IP 制限は Turnstile とバリデーションより**前**に評価されるので、メールを送るはずのなかった試行まで枠を消費します。3 回 / 60 秒だと 4 人目以降が「本人にはどうしようもない 429」を踏みます。スクリプトが実際に越えなければならないのはこの数字ではなく前段の Turnstile です。
 
 ログインの IP 鍵は**エンドポイント名を含みません**。これが抑えているのは「その発信元が Worker に踏ませる PBKDF2 の量」であり、2 本のどちらを叩こうと同じ CPU だからです。一方**メール鍵にはエンドポイント名を入れます**(`participant-login:` / `staff-login:`)。同じアドレスを参加者とスタッフの両方が持ち得るので、共有すると未認証で叩ける参加者ログインからスタッフの枠を削れてしまいます。
 
@@ -604,7 +608,8 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 | `TURNSTILE_SECRET_KEY` | ✅ | Turnstile の siteverify に渡すシークレット。`[env.*.vars]` には**置かない**(同名の var はシークレットを上書きします) |
 | `LOGIN_IP_RATE_LIMITER` | | Rate Limiting binding。ログイン 2 本に IP 単位で 10 回 / 60 秒 |
 | `LOGIN_EMAIL_RATE_LIMITER` | | Rate Limiting binding。ログイン 2 本にアカウント単位で 60 回 / 60 秒 |
-| `MAIL_TRIGGER_RATE_LIMITER` | | Rate Limiting binding。メールを送る 2 本に 3 回 / 60 秒 |
+| `MAIL_TRIGGER_IP_RATE_LIMITER` | | Rate Limiting binding。メールを送る 2 本に IP 単位で 20 回 / 60 秒 |
+| `MAIL_TRIGGER_EMAIL_RATE_LIMITER` | | Rate Limiting binding。メールを送る 2 本に宛先単位で 3 回 / 60 秒 |
 
 登録手順は [`supabase-deployment.md`](./supabase-deployment.md) / [`google-sheets-integration.md`](./google-sheets-integration.md) を参照してください。
 

@@ -146,7 +146,7 @@ describe('POST /request', () => {
     const res = await post(
       '/request',
       {email: 'known@example.com'},
-      {env: {...ENV, MAIL_TRIGGER_RATE_LIMITER: refusingRateLimiter()}},
+      {env: {...ENV, MAIL_TRIGGER_IP_RATE_LIMITER: refusingRateLimiter()}},
     );
 
     expect(res.status).toBe(429);
