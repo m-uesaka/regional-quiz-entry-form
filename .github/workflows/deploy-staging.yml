@@ -1,0 +1,27 @@
+name: deploy-staging
+
+# Every branch except `main` deploys to staging, so a change can be exercised
+# against real Supabase and Cloudflare before it is merged. `main` is covered
+# by `deploy-production.yml` instead — listing it here as well would deploy the
+# same commit twice, to two environments, from one push.
+#
+# There is one staging environment and any number of branches, so the last
+# push wins; `deploy.yml`'s concurrency group queues them rather than letting
+# two overlap. Deploy a specific branch on demand with `workflow_dispatch`.
+on:
+  push:
+    branches-ignore: [main]
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: staging
+      wrangler-env: staging
+      pages-project-name: regional-quiz-frontend-staging
+    # The called workflow reads `SUPABASE_*` / `CLOUDFLARE_*` from the
+    # `staging` Environment, which resolves against the job it declares
+    # `environment:` on. Nothing is passed by name here so that adding a secret
+    # to `deploy.yml` doesn't need an edit in both callers.
+    secrets: inherit

@@ -1,0 +1,152 @@
+name: deploy
+
+# The reusable half of the deploy pipeline (#42). `deploy-staging.yml` and
+# `deploy-production.yml` are thin callers around it: the two deploys differ
+# only in which GitHub Environment's secrets they resolve and which Cloudflare
+# targets they write to, and every step below is shared. The runbook around
+# this workflow — creating the Supabase projects, issuing the tokens, and what
+# to check afterwards — is `docs/supabase-deployment.md`.
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: >-
+          The GitHub Environment whose secrets this deploy resolves. Its
+          protection rules (e.g. production's required reviewers) gate the job.
+        required: true
+        type: string
+      wrangler-env:
+        description: >-
+          The `[env.*]` block in `apps/backend/wrangler.toml` to deploy.
+        required: true
+        type: string
+      pages-project-name:
+        description: The Cloudflare Pages project `apps/frontend` is uploaded to.
+        required: true
+        type: string
+      preview-migrations:
+        description: >-
+          Log the migrations that are about to be applied before applying them,
+          so a surprise is visible in the run log rather than only in the
+          database afterwards.
+        required: false
+        type: boolean
+        default: false
+
+# Unlike a CI run, a deploy is not safe to cancel: the migration step below is
+# the point of no return, and a run killed after it would leave the schema
+# ahead of both the Worker and the Pages project. So queue deploys to the same
+# environment instead of superseding them. Two different environments still
+# run side by side.
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install
+
+      # `ci.yml` runs these too, but nothing gates this workflow on that one,
+      # so they run again here rather than on trust: the migration step is
+      # irreversible and must not be reached by a commit that doesn't build.
+      # `lint` is deliberately not repeated — a style violation is a reason to
+      # fail a PR, not to hold back a deploy that is otherwise sound.
+      - run: bun run typecheck
+      - run: bun run test
+
+      # Built here rather than next to the Pages upload it feeds, because
+      # nothing else ever runs it: `ci.yml` covers typecheck/lint/test/e2e but
+      # not `build`, so this job is the first place `vite build` (and the
+      # `wrangler types --check` the frontend's `build` script gates on) is
+      # exercised at all. Left in its natural position it would run *after* the
+      # migrations and the Worker had already gone out, and a build failure
+      # would strand exactly the half-deployed state the ordering below is
+      # meant to avoid. `adapter-cloudflare` writes `.svelte-kit/cloudflare`,
+      # the same path `wrangler.jsonc`'s `pages_build_output_dir` names.
+      - name: Build the frontend
+        run: bun run build
+        working-directory: apps/frontend
+
+      # The CLI comes from the root `supabase` devDependency (via `bunx` after
+      # `bun install`) rather than from `supabase/setup-cli`, so the binary
+      # that touches a real project is the one pinned in `bun.lock` — the same
+      # one `bun run db:migrate:remote` gives a developer locally. `ci.yml`'s
+      # e2e job installs the CLI through the action instead and pins it to the
+      # same version by hand; there the stack is a throwaway container, here it
+      # is production, so this side takes the lockfile as the single source.
+      #
+      # `link` writes the project ref (and the DB password `db push` connects
+      # with) under `supabase/.temp`, which lives only for this job. Nothing
+      # carries over between runs, so each deploy links afresh and cannot
+      # inherit a ref pointing at the other environment.
+      - name: Link the Supabase project
+        run: bunx supabase link --project-ref "$SUPABASE_PROJECT_ID"
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+
+      - name: Preview the pending migrations
+        if: inputs.preview-migrations
+        run: bunx supabase db push --linked --dry-run
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
+      # Runs before either Cloudflare deploy, so the schema a new Worker
+      # expects is already in place when it starts serving. The reverse order
+      # would give every request between the two steps a backend querying
+      # columns that do not exist yet.
+      - name: Apply the Supabase migrations
+        run: bunx supabase db push --linked
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
+      # `bunx` is run from each package's own directory on purpose: the two
+      # apps are on different major versions of Wrangler (`apps/backend` on 3,
+      # `apps/frontend` on 4) and Bun resolves the binary per directory, so
+      # each app deploys with the Wrangler its own `package.json` pins.
+      #
+      # Secrets (`SUPABASE_SERVICE_ROLE_KEY`, `SESSION_SECRET`, …) are not set
+      # here. They are registered once per environment with `wrangler secret
+      # put` and are left untouched by a deploy; only the non-secret `vars` in
+      # `wrangler.toml` travel with the code. See `docs/supabase-deployment.md`
+      # §6.2.
+      - name: Deploy the backend Worker
+        run: bunx wrangler deploy --env "$WRANGLER_ENV"
+        working-directory: apps/backend
+        env:
+          WRANGLER_ENV: ${{ inputs.wrangler-env }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # The upload of what `Build the frontend` produced above.
+      #
+      # `--branch` decides whether Pages files this under the project's
+      # production deployment or as a preview: it defaults to the branch
+      # actually checked out, and Pages calls a deploy "production" when that
+      # name matches the project's production branch. Staging runs from feature
+      # branches but still has to move the staging site, so the value is pinned
+      # rather than inferred, and both Pages projects are created with `main`
+      # as their production branch (`docs/supabase-deployment.md` §6.3).
+      #
+      # Like the Worker, this uploads no secrets: `BACKEND_URL` and
+      # `SESSION_SECRET` are Pages project variables (`wrangler pages secret
+      # put`), read at runtime through `$env/dynamic/private` in
+      # `src/hooks.server.ts`.
+      - name: Deploy the frontend to Cloudflare Pages
+        run: >-
+          bunx wrangler pages deploy .svelte-kit/cloudflare
+          --project-name "$PAGES_PROJECT_NAME"
+          --branch main
+        working-directory: apps/frontend
+        env:
+          PAGES_PROJECT_NAME: ${{ inputs.pages-project-name }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
