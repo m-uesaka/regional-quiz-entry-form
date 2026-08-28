@@ -163,7 +163,9 @@ routes = [
 ]
 ```
 
-> 現状は `regionalquiz.example` がプレースホルダのためコメントアウトしています。Cloudflare アカウントが持っていない `zone_name` を書くと `wrangler deploy` 自体が失敗するため、**ドメインを取得して Pages にカスタムドメインを割り当てるまでは有効化しないでください**。有効化するまでは、デプロイされたフロントエンドから API は疎通しません。
+`routes` は `[env.*]` の**直下**に書いてください。`[env.*.vars]` の下に置くと `routes` という名前の var として解釈され、警告もエラーも出ないまま route 無しでデプロイされます。
+
+> 現状は `regionalquiz.example` がプレースホルダのためコメントアウトしています。Cloudflare アカウントが持っていない `zone_name` を書くと `wrangler deploy` 自体が失敗するため、**ドメインを取得して Pages にカスタムドメインを割り当てるまでは有効化しないでください**。有効化するまでは、デプロイされたフロントエンドからブラウザ経由の API 呼び出し(CSV ダウンロードのリンク、クライアント側の `createApiClient()`)は 404 になります。この残作業は **#101** で追跡しています。
 
 ### 6.5 GitHub Actions 側
 
@@ -227,7 +229,7 @@ routes = [
 - [ ] 各 Worker 環境に `wrangler secret put` でシークレットを登録した(6.2)
 - [ ] Pages プロジェクトを production branch `main` で作成した(6.3)
 - [ ] Pages プロジェクトに `BACKEND_URL` / `SESSION_SECRET` を登録した(6.3)
-- [ ] `wrangler.toml` の `routes` を実ドメインで有効化し、`/api/*` が Worker に届くことを確認した(6.4)
+- [ ] `wrangler.toml` の `routes` を実ドメインで有効化し、`/api/*` が Worker に届くことを確認した(6.4 / #101)
 - [ ] `bunx supabase db push --linked --dry-run` で初回マイグレーション適用の差分を確認した
 - [ ] staging の `deploy-staging` ワークフローが全ステップ成功することを確認した
 - [ ] production への初回デプロイ後、`/api/healthz` とトップページの疎通を確認した

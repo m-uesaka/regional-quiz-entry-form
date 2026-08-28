@@ -30,7 +30,7 @@ FRONTEND_URL = "https://entry.regionalquiz.example"
 # it with the real hostname once the domain exists, and leave it where it is:
 # `routes` belongs directly under `[env.staging]`, not below the
 # `[env.staging.vars]` header, where TOML would read it as a var named
-# `routes`. See `docs/supabase-deployment.md` §6.4.
+# `routes`. Tracked as #101; see `docs/supabase-deployment.md` §6.4.
 [env.staging]
 name = "regional-quiz-backend-staging"
 # routes = [
