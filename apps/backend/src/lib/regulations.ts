@@ -15,6 +15,16 @@ const UNKNOWN_REGULATION_SQLSTATE = 'P0003';
 const REGULATION_IN_USE_SQLSTATE = 'P0004';
 
 /**
+ * Postgres' own `foreign_key_violation`. `sync_regulations()` shouldn't
+ * produce one — its in-use check and its delete see the same state, since
+ * `entries`' foreign key makes a concurrent insert wait on the tournament
+ * row the function locks — but a regulation reference this code doesn't
+ * know about would surface here, and "a regulation is still in use" is
+ * still the only thing the caller can act on.
+ */
+const FOREIGN_KEY_VIOLATION_SQLSTATE = '23503';
+
+/**
  * Thrown when a request names a regulation `id` that doesn't belong to the
  * tournament being saved — a stale staff screen, or a copied-in id from
  * another tournament. Staff-facing: the message is rendered verbatim.
@@ -34,8 +44,8 @@ export class UnknownRegulationError extends Error {
 export class RegulationInUseError extends Error {
   constructor(readonly labels: string) {
     super(
-      'エントリーで使用中のため削除できないレギュレーションがあります: ' +
-        labels,
+      'エントリーで使用中のため削除できないレギュレーションがあります' +
+        (labels === '' ? '' : `: ${labels}`),
     );
     this.name = 'RegulationInUseError';
   }
@@ -86,6 +96,11 @@ export async function syncRegulations(
       throw new UnknownRegulationError(error.details ?? '');
     case REGULATION_IN_USE_SQLSTATE:
       throw new RegulationInUseError(error.details ?? '');
+    // No labels here: `details` is Postgres' own wording about the
+    // constraint, which describes the database rather than anything the
+    // staff member can act on.
+    case FOREIGN_KEY_VIOLATION_SQLSTATE:
+      throw new RegulationInUseError('');
     default:
       throw new Error(error.message);
   }

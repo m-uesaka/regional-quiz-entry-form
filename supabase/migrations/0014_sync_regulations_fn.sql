@@ -12,7 +12,8 @@
 --
 -- Like 0002, the tournament row is locked for the duration so two
 -- concurrent saves for the same tournament can't interleave and merge into
--- a set neither of them asked for.
+-- a set neither of them asked for. It covers concurrent entry creation
+-- too, though indirectly -- see the delete at the end.
 create or replace function sync_regulations(
   p_tournament_id uuid,
   p_regulations jsonb
@@ -94,6 +95,12 @@ begin
       using errcode = 'P0004', detail = array_to_string(v_in_use, '、');
   end if;
 
+  -- An entry created concurrently can't slip past the check above: the
+  -- foreign key from `entries.tournament_id` makes its insert take a
+  -- `for key share` lock on the same tournament row this function locked
+  -- `for update`, so entry creation waits for the sync to commit (and a
+  -- sync started mid-insert waits for the entry). The losing side sees the
+  -- other's committed state, which is why the check and this delete agree.
   delete from regulations r
   where r.tournament_id = p_tournament_id and not (r.id = any (v_keep));
 end;
@@ -101,6 +108,18 @@ $$;
 
 revoke all on function sync_regulations(uuid, jsonb) from public;
 grant execute on function sync_regulations(uuid, jsonb) to service_role;
+
+-- Regulations were maintained by hand through SQL until this migration, so
+-- a half-open (or backwards) window may already be stored, and the
+-- constraint below is validated against every existing row -- one such row
+-- would abort this whole file, taking `sync_regulations()` and the index
+-- with it. Normalising them to two nulls doesn't change how they behave:
+-- `isRegulationSelectionAllowed()` already ignores a window that isn't
+-- complete, and one that ends before it starts is never active.
+update regulations
+set priority_starts_at = null, priority_ends_at = null
+where (priority_starts_at is null) <> (priority_ends_at is null)
+  or (priority_starts_at is not null and priority_starts_at >= priority_ends_at);
 
 -- A priority window is either absent or complete. Held here as well as in
 -- the Zod schema because setting regulations straight through SQL stays a
