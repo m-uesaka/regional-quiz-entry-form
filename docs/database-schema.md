@@ -24,6 +24,7 @@ flowchart LR
   participants["participants<br>(参加者アカウント)"]
   password_reset_tokens["password_reset_tokens<br>(パスワード再設定トークン)"]
   staff_accounts["staff_accounts<br>(スタッフアカウント)"]
+  staff_password_reset_tokens["staff_password_reset_tokens<br>(スタッフのパスワード設定/再設定トークン)"]
 
   regions --> tournaments
   regions --> participants
@@ -33,6 +34,7 @@ flowchart LR
   tournaments --> entries
   entries --> email_verification_tokens
   participants --> password_reset_tokens
+  staff_accounts --> staff_password_reset_tokens
   end
   style bg fill:#ffffff,stroke:#ffffff
 ```
@@ -230,6 +232,21 @@ flowchart TB
 - 消費・パスワード更新・残りトークンの焼き捨ては DB 関数 `reset_participant_password()` が1トランザクションで行います。参加者行を `for update` でロックしてからトークン行を読み直すため、同じ参加者宛ての同時リクエストは直列化され、2 回消費されることはありません。
 - 再設定に成功した時点で、同じ参加者に残っている未使用トークンもまとめて `used_at` を立てて焼き捨てます。古い再設定リンクがもう一度パスワードを変更できてしまわないようにするためです。この焼き捨てはパスワード更新と同じトランザクションなので、失敗すればパスワード更新ごとロールバックされ、「古いリンクが生き残ったまま再設定だけ成功する」状態にはなりません。
 
+### staff_password_reset_tokens — スタッフのパスワード設定/再設定トークン
+
+| カラム | 型 | 制約 | 説明 |
+| --- | --- | --- | --- |
+| `id` | uuid | PK | |
+| `staff_account_id` | uuid | not null, FK → `staff_accounts.id`(on delete cascade) | |
+| `token_hash` | text | not null, unique | |
+| `expires_at` | timestamptz | not null | 有効期限(発行から24時間) |
+| `used_at` | timestamptz | nullable | |
+
+- `POST /api/staff/accounts`(招待)と `POST /api/staff/accounts/:id/password-reset`(再発行)が発行し、`POST /api/auth/staff/password-reset/confirm` が消費します(`apps/backend/src/lib/staff-password-reset.ts`)。
+- **参加者用の `password_reset_tokens` とは別テーブルです。** あちらは `participant_id` が not null の外部キーなので、スタッフの行を相乗りさせると「どちらか一方が必ず null の所有者列が 2 本」という、アプリのコードでしか守れない不変条件が生まれます。
+- 有効期限は参加者側(1 時間)より長い 24 時間です。招待は本人が待って操作しているわけではないため、1 時間では読まれる前に切れます。
+- 発行時にそのアカウントの期限切れ行を削除し、設定に成功した時点で残りの未使用行も焼き捨てます(`reset_staff_password()`)。
+
 ### staff_accounts — スタッフアカウント
 
 | カラム | 型 | 制約 | 説明 |
@@ -244,7 +261,8 @@ flowchart TB
 
 - `general`(統括スタッフ)は `region_id` / `tournament_type` が `null` で、全地域・全大会にアクセスできます。
 - `regional`(地域スタッフ)は `(region_id, tournament_type)` の組が担当範囲で、その大会のエントリーしか閲覧できません。この範囲チェックは `apps/backend/src/middleware/staff-auth.ts` が担当します。
-- スタッフアカウントを作成する API はありません。Supabase 上で直接 INSERT する運用です(`password_hash` の生成方法は [`supabase-deployment.md`](./supabase-deployment.md) を参照)。
+- この 2 パターン以外の行は check 制約 `staff_accounts_scope_matches_role`(`0015`)が拒否します。`regional` なのに `region_id` か `tournament_type` の片方しか無い行は「担当範囲が狭いアカウント」ではなく**壊れた行**で、上記の範囲チェックがすべての大会で落ちるため、そのアカウントはどこにアクセスしても静かに 403 を返し続けます。Zod 側(`StaffAccountCreateInputSchema` の判別共用体)と両方で縛っているのは、Supabase を直接触って行を作る経路が残るためです。
+- 作成は `POST /api/staff/accounts`(統括スタッフ限定)です。作成時の `password_hash` にはハッシュ形式に合わない固定値が入り、本人が招待メールのリンクでパスワードを設定するまでログインできません。統括スタッフが他人のパスワードを知らずに済ませるための作りです。
 
 ## 4. アクセス制御(RLS と権限)
 
@@ -255,6 +273,8 @@ alter table <各テーブル> enable row level security;
 revoke all on all tables in schema public from anon, authenticated;
 grant select, insert, update, delete on all tables in schema public to service_role;
 ```
+
+この `all tables in schema public` は**実行時点の**テーブルにしか効きません。あとから足したテーブル(`0015` の `staff_password_reset_tokens`)は、同じ `enable row level security` / `revoke` / `grant` をそのマイグレーション内で自分で書く必要があります。Supabase の default privileges は新しいテーブルを `anon` / `authenticated` にも渡すので、`revoke` を書き忘れると `0001` で剥がした権限が復活します。
 
 設計方針:
 
@@ -355,6 +375,12 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 - 4 で `password_changed_at` を同じ UPDATE 文に含めるのも要点です。参加者セッションは 7 日有効なステートレス JWT なので、この列が動かない限り、再設定前に発行された Cookie(盗まれたものを含む)はそのまま使えてしまいます。
 - パスワードのハッシュ化(PBKDF2)は意図的に高コストなため、TypeScript 側はこの関数を呼ぶ前にトークンの存在を軽く 1 回 SELECT して弾きます。あくまで早期リターン用で、正否の判定はロック下で再チェックするこの関数が行います。
 
+### reset_staff_password(p_token_hash, p_password_hash)
+
+スタッフ用のトークンハッシュと、アプリ側で計算済みの PBKDF2 パスワードハッシュを受け取り、対応するスタッフアカウントのパスワードを設定します。`reset_participant_password()` のスタッフ版で、処理順もロック順も同じです(トークン行 → スタッフ行を `for update` → トークン行を読み直し → 更新 → 残りトークンの焼き捨て)。未知 / 使用済み / 期限切れなら SQLSTATE `P0003`。
+
+- `participants.password_changed_at` に相当する打刻はありません。スタッフセッションは署名だけで受け付ける 12 時間の JWT なので、**再設定前に発行された Cookie は最大 12 時間有効なまま**です。ここを塞ぐには列とクレームの追加が要るため Task 11-3 に分けてあり、そのときこの関数は `0011` が `0010` を再定義したのと同じ形で書き直すことになります。
+
 ### tournament_entry_summary()
 
 統括スタッフ向けダッシュボード(`GET /api/staff/dashboard`)のために、全大会 1 行ずつの集計を返します。
@@ -387,3 +413,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0012_password_reset_tokens_participant_id_idx.sql` | `password_reset_tokens.participant_id` のインデックス |
 | `0013_tournament_entry_summary_fn.sql` | `tournament_entry_summary()` |
 | `0014_sync_regulations_fn.sql` | `sync_regulations()`・`regulations` の優先期間 check 制約・`(tournament_id, display_order)` インデックス |
+| `0015_staff_accounts_scope_and_password_reset.sql` | `staff_accounts` の役割/担当範囲の check 制約、`staff_password_reset_tokens`、`reset_staff_password()` |

@@ -3,8 +3,13 @@ import {describe, expect, it} from 'vitest';
 import Page from './+page.svelte';
 
 /** Renders the login screen with the given action result, if any. */
-function renderPage(form: {email: string; error: string} | null = null) {
-  render(Page, {props: {params: {}, data: {loggedIn: false}, form}});
+function renderPage(
+  form: {email: string; error: string} | null = null,
+  passwordSet = false,
+) {
+  render(Page, {
+    props: {params: {}, data: {loggedIn: false, passwordSet}, form},
+  });
 }
 
 describe('staff login +page.svelte', () => {
@@ -18,7 +23,11 @@ describe('staff login +page.svelte', () => {
 
   it('posts to its own URL so the redirectTo parameter survives', () => {
     const {container} = render(Page, {
-      props: {params: {}, data: {loggedIn: false}, form: null},
+      props: {
+        params: {},
+        data: {loggedIn: false, passwordSet: false},
+        form: null,
+      },
     });
 
     const form = container.querySelector('form');
@@ -34,6 +43,14 @@ describe('staff login +page.svelte', () => {
 
     expect(screen.getByRole('alert')).toHaveTextContent(
       'メールアドレスまたはパスワードが正しくありません',
+    );
+  });
+
+  it('says so when the visitor has just set their password from a link', () => {
+    renderPage(null, true);
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'パスワードを設定しました',
     );
   });
 

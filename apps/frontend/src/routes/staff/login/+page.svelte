@@ -2,7 +2,7 @@
   import {untrack} from 'svelte';
   import type {PageProps} from './$types';
 
-  let {form}: PageProps = $props();
+  let {data, form}: PageProps = $props();
 
   // Seeded from the action result once, then owned by the field itself. See
   // "Form controls are bound, not rendered from an expression" in
@@ -11,6 +11,12 @@
 </script>
 
 <h1>スタッフログイン</h1>
+
+{#if data.passwordSet}
+  <p role="status">
+    パスワードを設定しました。設定したパスワードでログインしてください。
+  </p>
+{/if}
 
 {#if form?.error}
   <p role="alert">{form.error}</p>

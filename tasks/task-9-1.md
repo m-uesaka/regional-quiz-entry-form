@@ -4,7 +4,7 @@
 
 #### 実装・更新内容
 
-* `regulations` への書き込み API が存在しない。読み出し(`GET /api/tournaments/:tournamentId/regulations`)だけが実装済みで、レギュレーション本体も優先エントリー期間も Supabase を直接操作しないと設定できない状態になっている(`docs/api-endpoints.md` 14章「未実装のエンドポイント」)。要件の中核である「複数条件のレギュレーション」「優先期間中は対象者のみエントリー可」が運用できないため、これを塞ぐ。
+* `regulations` への書き込み API が存在しない。読み出し(`GET /api/tournaments/:tournamentId/regulations`)だけが実装済みで、レギュレーション本体も優先エントリー期間も Supabase を直接操作しないと設定できない状態になっている(起票時点の `docs/api-endpoints.md`「未実装のエンドポイント」に記載)。要件の中核である「複数条件のレギュレーション」「優先期間中は対象者のみエントリー可」が運用できないため、これを塞ぐ。
 * Task 2-2 は表題に「レギュレーション登録 API」を含むが、実装されたのは `form_field_defs` の同期のみだった。本タスクがその積み残しにあたる。
 * 統括スタッフ(`requireGeneralStaff()`)限定で、大会単位の一括置き換え(PUT)を提供する。フォーム定義(`PUT /api/form-definitions/:tournamentId`)と同じ「YAML/配列で丸ごと差し替える」モデルに揃え、個別の POST/PATCH/DELETE は作らない。
 * **既存エントリーが参照している行を消してはならない**。`entries.regulation_id` は複合外部キー `(regulation_id, tournament_id)` で `regulations` を参照しているため、単純な delete → insert(`sync_form_field_defs` と同じ手口)は FK 違反で失敗する。id を指定した行は update、id 無しは insert、YAML から消えた行は「参照が無ければ delete、あれば拒否」する差分同期を Postgres 関数側で行う。
