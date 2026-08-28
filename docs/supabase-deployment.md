@@ -114,6 +114,7 @@ bunx wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env staging
 bunx wrangler secret put MAIL_API_KEY --env staging
 bunx wrangler secret put GOOGLE_SHEETS_API_KEY --env staging
 bunx wrangler secret put SESSION_SECRET --env staging
+bunx wrangler secret put TURNSTILE_SECRET_KEY --env staging
 
 # production
 bunx wrangler secret put SUPABASE_URL --env production
@@ -121,9 +122,20 @@ bunx wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env production
 bunx wrangler secret put MAIL_API_KEY --env production
 bunx wrangler secret put GOOGLE_SHEETS_API_KEY --env production
 bunx wrangler secret put SESSION_SECRET --env production
+bunx wrangler secret put TURNSTILE_SECRET_KEY --env production
 ```
 
 `SESSION_SECRET` は staging/production で必ず異なる値を発行してください(`openssl rand -base64 32` などで生成)。シークレットは `wrangler deploy` では変更されないため、この登録は環境ごとに一度だけで済みます。
+
+`TURNSTILE_SECRET_KEY` は Cloudflare Dashboard の `Turnstile` で widget を作成すると発行される **Secret Key** です(#116)。ウィジェットは環境ごとに 1 つ作り、その **Site Key** を Pages 側の `PUBLIC_TURNSTILE_SITE_KEY`(6.3)に、Secret Key をここに登録します。widget のドメイン設定には、その環境でフォームを表示するホスト名を入れてください。
+
+> **`[env.*.vars]` に `TURNSTILE_SECRET_KEY` を書かないでください。** 同名の var があるとデプロイのたびにシークレットが平文の var で上書きされます。トップレベルの `[vars]` にはローカル開発用のテスト鍵(Cloudflare が公開している「常に成功する」固定値)が入っていますが、`vars` は環境に継承されないため `--env` 付きのデプロイには影響しません。
+>
+> このため `wrangler deploy --env <name>` は毎回 `"vars.TURNSTILE_SECRET_KEY" exists at the top level, but not on "env.<name>.vars"` と警告します。**想定どおりの警告で、指示どおりに追記してはいけません。**
+
+### 6.2.1 レート制限の binding
+
+`wrangler.toml` の各環境に `LOGIN_IP_RATE_LIMITER` / `LOGIN_EMAIL_RATE_LIMITER` / `MAIL_TRIGGER_IP_RATE_LIMITER` / `MAIL_TRIGGER_EMAIL_RATE_LIMITER`(Cloudflare の Rate Limiting binding)を定義済みです(#116)。**登録作業は不要**で、`namespace_id` は Cloudflare 側の資源を指すものではなく「どのカウンタか」を表すだけの識別子です。ただし環境をまたいで同じ id を使うと staging の負荷が production の枠を食うため、`wrangler.toml` では環境ごとに別の値にしてあります。ここを編集するときは、`period` に **10 か 60 しか指定できない**点にも注意してください。
 
 ### 6.3 Cloudflare Pages(`apps/frontend`)側
 
@@ -136,12 +148,13 @@ bunx wrangler pages project create regional-quiz-frontend-staging --production-b
 bunx wrangler pages project create regional-quiz-frontend --production-branch main
 ```
 
-`src/hooks.server.ts` は `$env/dynamic/private` から 2 つの値を読むので、Pages プロジェクトの変数として登録します。
+`src/hooks.server.ts` は `$env/dynamic/private` から 2 つの値を、`Turnstile.svelte` は `$env/dynamic/public` から 1 つを読むので、Pages プロジェクトの変数として登録します。
 
 | 名前 | 種別 | 値 |
 | --- | --- | --- |
 | `BACKEND_URL` | 通常の変数 | その環境のバックエンド Worker のオリジン(例: `https://entry.regionalquiz.example`)。SSR の `handleFetch` が `/api/*` の転送先に使う |
 | `SESSION_SECRET` | シークレット | **同じ環境の Worker に登録したものと同一の値**。ズレるとログイン直後のセッションが読めず `/staff/*` がログイン画面に跳ね返される |
+| `PUBLIC_TURNSTILE_SITE_KEY` | 通常の変数 | 6.2 で作成した Turnstile widget の **Site Key**。エントリーフォームとパスワード再設定要求フォームのウィジェットが読む。未設定だとウィジェットが描画されず、トークンが無い送信をバックエンドが 400 で拒否するため、**この 2 つのフォームが誰にも使えなくなる** |
 
 ```bash
 bunx wrangler pages secret put SESSION_SECRET --project-name regional-quiz-frontend
@@ -227,8 +240,9 @@ routes = [
 - [ ] GitHub の `staging` / `production` Environments を作成し、Secrets を登録した
 - [ ] production Environment に Required reviewers を設定した
 - [ ] 各 Worker 環境に `wrangler secret put` でシークレットを登録した(6.2)
+- [ ] 環境ごとに Turnstile widget を作成し、Secret Key を Worker に登録した(6.2)
 - [ ] Pages プロジェクトを production branch `main` で作成した(6.3)
-- [ ] Pages プロジェクトに `BACKEND_URL` / `SESSION_SECRET` を登録した(6.3)
+- [ ] Pages プロジェクトに `BACKEND_URL` / `SESSION_SECRET` / `PUBLIC_TURNSTILE_SITE_KEY` を登録した(6.3)
 - [ ] `wrangler.toml` の `routes` を実ドメインで有効化し、`/api/*` が Worker に届くことを確認した(6.4 / #101)
 - [ ] `bunx supabase db push --linked --dry-run` で初回マイグレーション適用の差分を確認した
 - [ ] staging の `deploy-staging` ワークフローが全ステップ成功することを確認した

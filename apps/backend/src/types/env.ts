@@ -17,6 +17,37 @@ export interface Bindings {
   // (e.g. the entry verification link).
   FRONTEND_URL: string;
   SESSION_SECRET: string;
+  // Secret: the Turnstile secret key `lib/turnstile.ts` verifies the
+  // widget's tokens with. It is not among the `vars` of the deployed
+  // environments on purpose -- a `var` of the same name would overwrite the
+  // secret on the next deploy.
+  TURNSTILE_SECRET_KEY: string;
+  // Cloudflare's Rate Limiting bindings, declared in `wrangler.toml`. Each
+  // is shared by several endpoints, which is why every key built for them
+  // says what it is keyed on (see `middleware/rate-limit.ts`):
+  //
+  //   - `LOGIN_IP_RATE_LIMITER` caps credential guessing from one address
+  //     across the two login endpoints. Each attempt costs a PBKDF2
+  //     verification, so it is also what stops an unauthenticated caller
+  //     from spending the Worker's CPU.
+  //   - `LOGIN_EMAIL_RATE_LIMITER` caps guessing against one account, which
+  //     the IP limit cannot see when the guesses come from a botnet. It is
+  //     a separate binding rather than a second key on the one above
+  //     because its number has to be far looser: a limit keyed on an email
+  //     address is also a way to lock its owner out, and the tighter it is
+  //     the cheaper that is to do (`wrangler.toml` has the numbers).
+  //   - `MAIL_TRIGGER_EMAIL_RATE_LIMITER` caps how much of one inbox the two
+  //     endpoints that send mail to an address the caller chose can spend.
+  //     This is the tight one: it is the mail bomb it stops.
+  //   - `MAIL_TRIGGER_IP_RATE_LIMITER` caps the same two endpoints per
+  //     source address. Split off for the same reason as the login pair, and
+  //     looser than it looks like it should be: an IP is not one person, and
+  //     this limit is spent before the challenge and the schema have had a
+  //     say (`wrangler.toml` has the numbers).
+  LOGIN_IP_RATE_LIMITER: RateLimit;
+  LOGIN_EMAIL_RATE_LIMITER: RateLimit;
+  MAIL_TRIGGER_IP_RATE_LIMITER: RateLimit;
+  MAIL_TRIGGER_EMAIL_RATE_LIMITER: RateLimit;
 }
 
 export interface Variables {

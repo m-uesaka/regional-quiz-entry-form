@@ -3,8 +3,10 @@ import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
 import app from '../index';
 import {MAIL_BATCH_SIZE, MAX_BACKGROUND_RECIPIENTS} from '../lib/bulk-mail';
+import {PERMISSIVE_SECURITY_BINDINGS} from '../test-support/bindings';
 
 const ENV: Bindings = {
+  ...PERMISSIVE_SECURITY_BINDINGS,
   SUPABASE_URL: 'https://example.supabase.co',
   SUPABASE_SERVICE_ROLE_KEY: 'dummy-service-role-key',
   MAIL_API_KEY: 'dummy-mail-api-key',

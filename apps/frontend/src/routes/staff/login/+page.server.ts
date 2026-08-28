@@ -43,6 +43,15 @@ export const actions = {
     const api = createApiClient(fetch);
     const res = await api.api.auth.staff.login.$post({json: parsed.data});
     if (!res.ok) {
+      if (res.status === 429) {
+        // Counted per IP and per address (#116), so a shared connection can
+        // meet it without this visitor having tried anything themselves.
+        return fail(429, {
+          email,
+          error:
+            'ログインの試行が集中しています。しばらく待ってから再度お試しください',
+        });
+      }
       if (res.status === 401) {
         return fail(401, {email, error: INVALID_CREDENTIALS_MESSAGE});
       }

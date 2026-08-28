@@ -2,6 +2,7 @@ import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
 import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
+import {PERMISSIVE_SECURITY_BINDINGS} from '../test-support/bindings';
 import app from '../index';
 
 // Local Supabase stack (`supabase start`), same convention as
@@ -32,6 +33,7 @@ async function isDbReachable(): Promise<boolean> {
 }
 
 const BASE_ENV: Bindings = {
+  ...PERMISSIVE_SECURITY_BINDINGS,
   SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY,
   MAIL_API_KEY: 'dummy-mail-api-key',

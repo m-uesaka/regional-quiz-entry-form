@@ -63,6 +63,39 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 
 > **登録順の依存**: `index.ts` では `entryListRoute` を `tournamentsRoute` より先にマウントしています。`GET /tournaments/:tournamentId/entry-list` と `GET /tournaments/:regionSlug/:tournamentSlug` はどちらも2セグメントのパターンなので、順序を入れ替えると公開エントリーリストが大会取得ルートに吸われます。
 
+### レート制限と Turnstile
+
+未認証で叩ける 4 本には、Cloudflare の Rate Limiting binding によるレート制限が掛かっています(#116 / [Task 11-1](../tasks/task-11-1.md))。**IP(`CF-Connecting-IP`)とメールアドレスの 2 つの鍵**で別々に数えます。1 つの IP から多数のアカウントを試す攻撃は IP 鍵でしか、多数の IP から 1 アカウントを試す攻撃はメール鍵でしか止まらないためです。メール鍵はバリデーション通過後に数えるので、スキーマに合わない本文で他人のメール枠を減らすことはできません。また鍵に載せる前に**小文字化**します(`middleware/rate-limit.ts` の `emailKey()`)。`Victim@example.com` と `victim@example.com` は同じ受信箱なので、そのまま数えるとバケツが分かれ、大文字小文字を変えた分だけ上限を取り直せてしまうためです。
+
+**鍵ごとに別の limiter に載せています。** Rate Limiting binding は上限を binding 単位でしか持てないので、IP 鍵とメール鍵に別々の数字を与えるには binding を分けるしかありません。
+
+| エンドポイント | 鍵 | limiter | 上限(本番) | Turnstile |
+| --- | --- | --- | --- | --- |
+| `POST /api/auth/staff/login` | `ip:` | `LOGIN_IP_RATE_LIMITER` | 10 回 / 60 秒 | なし |
+| `POST /api/auth/staff/login` | `staff-login:email:` | `LOGIN_EMAIL_RATE_LIMITER` | 60 回 / 60 秒 | なし |
+| `POST /api/auth/participant/login` | `ip:` | `LOGIN_IP_RATE_LIMITER` | 10 回 / 60 秒 | なし |
+| `POST /api/auth/participant/login` | `participant-login:email:` | `LOGIN_EMAIL_RATE_LIMITER` | 60 回 / 60 秒 | なし |
+| `POST /api/tournaments/:tournamentId/entries` | `ip:` | `MAIL_TRIGGER_IP_RATE_LIMITER` | 20 回 / 60 秒 | **必須** |
+| `POST /api/tournaments/:tournamentId/entries` | `email:` | `MAIL_TRIGGER_EMAIL_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
+| `POST /api/auth/participant/password-reset/request` | `ip:` | `MAIL_TRIGGER_IP_RATE_LIMITER` | 20 回 / 60 秒 | **必須** |
+| `POST /api/auth/participant/password-reset/request` | `email:` | `MAIL_TRIGGER_EMAIL_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
+
+メール送信 2 本では、**厳しい数字は宛先(メール鍵)の側だけ**に置いています。抑えたいのは「1 つの受信箱をどれだけ消費できるか」だからです。IP 鍵の方を緩くしてあるのは、IP が 1 人とは限らないためです — エントリー開始時刻に部活動や学校の NAT・キャリアの CGNAT の裏から複数人が申し込むのは普通のことで、しかも IP 制限は Turnstile とバリデーションより**前**に評価されるので、メールを送るはずのなかった試行まで枠を消費します。3 回 / 60 秒だと 4 人目以降が「本人にはどうしようもない 429」を踏みます。スクリプトが実際に越えなければならないのはこの数字ではなく前段の Turnstile です。
+
+ログインの IP 鍵は**エンドポイント名を含みません**。これが抑えているのは「その発信元が Worker に踏ませる PBKDF2 の量」であり、2 本のどちらを叩こうと同じ CPU だからです。一方**メール鍵にはエンドポイント名を入れます**(`participant-login:` / `staff-login:`)。同じアドレスを参加者とスタッフの両方が持ち得るので、共有すると未認証で叩ける参加者ログインからスタッフの枠を削れてしまいます。
+
+超過時は **`429` と `Retry-After: 60`**、本文は `{"error": "too many requests"}` です。フロントエンドは「送信が集中しています。しばらく待ってから再度お試しください」と表示します。
+
+**アカウントロックアウト(N 回失敗でアカウントを止める)は採っていません。** メールアドレスさえ分かれば任意の参加者を締め出せる DoS になるため、単位時間あたりの試行回数だけを制限します。
+
+とはいえ**メールアドレスを鍵にした制限は、それ自体がその持ち主を締め出す手段になります**(枠を埋め続ければよい)。そのためログインのメール鍵は、正規の利用者がまず到達しない 60 回 / 60 秒に緩めてあります。10 回 / 60 秒なら 6 秒に 1 回の送信で恒久的に締め出せるところ、毎秒 1 回の送信を維持しないと同じことができない、というトレードオフです(1 アカウントに対する総当たりの上限としては緩くなります)。厳しい数字は、締め出される相手と枠を使う相手が一致する IP 鍵の側に置いています。
+
+メールを送る 2 本は、上記に加えて **Turnstile のトークン**を要求します。トークンはリクエストボディではなく **`cf-turnstile-response` ヘッダ**で受け取ります(送信のたびに使い捨てるものなので、`packages/shared` のスキーマ — マイページの編集フォームや DB への insert も組み立てる — には入れません)。フロントエンドはウィジェットがフォームに差し込む同名の hidden control を読み、ヘッダに載せ替えます。載せる前に `$lib/turnstile.ts` の `readTurnstileToken()` を通し、**HTTP ヘッダに載らない値(改行・制御文字・非 ASCII・極端に長い値)は空文字に落とします**。フォームアクションには直接 POST できるので、この control の値は呼び出し側の任意です。そのまま渡すと `new Request()` が `TypeError` を投げ、Turnstile が返すべき 400 ではなく 500 のエラーページになります。空文字はトークン無しと同じ扱い(fail closed の 400)です。
+
+検証は `lib/turnstile.ts` の `verifyTurnstile()` が Cloudflare の siteverify API に対して行い、**トークンが無い場合・無効な場合・siteverify に到達できない場合のいずれも 400 `{"error": "turnstile verification failed"}`** で落とします(fail closed)。Cloudflare 側の一時障害で素通しになると、そのままメール爆撃の口が開くためです。3 者を区別しないのは、どれも「もう一度ウィジェットを解いてやり直す」で直るからです。
+
+**トークンは使い捨てです。** siteverify に一度通したトークンを再送すると Cloudflare は `timeout-or-duplicate` を返すため、この 2 本のフォームは送信が拒否された(429・401・400 など何であれ)たびにウィジェットを描き直します。フロントエンドの 2 つのフォームは `use:enhance` + `fail()` でその場に再描画されるだけなので、放っておくと hidden control に使用済みトークンが残り、次の送信が「本当の失敗理由」ではなく Turnstile の 400 で落ちてしまいます。`$lib/components/Turnstile.svelte` が `reset()` を公開し、各フォームの `enhance` コールバックがこれを呼びます。
+
 ### エラー応答の形式
 
 エラーは基本的に `{"error": "メッセージ"}` の形です。ただし `@hono/zod-validator` によるバリデーション失敗だけは例外で、ライブラリ既定の `{"success": false, "error": <ZodError>}` が 400 で返ります。
@@ -83,10 +116,10 @@ if ('yaml' in body) {
 | メソッド | パス | 認可 |
 | --- | --- | --- |
 | GET | `/api/healthz` | なし |
-| POST | `/api/auth/staff/login` | なし |
+| POST | `/api/auth/staff/login` | なし(レート制限) |
 | POST | `/api/auth/staff/password-reset/confirm` | なし(トークン) |
-| POST | `/api/auth/participant/login` | なし |
-| POST | `/api/auth/participant/password-reset/request` | なし |
+| POST | `/api/auth/participant/login` | なし(レート制限) |
+| POST | `/api/auth/participant/password-reset/request` | なし(レート制限 + Turnstile) |
 | POST | `/api/auth/participant/password-reset/confirm` | なし(トークン) |
 | GET | `/api/regions` | 統括スタッフ |
 | POST | `/api/regions` | 統括スタッフ |
@@ -98,7 +131,7 @@ if ('yaml' in body) {
 | GET | `/api/tournaments/:tournamentId/regulations` | なし |
 | PUT | `/api/tournaments/:tournamentId/regulations` | 統括スタッフ |
 | GET | `/api/tournaments/:tournamentId/entry-list` | なし |
-| POST | `/api/tournaments/:tournamentId/entries` | なし |
+| POST | `/api/tournaments/:tournamentId/entries` | なし(レート制限 + Turnstile) |
 | GET | `/api/entries/verify` | なし(トークン) |
 | GET | `/api/form-definitions/:tournamentId` | なし |
 | PUT | `/api/form-definitions/:tournamentId` | 統括スタッフ |
@@ -131,6 +164,7 @@ if ('yaml' in body) {
 - リクエスト: `StaffLoginInputSchema` — `{email: string(email), password: string(min 1)}`
 - `200`: `StaffLoginResponseSchema` — `{"ok": true, "role": "regional" | "general", "regionSlug": string | null, "tournamentType": "saikyoi" | "shinjinou" | null}`
 - `401`: `{"error": "invalid credentials"}`
+- `429`: `{"error": "too many requests"}`(`Retry-After: 60`。1 章「レート制限と Turnstile」を参照)
 - `500`: `{"error": "internal server error"}`
 
 該当アカウントが存在しない場合もダミーのハッシュに対して PBKDF2 を実行してから 401 を返します。これにより「メールアドレスが存在しない」場合と「パスワードが違う」場合の応答時間が揃い、タイミング差からのアカウント列挙を防ぎます。
@@ -158,7 +192,7 @@ if ('yaml' in body) {
 
 - リクエスト: `ParticipantLoginInputSchema` — `{email, password}`
 - `200`: `{"ok": true}`
-- `401` / `500`: スタッフ側と同じ(ダミーハッシュによる時間平準化も同様)
+- `401` / `429` / `500`: スタッフ側と同じ(ダミーハッシュによる時間平準化も同様)
 
 発行する JWT には `sub` / `exp` に加えて `pwdChangedAt`(このログインで照合したパスワードの `password_changed_at`)を載せます。追加のクエリは不要で、パスワードハッシュと同じ SELECT で取得しています。
 
@@ -166,15 +200,16 @@ if ('yaml' in body) {
 
 参加者のパスワード再設定リンクの送信要求。`lib/password-reset.ts` の `requestPasswordReset()` が、該当する参加者がいれば使い捨てトークン(有効期限 1 時間)を `password_reset_tokens` に発行し、`FRONTEND_URL/password-reset?token=...` へのリンクをメールで送ります。トークンは Task 3-4 のメール確認トークンと同じく SHA-256 ハッシュのみを保存し、生のトークンは受信者のメールボックスにしか存在しません。
 
-- リクエスト: `PasswordResetRequestInputSchema` — `{email: string(email)}`
+- リクエスト: `PasswordResetRequestInputSchema` — `{email: string(email)}`、および `cf-turnstile-response` ヘッダ
 - `200`: `{"ok": true}`
-- `400`: メール形式が不正(zValidator)
+- `400`: メール形式が不正(zValidator)、または `{"error": "turnstile verification failed"}`
+- `429`: `{"error": "too many requests"}`(`Retry-After: 60`)
 
 メールアドレスが未登録の場合、トークンの保存に失敗した場合、メール送信に失敗した場合のいずれも、送信できた場合と同じ `200 {"ok": true}` を返します。内部的な失敗は `console.error` に記録されます。
 
 レスポンスが同じでも、**かかる時間が同じでなければ**メールアドレスの列挙に使えてしまいます(未登録なら SELECT 1 回、登録済みならハッシュ化・INSERT・Resend への往復が加わり、通常 100〜500ms 差が出ます)。そのためルートは `requestPasswordReset()` を `await` せず `c.executionCtx.waitUntil()` に渡し、**上記の処理を一切始めないうちに** 200 を返します。この関数は結果を呼び出し元に返さないので、待つ必要もありません。
 
-発行時には、その参加者の**期限切れトークンを削除**します。`/request` は未認証・レート制限なしで 1 回ごとに 1 行増えるため、これがないと `password_reset_tokens` が無制限に育ちます。なお**レート制限そのものは未実装**です(メール爆撃・Resend のクォータ消費は防げません)。
+発行時には、その参加者の**期限切れトークンを削除**します。`/request` は未認証で 1 回ごとに 1 行増えるため、これがないと `password_reset_tokens` が無制限に育ちます。歯止めとして、この 2 本目の防御に加えて 1 章のレート制限(3 回 / 60 秒)と Turnstile が前段に入っています。
 
 ### `POST /api/auth/participant/password-reset/confirm`
 
@@ -329,12 +364,16 @@ if ('yaml' in body) {
   | `freeText` | string(任意) | |
   | `customFieldValues` | `Record<string, string \| string[]>` | 追加フォーム項目の回答 |
 
+  加えて **`cf-turnstile-response` ヘッダ**(Turnstile のトークン)が必須です。1 章「レート制限と Turnstile」を参照してください。
+
 - `201`: `{"id": "<entry id>"}`
 
 エラー:
 
 | ステータス | `error` | 条件 |
 | --- | --- | --- |
+| 400 | `turnstile verification failed` | Turnstile のトークンが無い / 無効 / 検証できなかった |
+| 429 | `too many requests` | レート制限超過(`Retry-After: 60`) |
 | 400 | `invalid tournament` | `:tournamentId` の大会が存在しない |
 | 400 | `unknown custom field: ...` 等 | `customFieldValues` が大会の `form_field_defs` と一致しない(メッセージは [`form-generation.md`](./form-generation.md) の一覧を参照) |
 | 403 | `entry period closed` | エントリー期間外 |
@@ -673,6 +712,11 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 | `MAIL_FROM_ADDRESS` | | 送信元アドレス |
 | `GOOGLE_SHEETS_API_KEY` | ✅ | Google Sheets API v4 の API キー |
 | `FRONTEND_URL` | | メール本文中のリンク(確認リンク等)を組み立てるためのフロントエンド URL |
+| `TURNSTILE_SECRET_KEY` | ✅ | Turnstile の siteverify に渡すシークレット。`[env.*.vars]` には**置かない**(同名の var はシークレットを上書きします) |
+| `LOGIN_IP_RATE_LIMITER` | | Rate Limiting binding。ログイン 2 本に IP 単位で 10 回 / 60 秒 |
+| `LOGIN_EMAIL_RATE_LIMITER` | | Rate Limiting binding。ログイン 2 本にアカウント単位で 60 回 / 60 秒 |
+| `MAIL_TRIGGER_IP_RATE_LIMITER` | | Rate Limiting binding。メールを送る 2 本に IP 単位で 20 回 / 60 秒 |
+| `MAIL_TRIGGER_EMAIL_RATE_LIMITER` | | Rate Limiting binding。メールを送る 2 本に宛先単位で 3 回 / 60 秒 |
 
 登録手順は [`supabase-deployment.md`](./supabase-deployment.md) / [`google-sheets-integration.md`](./google-sheets-integration.md) を参照してください。
 

@@ -6,6 +6,7 @@ import {
   StaffLoginInputSchema,
   StaffPasswordResetConfirmInputSchema,
   type StaffClaims,
+  type StaffLoginInput,
   type StaffLoginResponse,
   type StaffRole,
   type TournamentType,
@@ -16,6 +17,7 @@ import {isPasswordHashUsable, verifyPassword} from '../lib/password';
 import {internalError} from '../lib/errors';
 import {confirmStaffPasswordReset} from '../lib/staff-password-reset';
 import {STAFF_SESSION_COOKIE} from '../middleware/staff-auth';
+import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
 
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
 // A well-formed but unusable hash, run through `verifyPassword` when no
@@ -50,66 +52,86 @@ interface StaffAccountRow {
   regions: {slug: string} | null;
 }
 
+// Matches the period both login limiters count over (`wrangler.toml`).
+const LOGIN_LIMIT_PERIOD_SECONDS = 60;
+
 export const staffAuthRoute = new Hono<Env>()
-  .post('/login', zValidator('json', StaffLoginInputSchema), async c => {
-    const {email, password} = c.req.valid('json');
-    const db = createDbClient(c.env);
-    const {data: staff, error} = await db
-      .from('staff_accounts')
-      .select(
-        'id, password_hash, role, region_id, tournament_type, regions(slug)',
-      )
-      .eq('email', email)
-      .returns<StaffAccountRow[]>()
-      .maybeSingle();
+  .post(
+    '/login',
+    // Keyed both ways for the same reason as the participant login, and the
+    // email key named after this endpoint so the two cannot spend each
+    // other's per-account budget: see `routes/participant-auth.ts`.
+    rateLimit(
+      env => env.LOGIN_IP_RATE_LIMITER,
+      c => `ip:${clientIp(c)}`,
+      LOGIN_LIMIT_PERIOD_SECONDS,
+    ),
+    zValidator('json', StaffLoginInputSchema),
+    rateLimit<{out: {json: StaffLoginInput}}>(
+      env => env.LOGIN_EMAIL_RATE_LIMITER,
+      c => `staff-login:${emailKey(c.req.valid('json').email)}`,
+      LOGIN_LIMIT_PERIOD_SECONDS,
+    ),
+    async c => {
+      const {email, password} = c.req.valid('json');
+      const db = createDbClient(c.env);
+      const {data: staff, error} = await db
+        .from('staff_accounts')
+        .select(
+          'id, password_hash, role, region_id, tournament_type, regions(slug)',
+        )
+        .eq('email', email)
+        .returns<StaffAccountRow[]>()
+        .maybeSingle();
 
-    if (error) {
-      return c.json({error: 'internal server error'}, 500);
-    }
+      if (error) {
+        return c.json({error: 'internal server error'}, 500);
+      }
 
-    // An account created by `POST /api/staff/accounts` whose owner hasn't
-    // followed their invite link yet carries an unusable placeholder hash.
-    // `verifyPassword()` refuses it either way, but it refuses it before
-    // doing any PBKDF2 work, which would make "invited, not set up yet"
-    // distinguishable from "wrong password" by response time -- the same leak
-    // the dummy hash exists to close for an unknown email.
-    const storedHash =
-      staff && isPasswordHashUsable(staff.password_hash)
-        ? staff.password_hash
-        : DUMMY_PASSWORD_HASH;
-    const passwordValid = await verifyPassword(password, storedHash);
-    if (!staff || !passwordValid) {
-      return c.json({error: 'invalid credentials'}, 401);
-    }
+      // An account created by `POST /api/staff/accounts` whose owner hasn't
+      // followed their invite link yet carries an unusable placeholder hash.
+      // `verifyPassword()` refuses it either way, but it refuses it before
+      // doing any PBKDF2 work, which would make "invited, not set up yet"
+      // distinguishable from "wrong password" by response time -- the same leak
+      // the dummy hash exists to close for an unknown email.
+      const storedHash =
+        staff && isPasswordHashUsable(staff.password_hash)
+          ? staff.password_hash
+          : DUMMY_PASSWORD_HASH;
+      const passwordValid = await verifyPassword(password, storedHash);
+      if (!staff || !passwordValid) {
+        return c.json({error: 'invalid credentials'}, 401);
+      }
 
-    const claims: StaffClaims = {
-      sub: staff.id,
-      role: staff.role,
-      regionId: staff.region_id,
-      tournamentType: staff.tournament_type,
-    };
-    const token = await sign(
-      {
-        ...claims,
-        exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS,
-      },
-      c.env.SESSION_SECRET,
-    );
-    setCookie(c, STAFF_SESSION_COOKIE, token, {
-      ...SESSION_COOKIE_OPTIONS,
-      maxAge: SESSION_TTL_SECONDS,
-    });
-    // The scope travels back as a slug rather than the `regionId` the claims
-    // carry so that the login screen can build the entry-list URL of a
-    // regional account's own tournament without a second round trip.
-    const body: StaffLoginResponse = {
-      ok: true,
-      role: staff.role,
-      regionSlug: staff.regions?.slug ?? null,
-      tournamentType: staff.tournament_type,
-    };
-    return c.json(body);
-  })
+      const claims: StaffClaims = {
+        sub: staff.id,
+        role: staff.role,
+        regionId: staff.region_id,
+        tournamentType: staff.tournament_type,
+      };
+      const token = await sign(
+        {
+          ...claims,
+          exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS,
+        },
+        c.env.SESSION_SECRET,
+      );
+      setCookie(c, STAFF_SESSION_COOKIE, token, {
+        ...SESSION_COOKIE_OPTIONS,
+        maxAge: SESSION_TTL_SECONDS,
+      });
+      // The scope travels back as a slug rather than the `regionId` the claims
+      // carry so that the login screen can build the entry-list URL of a
+      // regional account's own tournament without a second round trip.
+      const body: StaffLoginResponse = {
+        ok: true,
+        role: staff.role,
+        regionSlug: staff.regions?.slug ?? null,
+        tournamentType: staff.tournament_type,
+      };
+      return c.json(body);
+    },
+  )
   // The counterpart to the invite mail `POST /api/staff/accounts` sends, and
   // to the link a general staff member re-issues from
   // `/api/staff/accounts/:id/password-reset`. There is no `/request` sibling:

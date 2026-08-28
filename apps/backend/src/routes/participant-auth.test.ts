@@ -3,8 +3,13 @@ import {verify} from 'hono/jwt';
 import {participantAuthRoute} from './participant-auth';
 import {hashPassword} from '../lib/password';
 import type {Bindings} from '../types/env';
+import {
+  PERMISSIVE_SECURITY_BINDINGS,
+  refusingRateLimiter,
+} from '../test-support/bindings';
 
 const ENV: Bindings = {
+  ...PERMISSIVE_SECURITY_BINDINGS,
   SUPABASE_URL: 'https://example.supabase.co',
   SUPABASE_SERVICE_ROLE_KEY: 'dummy-service-role-key',
   MAIL_API_KEY: 'dummy-mail-api-key',
@@ -109,6 +114,67 @@ describe('POST /login', () => {
     );
 
     expect(res.status).toBe(401);
+  });
+
+  it('returns 429 with Retry-After when the rate limiter refuses', async () => {
+    // The account is a valid one: a refused attempt must cost no PBKDF2
+    // work at all, which is half of what this limit is for.
+    mockParticipantFetch({
+      id: PARTICIPANT_ID,
+      password_hash: await hashPassword('correct-password'),
+      password_changed_at: '2026-08-25T01:23:45.678+00:00',
+    });
+
+    const res = await participantAuthRoute.request(
+      '/login',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          email: 'participant@example.com',
+          password: 'correct-password',
+        }),
+      },
+      {...ENV, LOGIN_IP_RATE_LIMITER: refusingRateLimiter()},
+    );
+
+    const body: unknown = await res.json();
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe('60');
+    expect(body).toEqual({error: 'too many requests'});
+    expect(res.headers.get('set-cookie')).toBeNull();
+  });
+
+  it('counts the per-account limit under a key naming this endpoint', async () => {
+    // A participant and a staff member can hold the same address. Without
+    // the endpoint in the key the two logins would share one bucket, and
+    // this cheap unauthenticated endpoint could be used to spend a staff
+    // member's budget for that address.
+    mockParticipantFetch(null);
+    const keys: string[] = [];
+    const recording: RateLimit = {
+      limit: ({key}) => {
+        keys.push(key ?? '');
+        return Promise.resolve({success: true});
+      },
+    };
+
+    await participantAuthRoute.request(
+      '/login',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          email: 'Shared@Example.com',
+          password: 'anything',
+        }),
+      },
+      {...ENV, LOGIN_EMAIL_RATE_LIMITER: recording},
+    );
+
+    // Folded, so that re-spelling the address doesn't hand out a second
+    // budget for the same account.
+    expect(keys).toEqual(['participant-login:email:shared@example.com']);
   });
 });
 

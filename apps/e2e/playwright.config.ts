@@ -9,6 +9,8 @@ import {
   SESSION_SECRET,
   SUPABASE_SERVICE_ROLE_KEY,
   SUPABASE_URL,
+  TURNSTILE_SECRET_KEY,
+  TURNSTILE_SITE_KEY,
 } from './support/env';
 
 // The bindings `apps/backend` reads (`src/types/env.ts`), passed to
@@ -29,6 +31,9 @@ const BACKEND_VARS: Record<string, string> = {
   // Only the Task 2-3 spreadsheet import reads this, which no spec here
   // exercises.
   GOOGLE_SHEETS_API_KEY: 'e2e-google-sheets-api-key',
+  // Accepts any token, so the widget the browser solves is verified for
+  // real without a real Turnstile account behind it.
+  TURNSTILE_SECRET_KEY,
 };
 
 // `apps/frontend` reads both of these through `$env/dynamic/private`, which
@@ -56,6 +61,11 @@ const FRONTEND_ENV: Record<string, string> = {
   // calls are unaffected: they go through `vite.config.ts`'s dev proxy,
   // which already sets `secure: false`.
   NODE_TLS_REJECT_UNAUTHORIZED: '0',
+  // The other half of the pair above. Read through `$env/dynamic/public` by
+  // `$lib/components/Turnstile.svelte`; without it the two forms behind the
+  // challenge render no widget, send no token, and are refused by the
+  // Worker.
+  PUBLIC_TURNSTILE_SITE_KEY: TURNSTILE_SITE_KEY,
 };
 
 const frontendCommand = [

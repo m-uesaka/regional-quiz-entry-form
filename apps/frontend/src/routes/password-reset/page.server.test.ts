@@ -9,16 +9,21 @@ const REQUEST_URL = 'http://localhost/password-reset';
 interface FetchLog {
   urls: string[];
   bodies: unknown[];
+  turnstileTokens: Array<string | null>;
+}
+
+function emptyLog(): FetchLog {
+  return {urls: [], bodies: [], turnstileTokens: []};
 }
 
 /** Builds a fake `fetch` answering the reset POST with the given status. */
-function fakeFetch(
-  status = 200,
-  log: FetchLog = {urls: [], bodies: []},
-): typeof fetch {
+function fakeFetch(status = 200, log: FetchLog = emptyLog()): typeof fetch {
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     log.urls.push(String(input));
     log.bodies.push(JSON.parse(String(init?.body)));
+    log.turnstileTokens.push(
+      new Headers(init?.headers).get('cf-turnstile-response'),
+    );
     return new Response(status === 200 ? JSON.stringify({ok: true}) : '{}', {
       status,
       headers: {'Content-Type': 'application/json'},
@@ -57,9 +62,17 @@ function buildActionEvent(
   } as Parameters<typeof actions.default>[0];
 }
 
-function emailForm(email = 'sanka@example.com'): FormData {
+function emailForm(
+  email = 'sanka@example.com',
+  turnstileToken: string | null = 'a-turnstile-token',
+): FormData {
   const formData = new FormData();
   formData.set('email', email);
+  // The control the Turnstile widget writes its token into, which the action
+  // forwards to the API as a header.
+  if (turnstileToken !== null) {
+    formData.set('cf-turnstile-response', turnstileToken);
+  }
   return formData;
 }
 
@@ -91,7 +104,7 @@ describe('password reset +page.server load', () => {
 
 describe('password reset +page.server action, without a token', () => {
   it('asks the API to mail a reset link', async () => {
-    const log: FetchLog = {urls: [], bodies: []};
+    const log: FetchLog = emptyLog();
     const event = buildActionEvent(
       REQUEST_URL,
       fakeFetch(200, log),
@@ -103,10 +116,64 @@ describe('password reset +page.server action, without a token', () => {
       '/api/auth/participant/password-reset/request',
     );
     expect(log.bodies).toEqual([{email: 'sanka@example.com'}]);
+    expect(log.turnstileTokens).toEqual(['a-turnstile-token']);
+  });
+
+  it('sends an empty token when the widget produced none', async () => {
+    // What a submission with the widget unsolved (or never loaded) looks
+    // like. The API is what refuses it -- the page does not decide that on
+    // its own, so a broken widget cannot be talked past from the client.
+    const log: FetchLog = emptyLog();
+    const event = buildActionEvent(
+      REQUEST_URL,
+      fakeFetch(400, log),
+      emailForm('sanka@example.com', null),
+    );
+
+    await expect(actions.default(event)).resolves.toMatchObject({status: 400});
+    expect(log.turnstileTokens).toEqual(['']);
+  });
+
+  it('drops a token that could not travel in a header', async () => {
+    // A direct POST to this action, rather than anything the widget wrote:
+    // forwarded as it stands, `new Request()` throws on the newline and the
+    // caller gets a 500 error page instead of the challenge's 400.
+    const log: FetchLog = emptyLog();
+    const event = buildActionEvent(
+      REQUEST_URL,
+      fakeFetch(400, log),
+      emailForm('sanka@example.com', 'token\r\nX-Injected: 1'),
+    );
+
+    await expect(actions.default(event)).resolves.toMatchObject({status: 400});
+    expect(log.turnstileTokens).toEqual(['']);
+  });
+
+  it('reports a refused Turnstile token as something to retry', async () => {
+    const event = buildActionEvent(REQUEST_URL, fakeFetch(400), emailForm());
+
+    await expect(actions.default(event)).resolves.toMatchObject({
+      status: 400,
+      data: {
+        error:
+          '「私はロボットではありません」の確認に失敗しました。ページを再読み込みして、もう一度お試しください',
+      },
+    });
+  });
+
+  it('asks the participant to wait when the API rate limits the request', async () => {
+    const event = buildActionEvent(REQUEST_URL, fakeFetch(429), emailForm());
+
+    await expect(actions.default(event)).resolves.toMatchObject({
+      status: 429,
+      data: {
+        error: '送信が集中しています。しばらく待ってから再度お試しください',
+      },
+    });
   });
 
   it('fails with 400 without calling the API when the email is malformed', async () => {
-    const log: FetchLog = {urls: [], bodies: []};
+    const log: FetchLog = emptyLog();
     const event = buildActionEvent(
       REQUEST_URL,
       fakeFetch(200, log),
@@ -118,7 +185,7 @@ describe('password reset +page.server action, without a token', () => {
   });
 
   it('is what an empty token falls back to', async () => {
-    const log: FetchLog = {urls: [], bodies: []};
+    const log: FetchLog = emptyLog();
     const event = buildActionEvent(
       `${REQUEST_URL}?token=`,
       fakeFetch(200, log),
@@ -140,7 +207,7 @@ describe('password reset +page.server action, without a token', () => {
 
 describe('password reset +page.server action, with a token', () => {
   it('confirms the reset and sends the participant back to the login page', async () => {
-    const log: FetchLog = {urls: [], bodies: []};
+    const log: FetchLog = emptyLog();
     const deleted: string[] = [];
     const event = buildActionEvent(
       RESET_URL,
@@ -163,7 +230,7 @@ describe('password reset +page.server action, with a token', () => {
   });
 
   it('fails with 400 without calling the API when the two passwords differ', async () => {
-    const log: FetchLog = {urls: [], bodies: []};
+    const log: FetchLog = emptyLog();
     const event = buildActionEvent(
       RESET_URL,
       fakeFetch(200, log),
@@ -178,7 +245,7 @@ describe('password reset +page.server action, with a token', () => {
   });
 
   it('fails with 400 without calling the API when the password is too short', async () => {
-    const log: FetchLog = {urls: [], bodies: []};
+    const log: FetchLog = emptyLog();
     const event = buildActionEvent(
       RESET_URL,
       fakeFetch(200, log),

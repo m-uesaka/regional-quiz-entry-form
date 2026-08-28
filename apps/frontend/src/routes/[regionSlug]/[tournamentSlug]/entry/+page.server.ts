@@ -9,12 +9,23 @@ import {
   type Tournament,
 } from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
+import {readTurnstileToken, TURNSTILE_TOKEN_FIELD} from '$lib/turnstile';
 import {
   customFieldErrors,
   readCustomFieldValues,
 } from '$lib/server/custom-field-values';
 import type {EntryFieldErrors, EntryFormValues} from '$lib/types/entry-form';
 import type {Actions, PageServerLoad, RequestEvent} from './$types';
+
+/**
+ * What a 429 from the API is shown as. The rate limit it comes from is
+ * counted per IP *and* per address (#116), so a participant can also meet it
+ * without having submitted anything themselves -- from a shared connection,
+ * say -- which is why the wording asks for patience rather than blaming the
+ * submission.
+ */
+const TOO_MANY_REQUESTS_MESSAGE =
+  '送信が集中しています。しばらく待ってから再度お試しください';
 
 /**
  * The backend's `error` strings mapped to what the form shows. The API
@@ -35,6 +46,11 @@ const ENTRY_ERROR_MESSAGES: Record<string, string> = {
   'already entered': 'この大会には既にエントリー済みです',
   'already entered another tournament in this region':
     'この地域では、最強位と新人王のどちらか一方にのみエントリーできます',
+  // Answered by the challenge in front of the API, which refuses a missing
+  // and an invalid token alike. Both are fixed by solving the widget again.
+  'turnstile verification failed':
+    '「私はロボットではありません」の確認に失敗しました。ページを再読み込みして、もう一度お試しください',
+  'too many requests': TOO_MANY_REQUESTS_MESSAGE,
 };
 
 /** Fallbacks for a status whose `error` string isn't one we know. */
@@ -43,6 +59,7 @@ const ENTRY_STATUS_MESSAGES: Record<number, string> = {
   401: 'パスワードが正しくありません',
   403: 'この内容ではエントリーできません',
   409: '既にエントリー済みです',
+  429: TOO_MANY_REQUESTS_MESSAGE,
 };
 
 /**
@@ -172,6 +189,12 @@ export const actions = {
     const formFieldDefs = await fetchFormFieldDefs(tournament.id, fetch);
 
     const formData = await request.formData();
+    // Written into the form by the Turnstile widget
+    // (`$lib/components/Turnstile.svelte`). Not part of the entry, so it
+    // travels as a header rather than in the body the schema describes --
+    // which is why it is read through a helper that refuses what a header
+    // cannot carry.
+    const turnstileToken = readTurnstileToken(formData);
     const freeText = String(formData.get('freeText') ?? '');
     // Echoed back with every failure so a rejected submission re-renders
     // what the participant typed. The two password fields are deliberately
@@ -233,10 +256,10 @@ export const actions = {
     }
 
     const api = createApiClient(fetch);
-    const res = await api.api.tournaments[':tournamentId'].entries.$post({
-      param: {tournamentId: tournament.id},
-      json: parsed.data,
-    });
+    const res = await api.api.tournaments[':tournamentId'].entries.$post(
+      {param: {tournamentId: tournament.id}, json: parsed.data},
+      {headers: {[TURNSTILE_TOKEN_FIELD]: turnstileToken}},
+    );
     if (!res.ok) {
       const code = await readErrorCode(res);
       // The API's refusal is about the submission as a whole, not about one

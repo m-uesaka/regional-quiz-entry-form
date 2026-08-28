@@ -1,8 +1,16 @@
 import {afterEach, describe, expect, it} from 'bun:test';
 import {passwordResetRoute} from './password-reset';
 import type {Bindings} from '../types/env';
+import {
+  PERMISSIVE_SECURITY_BINDINGS,
+  refusingRateLimiter,
+  TURNSTILE_TEST_TOKEN,
+  turnstileAwareFetch,
+} from '../test-support/bindings';
+import {TURNSTILE_TOKEN_HEADER} from '../middleware/turnstile';
 
 const ENV: Bindings = {
+  ...PERMISSIVE_SECURITY_BINDINGS,
   SUPABASE_URL: 'https://example.supabase.co',
   SUPABASE_SERVICE_ROLE_KEY: 'dummy-service-role-key',
   MAIL_API_KEY: 'dummy-mail-api-key',
@@ -29,7 +37,14 @@ let requestedUrls: string[] = [];
  */
 function mockFetch(tables: MockedTables): void {
   requestedUrls = [];
-  globalThis.fetch = ((input: RequestInfo | URL) => {
+  // Wrapped so that Turnstile's siteverify is answered by the wrapper rather
+  // than by the stub below -- which would otherwise hand `verifyTurnstile` a
+  // list of participant rows, read no `success` in it, and turn every test
+  // here into a test of a refused token. It also keeps the call out of
+  // `requestedUrls`, which the tests below read as "what the route did on
+  // the response path": the challenge is checked before the route is
+  // reached at all.
+  globalThis.fetch = turnstileAwareFetch(((input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString();
     requestedUrls.push(url);
     if (url.startsWith('https://api.resend.com/')) {
@@ -39,7 +54,7 @@ function mockFetch(tables: MockedTables): void {
       return Promise.resolve(Response.json(tables.passwordResetTokens ?? []));
     }
     return Promise.resolve(Response.json(tables.participants ?? []));
-  }) as unknown as typeof fetch;
+  }) as unknown as typeof fetch);
 }
 
 // What `/request` deferred with `waitUntil()`. Cloudflare runs these after
@@ -61,15 +76,24 @@ async function settleBackgroundWork(): Promise<void> {
   await Promise.all(pending);
 }
 
-async function post(path: string, body: unknown): Promise<Response> {
+async function post(
+  path: string,
+  body: unknown,
+  options: {env?: Bindings; turnstileToken?: string | null} = {},
+): Promise<Response> {
+  const {env = ENV, turnstileToken = TURNSTILE_TEST_TOKEN} = options;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  // `/confirm` is not behind the challenge and ignores the header; sending
+  // it there anyway keeps this helper to one shape.
+  if (turnstileToken !== null) {
+    headers[TURNSTILE_TOKEN_HEADER] = turnstileToken;
+  }
   return passwordResetRoute.request(
     path,
-    {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body),
-    },
-    ENV,
+    {method: 'POST', headers, body: JSON.stringify(body)},
+    env,
     EXECUTION_CTX,
   );
 }
@@ -114,6 +138,48 @@ describe('POST /request', () => {
     expect(
       requestedUrls.some(url => url.startsWith('https://api.resend.com/')),
     ).toBe(true);
+  });
+
+  it('returns 429 with Retry-After when the rate limiter refuses', async () => {
+    mockFetch({participants: [{id: PARTICIPANT_ID}]});
+
+    const res = await post(
+      '/request',
+      {email: 'known@example.com'},
+      {env: {...ENV, MAIL_TRIGGER_IP_RATE_LIMITER: refusingRateLimiter()}},
+    );
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe('60');
+    // Refused before the mail was even queued, which is the whole point:
+    // this endpoint mails whatever address it is given.
+    expect(requestedUrls).toEqual([]);
+  });
+
+  it('returns 400 when the Turnstile token is missing', async () => {
+    mockFetch({participants: [{id: PARTICIPANT_ID}]});
+
+    const res = await post(
+      '/request',
+      {email: 'known@example.com'},
+      {turnstileToken: null},
+    );
+
+    const body: unknown = await res.json();
+    expect(res.status).toBe(400);
+    expect(body).toEqual({error: 'turnstile verification failed'});
+    expect(requestedUrls).toEqual([]);
+  });
+
+  it('returns 400 when Turnstile refuses the token', async () => {
+    mockFetch({participants: [{id: PARTICIPANT_ID}]});
+    // Same stub, but siteverify now says the token is no good.
+    globalThis.fetch = turnstileAwareFetch(globalThis.fetch, false);
+
+    const res = await post('/request', {email: 'known@example.com'});
+
+    expect(res.status).toBe(400);
+    expect(requestedUrls).toEqual([]);
   });
 
   it('returns 400 for a malformed email', async () => {

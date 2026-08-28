@@ -14,6 +14,67 @@ compatibility_date = "2026-08-01"
 # 非機密の設定値のみここに記載し、機密情報は `wrangler secret put` で登録する
 MAIL_FROM_ADDRESS = "entry@entry.regionalquiz.example"
 FRONTEND_URL = "https://entry.regionalquiz.example"
+# Turnstile の「常に成功する」テスト用シークレット(Cloudflare が公開している
+# 固定値)。ローカル開発と E2E はこれで通す。`[env.*.vars]` には**置かない**:
+# 同名の var があるとデプロイのたびに `wrangler secret put` で登録した本物の
+# シークレットを上書きしてしまい、Turnstile が誰でも素通しになる。実環境の値は
+# `docs/supabase-deployment.md` §6.2 の手順でシークレットとして登録する。
+#
+# そのため `wrangler deploy --env <name>` は毎回
+# 「"vars.TURNSTILE_SECRET_KEY" exists at the top level, but not on
+# "env.<name>.vars"」と警告する。**これは想定どおりで、警告の言うとおりに
+# `[env.*.vars]` へ追記してはいけない**(上記のとおりシークレットが平文で
+# 上書きされる)。
+TURNSTILE_SECRET_KEY = "1x0000000000000000000000000000000AA"
+
+# Cloudflare の Rate Limiting bindings (#116).
+#
+# Wrangler 3 spells these as `unsafe` bindings; the dedicated `[[ratelimits]]`
+# table is Wrangler 4 syntax, and this package is deliberately still on 3 (see
+# `.github/workflows/deploy.yml`). Rename the tables when it moves.
+#
+# Like every other binding, `unsafe` is a non-inheritable key: an `[env.*]`
+# block that doesn't restate it gets no limiters at all, and a Worker whose
+# `env.LOGIN_IP_RATE_LIMITER` is undefined answers 500 on every login. So each
+# environment below carries its own copy, with its own `namespace_id` — the
+# counters are keyed by that id, and sharing one between environments would
+# let a staging load test spend production's budget.
+#
+# `period` accepts only 10 or 60.
+#
+# The limits here are the *development* ones, and they are loose on purpose.
+# `wrangler dev` sees no `CF-Connecting-IP` header, so every local request
+# shares the single `ip:unknown` bucket (`src/middleware/rate-limit.ts`) — the
+# production limits would put a developer filling in the entry form twice, or
+# an end-to-end run seeding a waitlist, straight into a 429. The real policy
+# is in `[env.staging]` / `[env.production]` below.
+#
+# This is one more thing a bare `wrangler deploy` (no `--env`) would get
+# wrong, on top of the `vars` warned about above: it would ship these limits
+# to the production Worker. Always pass `--env`.
+[[unsafe.bindings]]
+name = "LOGIN_IP_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "3001"
+simple = {limit = 1000, period = 60}
+
+[[unsafe.bindings]]
+name = "LOGIN_EMAIL_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "3003"
+simple = {limit = 1000, period = 60}
+
+[[unsafe.bindings]]
+name = "MAIL_TRIGGER_IP_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "3002"
+simple = {limit = 1000, period = 60}
+
+[[unsafe.bindings]]
+name = "MAIL_TRIGGER_EMAIL_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "3004"
+simple = {limit = 1000, period = 60}
 
 # Deployed by `.github/workflows/deploy-staging.yml` on a push to any branch
 # other than `main`.
@@ -41,6 +102,58 @@ name = "regional-quiz-backend-staging"
 MAIL_FROM_ADDRESS = "entry@staging.entry.regionalquiz.example"
 FRONTEND_URL = "https://staging.entry.regionalquiz.example"
 
+# 10 login attempts a minute from one address. Enough for someone retyping a
+# password they half-remember, far too few to work through a
+# credential-stuffing list — and this is also the limiter that keeps an
+# unauthenticated caller from spending the Worker's CPU on PBKDF2.
+[[env.staging.unsafe.bindings]]
+name = "LOGIN_IP_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "2001"
+simple = {limit = 10, period = 60}
+
+# The per-account limit is on its own limiter *because* its number has to be
+# a different one. It exists for the attack the IP limit cannot see — a
+# botnet spread thin across addresses, all guessing at one account — but any
+# limit keyed on an email address is, by construction, a lever for locking
+# the owner of that address out of their own account, and the lower the
+# number the cheaper that lever is. At 10/60s an attacker who knows an
+# address keeps its owner permanently refused for one request every six
+# seconds; 60/60s makes them hold a full request a second to do the same,
+# while still capping how far anyone can get through a password list against
+# one account. No legitimate sign-in comes anywhere near it.
+[[env.staging.unsafe.bindings]]
+name = "LOGIN_EMAIL_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "2003"
+simple = {limit = 60, period = 60}
+
+# The per-address limit is the tight one, and it is the one that matters:
+# every call that gets through here sends mail to an address the caller
+# chose, so what has to be capped is how much of that one inbox can be
+# spent. Three a minute covers a participant who resubmits the entry form
+# after a validation error; it does not cover a mail bomb.
+[[env.staging.unsafe.bindings]]
+name = "MAIL_TRIGGER_EMAIL_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "2004"
+simple = {limit = 3, period = 60}
+
+# The per-IP limit is looser, because an IP is not one person. Entries open
+# at an announced time and are filled in from shared networks — a club or a
+# school behind one NAT, several participants behind one carrier's CGNAT —
+# and this limit is checked before Turnstile and before validation, so every
+# attempt counts against it whether or not it was ever going to send mail.
+# At 3/60s the fourth submission from such a network is refused for a reason
+# the participant cannot act on. Twenty leaves room for that while still
+# capping a single source; the challenge in front of the endpoint, not this
+# number, is what a script actually has to get past.
+[[env.staging.unsafe.bindings]]
+name = "MAIL_TRIGGER_IP_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "2002"
+simple = {limit = 20, period = 60}
+
 # Deployed by `.github/workflows/deploy-production.yml` on a push to `main`.
 # `name` is set back to the unsuffixed one: without it, `--env production`
 # would deploy a Worker called `regional-quiz-backend-production`.
@@ -55,3 +168,28 @@ name = "regional-quiz-backend"
 [env.production.vars]
 MAIL_FROM_ADDRESS = "entry@entry.regionalquiz.example"
 FRONTEND_URL = "https://entry.regionalquiz.example"
+
+# Same policy as staging, on its own namespaces — see the comments there.
+[[env.production.unsafe.bindings]]
+name = "LOGIN_IP_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1001"
+simple = {limit = 10, period = 60}
+
+[[env.production.unsafe.bindings]]
+name = "LOGIN_EMAIL_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1003"
+simple = {limit = 60, period = 60}
+
+[[env.production.unsafe.bindings]]
+name = "MAIL_TRIGGER_EMAIL_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1004"
+simple = {limit = 3, period = 60}
+
+[[env.production.unsafe.bindings]]
+name = "MAIL_TRIGGER_IP_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1002"
+simple = {limit = 20, period = 60}
