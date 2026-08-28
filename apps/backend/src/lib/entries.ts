@@ -107,7 +107,7 @@ export async function createEntry(
 ): Promise<CreateEntryResult> {
   const db = createDbClient(env);
 
-  const {data: tournament} = await db
+  const {data: tournament, error: tournamentError} = await db
     .from('tournaments')
     .select(
       'id, region_id, entry_opens_at, entry_closes_at, ' +
@@ -117,6 +117,13 @@ export async function createEntry(
     .eq('id', tournamentId)
     .returns<TournamentRow[]>()
     .maybeSingle();
+  // A failing select is not the same as an unknown tournament: the embeds
+  // read columns added by later migrations, so a stale PostgREST schema
+  // cache would otherwise turn every submission into 「大会が見つかりません」
+  // with nothing logged. Kept apart so the 500 says so.
+  if (tournamentError) {
+    return {ok: false, status: 500, error: tournamentError.message};
+  }
   if (!tournament) {
     return {ok: false, status: 400, error: 'invalid tournament'};
   }
