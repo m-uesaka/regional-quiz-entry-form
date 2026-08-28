@@ -25,6 +25,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+      # `setup-bun` restores the bun binary, not the packages bun downloads, so
+      # without this every job refetches the whole tree from the registry. Only
+      # a few seconds each, but it is paid by all four jobs of the workflow.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          # A lockfile edit invalidates the key while leaving most of the tree
+          # unchanged, so fall back to the newest cache for this runner and let
+          # `bun install` fetch only what actually moved.
+          restore-keys: bun-${{ runner.os }}-
       - run: bun install
       - run: bun run ${{ matrix.task }}
 
@@ -39,7 +50,26 @@ jobs:
           # `package.json` devDependency gives local devs, against the same
           # `supabase/config.toml`. Bump both together.
           version: 2.115.0
+      # Same cache as `check` above, and the same key, so whichever job runs
+      # first populates it for the others.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
       - run: bun install
+      # Two independent setup jobs, run at the same time because neither waits
+      # on the other: bringing up Supabase is docker, and fetching the browser
+      # is apt plus a download. Serially they cost the sum (~45s + ~25s); this
+      # way the browser lands inside the time Supabase already takes, and the
+      # step costs roughly what `supabase start` alone costs.
+      #
+      # The cost is that neither half has its own step timing any more. If this
+      # step gets slower, split it back into two `run`s to see which half moved
+      # before looking anywhere else.
+      #
+      # ---- `supabase start` ----
+      #
       # Applies every migration in `supabase/migrations` to a throwaway
       # local stack. `apps/e2e` seeds it and talks to it over the Data API.
       #
@@ -62,9 +92,31 @@ jobs:
       # upstream before (`inbucket` -> `mailpit`); an unknown name is
       # ignored silently rather than erroring, so a rename would show up as
       # this step getting slower again, not as a failure.
-      - run: >
-          supabase start
-          -x mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
+      #
+      # ---- `playwright install` ----
+      #
+      # Chromium only: the specs drive one browser, and downloading the
+      # other two would triple this for nothing. `--with-deps` installs the
+      # shared libraries the runner image does not carry.
+      - name: Start Supabase and fetch Chromium at the same time
+        run: |
+          # Held back rather than interleaved with the CLI's own output, which
+          # is what anyone reading this step is there for.
+          log="$RUNNER_TEMP/playwright-install.log"
+          (cd apps/e2e && bunx playwright install --with-deps chromium) >"$log" 2>&1 &
+          playwright=$!
+
+          supabase start \
+            -x mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
+
+          # `wait` exits with the background job's status, so a browser that
+          # failed to download fails the step here rather than surfacing as an
+          # unexplained Playwright error two steps later.
+          wait "$playwright" || {
+            cat "$log"
+            exit 1
+          }
+          cat "$log"
       # Prefer the stack's own service role key over the default
       # `apps/e2e/support/env.ts` falls back to, so a CLI that issues a
       # different one still works. If `status` doesn't name one, the
@@ -75,11 +127,6 @@ jobs:
           if [ -n "$key" ]; then
             echo "SUPABASE_SERVICE_ROLE_KEY=$key" >> "$GITHUB_ENV"
           fi
-      # Chromium only: the specs drive one browser, and downloading the
-      # other two would triple this step for nothing. `--with-deps` installs
-      # the shared libraries the runner image does not carry.
-      - run: bunx playwright install --with-deps chromium
-        working-directory: apps/e2e
       - run: bun run test:e2e
       - if: failure()
         uses: actions/upload-artifact@v4
