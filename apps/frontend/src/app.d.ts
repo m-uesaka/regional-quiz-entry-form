@@ -19,15 +19,19 @@ declare global {
   }
 
   // Cloudflare's Turnstile API, published by the script
-  // `$lib/components/Turnstile.svelte` adds to the head. Only the one call
-  // that component makes is declared; `window.turnstile` is absent until
-  // that script has loaded, which is why it is optional.
+  // `$lib/components/Turnstile.svelte` adds to the head. Only the calls that
+  // component makes are declared; `window.turnstile` is absent until that
+  // script has loaded, which is why it is optional.
   interface Window {
     turnstile?: {
       render(
         container: HTMLElement,
         options: {sitekey: string},
       ): string | undefined;
+      // `widget` is the id `render` returned, or the container element --
+      // which is the only handle there is on a widget the script rendered
+      // by itself.
+      reset(widget: string | HTMLElement): void;
     };
   }
 }

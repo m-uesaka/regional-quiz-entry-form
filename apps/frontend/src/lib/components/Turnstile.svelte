@@ -12,6 +12,10 @@
   const siteKey = env.PUBLIC_TURNSTILE_SITE_KEY;
 
   let container: HTMLDivElement | undefined = $state();
+  // What `reset()` names the widget by. Only the explicit render below hands
+  // one back; after an implicit render there is none, and the container
+  // element identifies the widget instead -- Turnstile takes either.
+  let widgetId: string | undefined;
 
   onMount(() => {
     // Two ways in, because neither covers the other. On a full page load the
@@ -24,8 +28,27 @@
     // what covers that case; a container the scan already filled is left
     // alone.
     if (!siteKey || !container || container.childElementCount > 0) return;
-    window.turnstile?.render(container, {sitekey: siteKey});
+    widgetId = window.turnstile?.render(container, {sitekey: siteKey});
   });
+
+  /**
+   * Puts a fresh, unspent challenge in front of the participant.
+   *
+   * A token is single-use: the API redeems it at siteverify, and sending the
+   * same one again is answered `timeout-or-duplicate`. Every form this widget
+   * sits in submits with `use:enhance` and reports its refusals with
+   * `fail()`, which re-renders the page in place rather than reloading it --
+   * so after a rejected submission the hidden control still holds the token
+   * that was just spent, and nothing else would clear it. Retrying with it
+   * fails the challenge instead of failing on whatever the participant
+   * actually has to fix, and the 429 message that invites a retry could
+   * never be acted on at all. Callers reset from their `enhance` callback.
+   */
+  export function reset() {
+    const widget = widgetId ?? container;
+    if (!widget) return;
+    window.turnstile?.reset(widget);
+  }
 </script>
 
 <!-- Without a site key there is nothing to render, and no token is sent. The

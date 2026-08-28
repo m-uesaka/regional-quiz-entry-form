@@ -48,6 +48,7 @@
   let freeText = $state(initial?.freeText ?? '');
   let regulationId = $state<string | null>(initial?.regulationId ?? null);
   let customFieldValues = $state(initialCustomFieldValues());
+  let turnstile = $state<ReturnType<typeof Turnstile>>();
 
   function fieldError(field: string): string | undefined {
     return fieldErrors?.[field]?.[0];
@@ -70,7 +71,20 @@
   }
 </script>
 
-<form method="POST" use:enhance>
+<!-- The `enhance` callback is only here to hand the challenge back: a
+     rejected submission is reported with `fail()`, which re-renders this
+     form in place with the token it already spent still in it, and the
+     retry the message invites would then fail the challenge rather than
+     whatever it was actually refused for. See `Turnstile.svelte`. -->
+<form
+  method="POST"
+  use:enhance={() => {
+    return async ({update}) => {
+      await update();
+      turnstile?.reset();
+    };
+  }}
+>
   <div class="form-field">
     <label for="name">氏名</label>
     <input id="name" name="name" bind:value={name} required />
@@ -163,7 +177,7 @@
        form, which the page's action forwards to the API. Entry registration
        mails a confirmation to whatever address it is given, so it is one of
        the two forms behind a challenge as well as a rate limit (#116). -->
-  <Turnstile />
+  <Turnstile bind:this={turnstile} />
 
   <button type="submit">エントリーする</button>
 </form>
