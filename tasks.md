@@ -71,7 +71,7 @@ Phase 9 以降のタスクファイルに書かれているマイグレーショ
 * Phase 10: 要件との差分の解消 🚧進行中
   * Task 10-1: 地域ごとの「最強位・新人王 重複参加」可否の制御
   * Task 10-2: レギュレーションの複数選択対応(要確認)
-  * Task 10-3: ログアウト機能(参加者・スタッフ) ✅(#113)
+  * Task 10-3: ログアウト機能(参加者・スタッフ) ✅(#113。スタッフ側は `/staff/logout` を専用ルートにし、Cookie 転送は `handleFetch` に一本化した)
   * Task 10-4: 一斉メールの Cloudflare Queues 化(80 名上限の撤廃)
   * Task 10-5: エントリー期間外アクセス制御をバックエンドにも実装する
 * Phase 11: セキュリティ強化 🚧未着手
@@ -353,7 +353,7 @@ graph TD
 
 * [Task 10-1: 地域ごとの「最強位・新人王 重複参加」可否の制御](tasks/task-10-1.md) — 現在は全地域で重複参加できてしまう
 * [Task 10-2: レギュレーションの複数選択対応](tasks/task-10-2.md) — 「どれか一つを最低限でも満たす」の読み方を統括スタッフに確認してから着手する
-* [Task 10-3: ログアウト機能(参加者・スタッフ)](tasks/task-10-3.md) ✅(#113) — 参加者・スタッフとも `POST /api/auth/*/logout` と画面のログアウトボタンを追加
+* [Task 10-3: ログアウト機能(参加者・スタッフ)](tasks/task-10-3.md) ✅(#113) — `POST /api/auth/{participant,staff}/logout` と、マイページ / スタッフ画面それぞれのレイアウトにログアウトボタンを追加。発行と削除で Cookie 属性がずれないよう `SESSION_COOKIE_OPTIONS` を共有する。スタッフ側だけは既存ページに action を置けず(レイアウトは action を持てず、`/staff/login` は `default` action 済み)`/staff/logout` を専用ルートにした。あわせて削除 Cookie の転送を `handleFetch` の `forwardBackendCookies()` に一本化し(`forwardSetCookies()` / `backend-cookies.ts` は削除)、バックエンドに届かなかった場合はフロント側で Cookie を落とすフォールバックを入れている。JWT の失効自体は [Task 11-3](tasks/task-11-3.md) の範囲
 * [Task 10-4: 一斉メールの Cloudflare Queues 化](tasks/task-10-4.md) — 1 リクエスト 80 名の上限を外す。課金判断を伴う
 * [Task 10-5: エントリー期間外アクセス制御をバックエンドにも実装する](tasks/task-10-5.md) — 現在はフロントの `load` のみで、スコープ判定も緩い
 
