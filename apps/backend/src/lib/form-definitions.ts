@@ -6,6 +6,14 @@ import {
 } from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
+import {
+  TOURNAMENT_NOT_FOUND_SQLSTATE,
+  TournamentNotFoundError,
+} from './tournament-errors';
+
+// Re-exported so callers of `syncFormFieldDefs()` can catch it without
+// having to know it's shared with the regulation sync.
+export {TournamentNotFoundError};
 
 /**
  * Maps the camelCase `form_field_defs` rows produced by
@@ -23,21 +31,6 @@ function toFormFieldDefTableRow(
     options: row.options,
     display_order: row.displayOrder,
   };
-}
-
-/**
- * The SQLSTATE the `sync_form_field_defs` Postgres function raises (see
- * `supabase/migrations/0002_sync_form_field_defs_fn.sql`) when the given
- * tournament doesn't exist.
- */
-const TOURNAMENT_NOT_FOUND_SQLSTATE = 'P0002';
-
-/** Thrown by `syncFormFieldDefs()` when `tournamentId` doesn't exist. */
-export class TournamentNotFoundError extends Error {
-  constructor(tournamentId: string) {
-    super(`tournament not found: ${tournamentId}`);
-    this.name = 'TournamentNotFoundError';
-  }
 }
 
 /**

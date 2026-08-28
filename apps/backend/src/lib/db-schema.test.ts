@@ -1,4 +1,4 @@
-import {afterAll, describe, expect, it} from 'bun:test';
+import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
 
 // Local Supabase Postgres connection (`supabase start` default). Overridable
@@ -235,6 +235,99 @@ describe.skipIf(!(await isDbReachable()))(
         confirmed_count: 0,
         waitlisted_count: 0,
       });
+    });
+  },
+);
+
+// The half-open priority window is ruled out in the Zod schema as well, but
+// setting regulations straight through SQL stays a supported operation, so
+// the constraint has to hold on its own.
+describe.skipIf(!(await isDbReachable()))(
+  'regulations table (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const testRegionSlug = 'db-schema-regulations-test-region';
+
+    async function deleteTestRegion(): Promise<void> {
+      await sql`delete from regulations where tournament_id in (
+        select id from tournaments where region_id in (
+          select id from regions where slug = ${testRegionSlug}
+        )
+      )`;
+      await sql`delete from tournaments where region_id in (
+        select id from regions where slug = ${testRegionSlug}
+      )`;
+      await sql`delete from regions where slug = ${testRegionSlug}`;
+    }
+
+    beforeAll(deleteTestRegion);
+
+    afterAll(async () => {
+      await deleteTestRegion();
+      await sql.close();
+    });
+
+    async function createTournament(): Promise<string> {
+      const [region] = await sql`
+        insert into regions (slug, name) values (${testRegionSlug}, 'テスト地域')
+        returning id
+      `;
+      const [tournament] = await sql`
+        insert into tournaments (
+          region_id, type, name, entry_opens_at, entry_closes_at
+        ) values (
+          ${region.id}, 'saikyoi', 'テスト大会', now(), now()
+        )
+        returning id
+      `;
+      return tournament.id as string;
+    }
+
+    it('rejects a half-open priority window', async () => {
+      const tournamentId = await createTournament();
+
+      let halfOpenInsertThrew = false;
+      try {
+        await sql`
+          insert into regulations (tournament_id, label, priority_starts_at)
+          values (${tournamentId}, '半開の部', now())
+        `;
+      } catch {
+        halfOpenInsertThrew = true;
+      }
+      expect(halfOpenInsertThrew).toBe(true);
+
+      // A window that ends before it starts is rejected by the same
+      // constraint.
+      let backwardsInsertThrew = false;
+      try {
+        await sql`
+          insert into regulations (
+            tournament_id, label, priority_starts_at, priority_ends_at
+          ) values (
+            ${tournamentId}, '逆順の部', now(), now() - interval '1 day'
+          )
+        `;
+      } catch {
+        backwardsInsertThrew = true;
+      }
+      expect(backwardsInsertThrew).toBe(true);
+
+      // Both endpoints null, and a well-formed window, still go in.
+      await sql`
+        insert into regulations (tournament_id, label) values (${tournamentId}, '通常の部')
+      `;
+      await sql`
+        insert into regulations (
+          tournament_id, label, priority_starts_at, priority_ends_at
+        ) values (
+          ${tournamentId}, '優先の部', now(), now() + interval '1 day'
+        )
+      `;
+      const rows = await sql`
+        select label from regulations where tournament_id = ${tournamentId}
+      `;
+      expect(rows).toHaveLength(2);
     });
   },
 );

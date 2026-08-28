@@ -1,10 +1,10 @@
 // Puts the local Supabase stack into a known state before a run: every
 // application row is cleared, then the fixtures in `./fixtures.ts` are
 // inserted. Talking to Postgres directly rather than through the API is
-// deliberate — there is no API for creating regions, tournaments,
-// regulations or staff accounts (see the "未実装" section of
-// `docs/api-endpoints.md`), which is exactly what a run needs to start
-// from.
+// deliberate — there is no API for creating regions or staff accounts
+// (see the "未実装" section of `docs/api-endpoints.md`), which is exactly
+// what a run needs to start from, and the rows that do have one are
+// inserted the same way to keep the seed a single pass over Postgres.
 
 import {createClient, type SupabaseClient} from '@supabase/supabase-js';
 import {hashPassword} from '@regional-quiz/backend/lib/password';
