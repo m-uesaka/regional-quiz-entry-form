@@ -33,22 +33,23 @@ interface StaffAccountRow {
   regions: {slug: string} | null;
 }
 
-// Matches the period `LOGIN_RATE_LIMITER` counts over (`wrangler.toml`).
+// Matches the period both login limiters count over (`wrangler.toml`).
 const LOGIN_LIMIT_PERIOD_SECONDS = 60;
 
 export const staffAuthRoute = new Hono<Env>().post(
   '/login',
-  // Keyed both ways for the same reason as the participant login: see
-  // `routes/participant-auth.ts`.
+  // Keyed both ways for the same reason as the participant login, and the
+  // email key named after this endpoint so the two cannot spend each
+  // other's per-account budget: see `routes/participant-auth.ts`.
   rateLimit(
-    env => env.LOGIN_RATE_LIMITER,
+    env => env.LOGIN_IP_RATE_LIMITER,
     c => `ip:${clientIp(c)}`,
     LOGIN_LIMIT_PERIOD_SECONDS,
   ),
   zValidator('json', StaffLoginInputSchema),
   rateLimit<{out: {json: StaffLoginInput}}>(
-    env => env.LOGIN_RATE_LIMITER,
-    c => `email:${c.req.valid('json').email}`,
+    env => env.LOGIN_EMAIL_RATE_LIMITER,
+    c => `staff-login:email:${c.req.valid('json').email}`,
     LOGIN_LIMIT_PERIOD_SECONDS,
   ),
   async c => {

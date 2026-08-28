@@ -22,16 +22,24 @@ export interface Bindings {
   // environments on purpose -- a `var` of the same name would overwrite the
   // secret on the next deploy.
   TURNSTILE_SECRET_KEY: string;
-  // Cloudflare's Rate Limiting bindings, declared in `wrangler.toml`. Both
-  // are shared by several endpoints, which is why every key built for them
+  // Cloudflare's Rate Limiting bindings, declared in `wrangler.toml`. Each
+  // is shared by several endpoints, which is why every key built for them
   // says what it is keyed on (see `middleware/rate-limit.ts`):
   //
-  //   - `LOGIN_RATE_LIMITER` caps credential guessing on the two login
-  //     endpoints. Each attempt costs a PBKDF2 verification, so it is also
-  //     what stops an unauthenticated caller from spending the Worker's CPU.
+  //   - `LOGIN_IP_RATE_LIMITER` caps credential guessing from one address
+  //     across the two login endpoints. Each attempt costs a PBKDF2
+  //     verification, so it is also what stops an unauthenticated caller
+  //     from spending the Worker's CPU.
+  //   - `LOGIN_EMAIL_RATE_LIMITER` caps guessing against one account, which
+  //     the IP limit cannot see when the guesses come from a botnet. It is
+  //     a separate binding rather than a second key on the one above
+  //     because its number has to be far looser: a limit keyed on an email
+  //     address is also a way to lock its owner out, and the tighter it is
+  //     the cheaper that is to do (`wrangler.toml` has the numbers).
   //   - `MAIL_TRIGGER_RATE_LIMITER` caps the two endpoints that send mail to
   //     an address the caller chose, and so is much tighter.
-  LOGIN_RATE_LIMITER: RateLimit;
+  LOGIN_IP_RATE_LIMITER: RateLimit;
+  LOGIN_EMAIL_RATE_LIMITER: RateLimit;
   MAIL_TRIGGER_RATE_LIMITER: RateLimit;
 }
 

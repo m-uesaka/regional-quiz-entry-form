@@ -35,7 +35,7 @@ TURNSTILE_SECRET_KEY = "1x0000000000000000000000000000000AA"
 #
 # Like every other binding, `unsafe` is a non-inheritable key: an `[env.*]`
 # block that doesn't restate it gets no limiters at all, and a Worker whose
-# `env.LOGIN_RATE_LIMITER` is undefined answers 500 on every login. So each
+# `env.LOGIN_IP_RATE_LIMITER` is undefined answers 500 on every login. So each
 # environment below carries its own copy, with its own `namespace_id` — the
 # counters are keyed by that id, and sharing one between environments would
 # let a staging load test spend production's budget.
@@ -53,9 +53,15 @@ TURNSTILE_SECRET_KEY = "1x0000000000000000000000000000000AA"
 # wrong, on top of the `vars` warned about above: it would ship these limits
 # to the production Worker. Always pass `--env`.
 [[unsafe.bindings]]
-name = "LOGIN_RATE_LIMITER"
+name = "LOGIN_IP_RATE_LIMITER"
 type = "ratelimit"
 namespace_id = "3001"
+simple = {limit = 1000, period = 60}
+
+[[unsafe.bindings]]
+name = "LOGIN_EMAIL_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "3003"
 simple = {limit = 1000, period = 60}
 
 [[unsafe.bindings]]
@@ -90,15 +96,31 @@ name = "regional-quiz-backend-staging"
 MAIL_FROM_ADDRESS = "entry@staging.entry.regionalquiz.example"
 FRONTEND_URL = "https://staging.entry.regionalquiz.example"
 
-# 10 login attempts a minute per IP and per address. Enough for someone
-# retyping a password they half-remember, far too few to work through a
-# credential-stuffing list — and it is the same limiter that keeps an
+# 10 login attempts a minute from one address. Enough for someone retyping a
+# password they half-remember, far too few to work through a
+# credential-stuffing list — and this is also the limiter that keeps an
 # unauthenticated caller from spending the Worker's CPU on PBKDF2.
 [[env.staging.unsafe.bindings]]
-name = "LOGIN_RATE_LIMITER"
+name = "LOGIN_IP_RATE_LIMITER"
 type = "ratelimit"
 namespace_id = "2001"
 simple = {limit = 10, period = 60}
+
+# The per-account limit is on its own limiter *because* its number has to be
+# a different one. It exists for the attack the IP limit cannot see — a
+# botnet spread thin across addresses, all guessing at one account — but any
+# limit keyed on an email address is, by construction, a lever for locking
+# the owner of that address out of their own account, and the lower the
+# number the cheaper that lever is. At 10/60s an attacker who knows an
+# address keeps its owner permanently refused for one request every six
+# seconds; 60/60s makes them hold a full request a second to do the same,
+# while still capping how far anyone can get through a password list against
+# one account. No legitimate sign-in comes anywhere near it.
+[[env.staging.unsafe.bindings]]
+name = "LOGIN_EMAIL_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "2003"
+simple = {limit = 60, period = 60}
 
 # Much tighter: every call that gets through here sends mail to an address
 # the caller chose. Three a minute covers a participant who resubmits the
@@ -126,10 +148,16 @@ FRONTEND_URL = "https://entry.regionalquiz.example"
 
 # Same policy as staging, on its own namespaces — see the comments there.
 [[env.production.unsafe.bindings]]
-name = "LOGIN_RATE_LIMITER"
+name = "LOGIN_IP_RATE_LIMITER"
 type = "ratelimit"
 namespace_id = "1001"
 simple = {limit = 10, period = 60}
+
+[[env.production.unsafe.bindings]]
+name = "LOGIN_EMAIL_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1003"
+simple = {limit = 60, period = 60}
 
 [[env.production.unsafe.bindings]]
 name = "MAIL_TRIGGER_RATE_LIMITER"

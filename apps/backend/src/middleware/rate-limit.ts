@@ -7,10 +7,17 @@ import type {Bindings, Env} from '../types/env';
  * budget, answering 429 with a `Retry-After`.
  *
  * Lockout (stop an account after N failures) is deliberately not what this
- * does. Anyone who knows a participant's address could then lock them out
- * of their own entry at will, which trades a brute-force risk for a
- * denial-of-service one; only the number of attempts per unit of time is
- * capped here, and never the account itself.
+ * does. Only the number of attempts per unit of time is capped, and never
+ * the account itself: nothing here counts failures, so a refusal always
+ * expires on its own.
+ *
+ * A limit keyed on an email address is still a lever for keeping the owner
+ * of that address refused -- an attacker who knows it only has to keep the
+ * bucket full -- so the endpoints that use one put it on a limiter whose
+ * budget is far too loose for a legitimate caller to ever meet, and pay for
+ * that with a weaker cap on guessing against a single account. The tight
+ * numbers are all on IP keys, where the caller being refused is the one
+ * spending the budget. See `wrangler.toml`.
  *
  * The limiters are Cloudflare's Rate Limiting bindings, so the counting is
  * per-colo and approximate. That is enough for what this defends against
@@ -21,7 +28,9 @@ import type {Bindings, Env} from '../types/env';
  *     bindings.
  * @param keyOf Builds the key to count under. Prefix it with what the key
  *     means (`ip:` / `email:`), so two limits on the same limiter can never
- *     collide on one bucket.
+ *     collide on one bucket -- and, where two endpoints share a limiter but
+ *     must not share a bucket, name the endpoint too (see the email keys in
+ *     `routes/participant-auth.ts` and `routes/staff-auth.ts`).
  * @param retryAfterSeconds What to put in `Retry-After`. The binding does
  *     not report when the budget resets, so this is the limiter's own
  *     period, named by the caller.

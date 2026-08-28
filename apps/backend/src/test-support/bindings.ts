@@ -1,7 +1,7 @@
 // Filler for the bindings Task 11-1 added, for the tests of everything
 // else. Every test that hands a route or a `lib/` function an environment
-// builds a `Bindings` literal, and three of those fields (a Turnstile secret
-// and two rate limiters) have nothing to do with what most of those tests
+// builds a `Bindings` literal, and four of those fields (a Turnstile secret
+// and three rate limiters) have nothing to do with what most of those tests
 // are about — but leaving them out no longer typechecks, and leaving the
 // limiters undefined makes the middleware throw. They are spread in from
 // here instead, so a fourth binding is one edit rather than twenty-three.
@@ -28,10 +28,14 @@ export function refusingRateLimiter(): RateLimit {
  */
 export const PERMISSIVE_SECURITY_BINDINGS: Pick<
   Bindings,
-  'TURNSTILE_SECRET_KEY' | 'LOGIN_RATE_LIMITER' | 'MAIL_TRIGGER_RATE_LIMITER'
+  | 'TURNSTILE_SECRET_KEY'
+  | 'LOGIN_IP_RATE_LIMITER'
+  | 'LOGIN_EMAIL_RATE_LIMITER'
+  | 'MAIL_TRIGGER_RATE_LIMITER'
 > = {
   TURNSTILE_SECRET_KEY: 'dummy-turnstile-secret',
-  LOGIN_RATE_LIMITER: allowingRateLimiter(),
+  LOGIN_IP_RATE_LIMITER: allowingRateLimiter(),
+  LOGIN_EMAIL_RATE_LIMITER: allowingRateLimiter(),
   MAIL_TRIGGER_RATE_LIMITER: allowingRateLimiter(),
 };
 

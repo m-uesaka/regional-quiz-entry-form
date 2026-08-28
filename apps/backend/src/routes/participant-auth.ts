@@ -24,27 +24,37 @@ interface ParticipantRow {
   password_changed_at: string;
 }
 
-// The period `LOGIN_RATE_LIMITER` counts over (`wrangler.toml`), which is
+// The period both login limiters count over (`wrangler.toml`), which is
 // also how long a refused caller is asked to wait.
 const LOGIN_LIMIT_PERIOD_SECONDS = 60;
 
 export const participantAuthRoute = new Hono<Env>().post(
   '/login',
-  // Two keys on the same limiter, because they stop different attacks: one
-  // address trying many accounts is only visible on the IP key, and many
-  // addresses trying one account only on the email key. Neither alone
-  // covers the other.
+  // Two limits, because they stop different attacks: one address trying many
+  // accounts is only visible on the IP key, and many addresses trying one
+  // account only on the email key. Neither alone covers the other, and they
+  // sit on separate limiters because the per-account one has to be far
+  // looser -- see `types/env.ts`.
+  //
+  // The IP key deliberately carries no endpoint of its own, so the staff
+  // login below shares this bucket: what it caps is one caller's PBKDF2
+  // spend, and that is the same CPU whichever of the two they aim at.
   rateLimit(
-    env => env.LOGIN_RATE_LIMITER,
+    env => env.LOGIN_IP_RATE_LIMITER,
     c => `ip:${clientIp(c)}`,
     LOGIN_LIMIT_PERIOD_SECONDS,
   ),
   zValidator('json', ParticipantLoginInputSchema),
   // After the validator, so the address counted against is one the schema
   // has already accepted rather than any string a caller cares to send.
+  //
+  // Named by endpoint, unlike the IP key: a participant and a staff member
+  // can hold the same address, and without the prefix this cheap
+  // unauthenticated endpoint could be used to spend that address's staff
+  // budget.
   rateLimit<{out: {json: ParticipantLoginInput}}>(
-    env => env.LOGIN_RATE_LIMITER,
-    c => `email:${c.req.valid('json').email}`,
+    env => env.LOGIN_EMAIL_RATE_LIMITER,
+    c => `participant-login:email:${c.req.valid('json').email}`,
     LOGIN_LIMIT_PERIOD_SECONDS,
   ),
   async c => {

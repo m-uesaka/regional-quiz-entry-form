@@ -135,7 +135,7 @@ describe('POST /login', () => {
           password: 'correct-password',
         }),
       },
-      {...ENV, LOGIN_RATE_LIMITER: refusingRateLimiter()},
+      {...ENV, LOGIN_IP_RATE_LIMITER: refusingRateLimiter()},
     );
 
     const body: unknown = await res.json();
@@ -143,5 +143,35 @@ describe('POST /login', () => {
     expect(res.headers.get('Retry-After')).toBe('60');
     expect(body).toEqual({error: 'too many requests'});
     expect(res.headers.get('set-cookie')).toBeNull();
+  });
+
+  it('counts the per-account limit under a key naming this endpoint', async () => {
+    // A participant and a staff member can hold the same address. Without
+    // the endpoint in the key the two logins would share one bucket, and
+    // this cheap unauthenticated endpoint could be used to spend a staff
+    // member's budget for that address.
+    mockParticipantFetch(null);
+    const keys: string[] = [];
+    const recording: RateLimit = {
+      limit: ({key}) => {
+        keys.push(key ?? '');
+        return Promise.resolve({success: true});
+      },
+    };
+
+    await participantAuthRoute.request(
+      '/login',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          email: 'shared@example.com',
+          password: 'anything',
+        }),
+      },
+      {...ENV, LOGIN_EMAIL_RATE_LIMITER: recording},
+    );
+
+    expect(keys).toEqual(['participant-login:email:shared@example.com']);
   });
 });

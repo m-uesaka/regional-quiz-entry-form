@@ -67,16 +67,24 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 
 未認証で叩ける 4 本には、Cloudflare の Rate Limiting binding によるレート制限が掛かっています(#116 / [Task 11-1](../tasks/task-11-1.md))。**IP(`CF-Connecting-IP`)とメールアドレスの 2 つの鍵**で別々に数えます。1 つの IP から多数のアカウントを試す攻撃は IP 鍵でしか、多数の IP から 1 アカウントを試す攻撃はメール鍵でしか止まらないためです。メール鍵はバリデーション通過後に数えるので、スキーマに合わない本文で他人のメール枠を減らすことはできません。
 
-| エンドポイント | limiter | 上限(本番) | Turnstile |
-| --- | --- | --- | --- |
-| `POST /api/auth/staff/login` | `LOGIN_RATE_LIMITER` | 10 回 / 60 秒 | なし |
-| `POST /api/auth/participant/login` | `LOGIN_RATE_LIMITER` | 10 回 / 60 秒 | なし |
-| `POST /api/tournaments/:tournamentId/entries` | `MAIL_TRIGGER_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
-| `POST /api/auth/participant/password-reset/request` | `MAIL_TRIGGER_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
+**鍵ごとに別の limiter に載せています。** Rate Limiting binding は上限を binding 単位でしか持てないので、IP 鍵とメール鍵に別々の数字を与えるには binding を分けるしかありません。
+
+| エンドポイント | 鍵 | limiter | 上限(本番) | Turnstile |
+| --- | --- | --- | --- | --- |
+| `POST /api/auth/staff/login` | `ip:` | `LOGIN_IP_RATE_LIMITER` | 10 回 / 60 秒 | なし |
+| `POST /api/auth/staff/login` | `staff-login:email:` | `LOGIN_EMAIL_RATE_LIMITER` | 60 回 / 60 秒 | なし |
+| `POST /api/auth/participant/login` | `ip:` | `LOGIN_IP_RATE_LIMITER` | 10 回 / 60 秒 | なし |
+| `POST /api/auth/participant/login` | `participant-login:email:` | `LOGIN_EMAIL_RATE_LIMITER` | 60 回 / 60 秒 | なし |
+| `POST /api/tournaments/:tournamentId/entries` | `ip:` / `email:` | `MAIL_TRIGGER_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
+| `POST /api/auth/participant/password-reset/request` | `ip:` / `email:` | `MAIL_TRIGGER_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
+
+ログインの IP 鍵は**エンドポイント名を含みません**。これが抑えているのは「その発信元が Worker に踏ませる PBKDF2 の量」であり、2 本のどちらを叩こうと同じ CPU だからです。一方**メール鍵にはエンドポイント名を入れます**(`participant-login:` / `staff-login:`)。同じアドレスを参加者とスタッフの両方が持ち得るので、共有すると未認証で叩ける参加者ログインからスタッフの枠を削れてしまいます。
 
 超過時は **`429` と `Retry-After: 60`**、本文は `{"error": "too many requests"}` です。フロントエンドは「送信が集中しています。しばらく待ってから再度お試しください」と表示します。
 
 **アカウントロックアウト(N 回失敗でアカウントを止める)は採っていません。** メールアドレスさえ分かれば任意の参加者を締め出せる DoS になるため、単位時間あたりの試行回数だけを制限します。
+
+とはいえ**メールアドレスを鍵にした制限は、それ自体がその持ち主を締め出す手段になります**(枠を埋め続ければよい)。そのためログインのメール鍵は、正規の利用者がまず到達しない 60 回 / 60 秒に緩めてあります。10 回 / 60 秒なら 6 秒に 1 回の送信で恒久的に締め出せるところ、毎秒 1 回の送信を維持しないと同じことができない、というトレードオフです(1 アカウントに対する総当たりの上限としては緩くなります)。厳しい数字は、締め出される相手と枠を使う相手が一致する IP 鍵の側に置いています。
 
 メールを送る 2 本は、上記に加えて **Turnstile のトークン**を要求します。トークンはリクエストボディではなく **`cf-turnstile-response` ヘッダ**で受け取ります(送信のたびに使い捨てるものなので、`packages/shared` のスキーマ — マイページの編集フォームや DB への insert も組み立てる — には入れません)。フロントエンドはウィジェットがフォームに差し込む同名の hidden control を読み、そのままヘッダに載せ替えます。
 
@@ -594,7 +602,8 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 | `GOOGLE_SHEETS_API_KEY` | ✅ | Google Sheets API v4 の API キー |
 | `FRONTEND_URL` | | メール本文中のリンク(確認リンク等)を組み立てるためのフロントエンド URL |
 | `TURNSTILE_SECRET_KEY` | ✅ | Turnstile の siteverify に渡すシークレット。`[env.*.vars]` には**置かない**(同名の var はシークレットを上書きします) |
-| `LOGIN_RATE_LIMITER` | | Rate Limiting binding。ログイン 2 本に 10 回 / 60 秒 |
+| `LOGIN_IP_RATE_LIMITER` | | Rate Limiting binding。ログイン 2 本に IP 単位で 10 回 / 60 秒 |
+| `LOGIN_EMAIL_RATE_LIMITER` | | Rate Limiting binding。ログイン 2 本にアカウント単位で 60 回 / 60 秒 |
 | `MAIL_TRIGGER_RATE_LIMITER` | | Rate Limiting binding。メールを送る 2 本に 3 回 / 60 秒 |
 
 登録手順は [`supabase-deployment.md`](./supabase-deployment.md) / [`google-sheets-integration.md`](./google-sheets-integration.md) を参照してください。
