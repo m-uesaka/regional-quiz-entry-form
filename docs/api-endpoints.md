@@ -95,6 +95,7 @@ if ('yaml' in body) {
 | PATCH | `/api/tournaments/:id` | 統括スタッフ |
 | GET | `/api/tournaments/:regionSlug/:tournamentSlug` | なし |
 | GET | `/api/tournaments/:tournamentId/regulations` | なし |
+| PUT | `/api/tournaments/:tournamentId/regulations` | 統括スタッフ |
 | GET | `/api/tournaments/:tournamentId/entry-list` | なし |
 | POST | `/api/tournaments/:tournamentId/entries` | なし |
 | GET | `/api/entries/verify` | なし(トークン) |
@@ -261,6 +262,30 @@ if ('yaml' in body) {
 - `500`
 
 `src/index.ts` では**`tournamentsRoute` より前**にマウントしています。`tournamentsRoute` の `/:regionSlug/:tournamentSlug` も2セグメントにマッチするため、後ろに置くとその `tournamentSlug` の enum バリデーションが先に 400 を返してしまいます(`entryListRoute` と同じ理由)。
+
+### `PUT /api/tournaments/:tournamentId/regulations`
+
+統括スタッフ限定。大会のレギュレーションを**まとめて保存**します。`PUT /api/form-definitions/:tournamentId` と同じく「保存後にこうなっていてほしい状態」を丸ごと送るモデルで、個別の POST/PATCH/DELETE はありません。処理の本体は `apps/backend/src/lib/regulations.ts` の `syncRegulations()`、実際の差分適用は Postgres 関数 `sync_regulations()`(`supabase/migrations/0014_sync_regulations_fn.sql`)です。
+
+- リクエスト: `RegulationSyncInputSchema` — `{regulations: RegulationUpsert[]}`
+  | フィールド | 型 | 備考 |
+  | --- | --- | --- |
+  | `id` | string(uuid) | 省略可。**指定すると既存行の更新、省略すると新規追加** |
+  | `label` | string | 1〜200文字 |
+  | `priorityStartsAt` | string(datetime) \| null | 省略時は `null` |
+  | `priorityEndsAt` | string(datetime) \| null | 省略時は `null` |
+- `displayOrder` は送りません。**配列の並び順がそのまま `display_order`** になるので、並べ替えは配列を並べ替えるだけです。
+- 優先期間は「両方 null」か「両方指定(開始 < 終了)」のみ許容します(Zod と `regulations` の check 制約 `regulations_priority_window_complete` の両方で担保)。
+- 配列に含まれなかった既存行は削除されますが、**エントリーから参照されている行は削除できません**。`entries` が複合外部キー `(regulation_id, tournament_id)` で参照しているため、フォーム定義のような delete → insert は使えず、id 指定は update・id 無しは insert・消えた行は「参照が無ければ delete」という差分同期になっています。
+- `regulations` は1件以上必要です(エントリーは必ず1つ選ぶため、0件の大会はエントリー不可になる)。
+
+- `200`: `{"ok": true}`
+- `400`: `:tournamentId` が UUID でない / リクエストが `RegulationSyncInputSchema` に合わない / `id` がこの大会のレギュレーションでない(`この大会に存在しないレギュレーションが指定されています: ...`)
+- `401`: スタッフセッションが無い
+- `403`: 地域スタッフ
+- `404`: `{"error": "tournament not found"}`
+- `409`: `{"error": "エントリーで使用中のため削除できないレギュレーションがあります: ..."}` — 何も書き込まれていないので、該当レギュレーションを戻して送り直せます(保存中のエントリー作成は大会行のロックで直列化されるので、「検査は通ったのに削除で FK 違反」という中間状態にはなりません)
+- `500`
 
 ## 7. エントリー(参加者向け)
 
@@ -573,5 +598,4 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 `tasks.md` 上で計画されているが、現時点で API が存在しないものです。
 
-- レギュレーション(`regulations`)の**登録・編集** API — 読み出しは `GET /api/tournaments/:tournamentId/regulations` がありますが、書き込みは Supabase 上で直接行う運用です。
-- スタッフアカウント(`staff_accounts`)の管理 API — 同上。
+- スタッフアカウント(`staff_accounts`)の管理 API — 登録・編集は Supabase 上で直接行う運用です。
