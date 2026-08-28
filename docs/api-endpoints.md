@@ -230,7 +230,7 @@ if ('yaml' in body) {
 
 ## 5. 地域管理(統括スタッフ)
 
-`routes/regions.ts`。`regions` は列名も API のフィールド名も `id` / `slug` / `name` で一致するため、大会管理のような camelCase ↔ snake_case の変換はありません。地域を作らないと大会も作れないので、統括スタッフが自力で新地域を立ち上げられるようにするためのエンドポイント群です。大会作成画面が `regionId` を選ぶための一覧もここで返します。
+`routes/regions.ts`。`id` / `slug` / `name` は列名と API のフィールド名が一致しますが、`allowsDualEntry` ↔ `allows_dual_entry` だけは変換が要るので、`rowToRegion()` / `toRegionRow()` が担当します。地域を作らないと大会も作れないので、統括スタッフが自力で新地域を立ち上げられるようにするためのエンドポイント群です。大会作成画面が `regionId` を選ぶための一覧もここで返します。
 
 **削除は提供しません。** `tournaments` / `participants` / `staff_accounts` から参照されており、地域を消す運用は想定していません。
 
@@ -240,7 +240,7 @@ if ('yaml' in body) {
 
 全地域を `name` 昇順で返します。
 
-- `200`: `Region[]` — `{id, slug, name}`
+- `200`: `Region[]` — `{id, slug, name, allowsDualEntry}`
 - `401` / `403`
 - `500`: `{"error": "internal server error"}`
 
@@ -248,9 +248,10 @@ if ('yaml' in body) {
 
 ### `POST /api/regions`
 
-- リクエスト: `RegionCreateInputSchema` — `{slug, name}`
+- リクエスト: `RegionCreateInputSchema` — `{slug, name, allowsDualEntry?}`
   - `slug` は `/^[a-z][a-z0-9-]{1,30}$/`(先頭の英字を含めて 2〜31 文字)。エントリーフォーム URL(`/{regionSlug}/{tournamentSlug}/entry`)の1セグメントとしてそのまま使うため、パスやクエリで意味を持つ文字と大文字を弾きます。先頭を英字に固定しているのは UUID や数値 id と見分けるためです
   - `name` は 1〜100 文字
+  - `allowsDualEntry` は省略可で、既定は `false`(最強位・新人王のどちらか一方のみ)。省略時に許可側へ倒さないのは、この設定を意識しなかった地域が黙って重複エントリーを受け付けてしまわないようにするためです
 - `201`: 作成された `Region`
 - `400`: バリデーション違反(`zValidator`)
 - `409`: `{"error": "slug already in use"}` — slug の重複(Postgres の `23505`)。スタッフが直せる入力ミスなので 500 ではなくこれを返します
@@ -262,14 +263,16 @@ if ('yaml' in body) {
 ### `PATCH /api/regions/:id`
 
 - パス: `id` は UUID
-- リクエスト: `RegionUpdateInputSchema` — `{name}`
+- リクエスト: `RegionUpdateInputSchema` — `{name?, allowsDualEntry?}`(両方省略した空の body は 400)
 - `200`: 更新後の `Region`
 - `400`: バリデーション違反(`zValidator`)
 - `404`: `{"error": "region not found"}`(Supabase の `PGRST116` を変換)
 - `401` / `403`
 - `500`: `{"error": "internal server error"}` — 作成時と同じ理由で、対象が無い以外の更新失敗はサーバ側の失敗として扱います
 
-**`slug` は更新できません。** 公開済みのエントリーフォーム URL の一部なので、後から変えると配布済みのリンクが壊れます。`RegionUpdateInputSchema` は `name` だけを `pick` しているため、body に `slug` を入れても 400 にはならず、単に無視されます。
+**`slug` は更新できません。** 公開済みのエントリーフォーム URL の一部なので、後から変えると配布済みのリンクが壊れます。`RegionUpdateInputSchema` は `name` と `allowsDualEntry` だけを `pick` しているため、body に `slug` を入れても(他に更新するフィールドがあれば)400 にはならず、単に無視されます。
+
+`name` / `allowsDualEntry` はどちらも PATCH なので**任意**です。省略したフィールドは `toRegionRow()` が UPDATE 文から落とすので、地域名だけを直したいときに重複参加の設定が巻き添えで変わることも、設定だけを切り替えたいときに(取得後に他のスタッフが改名した)古い `name` を書き戻してしまうこともありません。両方を省略した body は更新する対象が無く、クライアント側のバグでしかないので 400 で弾きます。
 
 ## 6. 大会管理(統括スタッフ)
 
@@ -378,6 +381,7 @@ if ('yaml' in body) {
 | 401 | `invalid password` | 既存メールアドレスでのエントリーだがパスワードが一致しない |
 | 409 | `already registered in another region` | そのメールアドレスが別地域の participant として登録済み |
 | 409 | `already entered` | 同じ大会にキャンセル以外のエントリーが既にある |
+| 409 | `already entered another tournament in this region` | `regions.allows_dual_entry` が false の地域で、同一地域の**別の**大会にキャンセル以外のエントリーが既にある |
 | 409 | (Supabase のメッセージ) | participant / entry の作成に失敗 |
 | 500 | (Supabase のメッセージ) | 大会の `form_field_defs` の取得に失敗 |
 | 500 | `failed to send verification email: ...` | 確認メールの送信に失敗 |
@@ -388,9 +392,12 @@ if ('yaml' in body) {
 2. その大会の `form_field_defs` を取得し、`customFieldValues` を `findCustomFieldValuesError()` で照合(未定義キー、選択肢にない値、必須項目の空欄、型の不一致を 400 で弾く)。
 3. メールアドレスから participant を検索。既存なら**パスワード照合**、無ければ新規作成(PBKDF2 でハッシュ化)。
 4. 同じ大会の既存エントリーを確認。`cancelled` なら**その行を再利用**して上書き(`unique (participant_id, tournament_id)` があるため2行目は作れない)、それ以外なら 409。
-5. 確認メールを送信。
+5. 地域が重複参加を許していなければ(`regions.allows_dual_entry` が false)、同一地域の**別**大会に有効なエントリーが無いことを確認。
+6. 確認メールを送信。
 
 `customFieldValues` の照合を participant の検索・作成より前に置いているのは、フォームからは生成し得ない回答を弾いた結果としてアカウントだけが作られる、という副作用を残さないためです。編集 API(`PATCH /api/mypage/entries/:entryId`)と同じ `findCustomFieldValuesError()` を使うので、新規と編集で通る回答は一致します。
+
+重複参加の判定で数えるのは `pending_verification` / `confirmed` / `waitlisted` で、**`cancelled` は数えません**。キャンセルしたなら他方に出られるべきだからです。逆に `pending_verification` を数えるのは、メール確認前の枠取りで両方を押さえるのを防ぐためです。判定対象から**この大会自身は除いて**いるので、キャンセル後に同じ大会へ再エントリーする経路(上の 4.)はそのまま通ります。
 
 メール送信に失敗した場合はエントリーを**ロールバック**します。放置すると、参加者は使えるリンクを受け取っていないのに一意制約や「already entered」で再試行を永久に阻まれるためです。ロールバックは「確認トークンの削除 → 新規行なら削除 / 再利用行なら元の値へ復元」の順に行います(トークンが FK で参照している間はエントリーを削除できないため)。再利用行は削除ではなく**キャンセル状態へ復元**することで、元のエントリーの記録が消えないようにしています。
 

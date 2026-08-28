@@ -142,6 +142,7 @@ export async function seedDatabase(): Promise<void> {
         id: REGION.id,
         slug: REGION.slug,
         name: REGION.name,
+        allows_dual_entry: REGION.allowsDualEntry,
       })
     ).error,
   );

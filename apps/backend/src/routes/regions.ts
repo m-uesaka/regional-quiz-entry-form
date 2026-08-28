@@ -5,6 +5,8 @@ import {
   RegionCreateInputSchema,
   RegionUpdateInputSchema,
   type Region,
+  type RegionCreateInput,
+  type RegionUpdateInput,
 } from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
@@ -18,7 +20,11 @@ interface RegionRow {
   id: string;
   slug: string;
   name: string;
+  allows_dual_entry: boolean;
 }
+
+/** The columns of `RegionRow`, for every select in this file. */
+const REGION_COLUMNS = 'id, slug, name, allows_dual_entry';
 
 // Rows are mapped rather than re-parsed with `RegionSchema`: the slug rules
 // live in the create schema, not in the column, so a row written before this
@@ -26,7 +32,29 @@ interface RegionRow {
 // read that rejects data already in the table would answer 500 for a region
 // the staff can otherwise use fine.
 function rowToRegion(row: RegionRow): Region {
-  return {id: row.id, slug: row.slug, name: row.name};
+  return {
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    allowsDualEntry: row.allows_dual_entry,
+  };
+}
+
+/**
+ * Turns the API's camelCase input into the columns Supabase writes. Only
+ * `allowsDualEntry` needs renaming — `slug` and `name` are spelled the same
+ * on both sides — and every field the caller omitted is left out of the row,
+ * so a PATCH updates exactly what it sent. The update schema refuses a body
+ * that would leave nothing at all.
+ * @param input The validated create or update body.
+ */
+function toRegionRow(
+  input: RegionCreateInput | RegionUpdateInput,
+): Record<string, unknown> {
+  const {allowsDualEntry, ...rest} = input;
+  return allowsDualEntry === undefined
+    ? rest
+    : {...rest, allows_dual_entry: allowsDualEntry};
 }
 
 // The whole app is general-staff only and is mounted alone at `/regions`, so
@@ -38,7 +66,7 @@ export const regionsRoute = new Hono<StaffEnv>()
     const db = createDbClient(c.env);
     const {data, error} = await db
       .from('regions')
-      .select('id, slug, name')
+      .select(REGION_COLUMNS)
       .order('name', {ascending: true})
       .returns<RegionRow[]>();
     if (error) {
@@ -50,8 +78,8 @@ export const regionsRoute = new Hono<StaffEnv>()
     const db = createDbClient(c.env);
     const {data, error} = await db
       .from('regions')
-      .insert(c.req.valid('json'))
-      .select('id, slug, name')
+      .insert(toRegionRow(c.req.valid('json')))
+      .select(REGION_COLUMNS)
       .returns<RegionRow[]>()
       .single();
     if (error) {
@@ -79,9 +107,9 @@ export const regionsRoute = new Hono<StaffEnv>()
       const db = createDbClient(c.env);
       const {data, error} = await db
         .from('regions')
-        .update(c.req.valid('json'))
+        .update(toRegionRow(c.req.valid('json')))
         .eq('id', c.req.valid('param').id)
-        .select('id, slug, name')
+        .select(REGION_COLUMNS)
         .returns<RegionRow[]>()
         .single();
       if (error) {

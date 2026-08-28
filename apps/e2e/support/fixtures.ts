@@ -44,10 +44,15 @@ export interface FormFieldDefFixture {
   displayOrder: number;
 }
 
+// `allowsDualEntry` is spelled out rather than left to the column default,
+// because `entry-flow.spec.ts` asserts what a region that refuses double
+// entries does — a default that changed would otherwise turn that spec into
+// a false pass.
 export const REGION = {
   id: '11111111-1111-4111-8111-111111111111',
   slug: 'tokyo',
   name: '東京',
+  allowsDualEntry: false,
 } as const;
 
 /** One seat only, so the second confirmed entry lands on the waitlist. */

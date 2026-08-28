@@ -44,6 +44,8 @@ const ENTRY_ERROR_MESSAGES: Record<string, string> = {
   'already registered in another region':
     'このメールアドレスは別の地域で登録済みです',
   'already entered': 'この大会には既にエントリー済みです',
+  'already entered another tournament in this region':
+    'この地域では、最強位と新人王のどちらか一方にのみエントリーできます',
   // Answered by the challenge in front of the API, which refuses a missing
   // and an invalid token alike. Both are fixed by solving the widget again.
   'turnstile verification failed':
