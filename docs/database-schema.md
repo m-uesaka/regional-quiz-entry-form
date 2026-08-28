@@ -24,6 +24,7 @@ flowchart LR
   participants["participants<br>(参加者アカウント)"]
   password_reset_tokens["password_reset_tokens<br>(パスワード再設定トークン)"]
   staff_accounts["staff_accounts<br>(スタッフアカウント)"]
+  staff_password_reset_tokens["staff_password_reset_tokens<br>(スタッフのパスワード設定/再設定トークン)"]
 
   regions --> tournaments
   regions --> participants
@@ -33,6 +34,7 @@ flowchart LR
   tournaments --> entries
   entries --> email_verification_tokens
   participants --> password_reset_tokens
+  staff_accounts --> staff_password_reset_tokens
   end
   style bg fill:#ffffff,stroke:#ffffff
 ```
@@ -128,6 +130,8 @@ flowchart TB
 - `unique (id, tournament_id)`: 一見冗長ですが、これは `entries` 側の複合外部キー `foreign key (regulation_id, tournament_id) references regulations (id, tournament_id)` を張るために必要です。この複合 FK により、**ある大会のエントリーが別の大会のレギュレーションを参照することが DB レベルで不可能**になります。
 - 優先期間の判定ロジックは `packages/shared/src/logic/regulation-eligibility.ts` の `isRegulationSelectionAllowed()`。「いずれかのレギュレーションの優先期間が現在アクティブなら、そのレギュレーションしか選べない。アクティブなものが1つもなければ全て選べる」という規則です。
 - `priority_starts_at` / `priority_ends_at` は**両方揃っているときだけ**優先期間として扱われます(片方だけ設定されている行は優先期間なしと同じ扱い)。
+- `check (regulations_priority_window_complete)`(`0014`): 「両方 null」か「両方非 null かつ開始 < 終了」だけを許します。制約追加は既存行も検証するため、`0014` では制約を張る前に不完全な行(片方だけ / 逆順)を両方 null に正規化しています(`isRegulationSelectionAllowed()` は元々それらを「優先期間なし」として扱っていたので、挙動は変わりません)。片方だけ設定された行を `isRegulationSelectionAllowed()` が「優先期間なし」として扱ってしまうため、そもそも作らせません。Zod の `RegulationUpsertSchema` にも同じ規則がありますが、SQL を直接叩く運用が残るので DB 側にも持たせています。
+- `index (tournament_id, display_order)`(`0014`): `unique (id, tournament_id)` は先頭列が `id` なので `where tournament_id = ?` には使えません。エントリーフォームの表示のたびに走るクエリなので別途張っています。
 
 ### form_field_defs — 大会ごとの追加フォーム項目定義
 
@@ -228,6 +232,21 @@ flowchart TB
 - 消費・パスワード更新・残りトークンの焼き捨ては DB 関数 `reset_participant_password()` が1トランザクションで行います。参加者行を `for update` でロックしてからトークン行を読み直すため、同じ参加者宛ての同時リクエストは直列化され、2 回消費されることはありません。
 - 再設定に成功した時点で、同じ参加者に残っている未使用トークンもまとめて `used_at` を立てて焼き捨てます。古い再設定リンクがもう一度パスワードを変更できてしまわないようにするためです。この焼き捨てはパスワード更新と同じトランザクションなので、失敗すればパスワード更新ごとロールバックされ、「古いリンクが生き残ったまま再設定だけ成功する」状態にはなりません。
 
+### staff_password_reset_tokens — スタッフのパスワード設定/再設定トークン
+
+| カラム | 型 | 制約 | 説明 |
+| --- | --- | --- | --- |
+| `id` | uuid | PK | |
+| `staff_account_id` | uuid | not null, FK → `staff_accounts.id`(on delete cascade) | |
+| `token_hash` | text | not null, unique | |
+| `expires_at` | timestamptz | not null | 有効期限(発行から24時間) |
+| `used_at` | timestamptz | nullable | |
+
+- `POST /api/staff/accounts`(招待)と `POST /api/staff/accounts/:id/password-reset`(再発行)が発行し、`POST /api/auth/staff/password-reset/confirm` が消費します(`apps/backend/src/lib/staff-password-reset.ts`)。
+- **参加者用の `password_reset_tokens` とは別テーブルです。** あちらは `participant_id` が not null の外部キーなので、スタッフの行を相乗りさせると「どちらか一方が必ず null の所有者列が 2 本」という、アプリのコードでしか守れない不変条件が生まれます。
+- 有効期限は参加者側(1 時間)より長い 24 時間です。招待は本人が待って操作しているわけではないため、1 時間では読まれる前に切れます。
+- 発行時にそのアカウントの期限切れ行を削除し、設定に成功した時点で残りの未使用行も焼き捨てます(`reset_staff_password()`)。
+
 ### staff_accounts — スタッフアカウント
 
 | カラム | 型 | 制約 | 説明 |
@@ -242,7 +261,8 @@ flowchart TB
 
 - `general`(統括スタッフ)は `region_id` / `tournament_type` が `null` で、全地域・全大会にアクセスできます。
 - `regional`(地域スタッフ)は `(region_id, tournament_type)` の組が担当範囲で、その大会のエントリーしか閲覧できません。この範囲チェックは `apps/backend/src/middleware/staff-auth.ts` が担当します。
-- スタッフアカウントを作成する API はありません。Supabase 上で直接 INSERT する運用です(`password_hash` の生成方法は [`supabase-deployment.md`](./supabase-deployment.md) を参照)。
+- この 2 パターン以外の行は check 制約 `staff_accounts_scope_matches_role`(`0015`)が拒否します。`regional` なのに `region_id` か `tournament_type` の片方しか無い行は「担当範囲が狭いアカウント」ではなく**壊れた行**で、上記の範囲チェックがすべての大会で落ちるため、そのアカウントはどこにアクセスしても静かに 403 を返し続けます。Zod 側(`StaffAccountCreateInputSchema` の判別共用体)と両方で縛っているのは、Supabase を直接触って行を作る経路が残るためです。
+- 作成は `POST /api/staff/accounts`(統括スタッフ限定)です。作成時の `password_hash` にはハッシュ形式に合わない固定値が入り、本人が招待メールのリンクでパスワードを設定するまでログインできません。統括スタッフが他人のパスワードを知らずに済ませるための作りです。
 
 ## 4. アクセス制御(RLS と権限)
 
@@ -253,6 +273,8 @@ alter table <各テーブル> enable row level security;
 revoke all on all tables in schema public from anon, authenticated;
 grant select, insert, update, delete on all tables in schema public to service_role;
 ```
+
+この `all tables in schema public` は**実行時点の**テーブルにしか効きません。あとから足したテーブル(`0015` の `staff_password_reset_tokens`)は、同じ `enable row level security` / `revoke` / `grant` をそのマイグレーション内で自分で書く必要があります。Supabase の default privileges は新しいテーブルを `anon` / `authenticated` にも渡すので、`revoke` を書き忘れると `0001` で剥がした権限が復活します。
 
 設計方針:
 
@@ -278,6 +300,7 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | `cancel_own_entry(uuid, uuid)` | `0006` | `lib/entries.ts` | 参加者自身のエントリーをキャンセルする |
 | `reset_participant_password(text, text)` | `0009` → `0010` で再定義 | `lib/password-reset.ts` | 再設定トークンを消費してパスワードを更新し、残りのトークンを焼き捨てる |
 | `tournament_entry_summary()` | `0013` | `routes/staff-dashboard.ts` | 全大会のエントリー件数をステータス別に集計する(読み取り専用) |
+| `sync_regulations(uuid, jsonb)` | `0014` | `lib/regulations.ts` | 大会のレギュレーションを差分同期する(update / insert / 参照が無ければ delete) |
 
 ### sync_form_field_defs(p_tournament_id, p_rows)
 
@@ -285,6 +308,22 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 
 - 大会行を `for update` でロックしてから delete → insert するため、(1) 挿入に失敗しても削除だけが残ることがなく、(2) 同一大会への同時アップロードが直列化され、2つの定義がマージされた中途半端な状態になりません。
 - 大会が存在しない場合は SQLSTATE `P0002` を raise します。TypeScript 側はこれを `TournamentNotFoundError` に変換し、API は 404 を返します。
+
+### sync_regulations(p_tournament_id, p_regulations)
+
+指定大会の `regulations` を、渡された JSON 配列が「保存後にこうなっていてほしい状態」になるよう差分同期します。`sync_form_field_defs()` と違い delete → insert が使えないのは、`entries` が複合外部キー `(regulation_id, tournament_id)` でこのテーブルを参照しているためです(全削除は FK 違反になり、仮に消せてもエントリーの参照先 id が変わってしまう)。
+
+処理順:
+
+1. 大会行を `for update` でロック(存在しなければ SQLSTATE `P0002`)。同一大会への同時保存を直列化します。
+2. `id` 付き要素のうち、**この大会のレギュレーションでない** id を洗い出して SQLSTATE `P0003`(`detail` に id 一覧)。これが無いと、よその大会の行を `on conflict (id) do update` で書き換えてしまいます。
+3. `id` 付きは update、`id` 無しは insert(`display_order` は配列の添字)。
+4. 配列から消えた行のうち `entries` から参照されているものがあれば SQLSTATE `P0004`(`detail` にラベル一覧)を raise してロールバック。
+5. 残った「消えた行」を delete。
+
+エントリーの新規作成が 4 の検査をすり抜けることはありません。`entries.tournament_id` の外部キーにより、エントリーの insert は 1 でロックした大会行に対して `for key share` を取ります。これは `for update` と競合するため、保存中はエントリー作成が待たされ(逆に保存側が待たされ)、4 と 5 は必ず同じ状態を見ます。
+
+TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(404)、`P0003` → `UnknownRegulationError`(400)、`P0004` → `RegulationInUseError`(409)に変換します。スタッフ画面がそのまま表示するので、id / ラベルの一覧はメッセージ本体ではなく例外の `detail` に載せ、日本語の文面は TypeScript 側で組み立てています。
 
 ### confirm_entry_by_token(p_token_hash)
 
@@ -336,6 +375,12 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 - 4 で `password_changed_at` を同じ UPDATE 文に含めるのも要点です。参加者セッションは 7 日有効なステートレス JWT なので、この列が動かない限り、再設定前に発行された Cookie(盗まれたものを含む)はそのまま使えてしまいます。
 - パスワードのハッシュ化(PBKDF2)は意図的に高コストなため、TypeScript 側はこの関数を呼ぶ前にトークンの存在を軽く 1 回 SELECT して弾きます。あくまで早期リターン用で、正否の判定はロック下で再チェックするこの関数が行います。
 
+### reset_staff_password(p_token_hash, p_password_hash)
+
+スタッフ用のトークンハッシュと、アプリ側で計算済みの PBKDF2 パスワードハッシュを受け取り、対応するスタッフアカウントのパスワードを設定します。`reset_participant_password()` のスタッフ版で、処理順もロック順も同じです(トークン行 → スタッフ行を `for update` → トークン行を読み直し → 更新 → 残りトークンの焼き捨て)。未知 / 使用済み / 期限切れなら SQLSTATE `P0003`。
+
+- `participants.password_changed_at` に相当する打刻はありません。スタッフセッションは署名だけで受け付ける 12 時間の JWT なので、**再設定前に発行された Cookie は最大 12 時間有効なまま**です。ここを塞ぐには列とクレームの追加が要るため Task 11-3 に分けてあり、そのときこの関数は `0011` が `0010` を再定義したのと同じ形で書き直すことになります。
+
 ### tournament_entry_summary()
 
 統括スタッフ向けダッシュボード(`GET /api/staff/dashboard`)のために、全大会 1 行ずつの集計を返します。
@@ -367,3 +412,5 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | `0011_participants_password_changed_at.sql` | `participants.password_changed_at` を追加し、再設定時に打刻(`0010` を再定義) |
 | `0012_password_reset_tokens_participant_id_idx.sql` | `password_reset_tokens.participant_id` のインデックス |
 | `0013_tournament_entry_summary_fn.sql` | `tournament_entry_summary()` |
+| `0014_sync_regulations_fn.sql` | `sync_regulations()`・`regulations` の優先期間 check 制約・`(tournament_id, display_order)` インデックス |
+| `0015_staff_accounts_scope_and_password_reset.sql` | `staff_accounts` の役割/担当範囲の check 制約、`staff_password_reset_tokens`、`reset_staff_password()` |

@@ -50,6 +50,7 @@ function buildEvent(
   return {
     fetch: fetchImpl,
     cookies: fakeCookies(deleted),
+    url: new URL('http://localhost/mypage'),
   } as Parameters<typeof load>[0];
 }
 
@@ -69,6 +70,7 @@ function buildCancelEvent(
   return {
     fetch: fetchImpl,
     cookies: fakeCookies(deleted),
+    url: new URL('http://localhost/mypage'),
     request: new Request('http://localhost/mypage?/cancel', {
       method: 'POST',
       body,
@@ -169,5 +171,110 @@ describe('mypage +page.server cancel action', () => {
     const result = await actions.cancel(buildCancelEvent(fakeDeleteFetch(500)));
 
     expect(result).toMatchObject({status: 502});
+  });
+});
+
+/** A cookie written back on the response, as `Cookies.set()` took it. */
+interface SetCookie {
+  name: string;
+  value: string;
+  options: Parameters<Cookies['set']>[2];
+}
+
+/**
+ * Builds a stand-in for `event.cookies` that records both the cookies
+ * re-issued on it and the names deleted from it — the two ways the session
+ * can be ended here.
+ * @param set The array every `set()` call appends to.
+ * @param deleted The array every `delete()` call appends its name to.
+ */
+function fakeLogoutCookies(set: SetCookie[], deleted: string[]): Cookies {
+  return {
+    set: (name: string, value: string, options: SetCookie['options']) =>
+      set.push({name, value, options}),
+    delete: (name: string) => deleted.push(name),
+  } as unknown as Cookies;
+}
+
+/** Builds the partial `RequestEvent` the `logout` action needs. */
+function buildLogoutEvent(
+  fetchImpl: typeof fetch,
+  set: SetCookie[] = [],
+  deleted: string[] = [],
+): Parameters<typeof actions.logout>[0] {
+  return {
+    fetch: fetchImpl,
+    cookies: fakeLogoutCookies(set, deleted),
+    url: new URL('http://localhost/mypage'),
+  } as Parameters<typeof actions.logout>[0];
+}
+
+describe('mypage +page.server logout action', () => {
+  it('asks the API to end the session, then redirects to the login page', async () => {
+    let requested: {url: string; method?: string} | undefined;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requested = {url: String(input), method: init?.method};
+      return new Response(JSON.stringify({ok: true}), {
+        status: 200,
+        headers: {'Content-Type': 'application/json'},
+      });
+    }) as typeof fetch;
+
+    const set: SetCookie[] = [];
+    const deleted: string[] = [];
+
+    await expect(
+      actions.logout(buildLogoutEvent(fetchImpl, set, deleted)),
+    ).rejects.toMatchObject({
+      status: 303,
+      location: '/mypage/login',
+    } satisfies Partial<Redirect>);
+
+    expect(requested?.method).toBe('POST');
+    expect(requested?.url).toContain('/api/auth/participant/logout');
+    // The deletion `Set-Cookie` the API answers with is carried into the
+    // cookie jar by `handleFetch`, not by the action -- so a successful
+    // logout touches no cookie here. `forwardBackendCookies` in
+    // `$lib/server/backend-fetch` is where that is covered.
+    expect(set).toEqual([]);
+    expect(deleted).toEqual([]);
+  });
+
+  it('ends the session locally when the backend cannot be reached', async () => {
+    const set: SetCookie[] = [];
+    const deleted: string[] = [];
+    // `handleFetch` throws outright on an unset or malformed `BACKEND_URL`,
+    // and an unreachable Worker rejects the fetch. Neither answers with a
+    // status to branch on.
+    const rejecting = (async () => {
+      throw new Error('BACKEND_URL is not set');
+    }) as typeof fetch;
+
+    await expect(
+      actions.logout(buildLogoutEvent(rejecting, set, deleted)),
+    ).rejects.toMatchObject({
+      status: 303,
+      location: '/mypage/login',
+    } satisfies Partial<Redirect>);
+
+    expect(set).toEqual([]);
+    expect(deleted).toEqual(['participant_session']);
+  });
+
+  it('ends the session locally when the logout request fails', async () => {
+    const set: SetCookie[] = [];
+    const deleted: string[] = [];
+
+    await expect(
+      actions.logout(buildLogoutEvent(fakeDeleteFetch(502), set, deleted)),
+    ).rejects.toMatchObject({
+      status: 303,
+      location: '/mypage/login',
+    } satisfies Partial<Redirect>);
+
+    // No deletion cookie came back, so the participant would otherwise stay
+    // logged in on a screen that just told them they were logged out.
+    expect(set).toEqual([]);
+    expect(deleted).toEqual(['participant_session']);
   });
 });

@@ -126,10 +126,29 @@ describe('clearParticipantSession', () => {
   it('deletes the session cookie under the path the backend set it on', () => {
     const deleted: DeletedCookie[] = [];
 
-    clearParticipantSession(fakeCookies(deleted));
+    clearParticipantSession(
+      fakeCookies(deleted),
+      new URL('https://entry.example.com/mypage'),
+    );
 
     expect(deleted).toEqual([
-      {name: 'participant_session', options: {path: '/'}},
+      {name: 'participant_session', options: {path: '/', secure: true}},
+    ]);
+  });
+
+  it('drops Secure when the frontend is served over plain HTTP', () => {
+    const deleted: DeletedCookie[] = [];
+
+    // SvelteKit's own default only spares the literal hostname `localhost`,
+    // so a `Secure` deletion here would be discarded by the browser and the
+    // session would quietly survive.
+    clearParticipantSession(
+      fakeCookies(deleted),
+      new URL('http://127.0.0.1:5173/mypage'),
+    );
+
+    expect(deleted).toEqual([
+      {name: 'participant_session', options: {path: '/', secure: false}},
     ]);
   });
 });
@@ -138,7 +157,12 @@ describe('redirectToParticipantLogin', () => {
   it('clears the refused session on the way to the login form', () => {
     const deleted: DeletedCookie[] = [];
 
-    expect(() => redirectToParticipantLogin(fakeCookies(deleted))).toThrow(
+    expect(() =>
+      redirectToParticipantLogin(
+        fakeCookies(deleted),
+        new URL('https://entry.example.com/mypage'),
+      ),
+    ).toThrow(
       expect.objectContaining({status: 303, location: '/mypage/login'}),
     );
     // A cookie left in place would be read as a session by

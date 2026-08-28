@@ -1,7 +1,8 @@
 import {describe, expect, it} from 'vitest';
 import {sign} from 'hono/jwt';
+import type {Cookies} from '@sveltejs/kit';
 import type {StaffClaims} from '@regional-quiz/shared';
-import {readStaffClaims} from './staff-session';
+import {clearStaffSession, readStaffClaims} from './staff-session';
 
 const SESSION_SECRET = 'test-session-secret';
 const WRONG_SECRET = 'wrong-session-secret';
@@ -81,5 +82,51 @@ describe('readStaffClaims', () => {
     );
 
     await expect(readStaffClaims(token, SESSION_SECRET)).resolves.toBeNull();
+  });
+});
+
+describe('clearStaffSession', () => {
+  /** Records what `Cookies.delete()` was called with. */
+  function fakeCookies(
+    deleted: Array<{name: string; options: Parameters<Cookies['delete']>[1]}>,
+  ): Cookies {
+    return {
+      delete: (name: string, options: Parameters<Cookies['delete']>[1]) =>
+        deleted.push({name, options}),
+    } as unknown as Cookies;
+  }
+
+  it('deletes the session cookie under the path the backend set it on', () => {
+    const deleted: Array<{
+      name: string;
+      options: Parameters<Cookies['delete']>[1];
+    }> = [];
+
+    clearStaffSession(
+      fakeCookies(deleted),
+      new URL('https://entry.example.com/staff/logout'),
+    );
+
+    expect(deleted).toEqual([
+      {name: 'staff_session', options: {path: '/', secure: true}},
+    ]);
+  });
+
+  it('drops Secure when the frontend is served over plain HTTP', () => {
+    const deleted: Array<{
+      name: string;
+      options: Parameters<Cookies['delete']>[1];
+    }> = [];
+
+    // A `Secure` deletion over plain HTTP is discarded by the browser, so
+    // the session it was meant to end would survive.
+    clearStaffSession(
+      fakeCookies(deleted),
+      new URL('http://127.0.0.1:5173/staff/logout'),
+    );
+
+    expect(deleted).toEqual([
+      {name: 'staff_session', options: {path: '/', secure: false}},
+    ]);
   });
 });

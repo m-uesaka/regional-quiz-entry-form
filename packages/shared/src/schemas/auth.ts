@@ -45,3 +45,18 @@ export const StaffLoginResponseSchema = z.object({
   tournamentType: TournamentTypeSchema.nullable(),
 });
 export type StaffLoginResponse = z.infer<typeof StaffLoginResponseSchema>;
+
+// The body of `POST /api/auth/staff/password-reset/confirm`, which a staff
+// member reaches from the invite (or re-issued reset) link mailed to them.
+//
+// It is deliberately its own schema rather than a reuse of
+// `PasswordResetConfirmInputSchema`: the two are separate endpoints with
+// separate token tables, and a password rule tightened for staff should not
+// silently move the participant form with it.
+export const StaffPasswordResetConfirmInputSchema = z.object({
+  token: z.string().min(1),
+  newPassword: z.string().min(8),
+});
+export type StaffPasswordResetConfirmInput = z.infer<
+  typeof StaffPasswordResetConfirmInputSchema
+>;

@@ -1,5 +1,10 @@
 import {describe, expect, it} from 'bun:test';
-import {hashPassword, verifyPassword} from './password';
+import {
+  hashPassword,
+  isPasswordHashUsable,
+  UNUSABLE_PASSWORD_HASH,
+  verifyPassword,
+} from './password';
 
 describe('hashPassword / verifyPassword', () => {
   it('verifies a matching password', async () => {
@@ -27,5 +32,26 @@ describe('hashPassword / verifyPassword', () => {
     const b = await hashPassword('same password');
 
     expect(a).not.toBe(b);
+  });
+});
+
+describe('isPasswordHashUsable', () => {
+  it('accepts a hash this module produced', async () => {
+    expect(isPasswordHashUsable(await hashPassword('a password'))).toBe(true);
+  });
+
+  it('rejects the placeholder a not-yet-invited account carries', () => {
+    expect(isPasswordHashUsable(UNUSABLE_PASSWORD_HASH)).toBe(false);
+  });
+
+  it('rejects a stored value that is malformed in any other way', () => {
+    for (const stored of [
+      '',
+      ':',
+      'aa:bb',
+      `${'zz'.repeat(16)}:${'00'.repeat(32)}`,
+    ]) {
+      expect(isPasswordHashUsable(stored)).toBe(false);
+    }
   });
 });

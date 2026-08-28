@@ -1,6 +1,6 @@
 import {afterEach, describe, expect, it} from 'bun:test';
 import {staffAuthRoute} from './staff-auth';
-import {hashPassword} from '../lib/password';
+import {hashPassword, UNUSABLE_PASSWORD_HASH} from '../lib/password';
 import type {Bindings} from '../types/env';
 import {
   PERMISSIVE_SECURITY_BINDINGS,
@@ -200,5 +200,42 @@ describe('POST /login', () => {
     );
 
     expect(keys).toEqual(['staff-login:email:shared@example.com']);
+  });
+
+  it('refuses an account that has not set a password yet', async () => {
+    // What `POST /api/staff/accounts` writes: the row exists, but its owner
+    // hasn't followed the invite link, so no password can match.
+    mockStaffAccountFetch(regionalStaffRow(UNUSABLE_PASSWORD_HASH));
+
+    const res = await login(UNUSABLE_PASSWORD_HASH);
+
+    expect(res.status).toBe(401);
+    expect((await res.json()) as Record<string, unknown>).toEqual({
+      error: 'invalid credentials',
+    });
+    expect(res.headers.get('set-cookie')).toBeNull();
+  });
+});
+
+describe('POST /logout', () => {
+  it('clears the staff session cookie', async () => {
+    // No account lookup and no session are involved: the handler only
+    // answers with the deletion cookie.
+    const res = await staffAuthRoute.request('/logout', {method: 'POST'}, ENV);
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as Record<string, unknown>).toEqual({
+      ok: true,
+    });
+
+    const setCookieHeader = res.headers.get('set-cookie') ?? '';
+    expect(setCookieHeader).toContain('staff_session=;');
+    expect(setCookieHeader).toContain('Max-Age=0');
+    // The attributes have to match the ones `/login` issues, or the browser
+    // reads this as a different cookie and keeps the live session.
+    expect(setCookieHeader).toContain('Path=/');
+    expect(setCookieHeader).toContain('HttpOnly');
+    expect(setCookieHeader).toContain('Secure');
+    expect(setCookieHeader).toContain('SameSite=Lax');
   });
 });

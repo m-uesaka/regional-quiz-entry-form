@@ -1,5 +1,31 @@
 import {verify} from 'hono/jwt';
+import type {Cookies} from '@sveltejs/kit';
 import {StaffClaimsSchema, type StaffClaims} from '@regional-quiz/shared';
+
+/**
+ * Matches `STAFF_SESSION_COOKIE` in
+ * `apps/backend/src/middleware/staff-auth.ts`.
+ */
+export const STAFF_SESSION_COOKIE = 'staff_session';
+
+/**
+ * Drops the staff session cookie the browser is still holding.
+ *
+ * The `path` matches the one the cookie is issued under, since a delete only
+ * matches a cookie of the same name *and* path, and `secure` is decided from
+ * the frontend's own protocol -- both for the reasons
+ * `clearParticipantSession()` spells out in `./participant-session.ts`.
+ *
+ * @param cookies `event.cookies`.
+ * @param url `event.url`, i.e. the origin the deletion is issued from. Only
+ *     its protocol is read.
+ */
+export function clearStaffSession(cookies: Cookies, url: URL): void {
+  cookies.delete(STAFF_SESSION_COOKIE, {
+    path: '/',
+    secure: url.protocol === 'https:',
+  });
+}
 
 /**
  * Verifies and parses the `staff_session` JWT issued by the backend on

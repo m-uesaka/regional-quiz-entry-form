@@ -127,7 +127,7 @@ export const actions = {
     // a visitor it still reads as logged in to `/mypage`, which would drop
     // the notice below (and cost a pointless round trip through the 401 the
     // API would answer there with).
-    clearParticipantSession(cookies);
+    clearParticipantSession(cookies, url);
     // The only thing left to do is log in again with the password they have
     // just chosen.
     throw redirect(303, '/mypage/login?reset=done');

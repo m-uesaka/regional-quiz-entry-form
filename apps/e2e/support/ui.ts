@@ -28,10 +28,10 @@ import {
 import {FRONTEND_URL} from './env';
 
 /** A participant's own view of their entries. */
-const MYPAGE_PATH = '/mypage';
+export const MYPAGE_PATH = '/mypage';
 
-/** Matches `LOGIN_PATH` in `apps/frontend/src/lib/server/participant-session.ts`. */
-const PARTICIPANT_LOGIN_PATH = '/mypage/login';
+/** Matches `PARTICIPANT_LOGIN_PATH` in `apps/frontend/src/lib/server/participant-session.ts`. */
+export const PARTICIPANT_LOGIN_PATH = '/mypage/login';
 
 /** How long the Turnstile widget is given to produce its token. */
 const TURNSTILE_TOKEN_TIMEOUT_MS = 20_000;
@@ -405,4 +405,15 @@ export async function loginStaffThroughForm(
 export async function cancelEntryThroughMypage(page: Page): Promise<void> {
   page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', {name: 'エントリーをキャンセルする'}).click();
+}
+
+/**
+ * Ends the participant's session from the button the mypage layout carries.
+ * @param page The page to drive, on any screen under `/mypage`.
+ */
+export async function logoutParticipantThroughButton(
+  page: Page,
+): Promise<void> {
+  await page.getByRole('button', {name: 'ログアウト'}).click();
+  await expect(page).toHaveURL(PARTICIPANT_LOGIN_PATH);
 }

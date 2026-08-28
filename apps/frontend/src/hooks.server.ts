@@ -1,6 +1,6 @@
 import type {Handle, HandleFetch} from '@sveltejs/kit';
 import {env} from '$env/dynamic/private';
-import {readStaffClaims} from '$lib/server/staff-session';
+import {readStaffClaims, STAFF_SESSION_COOKIE} from '$lib/server/staff-session';
 import {
   PARTICIPANT_SESSION_COOKIE,
   readParticipantClaims,
@@ -10,9 +10,6 @@ import {
   rewriteApiRequest,
 } from '$lib/server/backend-fetch';
 
-// Matches `STAFF_SESSION_COOKIE` in
-// `apps/backend/src/middleware/staff-auth.ts`.
-const STAFF_SESSION_COOKIE = 'staff_session';
 export const handle: Handle = async ({event, resolve}) => {
   // `$env/dynamic/private` first, for the same reason `handleFetch` below
   // reads `BACKEND_URL` from it: `event.platform` only exists on Cloudflare,
@@ -52,6 +49,6 @@ export const handleFetch: HandleFetch = async ({event, request, fetch}) => {
   // applied to the page response for free; a rewritten one is cross-origin
   // by definition, so the session cookie a login answers with is carried
   // over by hand.
-  forwardBackendCookies(response, event.cookies);
+  forwardBackendCookies(response, event.cookies, event.url);
   return response;
 };
