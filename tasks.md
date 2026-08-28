@@ -55,9 +55,9 @@
   * Task 6-4: CSV 出力機能 ✅
 * Phase 7: 統括スタッフ向け管理ページ ✅完了
   * Task 7-1: 全地域横断ダッシュボード ✅
-* Phase 8: 非機能・仕上げ
+* Phase 8: 非機能・仕上げ ✅完了
   * Task 8-1: E2E テスト整備 ✅(#74 でブラウザ操作の UI レベルに引き上げ済み)
-  * Task 8-2: デプロイパイプライン整備
+  * Task 8-2: デプロイパイプライン整備 ✅
 
 ## Dependency graph
 
@@ -75,7 +75,7 @@ graph TD
   P2 --> P6["Phase 6: 地域スタッフ管理ページ"]:::done
   P3 --> P6
   P6 --> P7["Phase 7: 統括スタッフ管理ページ"]:::done
-  P4 --> P8["Phase 8: 非機能・仕上げ"]:::wip
+  P4 --> P8["Phase 8: 非機能・仕上げ"]:::done
   P5 --> P8
   P7 --> P8
 
@@ -83,7 +83,7 @@ graph TD
   classDef wip fill:#fef3c7,stroke:#d97706,color:#78350f;
 ```
 
-凡例: 緑 = 完了、黄 = 進行中。Phase 0〜7 は完了し、残るは Phase 8 のみ。Phase 8 では Task 8-1 が完了し、Task 8-2(デプロイパイプライン整備)が残っている。
+凡例: 緑 = 完了、黄 = 進行中。Phase 0〜8 のすべてのタスクが完了している。
 
 ### Phase 内 Task の依存グラフ
 
@@ -228,7 +228,7 @@ graph TD
 
 * [Task 7-1: 全地域横断ダッシュボード ✅](tasks/task-7-1.md)
 
-### Phase 8: 非機能・仕上げ
+### Phase 8: 非機能・仕上げ ✅完了
 
 * [Task 8-1: E2E テスト整備 ✅](tasks/task-8-1.md)
-* [Task 8-2: デプロイパイプライン整備](tasks/task-8-2.md)
+* [Task 8-2: デプロイパイプライン整備 ✅](tasks/task-8-2.md)

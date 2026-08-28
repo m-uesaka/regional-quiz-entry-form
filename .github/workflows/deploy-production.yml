@@ -1,0 +1,26 @@
+name: deploy-production
+
+# Production follows `main`. Any protection rules on the `production`
+# Environment (required reviewers in particular) hold the job before its first
+# step, so an approval gate can sit between a merge and a schema change.
+#
+# `workflow_dispatch` is here for re-running a deploy whose Cloudflare half
+# failed after the migrations had already been applied: the migration step is
+# idempotent, so replaying the whole workflow is the recovery path.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: production
+      wrangler-env: production
+      pages-project-name: regional-quiz-frontend
+      # Staging has already applied the same migrations by the time a branch
+      # reaches `main`, so the interesting case here is the one where it has
+      # not — log what is about to run against production either way.
+      preview-migrations: true
+    secrets: inherit
