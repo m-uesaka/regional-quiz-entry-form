@@ -42,18 +42,6 @@ interface TournamentRow {
   regulations: RegulationRow[];
 }
 
-/**
- * The entry statuses that occupy a participant's place in a region: every
- * status but `cancelled`. `pending_verification` is included on purpose — it
- * is a seat held before the mail was confirmed, and leaving it out would let
- * a participant hold both tournaments by simply never following the link.
- */
-const REGION_OCCUPYING_STATUSES: readonly EntryStatus[] = [
-  'pending_verification',
-  'confirmed',
-  'waitlisted',
-];
-
 interface ParticipantRow {
   id: string;
   region_id: string;
@@ -253,7 +241,14 @@ export async function createEntry(
       .eq('participant_id', participantId)
       .eq('tournaments.region_id', tournament.region_id)
       .neq('tournament_id', tournamentId)
-      .in('status', REGION_OCCUPYING_STATUSES);
+      // Every status but `cancelled` occupies the region, expressed by
+      // exclusion rather than by listing the occupying ones: a status added
+      // to the `entry_status` enum later would otherwise fall out of the
+      // list silently and re-open double entry. `pending_verification`
+      // counts on purpose — it is a seat held before the mail was
+      // confirmed, and skipping it would let a participant hold both
+      // tournaments by simply never following the link.
+      .neq('status', 'cancelled');
     if (dualEntryError) {
       return {ok: false, status: 500, error: dualEntryError.message};
     }
