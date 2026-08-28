@@ -39,7 +39,7 @@ function renderPage(
   entries: MypageEntry[],
   form: {error: string} | null = null,
 ) {
-  render(Page, {props: {params: {}, data: {entries}, form}});
+  render(Page, {props: {params: {}, data: {loggedIn: true, entries}, form}});
 }
 
 describe('mypage +page.svelte', () => {

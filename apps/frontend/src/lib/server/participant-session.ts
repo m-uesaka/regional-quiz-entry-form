@@ -12,7 +12,7 @@ import {
 export const PARTICIPANT_SESSION_COOKIE = 'participant_session';
 
 /** Where a participant without a usable session is sent. */
-const LOGIN_PATH = '/mypage/login';
+export const PARTICIPANT_LOGIN_PATH = '/mypage/login';
 
 /**
  * Verifies and parses the `participant_session` JWT issued by the backend
@@ -84,5 +84,5 @@ export function clearParticipantSession(cookies: Cookies): void {
  */
 export function redirectToParticipantLogin(cookies: Cookies): never {
   clearParticipantSession(cookies);
-  redirect(303, LOGIN_PATH);
+  redirect(303, PARTICIPANT_LOGIN_PATH);
 }

@@ -1,7 +1,12 @@
-import {error, fail} from '@sveltejs/kit';
+import {error, fail, redirect} from '@sveltejs/kit';
 import {MypageEntrySchema} from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
-import {redirectToParticipantLogin} from '$lib/server/participant-session';
+import {
+  clearParticipantSession,
+  PARTICIPANT_LOGIN_PATH,
+  redirectToParticipantLogin,
+} from '$lib/server/participant-session';
+import {forwardSetCookies} from '$lib/server/backend-cookies';
 import type {Actions, PageServerLoad} from './$types';
 
 export const load: PageServerLoad = async ({cookies, fetch}) => {
@@ -21,6 +26,25 @@ export const load: PageServerLoad = async ({cookies, fetch}) => {
 };
 
 export const actions = {
+  logout: async ({cookies, fetch, url}) => {
+    const api = createApiClient(fetch);
+    const res = await api.api.auth.participant.logout.$post();
+    // The API answers with the cookie deletion, and `/api/*` goes to the
+    // backend Worker's own origin, so the `Set-Cookie` is re-issued from
+    // this origin by hand to reach the browser at all.
+    forwardSetCookies(res, cookies, url);
+    // The endpoint cannot fail on the backend's own terms -- it only writes
+    // a header -- but the request to it can (the Worker being down, say),
+    // and a logout that leaves the session in place is the one outcome not
+    // worth reporting back. Dropping the cookie here ends the session on
+    // this side regardless; the JWT stays signed either way (see
+    // `apps/backend/src/routes/participant-auth.ts`).
+    if (!res.ok) {
+      clearParticipantSession(cookies);
+    }
+    redirect(303, PARTICIPANT_LOGIN_PATH);
+  },
+
   cancel: async ({cookies, request, fetch}) => {
     const formData = await request.formData();
     // The id travels in the body (one form per listed entry), so it's

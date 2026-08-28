@@ -1,7 +1,7 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
 import {sign} from 'hono/jwt';
-import {setCookie} from 'hono/cookie';
+import {deleteCookie, setCookie} from 'hono/cookie';
 import {
   StaffLoginInputSchema,
   type StaffClaims,
@@ -19,6 +19,25 @@ const SESSION_TTL_SECONDS = 60 * 60 * 12;
 // account matches so that a missing email costs the same PBKDF2 work as a
 // wrong password and can't be timed to enumerate staff emails.
 const DUMMY_PASSWORD_HASH = `${'00'.repeat(16)}:${'00'.repeat(32)}`;
+// The attributes the session cookie is issued under, shared with `/logout`
+// so the two can't drift apart: a deletion whose `path` / `secure` /
+// `sameSite` differ from the ones the cookie was set with addresses a
+// different cookie as far as the browser is concerned, and the live session
+// would outlive the logout.
+//
+// `path` is spelled out rather than left off. A `Set-Cookie` without one is
+// scoped by the browser to the directory of the request that carried it,
+// which here would be `/api/auth/staff` -- the cookie only ever reached the
+// staff screens because the frontend re-issues it at `/` (see
+// `forwardBackendCookies()` in
+// `apps/frontend/src/lib/server/backend-fetch.ts`), and a deletion has to
+// name the same path to match it.
+const SESSION_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: true,
+  sameSite: 'Lax',
+  path: '/',
+} as const;
 
 interface StaffAccountRow {
   id: string;
@@ -31,10 +50,8 @@ interface StaffAccountRow {
   regions: {slug: string} | null;
 }
 
-export const staffAuthRoute = new Hono<Env>().post(
-  '/login',
-  zValidator('json', StaffLoginInputSchema),
-  async c => {
+export const staffAuthRoute = new Hono<Env>()
+  .post('/login', zValidator('json', StaffLoginInputSchema), async c => {
     const {email, password} = c.req.valid('json');
     const db = createDbClient(c.env);
     const {data: staff, error} = await db
@@ -72,9 +89,7 @@ export const staffAuthRoute = new Hono<Env>().post(
       c.env.SESSION_SECRET,
     );
     setCookie(c, STAFF_SESSION_COOKIE, token, {
-      httpOnly: true,
-      secure: true,
-      sameSite: 'Lax',
+      ...SESSION_COOKIE_OPTIONS,
       maxAge: SESSION_TTL_SECONDS,
     });
     // The scope travels back as a slug rather than the `regionId` the claims
@@ -87,5 +102,12 @@ export const staffAuthRoute = new Hono<Env>().post(
       tournamentType: staff.tournament_type,
     };
     return c.json(body);
-  },
-);
+  })
+  .post('/logout', c => {
+    // Same shape as the participant logout, and for the same reasons: no
+    // session is required, and dropping the cookie is all a stateless JWT
+    // allows. A staff token copied off the machine stays valid for the rest
+    // of its 12 hours; revoking that is Task 11-3.
+    deleteCookie(c, STAFF_SESSION_COOKIE, SESSION_COOKIE_OPTIONS);
+    return c.json({ok: true});
+  });
