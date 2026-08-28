@@ -65,13 +65,13 @@ Phase 9 以降のタスクファイルに書かれているマイグレーショ
 * Phase 9: 管理機能の欠落解消(運用ブロッカー) 🚧進行中
   * Task 9-1: レギュレーション登録・編集 API
   * Task 9-2: 地域(regions)管理 API ✅
-  * Task 9-3: スタッフアカウント管理 API
+  * Task 9-3: スタッフアカウント管理 API ✅
   * Task 9-4: 統括スタッフ向け管理画面(地域・レギュレーション・スタッフ)
   * Task 9-5: `/api/*` の Worker route 有効化(#101)
 * Phase 10: 要件との差分の解消 🚧進行中
   * Task 10-1: 地域ごとの「最強位・新人王 重複参加」可否の制御 ✅
   * Task 10-2: レギュレーションの複数選択対応(要確認)
-  * Task 10-3: ログアウト機能(参加者・スタッフ)
+  * Task 10-3: ログアウト機能(参加者・スタッフ) ✅(#113。スタッフ側は `/staff/logout` を専用ルートにし、Cookie 転送は `handleFetch` に一本化した)
   * Task 10-4: 一斉メールの Cloudflare Queues 化(80 名上限の撤廃)
   * Task 10-5: エントリー期間外アクセス制御をバックエンドにも実装する
 * Phase 11: セキュリティ強化 🚧未着手
@@ -210,7 +210,7 @@ graph TD
 ```mermaid
 graph TD
   T91["9-1 レギュレーションAPI"]:::next --> T94["9-4 管理画面"]:::todo
-  T92["9-2 地域API"]:::done --> T93["9-3 スタッフAPI"]:::next
+  T92["9-2 地域API"]:::done --> T93["9-3 スタッフAPI"]:::done
   T92 --> T94
   T93 --> T94
   T95["9-5 /api/* route 有効化 (#101)"]:::next
@@ -228,7 +228,7 @@ graph TD
 graph TD
   T92["9-2 地域API"]:::done --> T101["10-1 重複参加の可否"]:::done
   T91["9-1 レギュレーションAPI"]:::prereq --> T102["10-2 レギュレーション複数選択"]:::todo
-  T103["10-3 ログアウト"]:::next
+  T103["10-3 ログアウト"]:::done
   T104["10-4 一斉メールQueue化"]:::next
   T105["10-5 期間外アクセス制御"]:::next
 
@@ -238,22 +238,22 @@ graph TD
   classDef prereq fill:#ffffff,stroke:#a0aec0,color:#4a5568;
 ```
 
-白い枠は Phase 9 のタスク(前提)。10-3・10-4・10-5 は Phase 9 を待たずに着手できる。10-2 は要件の読み方の確認が先。
+白い枠は Phase 9 のタスク(前提)。10-3 は #113 で完了。10-4・10-5 も Phase 9 を待たずに着手できる。10-2 は要件の読み方の確認が先。
 
 #### Phase 11: セキュリティ強化(🚧 未着手)
 
 ```mermaid
 graph TD
   T111["11-1 レート制限/Turnstile"]:::next --> T112["11-2 メール列挙対策"]:::todo
-  T93["9-3 スタッフAPI"]:::prereq --> T113["11-3 スタッフセッション失効"]:::todo
+  T93["9-3 スタッフAPI"]:::done --> T113["11-3 スタッフセッション失効"]:::next
   T114["11-4 パスワードハッシュ強化"]:::next
   T115["11-5 CSRF/セキュリティヘッダ"]:::next
   T116["11-6 ルート網羅テスト"]:::next
   T117["11-7 軽微な堅牢化"]:::next
 
+  classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
   classDef todo fill:#e2e8f0,stroke:#4a5568,color:#1a202c;
   classDef next fill:#fef3c7,stroke:#d97706,color:#78350f;
-  classDef prereq fill:#ffffff,stroke:#a0aec0,color:#4a5568;
 ```
 
 11-1 → 11-2 の順序は必須(応答を統一しても、レート制限が無ければ処理時間差で列挙できるため)。他は独立。
@@ -344,7 +344,7 @@ graph TD
 
 * [Task 9-1: レギュレーション登録・編集 API](tasks/task-9-1.md) — 優先エントリー期間を含め、現状は Supabase を直接操作しないと設定できない
 * [Task 9-2: 地域(regions)管理 API ✅](tasks/task-9-2.md) — 地域が作れないと大会も作れない。`GET / POST / PATCH /api/regions` を追加済み
-* [Task 9-3: スタッフアカウント管理 API](tasks/task-9-3.md) — スタッフの発行にアプリのコード実行(パスワードハッシュ生成)が要る状態の解消
+* [Task 9-3: スタッフアカウント管理 API ✅](tasks/task-9-3.md) — スタッフの発行にアプリのコード実行(パスワードハッシュ生成)が要る状態の解消。`GET / POST /api/staff/accounts` と招待メールによる初期パスワード設定を追加済み
 * [Task 9-4: 統括スタッフ向け管理画面(地域・レギュレーション・スタッフ)](tasks/task-9-4.md) — `/admin/*` のサーバ側ガード追加を含む
 * [Task 9-5: `/api/*` の Worker route 有効化(#101)](tasks/task-9-5.md) — 本番で CSV ダウンロードと `/admin` のクライアント側 API 呼び出しが 404 になっている
 
@@ -354,7 +354,7 @@ graph TD
 
 * [Task 10-1: 地域ごとの「最強位・新人王 重複参加」可否の制御 ✅](tasks/task-10-1.md) — `regions.allows_dual_entry`(既定 false)を追加し、`createEntry()` で同一地域の2つ目の有効なエントリーを拒否するようにした
 * [Task 10-2: レギュレーションの複数選択対応](tasks/task-10-2.md) — 「どれか一つを最低限でも満たす」の読み方を統括スタッフに確認してから着手する
-* [Task 10-3: ログアウト機能(参加者・スタッフ)](tasks/task-10-3.md) — 現在セッションを終わらせる手段が無い
+* [Task 10-3: ログアウト機能(参加者・スタッフ)](tasks/task-10-3.md) ✅(#113) — `POST /api/auth/{participant,staff}/logout` と、マイページ / スタッフ画面それぞれのレイアウトにログアウトボタンを追加。発行と削除で Cookie 属性がずれないよう `SESSION_COOKIE_OPTIONS` を共有する。スタッフ側だけは既存ページに action を置けず(レイアウトは action を持てず、`/staff/login` は `default` action 済み)`/staff/logout` を専用ルートにした。あわせて削除 Cookie の転送を `handleFetch` の `forwardBackendCookies()` に一本化し(`forwardSetCookies()` / `backend-cookies.ts` は削除)、バックエンドに届かなかった場合はフロント側で Cookie を落とすフォールバックを入れている。JWT の失効自体は [Task 11-3](tasks/task-11-3.md) の範囲
 * [Task 10-4: 一斉メールの Cloudflare Queues 化](tasks/task-10-4.md) — 1 リクエスト 80 名の上限を外す。課金判断を伴う
 * [Task 10-5: エントリー期間外アクセス制御をバックエンドにも実装する](tasks/task-10-5.md) — 現在はフロントの `load` のみで、スコープ判定も緩い
 

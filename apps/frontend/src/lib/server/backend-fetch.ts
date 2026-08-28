@@ -80,27 +80,45 @@ function backendOrigin(backendUrl: string | undefined): URL {
  * `rewriteApiRequest` sends every `/api/*` call to the backend Worker's
  * origin. Without this, the `participant_session` cookie
  * `POST /api/auth/participant/login` answers with would be dropped on the
- * floor and the participant would stay logged out.
+ * floor and the participant would stay logged out. The deletion the logout
+ * endpoints answer with rides back the same way.
  *
  * The parsing is delegated to `set-cookie-parser` — the same library
  * SvelteKit itself uses for this exact job — rather than hand-rolled,
  * because a `Set-Cookie` value is only comma-separable by looking at what
  * each attribute means.
  *
+ * `Domain` and `Secure` are deliberately not copied: both describe where the
+ * *backend's* cookie may travel, and this cookie is being re-issued by the
+ * frontend instead.
+ *
  * @param response The response the backend answered with.
  * @param cookies `event.cookies`, i.e. the jar applied to the response this
  *     request is serving.
+ * @param url `event.url`, i.e. the frontend origin the cookie is being
+ *     re-issued from. Only its protocol is read, to decide `Secure`.
  */
 export function forwardBackendCookies(
   response: Response,
   cookies: Cookies,
+  url: URL,
 ): void {
-  const header = response.headers.get('set-cookie');
-  if (!header) return;
+  for (const {name, value, sameSite, ...attributes} of parseSetCookie(
+    response.headers.getSetCookie(),
+    {decodeValues: false},
+  )) {
+    // Dropped rather than copied; see the note above. `secure` needs no
+    // such removal -- it is overwritten below, after the spread.
+    delete attributes.domain;
 
-  for (const {name, value, sameSite, ...attributes} of parseSetCookie(header, {
-    decodeValues: false,
-  })) {
+    // A date the parser could not read comes back as an `Invalid Date`,
+    // which makes the `cookie` package's serializer throw and turns a
+    // successful login into a 500. Losing one attribute of a cookie that
+    // also carries `Max-Age` is the better failure.
+    if (attributes.expires && Number.isNaN(attributes.expires.getTime())) {
+      delete attributes.expires;
+    }
+
     cookies.set(name, value, {
       ...attributes,
       // `Cookies.set` requires an explicit path. A `Set-Cookie` without one
@@ -111,6 +129,14 @@ export function forwardBackendCookies(
       // `Path=/` anyway (see `apps/backend/src/routes/participant-auth.ts`).
       path: attributes.path ?? '/',
       sameSite: toSameSite(sameSite),
+      // Decided from the frontend's own protocol rather than left to
+      // SvelteKit's default, which only drops the flag for the literal
+      // hostname `localhost` — `http://127.0.0.1:5173` or `vite dev --host`
+      // on a LAN address would otherwise get a `Secure` cookie over plain
+      // HTTP, which the browser discards without a word, leaving login
+      // silently looping back to the form (and logout silently not logging
+      // anyone out).
+      secure: url.protocol === 'https:',
       // The parsed value is taken verbatim: it was already encoded by
       // whoever set it, and `Cookies.set` would otherwise encode it a second
       // time.

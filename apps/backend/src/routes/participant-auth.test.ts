@@ -111,3 +111,111 @@ describe('POST /login', () => {
     expect(res.status).toBe(401);
   });
 });
+
+/**
+ * The attributes of a `Set-Cookie` header, lowercased and without the
+ * `name=value` pair, `Max-Age` or `Expires` -- the three that necessarily
+ * differ between issuing a cookie and deleting it. What is left is exactly
+ * what a browser matches a deletion against.
+ * @param header The raw `Set-Cookie` header value.
+ */
+function cookieAttributes(header: string): string[] {
+  return header
+    .split(';')
+    .slice(1)
+    .map(attribute => attribute.trim().toLowerCase())
+    .filter(
+      attribute =>
+        !attribute.startsWith('max-age=') && !attribute.startsWith('expires='),
+    )
+    .sort();
+}
+
+/** Logs out, optionally carrying the session cookie a browser would hold. */
+async function logout(sessionCookie?: string): Promise<Response> {
+  return participantAuthRoute.request(
+    '/logout',
+    {
+      method: 'POST',
+      headers: sessionCookie
+        ? {cookie: `participant_session=${sessionCookie}`}
+        : {},
+    },
+    ENV,
+  );
+}
+
+describe('POST /logout', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  /** Logs in and returns the `Set-Cookie` header the login answered with. */
+  async function loginSetCookie(): Promise<string> {
+    mockParticipantFetch({
+      id: PARTICIPANT_ID,
+      password_hash: await hashPassword('correct-password'),
+      password_changed_at: '2026-08-25T01:23:45.678+00:00',
+    });
+
+    const res = await participantAuthRoute.request(
+      '/login',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          email: 'participant@example.com',
+          password: 'correct-password',
+        }),
+      },
+      ENV,
+    );
+    return res.headers.get('set-cookie') ?? '';
+  }
+
+  it('clears the session cookie', async () => {
+    const token = (await loginSetCookie())
+      .split('participant_session=')[1]
+      .split(';')[0];
+
+    const res = await logout(token);
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as Record<string, unknown>).toEqual({
+      ok: true,
+    });
+
+    const setCookieHeader = res.headers.get('set-cookie') ?? '';
+    // An empty value plus `Max-Age=0` is what tells the browser to drop the
+    // cookie it is holding, rather than to store this one.
+    expect(setCookieHeader).toContain('participant_session=;');
+    expect(setCookieHeader).toContain('Max-Age=0');
+  });
+
+  it('succeeds without a session', async () => {
+    // Nothing to clear, and nothing to complain about: a second logout, or
+    // one from a browser whose cookie already expired, still lands here.
+    const res = await logout();
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as Record<string, unknown>).toEqual({
+      ok: true,
+    });
+    expect(res.headers.get('set-cookie') ?? '').toContain(
+      'participant_session=;',
+    );
+  });
+
+  it('deletes with the same attributes login set', async () => {
+    const issued = await loginSetCookie();
+
+    const deleted = (await logout()).headers.get('set-cookie') ?? '';
+
+    // A deletion whose `Path`, `Secure` or `SameSite` differs from the
+    // issued cookie's addresses a different cookie, and the session would
+    // survive the logout.
+    expect(cookieAttributes(deleted)).toEqual(cookieAttributes(issued));
+  });
+});

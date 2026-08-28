@@ -33,7 +33,7 @@ const OSAKA: DashboardTournamentSummary = {
 
 function renderPage(summaries: DashboardTournamentSummary[]) {
   render(Page, {
-    props: {params: {}, data: {summaries}, form: null},
+    props: {params: {}, data: {loggedIn: true, summaries}, form: null},
   });
 }
 

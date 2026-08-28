@@ -1,4 +1,4 @@
--- Backstop for the `regions.allows_dual_entry` rule (migration 0015), which
+-- Backstop for the `regions.allows_dual_entry` rule (migration 0016), which
 -- `createEntry()` in `apps/backend/src/lib/entries.ts` otherwise enforces by
 -- counting the participant's other entries and then inserting. Two
 -- submissions for the region's two tournaments that interleave inside that

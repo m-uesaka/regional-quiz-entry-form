@@ -8,7 +8,10 @@ import {
   fillEntryForm,
   holdClientBundle,
   loginParticipantThroughForm,
+  logoutParticipantThroughButton,
+  MYPAGE_PATH,
   openVerificationLink,
+  PARTICIPANT_LOGIN_PATH,
   submitEntryForm,
 } from '../support/ui';
 
@@ -149,4 +152,20 @@ test('accepts a required checkbox group answered before the client bundle took o
 
   await expect(page.getByRole('status')).toContainText(participant.email);
   releaseClientBundle();
+});
+
+test('logging out ends the session, so mypage asks to log in again', async ({
+  page,
+}) => {
+  const participant = await submitEntryForm(page, SHINJINOU);
+  await loginParticipantThroughForm(page, participant);
+
+  await logoutParticipantThroughButton(page);
+
+  // The cookie is gone, not merely unused: coming back to mypage under the
+  // same browser session lands on the login form rather than the entries.
+  await page.goto(MYPAGE_PATH);
+  await expect(page).toHaveURL(PARTICIPANT_LOGIN_PATH);
+  // And the layout stops offering a session there is no longer any of.
+  await expect(page.getByRole('button', {name: 'ログアウト'})).toHaveCount(0);
 });

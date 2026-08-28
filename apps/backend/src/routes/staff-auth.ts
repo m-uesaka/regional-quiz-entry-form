@@ -1,9 +1,10 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
 import {sign} from 'hono/jwt';
-import {setCookie} from 'hono/cookie';
+import {deleteCookie, setCookie} from 'hono/cookie';
 import {
   StaffLoginInputSchema,
+  StaffPasswordResetConfirmInputSchema,
   type StaffClaims,
   type StaffLoginResponse,
   type StaffRole,
@@ -11,7 +12,9 @@ import {
 } from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
-import {verifyPassword} from '../lib/password';
+import {isPasswordHashUsable, verifyPassword} from '../lib/password';
+import {internalError} from '../lib/errors';
+import {confirmStaffPasswordReset} from '../lib/staff-password-reset';
 import {STAFF_SESSION_COOKIE} from '../middleware/staff-auth';
 
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
@@ -19,6 +22,22 @@ const SESSION_TTL_SECONDS = 60 * 60 * 12;
 // account matches so that a missing email costs the same PBKDF2 work as a
 // wrong password and can't be timed to enumerate staff emails.
 const DUMMY_PASSWORD_HASH = `${'00'.repeat(16)}:${'00'.repeat(32)}`;
+// The attributes the session cookie is issued under, shared with `/logout`
+// so the two can't drift apart: a deletion whose `path` / `secure` /
+// `sameSite` differ from the ones the cookie was set with addresses a
+// different cookie as far as the browser is concerned, and the live session
+// would outlive the logout.
+//
+// `path` is spelled out rather than left to `hono/cookie`, which already
+// defaults it to `/`: the point of this object is that the deletion can be
+// read off the same attributes as the issue, and an attribute that only
+// exists as a library default is one a reader has to go and check.
+const SESSION_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: true,
+  sameSite: 'Lax',
+  path: '/',
+} as const;
 
 interface StaffAccountRow {
   id: string;
@@ -31,10 +50,8 @@ interface StaffAccountRow {
   regions: {slug: string} | null;
 }
 
-export const staffAuthRoute = new Hono<Env>().post(
-  '/login',
-  zValidator('json', StaffLoginInputSchema),
-  async c => {
+export const staffAuthRoute = new Hono<Env>()
+  .post('/login', zValidator('json', StaffLoginInputSchema), async c => {
     const {email, password} = c.req.valid('json');
     const db = createDbClient(c.env);
     const {data: staff, error} = await db
@@ -50,10 +67,17 @@ export const staffAuthRoute = new Hono<Env>().post(
       return c.json({error: 'internal server error'}, 500);
     }
 
-    const passwordValid = await verifyPassword(
-      password,
-      staff?.password_hash ?? DUMMY_PASSWORD_HASH,
-    );
+    // An account created by `POST /api/staff/accounts` whose owner hasn't
+    // followed their invite link yet carries an unusable placeholder hash.
+    // `verifyPassword()` refuses it either way, but it refuses it before
+    // doing any PBKDF2 work, which would make "invited, not set up yet"
+    // distinguishable from "wrong password" by response time -- the same leak
+    // the dummy hash exists to close for an unknown email.
+    const storedHash =
+      staff && isPasswordHashUsable(staff.password_hash)
+        ? staff.password_hash
+        : DUMMY_PASSWORD_HASH;
+    const passwordValid = await verifyPassword(password, storedHash);
     if (!staff || !passwordValid) {
       return c.json({error: 'invalid credentials'}, 401);
     }
@@ -72,9 +96,7 @@ export const staffAuthRoute = new Hono<Env>().post(
       c.env.SESSION_SECRET,
     );
     setCookie(c, STAFF_SESSION_COOKIE, token, {
-      httpOnly: true,
-      secure: true,
-      sameSite: 'Lax',
+      ...SESSION_COOKIE_OPTIONS,
       maxAge: SESSION_TTL_SECONDS,
     });
     // The scope travels back as a slug rather than the `regionId` the claims
@@ -87,5 +109,41 @@ export const staffAuthRoute = new Hono<Env>().post(
       tournamentType: staff.tournament_type,
     };
     return c.json(body);
-  },
-);
+  })
+  // The counterpart to the invite mail `POST /api/staff/accounts` sends, and
+  // to the link a general staff member re-issues from
+  // `/api/staff/accounts/:id/password-reset`. There is no `/request` sibling:
+  // staff links are always issued by a general staff member for a named
+  // account, so this endpoint never has to take an address -- and can't be
+  // used to find out which ones are registered.
+  .post(
+    '/password-reset/confirm',
+    zValidator('json', StaffPasswordResetConfirmInputSchema),
+    async c => {
+      const result = await confirmStaffPasswordReset(
+        c.env,
+        c.req.valid('json'),
+      );
+      if (!result.ok) {
+        if (result.status === 500) {
+          return c.json(
+            internalError(
+              'failed to confirm the staff password reset',
+              result.error,
+            ),
+            500,
+          );
+        }
+        return c.json({error: result.error}, result.status);
+      }
+      return c.json({ok: true});
+    },
+  )
+  .post('/logout', c => {
+    // Same shape as the participant logout, and for the same reasons: no
+    // session is required, and dropping the cookie is all a stateless JWT
+    // allows. A staff token copied off the machine stays valid for the rest
+    // of its 12 hours; revoking that is Task 11-3.
+    deleteCookie(c, STAFF_SESSION_COOKIE, SESSION_COOKIE_OPTIONS);
+    return c.json({ok: true});
+  });

@@ -9,7 +9,7 @@ function renderPage(
   render(Page, {
     props: {
       params: {},
-      data: {passwordReset: options.passwordReset ?? false},
+      data: {loggedIn: false, passwordReset: options.passwordReset ?? false},
       form: options.form ?? null,
     },
   });

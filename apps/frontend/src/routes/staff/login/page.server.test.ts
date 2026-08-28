@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import type {Cookies, Redirect} from '@sveltejs/kit';
 import type {StaffLoginResponse} from '@regional-quiz/shared';
-import {actions} from './+page.server';
+import {actions, load} from './+page.server';
 
 const REGIONAL: StaffLoginResponse = {
   ok: true,
@@ -115,15 +115,16 @@ describe('staff login action', () => {
     } satisfies Partial<Redirect>);
   });
 
-  it('re-issues the session cookie the backend set', async () => {
+  it('leaves re-issuing the session cookie to handleFetch', async () => {
     const {cookies, set} = recordingCookies();
 
     await expect(
       actions.default(buildEvent({...CREDENTIALS, cookies})),
     ).rejects.toMatchObject({status: 303} satisfies Partial<Redirect>);
-    expect(set).toEqual([
-      {name: 'staff_session', value: 'header.payload.signature'},
-    ]);
+    // `hooks.server.ts` moves the backend's `Set-Cookie` into SvelteKit's
+    // cookie jar as the call comes back (see `forwardBackendCookies()` in
+    // `$lib/server/backend-fetch`), so the action writes no cookie itself.
+    expect(set).toEqual([]);
   });
 
   it('reports a rejected login without saying which field was wrong', async () => {
@@ -196,5 +197,24 @@ describe('staff login action', () => {
     const result = await actions.default(event);
 
     expect(result).toMatchObject({status: 500});
+  });
+});
+
+describe('staff login +page.server load', () => {
+  /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
+  function buildLoadEvent(url: string): Parameters<typeof load>[0] {
+    return {url: new URL(url)} as Parameters<typeof load>[0];
+  }
+
+  it('reports the password a staff member just set from their link', () => {
+    expect(
+      load(buildLoadEvent('http://localhost/staff/login?reset=done')),
+    ).toEqual({passwordSet: true});
+  });
+
+  it('reports nothing for an ordinary visit', () => {
+    expect(load(buildLoadEvent('http://localhost/staff/login'))).toEqual({
+      passwordSet: false,
+    });
   });
 });
