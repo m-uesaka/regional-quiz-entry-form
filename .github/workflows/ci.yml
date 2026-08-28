@@ -40,6 +40,23 @@ jobs:
           # `supabase/config.toml`. Bump both together.
           version: 2.115.0
       - run: bun install
+      # Two independent setup jobs, run at the same time because neither waits
+      # on the other: bringing up Supabase is docker, and fetching the browser
+      # is apt plus a download. Serially they cost the sum, ~65s; together they
+      # measure 43-55s, so the browser mostly lands inside the time Supabase
+      # already takes.
+      #
+      # Mostly, not entirely. They do contend: both are network- and disk-bound,
+      # and the image pull that opens `supabase start` has been seen to stretch
+      # from 20s to 29s while Chromium downloads alongside it. That is why this
+      # saves ~15s rather than the ~22s the browser costs on its own.
+      #
+      # The cost is that neither half has its own step timing any more. If this
+      # step gets slower, split it back into two `run`s to see which half moved
+      # before looking anywhere else.
+      #
+      # ---- `supabase start` ----
+      #
       # Applies every migration in `supabase/migrations` to a throwaway
       # local stack. `apps/e2e` seeds it and talks to it over the Data API.
       #
@@ -62,9 +79,39 @@ jobs:
       # upstream before (`inbucket` -> `mailpit`); an unknown name is
       # ignored silently rather than erroring, so a rename would show up as
       # this step getting slower again, not as a failure.
-      - run: >
-          supabase start
-          -x mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
+      #
+      # ---- `playwright install` ----
+      #
+      # Chromium only: the specs drive one browser, and downloading the
+      # other two would triple this for nothing. `--with-deps` installs the
+      # shared libraries the runner image does not carry.
+      - name: Start Supabase and fetch Chromium at the same time
+        run: |
+          # Held back rather than interleaved with the CLI's own output, which
+          # is what anyone reading this step is there for.
+          log="$RUNNER_TEMP/playwright-install.log"
+          (cd apps/e2e && bunx playwright install --with-deps chromium) >"$log" 2>&1 &
+          playwright=$!
+
+          # Neither failure is allowed to abort the step on the spot: with
+          # `bash -e` an exiting `supabase start` would skip the `wait` below
+          # and take the held-back log with it, hiding a browser that failed
+          # to download behind whichever error happened to come first. Both
+          # statuses are collected, the log is always flushed, and the step
+          # fails afterwards if either side did.
+          supabase_status=0
+          supabase start \
+            -x mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor \
+            || supabase_status=$?
+
+          # `wait` exits with the background job's status, so a browser that
+          # failed to download fails the step here rather than surfacing as an
+          # unexplained Playwright error two steps later.
+          playwright_status=0
+          wait "$playwright" || playwright_status=$?
+
+          cat "$log"
+          [ "$supabase_status" -eq 0 ] && [ "$playwright_status" -eq 0 ]
       # Prefer the stack's own service role key over the default
       # `apps/e2e/support/env.ts` falls back to, so a CLI that issues a
       # different one still works. If `status` doesn't name one, the
@@ -75,11 +122,6 @@ jobs:
           if [ -n "$key" ]; then
             echo "SUPABASE_SERVICE_ROLE_KEY=$key" >> "$GITHUB_ENV"
           fi
-      # Chromium only: the specs drive one browser, and downloading the
-      # other two would triple this step for nothing. `--with-deps` installs
-      # the shared libraries the runner image does not carry.
-      - run: bunx playwright install --with-deps chromium
-        working-directory: apps/e2e
       - run: bun run test:e2e
       - if: failure()
         uses: actions/upload-artifact@v4
