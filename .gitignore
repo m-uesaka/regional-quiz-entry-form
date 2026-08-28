@@ -41,3 +41,6 @@ test-results
 playwright-report
 blob-report
 playwright/.cache
+
+# CodeGraph's local index (a per-developer choice, not part of the repo)
+.codegraph
