@@ -192,7 +192,7 @@ describe('POST /login', () => {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
-          email: 'shared@example.com',
+          email: 'Shared@Example.com',
           password: 'anything',
         }),
       },

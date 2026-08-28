@@ -5,7 +5,7 @@ import {EntryInputSchema, type EntryInput} from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {createEntry} from '../lib/entries';
 import {internalError} from '../lib/errors';
-import {clientIp, rateLimit} from '../middleware/rate-limit';
+import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
 import {requireTurnstile} from '../middleware/turnstile';
 
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
@@ -36,7 +36,7 @@ export const entriesRoute = new Hono<Env>().post(
   // form from one shared network.
   rateLimit<{out: {json: EntryInput}}>(
     env => env.MAIL_TRIGGER_EMAIL_RATE_LIMITER,
-    c => `email:${c.req.valid('json').email}`,
+    c => emailKey(c.req.valid('json').email),
     MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
   ),
   async c => {

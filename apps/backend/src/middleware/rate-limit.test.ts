@@ -2,7 +2,7 @@ import {describe, expect, it} from 'bun:test';
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
-import {clientIp, rateLimit} from './rate-limit';
+import {clientIp, emailKey, rateLimit} from './rate-limit';
 import type {Bindings, Env} from '../types/env';
 import {PERMISSIVE_SECURITY_BINDINGS} from '../test-support/bindings';
 
@@ -159,6 +159,16 @@ describe('rateLimit', () => {
 
     expect(res.status).toBe(429);
     expect(keys).toEqual(['ip:unknown']);
+  });
+});
+
+describe('emailKey', () => {
+  it('folds the case of the address', () => {
+    // One mailbox, so one bucket. Counted as submitted, the two spellings
+    // would give a caller twice the budget the endpoint advertises -- and as
+    // many times again as they care to vary the capitalization.
+    expect(emailKey('Victim@Example.com')).toBe(emailKey('victim@example.com'));
+    expect(emailKey('Victim@Example.com')).toBe('email:victim@example.com');
   });
 });
 

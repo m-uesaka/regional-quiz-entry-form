@@ -11,7 +11,7 @@ import {
   confirmPasswordReset,
   requestPasswordReset,
 } from '../lib/password-reset';
-import {clientIp, rateLimit} from '../middleware/rate-limit';
+import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
 import {requireTurnstile} from '../middleware/turnstile';
 
 // Matches the period both mail-trigger limiters count over
@@ -35,7 +35,7 @@ export const passwordResetRoute = new Hono<Env>()
     zValidator('json', PasswordResetRequestInputSchema),
     rateLimit<{out: {json: PasswordResetRequestInput}}>(
       env => env.MAIL_TRIGGER_EMAIL_RATE_LIMITER,
-      c => `email:${c.req.valid('json').email}`,
+      c => emailKey(c.req.valid('json').email),
       MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
     ),
     c => {

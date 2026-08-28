@@ -9,7 +9,7 @@ import {
 import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
 import {verifyPassword} from '../lib/password';
-import {clientIp, rateLimit} from '../middleware/rate-limit';
+import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
 import {PARTICIPANT_SESSION_COOKIE} from '../middleware/participant-auth';
 
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
@@ -54,7 +54,7 @@ export const participantAuthRoute = new Hono<Env>().post(
   // budget.
   rateLimit<{out: {json: ParticipantLoginInput}}>(
     env => env.LOGIN_EMAIL_RATE_LIMITER,
-    c => `participant-login:email:${c.req.valid('json').email}`,
+    c => `participant-login:${emailKey(c.req.valid('json').email)}`,
     LOGIN_LIMIT_PERIOD_SECONDS,
   ),
   async c => {

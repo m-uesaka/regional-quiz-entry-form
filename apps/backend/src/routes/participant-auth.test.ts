@@ -165,13 +165,15 @@ describe('POST /login', () => {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
-          email: 'shared@example.com',
+          email: 'Shared@Example.com',
           password: 'anything',
         }),
       },
       {...ENV, LOGIN_EMAIL_RATE_LIMITER: recording},
     );
 
+    // Folded, so that re-spelling the address doesn't hand out a second
+    // budget for the same account.
     expect(keys).toEqual(['participant-login:email:shared@example.com']);
   });
 });

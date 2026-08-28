@@ -65,7 +65,7 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 
 ### レート制限と Turnstile
 
-未認証で叩ける 4 本には、Cloudflare の Rate Limiting binding によるレート制限が掛かっています(#116 / [Task 11-1](../tasks/task-11-1.md))。**IP(`CF-Connecting-IP`)とメールアドレスの 2 つの鍵**で別々に数えます。1 つの IP から多数のアカウントを試す攻撃は IP 鍵でしか、多数の IP から 1 アカウントを試す攻撃はメール鍵でしか止まらないためです。メール鍵はバリデーション通過後に数えるので、スキーマに合わない本文で他人のメール枠を減らすことはできません。
+未認証で叩ける 4 本には、Cloudflare の Rate Limiting binding によるレート制限が掛かっています(#116 / [Task 11-1](../tasks/task-11-1.md))。**IP(`CF-Connecting-IP`)とメールアドレスの 2 つの鍵**で別々に数えます。1 つの IP から多数のアカウントを試す攻撃は IP 鍵でしか、多数の IP から 1 アカウントを試す攻撃はメール鍵でしか止まらないためです。メール鍵はバリデーション通過後に数えるので、スキーマに合わない本文で他人のメール枠を減らすことはできません。また鍵に載せる前に**小文字化**します(`middleware/rate-limit.ts` の `emailKey()`)。`Victim@example.com` と `victim@example.com` は同じ受信箱なので、そのまま数えるとバケツが分かれ、大文字小文字を変えた分だけ上限を取り直せてしまうためです。
 
 **鍵ごとに別の limiter に載せています。** Rate Limiting binding は上限を binding 単位でしか持てないので、IP 鍵とメール鍵に別々の数字を与えるには binding を分けるしかありません。
 

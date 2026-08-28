@@ -52,6 +52,21 @@ export function rateLimit<I extends Input = Input>(
 }
 
 /**
+ * The part of a rate-limit key that names an email address.
+ *
+ * Case-folded, because `Victim@example.com` and `victim@example.com` are two
+ * strings for one mailbox. Counted as submitted they land in two buckets, so
+ * the per-address cap an endpoint advertises could be had over again for
+ * every capitalization a caller cares to try -- which on the endpoints that
+ * send mail is the whole of what the cap is for.
+ *
+ * @param email The address the request named, as it was submitted.
+ */
+export function emailKey(email: string): string {
+  return `email:${email.toLowerCase()}`;
+}
+
+/**
  * The address the request came from, as Cloudflare saw it.
  *
  * `CF-Connecting-IP` is set by Cloudflare on the way in and overwrites

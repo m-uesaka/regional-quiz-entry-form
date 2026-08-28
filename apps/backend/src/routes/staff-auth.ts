@@ -14,7 +14,7 @@ import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
 import {verifyPassword} from '../lib/password';
 import {STAFF_SESSION_COOKIE} from '../middleware/staff-auth';
-import {clientIp, rateLimit} from '../middleware/rate-limit';
+import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
 
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
 // A well-formed but unusable hash, run through `verifyPassword` when no
@@ -49,7 +49,7 @@ export const staffAuthRoute = new Hono<Env>().post(
   zValidator('json', StaffLoginInputSchema),
   rateLimit<{out: {json: StaffLoginInput}}>(
     env => env.LOGIN_EMAIL_RATE_LIMITER,
-    c => `staff-login:email:${c.req.valid('json').email}`,
+    c => `staff-login:${emailKey(c.req.valid('json').email)}`,
     LOGIN_LIMIT_PERIOD_SECONDS,
   ),
   async c => {
