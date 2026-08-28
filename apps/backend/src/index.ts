@@ -3,6 +3,7 @@ import type {Env} from './types/env';
 import {staffAuthRoute} from './routes/staff-auth';
 import {participantAuthRoute} from './routes/participant-auth';
 import {passwordResetRoute} from './routes/password-reset';
+import {regionsRoute} from './routes/regions';
 import {tournamentsRoute} from './routes/tournaments';
 import {entriesRoute} from './routes/entries';
 import {entryListRoute} from './routes/entry-list';
@@ -23,6 +24,7 @@ const routes = app
   .route('/auth/staff', staffAuthRoute)
   .route('/auth/participant', participantAuthRoute)
   .route('/auth/participant/password-reset', passwordResetRoute)
+  .route('/regions', regionsRoute)
   .route('/tournaments', entryListRoute)
   // Mounted before `tournamentsRoute` on purpose: its public
   // `/:regionSlug/:tournamentSlug` route also matches two segments, and its
