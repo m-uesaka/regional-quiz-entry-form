@@ -122,8 +122,8 @@ describe('RegionUpdateInputSchema', () => {
   it('rejects a body with nothing to update', () => {
     expect(RegionUpdateInputSchema.safeParse({}).success).toBe(false);
     // `slug` is stripped, so a body that only carries one updates nothing.
-    expect(
-      RegionUpdateInputSchema.safeParse({slug: 'kanto'}).success,
-    ).toBe(false);
+    expect(RegionUpdateInputSchema.safeParse({slug: 'kanto'}).success).toBe(
+      false,
+    );
   });
 });
