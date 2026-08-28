@@ -50,6 +50,7 @@ function buildEvent(
   return {
     fetch: fetchImpl,
     cookies: fakeCookies(deleted),
+    url: new URL('http://localhost/mypage'),
   } as Parameters<typeof load>[0];
 }
 
@@ -69,6 +70,7 @@ function buildCancelEvent(
   return {
     fetch: fetchImpl,
     cookies: fakeCookies(deleted),
+    url: new URL('http://localhost/mypage'),
     request: new Request('http://localhost/mypage?/cancel', {
       method: 'POST',
       body,
@@ -245,6 +247,27 @@ describe('mypage +page.server logout action', () => {
     });
     // The forwarded deletion is enough; nothing else had to be dropped.
     expect(deleted).toEqual([]);
+  });
+
+  it('ends the session locally when the backend cannot be reached', async () => {
+    const set: SetCookie[] = [];
+    const deleted: string[] = [];
+    // `handleFetch` throws outright on an unset or malformed `BACKEND_URL`,
+    // and an unreachable Worker rejects the fetch. Neither answers with a
+    // status to branch on.
+    const rejecting = (async () => {
+      throw new Error('BACKEND_URL is not set');
+    }) as typeof fetch;
+
+    await expect(
+      actions.logout(buildLogoutEvent(rejecting, set, deleted)),
+    ).rejects.toMatchObject({
+      status: 303,
+      location: '/mypage/login',
+    } satisfies Partial<Redirect>);
+
+    expect(set).toEqual([]);
+    expect(deleted).toEqual(['participant_session']);
   });
 
   it('ends the session locally when the logout request fails', async () => {

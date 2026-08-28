@@ -25,13 +25,10 @@ const DUMMY_PASSWORD_HASH = `${'00'.repeat(16)}:${'00'.repeat(32)}`;
 // different cookie as far as the browser is concerned, and the live session
 // would outlive the logout.
 //
-// `path` is spelled out rather than left off. A `Set-Cookie` without one is
-// scoped by the browser to the directory of the request that carried it,
-// which here would be `/api/auth/staff` -- the cookie only ever reached the
-// staff screens because the frontend re-issues it at `/` (see
-// `forwardBackendCookies()` in
-// `apps/frontend/src/lib/server/backend-fetch.ts`), and a deletion has to
-// name the same path to match it.
+// `path` is spelled out rather than left to `hono/cookie`, which already
+// defaults it to `/`: the point of this object is that the deletion can be
+// read off the same attributes as the issue, and an attribute that only
+// exists as a library default is one a reader has to go and check.
 const SESSION_COOKIE_OPTIONS = {
   httpOnly: true,
   secure: true,

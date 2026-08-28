@@ -59,10 +59,23 @@ export async function readParticipantClaims(
  * The `path` matches the one the backend issues the cookie under, since a
  * delete only matches a cookie of the same name *and* path.
  *
+ * `secure` is decided from the frontend's own protocol for the same reason
+ * `forwardSetCookies()` does it (see `./backend-cookies.ts`): SvelteKit's
+ * default only drops the flag for the literal hostname `localhost`, so on
+ * `http://127.0.0.1:5173` or `vite dev --host` the deletion would go out as
+ * a `Secure` cookie over plain HTTP and be discarded by the browser -- a
+ * deletion that silently does nothing, which is the one thing it must not
+ * be.
+ *
  * @param cookies `event.cookies`.
+ * @param url `event.url`, i.e. the origin the deletion is issued from. Only
+ *     its protocol is read.
  */
-export function clearParticipantSession(cookies: Cookies): void {
-  cookies.delete(PARTICIPANT_SESSION_COOKIE, {path: '/'});
+export function clearParticipantSession(cookies: Cookies, url: URL): void {
+  cookies.delete(PARTICIPANT_SESSION_COOKIE, {
+    path: '/',
+    secure: url.protocol === 'https:',
+  });
 }
 
 /**
@@ -81,8 +94,9 @@ export function clearParticipantSession(cookies: Cookies): void {
  * gives up.
  *
  * @param cookies `event.cookies`.
+ * @param url `event.url`, passed on to `clearParticipantSession`.
  */
-export function redirectToParticipantLogin(cookies: Cookies): never {
-  clearParticipantSession(cookies);
+export function redirectToParticipantLogin(cookies: Cookies, url: URL): never {
+  clearParticipantSession(cookies, url);
   redirect(303, PARTICIPANT_LOGIN_PATH);
 }

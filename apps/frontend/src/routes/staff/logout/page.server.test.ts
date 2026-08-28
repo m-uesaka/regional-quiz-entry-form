@@ -93,6 +93,27 @@ describe('staff logout +page.server action', () => {
     expect(deleted).toEqual([]);
   });
 
+  it('ends the session locally when the backend cannot be reached', async () => {
+    const set: SetCookie[] = [];
+    const deleted: string[] = [];
+    // A rejected fetch (unset `BACKEND_URL`, unreachable Worker) has no
+    // status to branch on, and must not surface as a 500 with the session
+    // left standing.
+    const rejecting = (async () => {
+      throw new Error('BACKEND_URL is not set');
+    }) as typeof fetch;
+
+    await expect(
+      actions.default(buildEvent(rejecting, set, deleted)),
+    ).rejects.toMatchObject({
+      status: 303,
+      location: '/staff/login',
+    } satisfies Partial<Redirect>);
+
+    expect(set).toEqual([]);
+    expect(deleted).toEqual(['staff_session']);
+  });
+
   it('ends the session locally when the logout request fails', async () => {
     const set: SetCookie[] = [];
     const deleted: string[] = [];

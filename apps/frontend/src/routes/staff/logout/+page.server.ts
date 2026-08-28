@@ -21,17 +21,19 @@ export const load: PageServerLoad = () => {
 export const actions = {
   default: async ({cookies, fetch, url}) => {
     const api = createApiClient(fetch);
-    const res = await api.api.auth.staff.logout.$post();
-    // The API answers with the cookie deletion, and `/api/*` goes to the
-    // backend Worker's own origin, so the `Set-Cookie` is re-issued from
-    // this origin by hand to reach the browser at all.
-    forwardSetCookies(res, cookies, url);
-    // The endpoint only writes a header, so it cannot fail on its own
-    // terms, but the request to it can (the Worker being down, say). A
-    // logout that quietly leaves the session in place is the one outcome
-    // not worth reporting back, so the cookie is dropped here as well.
-    if (!res.ok) {
-      clearStaffSession(cookies);
+    // Caught for the same reason the participant logout catches (see
+    // `routes/mypage/+page.server.ts`): an unset or malformed
+    // `BACKEND_URL`, or a Worker that cannot be reached, rejects rather
+    // than answering, and a logout must not leave the session standing
+    // behind a 500.
+    const res = await api.api.auth.staff.logout.$post().catch(() => null);
+    if (res?.ok) {
+      // The API answers with the cookie deletion, and `/api/*` goes to the
+      // backend Worker's own origin, so the `Set-Cookie` is re-issued from
+      // this origin by hand to reach the browser at all.
+      forwardSetCookies(res, cookies, url);
+    } else {
+      clearStaffSession(cookies, url);
     }
     redirect(303, STAFF_LOGIN_PATH);
   },
