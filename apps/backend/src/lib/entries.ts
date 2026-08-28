@@ -42,6 +42,23 @@ interface TournamentRow {
   regulations: RegulationRow[];
 }
 
+/**
+ * The error the dual-entry rule answers with. Shared with the trigger's
+ * SQLSTATE mapping below so both paths give the entry form the same string
+ * to translate.
+ */
+const ALREADY_ENTERED_ANOTHER_TOURNAMENT =
+  'already entered another tournament in this region';
+
+/**
+ * The SQLSTATE `check_region_dual_entry()` (migration 0016) raises. The
+ * trigger only fires for a submission that slipped through the check below
+ * while a concurrent one was being inserted, so it is a race, not a bug in
+ * the caller — but the participant caused it and 409 is still the honest
+ * answer.
+ */
+const REGION_DUAL_ENTRY_SQLSTATE = 'P0005';
+
 interface ParticipantRow {
   id: string;
   region_id: string;
@@ -256,7 +273,7 @@ export async function createEntry(
       return {
         ok: false,
         status: 409,
-        error: 'already entered another tournament in this region',
+        error: ALREADY_ENTERED_ANOTHER_TOURNAMENT,
       };
     }
   }
@@ -292,6 +309,12 @@ export async function createEntry(
         .select('id')
         .single()
     : await db.from('entries').insert(entryValues).select('id').single();
+  if (error?.code === REGION_DUAL_ENTRY_SQLSTATE) {
+    // The check above lost a race with a concurrent submission for the
+    // region's other tournament; the trigger is what actually kept the
+    // participant from holding both seats.
+    return {ok: false, status: 409, error: ALREADY_ENTERED_ANOTHER_TOURNAMENT};
+  }
   if (error || !entry) {
     return {
       ok: false,

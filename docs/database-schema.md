@@ -96,7 +96,7 @@ flowchart TB
 | `name` | text | not null | 表示名 |
 | `allows_dual_entry` | boolean | not null, default `false` | 同一地域の最強位と新人王の**両方**にエントリーできるか |
 
-`allows_dual_entry` は requirements.md の「両方に参加することができる**ような地域も存在します**」に対応します。既定を `false` にしているのは、現在の「どの地域でも両方に出られる」挙動が仕様の欠落であって意図された既定ではないためで、許可する地域には運用開始前に明示的に `true` を立ててもらいます。判定は `apps/backend/src/lib/entries.ts` の `createEntry()` が行い、`cancelled` 以外のエントリーが同一地域の別大会にあれば 409 を返します。
+`allows_dual_entry` は requirements.md の「両方に参加することができる**ような地域も存在します**」に対応します。既定を `false` にしているのは、現在の「どの地域でも両方に出られる」挙動が仕様の欠落であって意図された既定ではないためで、許可する地域には運用開始前に明示的に `true` を立ててもらいます。判定は `apps/backend/src/lib/entries.ts` の `createEntry()` が行い、`cancelled` 以外のエントリーが同一地域の別大会にあれば 409 を返します。その裏では `check_region_dual_entry()` トリガ(マイグレーション `0016`)が同じルールを DB 側でも掛けています(下記)。
 
 作成・編集は統括スタッフ向けの `GET` / `POST` / `PATCH /api/regions`(`apps/backend/src/routes/regions.ts`)から行えます。`slug` だけは公開済み URL の一部なので作成時に固定され、更新できません。
 
@@ -368,6 +368,15 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 - 地域名・大会名も一緒に返すため、`regions` を JOIN しています。呼び出し側で JOIN し直さずに済みます。
 - 本体の列参照はすべてテーブル修飾(`t.id` / `r.slug` など)しています。`returns table` の出力列名(`region_id` など)と衝突して曖昧参照になるのを避けるためです。
 
+### check_region_dual_entry()(トリガ関数)
+
+`entries` の before insert or update トリガとして、`regions.allows_dual_entry` が `false` の地域で同じ participant が2つ目の有効なエントリーを持つことを DB 側でも禁止します。`db.rpc()` からは呼び出しません。
+
+- `createEntry()` は「数える → INSERT する」なので、地域の2大会への申込が同時に来ると両方が0件を数えて両方とも通り、片方を取り消す経路も無いまま2枠を占有してしまいます。この窓を閉じるためのバックストップです。
+- 競合するのは participant なので、`participants` 行を `for update` でロックします(地域行だと同一地域の無関係な申込まで直列化してしまいます)。2つ目のトランザクションはここで待たされ、1つ目のコミット後にその行を見て弾かれます。
+- **枠を取る瞬間だけ**チェックします(INSERT と、`cancelled` 行を再利用する再エントリーの UPDATE)。既に枠を持つ行のステータス変更(`pending_verification` → `confirmed`、キャンセル待ちの繰り上げ)は枠を取ったときに検査済みで、しかも `confirm_entry_by_token()` / `promote_next_waitlisted_entry()` が大会行のロックを持ったまま実行するため、そこで participant ロックを取りに行くとデッドロックを招きます。
+- 違反時は SQLSTATE `P0005` を raise します。`createEntry()` はこれを TypeScript 側の判定と同じ 409 `already entered another tournament in this region` に変換するので、フォームの文面は両経路で変わりません。
+
 ### マイグレーションを修正するときの注意
 
 `supabase db push` は各バージョンを一度しか適用しません。そのため、**適用済みのマイグレーションファイルを直接書き換えても、既存環境には反映されません**。関数の挙動を変更する場合は、`0007` / `0008` のように**新しい番号のファイルで `create or replace function` し直す**のが本リポジトリの流儀です。その際は変更しない部分も含めて関数全体を書き直すことになるため、元ファイルからの差分をコメントに明記してください。
@@ -391,3 +400,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0013_tournament_entry_summary_fn.sql` | `tournament_entry_summary()` |
 | `0014_sync_regulations_fn.sql` | `sync_regulations()`・`regulations` の優先期間 check 制約・`(tournament_id, display_order)` インデックス |
 | `0015_regions_allows_dual_entry.sql` | `regions.allows_dual_entry`(既定 `false`) |
+| `0016_entries_region_dual_entry_trigger.sql` | `check_region_dual_entry()` と `entries` の before insert or update トリガ |
