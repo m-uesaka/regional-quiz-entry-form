@@ -38,12 +38,16 @@ const ENTRY_ERROR_MESSAGES: Record<string, string> = {
   'invalid tournament': '大会が見つかりません',
   'entry period closed': 'エントリー期間外です',
   'regulation not eligible in priority window':
-    '現在は優先期間中のため、選択したレギュレーションではエントリーできません',
+    '現在は優先期間中のため、優先対象のレギュレーションを1つ以上選択してください',
   'invalid password':
     'このメールアドレスは登録済みです。登録時のパスワードを入力してください',
   'already registered in another region':
     'このメールアドレスは別の地域で登録済みです',
   'already entered': 'この大会には既にエントリー済みです',
+  // The regulations changed while the form was open, so what the page
+  // offered no longer exists. Reloading is what fixes it.
+  'regulation no longer available':
+    '選択したレギュレーションが変更されました。ページを再読み込みして、もう一度お試しください',
   'already entered another tournament in this region':
     'この地域では、最強位と新人王のどちらか一方にのみエントリーできます',
   // Answered by the challenge in front of the API, which refuses a missing
@@ -121,7 +125,7 @@ async function fetchTournament(
 
 /**
  * Fetches the regulations the form offers to choose between. Only `load`
- * needs these: the submitted `regulationId` is validated by the API, not
+ * needs these: the submitted `regulationIds` are validated by the API, not
  * against this list.
  * @param tournamentId The tournament the form belongs to.
  * @param fetch SvelteKit's `event.fetch`.
@@ -205,7 +209,9 @@ export const actions = {
       furigana: String(formData.get('furigana') ?? ''),
       displayName: String(formData.get('displayName') ?? ''),
       email: String(formData.get('email') ?? ''),
-      regulationId: String(formData.get('regulationId') ?? ''),
+      // A checkbox group, so every checked box arrives under the same
+      // name — `getAll`, not `get`.
+      regulationIds: formData.getAll('regulationIds').map(String),
       freeText,
       customFieldValues: readCustomFieldValues(formData, formFieldDefs),
     };

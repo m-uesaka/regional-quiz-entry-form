@@ -178,12 +178,14 @@ export async function seedDatabase(): Promise<void> {
     'inserting the regulations',
     (
       await db.from('regulations').insert(
-        TOURNAMENTS.map(tournament => ({
-          id: tournament.regulationId,
-          tournament_id: tournament.id,
-          label: tournament.regulationLabel,
-          display_order: 0,
-        })),
+        TOURNAMENTS.flatMap(tournament =>
+          tournament.regulations.map((regulation, index) => ({
+            id: regulation.id,
+            tournament_id: tournament.id,
+            label: regulation.label,
+            display_order: index,
+          })),
+        ),
       )
     ).error,
   );

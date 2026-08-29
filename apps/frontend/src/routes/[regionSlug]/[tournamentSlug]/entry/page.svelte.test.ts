@@ -76,7 +76,7 @@ const SUBMITTED_VALUES = {
   furigana: 'ヤマダタロウ',
   displayName: '太郎',
   email: 'taro@example.com',
-  regulationId: REGULATIONS[1].id,
+  regulationIds: [REGULATIONS[1].id],
   freeText: 'よろしくお願いします',
   customFieldValues: {t_shirt_size: 'M', agree_rules: ['agree_rules']},
 };
@@ -97,8 +97,12 @@ describe('entry +page.svelte', () => {
   it('renders the regulation choices and the custom form fields', () => {
     renderPage();
 
-    expect(screen.getByRole('radio', {name: /一般の部/})).toBeInTheDocument();
-    expect(screen.getByRole('radio', {name: /学生の部/})).toBeInTheDocument();
+    expect(
+      screen.getByRole('checkbox', {name: /一般の部/}),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('checkbox', {name: /学生の部/}),
+    ).toBeInTheDocument();
     expect(screen.getByRole('radio', {name: 'M'})).toBeInTheDocument();
     expect(
       screen.getByRole('checkbox', {name: /規約に同意する/}),
@@ -122,7 +126,7 @@ describe('entry +page.svelte', () => {
     expect(screen.getByLabelText('自由記述')).toHaveValue(
       'よろしくお願いします',
     );
-    expect(screen.getByRole('radio', {name: /学生の部/})).toBeChecked();
+    expect(screen.getByRole('checkbox', {name: /学生の部/})).toBeChecked();
     expect(screen.getByRole('radio', {name: 'M'})).toBeChecked();
     expect(
       screen.getByRole('checkbox', {name: /規約に同意する/}),

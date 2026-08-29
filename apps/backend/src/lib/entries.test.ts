@@ -189,7 +189,7 @@ describe.skipIf(!(await isDbReachable()))(
         email: `entry-${crypto.randomUUID()}@${testEmailDomain}`,
         password: 'password123',
         passwordConfirm: 'password123',
-        regulationId: '',
+        regulationIds: [],
         customFieldValues: {},
         ...overrides,
       };
@@ -230,7 +230,7 @@ describe.skipIf(!(await isDbReachable()))(
       const result = await createEntry(
         env,
         fixture.tournamentId,
-        validInput({regulationId: fixture.regulationId}),
+        validInput({regulationIds: [fixture.regulationId]}),
       );
 
       expect(result.ok).toBe(false);
@@ -251,11 +251,107 @@ describe.skipIf(!(await isDbReachable()))(
       const result = await createEntry(
         env,
         fixture.tournamentId,
-        validInput({regulationId: otherRegulation.id as string}),
+        validInput({regulationIds: [otherRegulation.id as string]}),
       );
 
       expect(result.ok).toBe(false);
       expect(!result.ok && result.status).toBe(403);
+    });
+
+    it('accepts a selection that includes the active priority regulation', async () => {
+      // The window says only participants meeting that condition may enter,
+      // not that they may claim nothing else — so a participant who also
+      // meets a second condition may check both.
+      const fixture = await createFixture('priority-plus-other', {
+        priorityStartsAt: '2020-01-01T00:00:00Z',
+        priorityEndsAt: '2099-01-01T00:00:00Z',
+      });
+      const [otherRegulation] = await sql`
+        insert into regulations (tournament_id, label)
+        values (${fixture.tournamentId}, '対象外レギュレーション')
+        returning id
+      `;
+
+      const result = await createEntry(
+        env,
+        fixture.tournamentId,
+        validInput({
+          regulationIds: [otherRegulation.id as string, fixture.regulationId],
+        }),
+      );
+
+      expect(result.ok).toBe(true);
+    });
+
+    it('rejects an entry that selects no regulation at all', async () => {
+      const fixture = await createFixture('no-regulation');
+
+      const result = await createEntry(
+        env,
+        fixture.tournamentId,
+        validInput({regulationIds: []}),
+      );
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.status).toBe(403);
+    });
+
+    it('stores every selected regulation', async () => {
+      const fixture = await createFixture('multi-select');
+      const [secondRegulation] = await sql`
+        insert into regulations (tournament_id, label, display_order)
+        values (${fixture.tournamentId}, '2つ目のレギュレーション', 1)
+        returning id
+      `;
+
+      const result = await createEntry(
+        env,
+        fixture.tournamentId,
+        validInput({
+          regulationIds: [fixture.regulationId, secondRegulation.id as string],
+        }),
+      );
+
+      expect(result.ok).toBe(true);
+      const rows = await sql`
+        select regulation_id, tournament_id from entry_regulations
+        where entry_id = ${result.ok ? result.entry.id : ''}
+        order by regulation_id
+      `;
+      expect(
+        rows.map((row: {regulation_id: string}) => row.regulation_id).sort(),
+      ).toEqual([fixture.regulationId, secondRegulation.id as string].sort());
+      // The redundant column is what ties both composite foreign keys to
+      // one tournament, so it has to be the entry's own.
+      for (const row of rows) {
+        expect(row.tournament_id).toBe(fixture.tournamentId);
+      }
+    });
+
+    it('refuses a regulation belonging to another tournament', async () => {
+      const fixture = await createFixture('foreign-regulation-own');
+      const otherTournament = await createFixture('foreign-regulation-other');
+
+      const result = await createEntry(
+        env,
+        fixture.tournamentId,
+        validInput({
+          regulationIds: [fixture.regulationId, otherTournament.regulationId],
+        }),
+      );
+
+      expect(result.ok).toBe(false);
+      // Refused by `isRegulationSelectionAllowed()`, which only knows this
+      // tournament's regulations — before any row is written. The DB-level
+      // guarantee behind it (the shared `tournament_id` on both composite
+      // foreign keys) is covered in `db-schema.test.ts`.
+      expect(!result.ok && result.status).toBe(403);
+      // Nothing is left behind.
+      const [{count}] = await sql`
+        select count(*)::int as count from entries
+        where tournament_id = ${fixture.tournamentId}
+      `;
+      expect(count).toBe(0);
     });
 
     it('rejects an email already registered in a different region', async () => {
@@ -270,7 +366,7 @@ describe.skipIf(!(await isDbReachable()))(
       const result = await createEntry(
         env,
         fixtureB.tournamentId,
-        validInput({email, regulationId: fixtureB.regulationId}),
+        validInput({email, regulationIds: [fixtureB.regulationId]}),
       );
 
       expect(result.ok).toBe(false);
@@ -292,7 +388,7 @@ describe.skipIf(!(await isDbReachable()))(
           email,
           password: 'a-wrong-password',
           passwordConfirm: 'a-wrong-password',
-          regulationId: fixture.regulationId,
+          regulationIds: [fixture.regulationId],
         }),
       );
 
@@ -307,7 +403,7 @@ describe.skipIf(!(await isDbReachable()))(
       const result = await createEntry(
         env,
         fixture.tournamentId,
-        validInput({regulationId: fixture.regulationId}),
+        validInput({regulationIds: [fixture.regulationId]}),
       );
 
       expect(result.ok).toBe(true);
@@ -321,7 +417,7 @@ describe.skipIf(!(await isDbReachable()))(
 
     it('rolls back the entry when the verification email fails to send, allowing a retry', async () => {
       const fixture = await createFixture('mail-failure');
-      const input = validInput({regulationId: fixture.regulationId});
+      const input = validInput({regulationIds: [fixture.regulationId]});
       const previousFetch = globalThis.fetch;
       globalThis.fetch = (async (
         requestInput: RequestInfo | URL,
@@ -368,7 +464,10 @@ describe.skipIf(!(await isDbReachable()))(
       const result = await createEntry(
         env,
         fixture.tournamentId,
-        validInput({regulationId: fixture.regulationId, customFieldValues: {}}),
+        validInput({
+          regulationIds: [fixture.regulationId],
+          customFieldValues: {},
+        }),
       );
 
       expect(result.ok).toBe(true);
@@ -387,7 +486,7 @@ describe.skipIf(!(await isDbReachable()))(
         env,
         fixture.tournamentId,
         validInput({
-          regulationId: fixture.regulationId,
+          regulationIds: [fixture.regulationId],
           customFieldValues: {t_shirt_size: 'M', topics: ['歴史']},
         }),
       );
@@ -409,7 +508,7 @@ describe.skipIf(!(await isDbReachable()))(
       const fixture = await createFixture('custom-fields-unknown-key');
       await addFormFieldDefs(fixture.tournamentId);
       const input = validInput({
-        regulationId: fixture.regulationId,
+        regulationIds: [fixture.regulationId],
         customFieldValues: {t_shirt_size: 'M', junk: 'x'},
       });
 
@@ -437,7 +536,7 @@ describe.skipIf(!(await isDbReachable()))(
         env,
         fixture.tournamentId,
         validInput({
-          regulationId: fixture.regulationId,
+          regulationIds: [fixture.regulationId],
           customFieldValues: {t_shirt_size: 'XXL'},
         }),
       );
@@ -454,7 +553,7 @@ describe.skipIf(!(await isDbReachable()))(
         env,
         fixture.tournamentId,
         validInput({
-          regulationId: fixture.regulationId,
+          regulationIds: [fixture.regulationId],
           customFieldValues: {topics: ['歴史']},
         }),
       );
@@ -471,7 +570,7 @@ describe.skipIf(!(await isDbReachable()))(
         env,
         fixture.tournamentId,
         validInput({
-          regulationId: fixture.regulationId,
+          regulationIds: [fixture.regulationId],
           customFieldValues: {t_shirt_size: 'M', topics: '歴史'},
         }),
       );
@@ -482,7 +581,7 @@ describe.skipIf(!(await isDbReachable()))(
 
     it('rejects a second entry for a tournament the participant is already in', async () => {
       const fixture = await createFixture('duplicate');
-      const input = validInput({regulationId: fixture.regulationId});
+      const input = validInput({regulationIds: [fixture.regulationId]});
       const firstResult = await createEntry(env, fixture.tournamentId, input);
       expect(firstResult.ok).toBe(true);
 
@@ -494,7 +593,7 @@ describe.skipIf(!(await isDbReachable()))(
 
     it('reuses the same entry row with pending_verification status after cancellation', async () => {
       const fixture = await createFixture('re-entry');
-      const input = validInput({regulationId: fixture.regulationId});
+      const input = validInput({regulationIds: [fixture.regulationId]});
       const firstResult = await createEntry(env, fixture.tournamentId, input);
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
@@ -530,7 +629,7 @@ describe.skipIf(!(await isDbReachable()))(
 
     it('restores the cancellation when the re-entry verification email fails', async () => {
       const fixture = await createFixture('re-entry-mail-failure');
-      const input = validInput({regulationId: fixture.regulationId});
+      const input = validInput({regulationIds: [fixture.regulationId]});
       const firstResult = await createEntry(env, fixture.tournamentId, input);
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
@@ -591,7 +690,7 @@ describe.skipIf(!(await isDbReachable()))(
       const firstResult = await createEntry(
         env,
         saikyoi.tournamentId,
-        validInput({email, regulationId: saikyoi.regulationId}),
+        validInput({email, regulationIds: [saikyoi.regulationId]}),
       );
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
@@ -603,7 +702,7 @@ describe.skipIf(!(await isDbReachable()))(
       const result = await createEntry(
         env,
         shinjinou.tournamentId,
-        validInput({email, regulationId: shinjinou.regulationId}),
+        validInput({email, regulationIds: [shinjinou.regulationId]}),
       );
 
       expect(result.ok).toBe(false);
@@ -623,14 +722,14 @@ describe.skipIf(!(await isDbReachable()))(
       const firstResult = await createEntry(
         env,
         saikyoi.tournamentId,
-        validInput({email, regulationId: saikyoi.regulationId}),
+        validInput({email, regulationIds: [saikyoi.regulationId]}),
       );
       expect(firstResult.ok).toBe(true);
 
       const result = await createEntry(
         env,
         shinjinou.tournamentId,
-        validInput({email, regulationId: shinjinou.regulationId}),
+        validInput({email, regulationIds: [shinjinou.regulationId]}),
       );
 
       expect(result.ok).toBe(true);
@@ -645,7 +744,7 @@ describe.skipIf(!(await isDbReachable()))(
       const firstResult = await createEntry(
         env,
         saikyoi.tournamentId,
-        validInput({email, regulationId: saikyoi.regulationId}),
+        validInput({email, regulationIds: [saikyoi.regulationId]}),
       );
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
@@ -659,7 +758,7 @@ describe.skipIf(!(await isDbReachable()))(
       const result = await createEntry(
         env,
         shinjinou.tournamentId,
-        validInput({email, regulationId: shinjinou.regulationId}),
+        validInput({email, regulationIds: [shinjinou.regulationId]}),
       );
 
       expect(result.ok).toBe(true);
@@ -676,7 +775,7 @@ describe.skipIf(!(await isDbReachable()))(
       const firstResult = await createEntry(
         env,
         saikyoi.tournamentId,
-        validInput({email, regulationId: saikyoi.regulationId}),
+        validInput({email, regulationIds: [saikyoi.regulationId]}),
       );
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
@@ -688,7 +787,7 @@ describe.skipIf(!(await isDbReachable()))(
       const result = await createEntry(
         env,
         shinjinou.tournamentId,
-        validInput({email, regulationId: shinjinou.regulationId}),
+        validInput({email, regulationIds: [shinjinou.regulationId]}),
       );
 
       expect(result.ok).toBe(false);
@@ -705,7 +804,7 @@ describe.skipIf(!(await isDbReachable()))(
       const fixture = await createFixture('dual-off-same-tournament', {
         allowsDualEntry: false,
       });
-      const input = validInput({regulationId: fixture.regulationId});
+      const input = validInput({regulationIds: [fixture.regulationId]});
       const firstResult = await createEntry(env, fixture.tournamentId, input);
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
@@ -812,13 +911,17 @@ describe.skipIf(!(await isDbReachable()))(
       const [entry] = await sql`
         insert into entries (
           participant_id, tournament_id, name, furigana, display_name,
-          regulation_id, free_text, custom_field_values, status
+          free_text, custom_field_values, status
         ) values (
           ${participant.id}, ${tournament.id}, '山田太郎', 'ヤマダタロウ', '太郎',
-          ${regulation.id}, '元の自由記述', ${{t_shirt_size: 'M'}},
+          '元の自由記述', ${{t_shirt_size: 'M'}},
           ${options.status ?? 'confirmed'}
         )
         returning id
+      `;
+      await sql`
+        insert into entry_regulations (entry_id, regulation_id, tournament_id)
+        values (${entry.id}, ${regulation.id}, ${tournament.id})
       `;
       return {
         participantId: participant.id as string,
@@ -1057,12 +1160,16 @@ describe.skipIf(!(await isDbReachable()))(
       const [entry] = await sql`
         insert into entries (
           participant_id, tournament_id, name, furigana, display_name,
-          regulation_id, status, waitlist_position
+          status, waitlist_position
         ) values (
           ${participant.id}, ${fixture.tournamentId}, '山田太郎', 'ヤマダタロウ',
-          '太郎', ${fixture.regulationId}, ${status}, ${waitlistPosition}
+          '太郎', ${status}, ${waitlistPosition}
         )
         returning id
+      `;
+      await sql`
+        insert into entry_regulations (entry_id, regulation_id, tournament_id)
+        values (${entry.id}, ${fixture.regulationId}, ${fixture.tournamentId})
       `;
       return {
         participantId: participant.id as string,

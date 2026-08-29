@@ -201,13 +201,16 @@ describe.skipIf(!(await isDbReachable()))(
     ): Promise<string> {
       const [entry] = await sql`
         insert into entries (
-          participant_id, tournament_id, name, furigana, display_name,
-          regulation_id, status
+          participant_id, tournament_id, name, furigana, display_name, status
         ) values (
           ${participantId}, ${tournamentId}, '山田太郎', 'ヤマダタロウ', '太郎',
-          ${regulationId}, 'confirmed'
+          'confirmed'
         )
         returning id
+      `;
+      await sql`
+        insert into entry_regulations (entry_id, regulation_id, tournament_id)
+        values (${entry.id}, ${regulationId}, ${tournamentId})
       `;
       return entry.id as string;
     }
@@ -342,7 +345,7 @@ describe.skipIf(!(await isDbReachable()))(
       expect(body).toMatchObject({
         id: entryId,
         name: '山田太郎',
-        regulationLabel: 'テストレギュレーション',
+        regulationLabels: ['テストレギュレーション'],
         formFieldDefs: [
           {
             fieldKey: 't_shirt_size',

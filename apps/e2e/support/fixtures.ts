@@ -13,8 +13,12 @@ export interface TournamentFixture {
   type: TournamentType;
   name: string;
   capacity: number | null;
-  regulationId: string;
-  regulationLabel: string;
+  /**
+   * The tournament's regulations, in display order. An entry may claim
+   * several of them (issue #112), so this is a list — `submitEntry()` and
+   * the form helper claim every one of them.
+   */
+  regulations: ReadonlyArray<{id: string; label: string}>;
   /**
    * Answers that satisfy the tournament's seeded custom form fields, used
    * as `submitEntry()`'s filler. `createEntry()` checks submitted answers
@@ -61,8 +65,7 @@ export const SAIKYOI: TournamentFixture = {
   type: 'saikyoi',
   name: '東京最強位決定戦',
   capacity: 1,
-  regulationId: '22222222-2222-4222-8222-2222222222aa',
-  regulationLabel: '一般',
+  regulations: [{id: '22222222-2222-4222-8222-2222222222aa', label: '一般'}],
   // No custom fields are seeded for this tournament.
   defaultCustomFieldValues: {},
 };
@@ -73,8 +76,13 @@ export const SHINJINOU: TournamentFixture = {
   type: 'shinjinou',
   name: '東京新人王決定戦',
   capacity: null,
-  regulationId: '33333333-3333-4333-8333-3333333333aa',
-  regulationLabel: '一般',
+  // Two, so the specs exercise an entry that claims more than one
+  // condition — the roster, the detail screen and the CSV all have to show
+  // both.
+  regulations: [
+    {id: '33333333-3333-4333-8333-3333333333aa', label: '一般'},
+    {id: '33333333-3333-4333-8333-3333333333ab', label: '学生'},
+  ],
   // `shirt_size` and `workshops` below are required; `note` is optional and
   // left out.
   defaultCustomFieldValues: {shirt_size: 'M', workshops: ['早押し']},

@@ -127,6 +127,7 @@ test('staff sign in, read their tournament roster, and export it as CSV', async 
     'ふりがな',
     '掲載名',
     'ステータス',
+    'レギュレーション',
     'Tシャツサイズ',
     '備考',
     '参加したい企画',
@@ -137,6 +138,8 @@ test('staff sign in, read their tournament roster, and export it as CSV', async 
     'しゅつりょくはなこ',
     confirmed.displayName,
     '確定',
+    // An entry may claim several regulations, and they share one cell.
+    '一般;学生',
     'L',
     '会場まで徒歩',
     // A checkbox group's selections share one cell, joined by `;`.
@@ -149,6 +152,7 @@ test('staff sign in, read their tournament roster, and export it as CSV', async 
     'みかくにんじろう',
     pending.displayName,
     'メール確認待ち',
+    '一般;学生',
     'S',
     '',
     '筆記',

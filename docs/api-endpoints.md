@@ -334,8 +334,8 @@ if ('yaml' in body) {
   | `priorityEndsAt` | string(datetime) \| null | 省略時は `null` |
 - `displayOrder` は送りません。**配列の並び順がそのまま `display_order`** になるので、並べ替えは配列を並べ替えるだけです。
 - 優先期間は「両方 null」か「両方指定(開始 < 終了)」のみ許容します(Zod と `regulations` の check 制約 `regulations_priority_window_complete` の両方で担保)。
-- 配列に含まれなかった既存行は削除されますが、**エントリーから参照されている行は削除できません**。`entries` が複合外部キー `(regulation_id, tournament_id)` で参照しているため、フォーム定義のような delete → insert は使えず、id 指定は update・id 無しは insert・消えた行は「参照が無ければ delete」という差分同期になっています。
-- `regulations` は1件以上必要です(エントリーは必ず1つ選ぶため、0件の大会はエントリー不可になる)。
+- 配列に含まれなかった既存行は削除されますが、**エントリーから参照されている行は削除できません**。`entry_regulations` が複合外部キー `(regulation_id, tournament_id)` で参照しているため、フォーム定義のような delete → insert は使えず、id 指定は update・id 無しは insert・消えた行は「参照が無ければ delete」という差分同期になっています。
+- `regulations` は1件以上必要です(エントリーは必ず1つ以上選ぶため、0件の大会はエントリー不可になる)。
 
 - `200`: `{"ok": true}`
 - `400`: `:tournamentId` が UUID でない / リクエストが `RegulationSyncInputSchema` に合わない / `id` がこの大会のレギュレーションでない(`この大会に存在しないレギュレーションが指定されています: ...`)
@@ -361,7 +361,7 @@ if ('yaml' in body) {
   | `email` | string(email) | アカウントのメールアドレス |
   | `password` | string(min 8) | |
   | `passwordConfirm` | string(min 8) | `password` と一致必須 |
-  | `regulationId` | string(uuid) | |
+  | `regulationIds` | string(uuid)[] (min 1) | 選択したレギュレーション。複数該当し得るので配列(issue #112) |
   | `freeText` | string(任意) | |
   | `customFieldValues` | `Record<string, string \| string[]>` | 追加フォーム項目の回答 |
 
@@ -378,10 +378,11 @@ if ('yaml' in body) {
 | 400 | `invalid tournament` | `:tournamentId` の大会が存在しない |
 | 400 | `unknown custom field: ...` 等 | `customFieldValues` が大会の `form_field_defs` と一致しない(メッセージは [`form-generation.md`](./form-generation.md) の一覧を参照) |
 | 403 | `entry period closed` | エントリー期間外 |
-| 403 | `regulation not eligible in priority window` | 優先期間中に対象外レギュレーションを選択した |
+| 403 | `regulation not eligible in priority window` | `regulationIds` が空、この大会のものでない id を含む、または優先期間中に優先対象を1つも選んでいない |
 | 401 | `invalid password` | 既存メールアドレスでのエントリーだがパスワードが一致しない |
 | 409 | `already registered in another region` | そのメールアドレスが別地域の participant として登録済み |
 | 409 | `already entered` | 同じ大会にキャンセル以外のエントリーが既にある |
+| 409 | `regulation no longer available` | フォームを開いている間に `PUT .../regulations` が対象のレギュレーションを削除した(エントリー行はロールバックされる) |
 | 409 | `already entered another tournament in this region` | `regions.allows_dual_entry` が false の地域で、同一地域の**別の**大会にキャンセル以外のエントリーが既にある |
 | 409 | (Supabase のメッセージ) | participant / entry の作成に失敗 |
 | 500 | (Supabase のメッセージ) | 大会の `form_field_defs` の取得に失敗 |
@@ -480,7 +481,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 - `200`: `Entry[]`(`created_at` 昇順)
 
-`Entry` は `id` / `tournamentId` / `name` / `furigana` / `displayName` / `email` / `regulationId` / `regulationLabel` / `freeText` / `customFieldValues` / `status` / `waitlistPosition` を含みます。`email` は `participants` の、`regulationLabel` は `regulations` の JOIN 結果です。
+`Entry` は `id` / `tournamentId` / `name` / `furigana` / `displayName` / `email` / `regulationIds` / `regulationLabels` / `freeText` / `customFieldValues` / `status` / `waitlistPosition` を含みます。`email` は `participants` の、`regulationIds` / `regulationLabels` は `entry_regulations` 経由の JOIN 結果で、大会の `display_order` 昇順に揃えて返します(1エントリーが複数のレギュレーションを選べるため配列)。
 
 - `401` / `403` / `500`
 
@@ -493,10 +494,11 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 | 項目 | 内容 |
 | --- | --- |
-| 列 | `氏名` / `ふりがな` / `掲載名` / `ステータス` + 当該大会の追加項目(`form_field_defs` の `label` を見出しに、`display_order` 昇順) |
+| 列 | `氏名` / `ふりがな` / `掲載名` / `ステータス` / `レギュレーション` + 当該大会の追加項目(`form_field_defs` の `label` を見出しに、`display_order` 昇順) |
 | 改行 | CRLF(RFC 4180)。末尾に改行は付けません |
 | エンコーディング | UTF-8 + BOM。BOM がないと Excel(Windows)が日本語列を文字化けさせるため |
 | ステータス | `ENTRY_STATUS_LABELS`(共有)による日本語表記。スタッフ画面の表示と同じ文言です |
+| レギュレーション | エントリーが選択したレギュレーションのラベルを、大会の `display_order` 昇順に `;` で連結して1セルに収めます |
 | 追加項目の値 | 複数選択チェックボックスは選択肢を `;` で連結。単独ブールチェックボックスは `はい` / `いいえ`(スタッフ詳細画面と同じ)。回答がない項目は空セル |
 | 数式の無害化 | `=` `+` `-` `@` タブ・CR のいずれかで始まるセルは、先頭にアポストロフィ(`'`)を付けて出力します(後述) |
 
@@ -677,7 +679,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 編集画面のプリフィル用の詳細。
 
-- `200`: `MypageEntryDetail` = `MypageEntry` + `{name, furigana, displayName, regulationLabel, freeText, customFieldValues, formFieldDefs}`
+- `200`: `MypageEntryDetail` = `MypageEntry` + `{name, furigana, displayName, regulationLabels, freeText, customFieldValues, formFieldDefs}`
 - `404`: `{"error": "entry not found"}`
 - `500`
 
@@ -688,7 +690,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 - リクエスト: `EntryEditInputSchema` — `{name, furigana, displayName, freeText?, customFieldValues}`
 - `200`: `{"ok": true}`
 
-編集可能なのはこの5項目だけです。`email` / `password` はアカウント資格情報なので認証フロー側で変更し、`regulationId` はエントリー時点の優先期間に基づいて検証済みのため変更できません。
+編集可能なのはこの5項目だけです。`email` / `password` はアカウント資格情報なので認証フロー側で変更し、`regulationIds` はエントリー時点の優先期間に基づいて検証済みのため変更できません。
 
 | ステータス | `error` | 条件 |
 | --- | --- | --- |

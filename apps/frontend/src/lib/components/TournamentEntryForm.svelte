@@ -46,7 +46,7 @@
   let displayName = $state(initial?.displayName ?? '');
   let email = $state(initial?.email ?? '');
   let freeText = $state(initial?.freeText ?? '');
-  let regulationId = $state<string | null>(initial?.regulationId ?? null);
+  let regulationIds = $state<string[]>(initial?.regulationIds ?? []);
   let customFieldValues = $state(initialCustomFieldValues());
   let turnstile = $state<ReturnType<typeof Turnstile>>();
 
@@ -153,9 +153,9 @@
     {/if}
   </div>
 
-  <RegulationSelector {regulations} bind:value={regulationId} />
-  {#if fieldError('regulationId')}
-    <p class="field-error">{fieldError('regulationId')}</p>
+  <RegulationSelector {regulations} bind:value={regulationIds} />
+  {#if fieldError('regulationIds')}
+    <p class="field-error">{fieldError('regulationIds')}</p>
   {/if}
 
   {#each fields as field (field.key)}

@@ -6,9 +6,19 @@ import {
 } from '@regional-quiz/shared';
 
 /** The columns every export starts with, before the custom fields. */
-const FIXED_HEADERS = ['氏名', 'ふりがな', '掲載名', 'ステータス'];
+const FIXED_HEADERS = [
+  '氏名',
+  'ふりがな',
+  '掲載名',
+  'ステータス',
+  'レギュレーション',
+];
 
-/** Separator between the selected options of a multi-select checkbox. */
+/**
+ * Separator between the selected options of a multi-select checkbox, and
+ * between an entry's regulations — both are a set the participant chose,
+ * and staff read them out of one cell either way.
+ */
 const MULTI_VALUE_SEPARATOR = ';';
 
 /**
@@ -27,6 +37,13 @@ export interface EntriesCsvRow {
   furigana: string;
   displayName: string;
   status: string;
+  /**
+   * Every regulation the entry claims, in the tournament's display order.
+   * An entry may meet more than one condition, so these are joined into a
+   * single cell rather than spilling into columns the header row doesn't
+   * cover.
+   */
+  regulationLabels: string[];
   customFieldValues: CustomFieldValues;
 }
 
@@ -54,6 +71,7 @@ export function buildEntriesCsv(
     entry.furigana,
     entry.displayName,
     entry.status,
+    entry.regulationLabels.join(MULTI_VALUE_SEPARATOR),
     ...fieldDefs.map(fieldDef =>
       formatCustomFieldValue(
         fieldDef,

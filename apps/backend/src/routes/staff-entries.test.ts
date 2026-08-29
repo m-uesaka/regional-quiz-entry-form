@@ -57,13 +57,23 @@ const FULL_ENTRY_ROW = {
   name: '山田太郎',
   furigana: 'ヤマダタロウ',
   display_name: '太郎',
-  regulation_id: '66666666-6666-6666-6666-666666666666',
   free_text: '自由記述',
   custom_field_values: {},
   status: 'pending_verification',
   waitlist_position: null,
   participants: {email: 'taro@example.com'},
-  regulations: {label: '一般の部'},
+  // Deliberately out of display order, so the route is seen to sort them
+  // rather than passing the embed through as it arrived.
+  entry_regulations: [
+    {
+      regulation_id: '77777777-7777-7777-7777-777777777777',
+      regulations: {label: '学生の部', display_order: 1},
+    },
+    {
+      regulation_id: '66666666-6666-6666-6666-666666666666',
+      regulations: {label: '一般の部', display_order: 0},
+    },
+  ],
 };
 
 const FORM_FIELD_DEF_ROWS = [
@@ -150,7 +160,7 @@ describe('GET /staff/tournaments/:id/entries (mocked Supabase)', () => {
       furigana: 'ヤマダタロウ',
       displayName: '太郎',
       email: 'taro@example.com',
-      regulationLabel: '一般の部',
+      regulationLabels: ['一般の部', '学生の部'],
       freeText: '自由記述',
       status: 'pending_verification',
     });
@@ -228,6 +238,16 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
       agree_to_rules: ['agree_to_rules'],
     },
     status: 'confirmed',
+    entry_regulations: [
+      {
+        regulation_id: '77777777-7777-7777-7777-777777777777',
+        regulations: {label: '学生の部', display_order: 1},
+      },
+      {
+        regulation_id: '66666666-6666-6666-6666-666666666666',
+        regulations: {label: '一般の部', display_order: 0},
+      },
+    ],
   };
 
   it('returns a CSV whose custom field columns are headed by their labels', async () => {
@@ -255,8 +275,8 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
     // mojibake.
     expect(body.startsWith('\uFEFF')).toBe(true);
     expect(body.slice(1).split('\r\n')).toEqual([
-      '氏名,ふりがな,掲載名,ステータス,Tシャツサイズ,規約に同意する',
-      '山田太郎,ヤマダタロウ,太郎,確定,M,はい',
+      '氏名,ふりがな,掲載名,ステータス,レギュレーション,Tシャツサイズ,規約に同意する',
+      '山田太郎,ヤマダタロウ,太郎,確定,一般の部;学生の部,M,はい',
     ]);
   });
 
@@ -272,7 +292,7 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
 
     expect(res.status).toBe(200);
     expect(await res.text()).toBe(
-      '\uFEFF氏名,ふりがな,掲載名,ステータス,Tシャツサイズ,規約に同意する',
+      '\uFEFF氏名,ふりがな,掲載名,ステータス,レギュレーション,Tシャツサイズ,規約に同意する',
     );
   });
 
@@ -386,7 +406,7 @@ describe('GET /staff/entries/:id (mocked Supabase)', () => {
       name: '山田太郎',
       furigana: 'ヤマダタロウ',
       email: 'taro@example.com',
-      regulationLabel: '一般の部',
+      regulationLabels: ['一般の部', '学生の部'],
       formFieldDefs: [
         {
           fieldKey: 't_shirt_size',
