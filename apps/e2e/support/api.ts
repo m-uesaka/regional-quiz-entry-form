@@ -1,21 +1,29 @@
 // The API calls the specs still make directly, now that the three flows
 // themselves are driven through the browser (`./ui.ts`).
 //
-// Two things are left here. The mail stub has no UI at all, and a
+// Three things are left here. The mail stub has no UI at all, and a
 // participant's confirmation link only exists inside the mail it captured.
-// And `staff-csv.spec.ts` needs a roster to look at before it signs in;
-// that arrangement is not what the spec is about, and the participant side
-// of it is covered end-to-end by `entry-flow.spec.ts`.
+// `staff-csv.spec.ts` needs a roster to look at before it signs in; that
+// arrangement is not what the spec is about, and the participant side of it
+// is covered end-to-end by `entry-flow.spec.ts`. And the staff bulk send
+// (Task 10-4) has no screen at all yet, so `staff-bulk-mail.spec.ts` drives
+// its two endpoints directly -- what that spec is really about is the
+// Cloudflare queue between them, which `wrangler dev` simulates locally.
 //
 // Every URL below names its origin in full, because the shared `request`
 // fixture's `baseURL` is the *frontend* (see `playwright.config.ts`).
 
 import {expect, type APIRequestContext} from '@playwright/test';
-import type {EntryStatus} from '@regional-quiz/shared';
+import type {
+  EntryStatus,
+  StaffMailJob,
+  StaffMailResult,
+} from '@regional-quiz/shared';
 import {BACKEND_URL, MAIL_SINK_URL} from './env';
 import {
   PARTICIPANT_PASSWORD,
   uniqueEmail,
+  type StaffFixture,
   type TournamentFixture,
 } from './fixtures';
 
@@ -53,6 +61,12 @@ export const VERIFICATION_MAIL_SUBJECT = 'エントリー確認メール';
 
 const MAIL_WAIT_TIMEOUT_MS = 10_000;
 const MAIL_POLL_INTERVAL_MS = 100;
+
+// Far longer than the mail wait above, because a bulk send is not made
+// inside the request that asks for it: the messages sit in the queue until
+// the consumer's batch fills or `max_batch_timeout` (5 seconds in
+// `apps/backend/wrangler.toml`) expires, and the send is then paced.
+const MAIL_JOB_TIMEOUT_MS = 30_000;
 
 // The link `sendVerificationEmail()` builds, whose token is generated per
 // request and stored only as a SHA-256 hash — so this mail body is the one
@@ -227,4 +241,83 @@ export async function enterAndVerify(
   const participant = await submitEntry(request, tournament, overrides);
   const status = await verifyEntry(request, participant.email);
   return {...participant, status};
+}
+
+/**
+ * Signs a staff account in, leaving the session cookie in `request`'s own
+ * jar so the calls after it are authenticated.
+ *
+ * The browser-driven version of this is `loginStaffThroughForm()` in
+ * `./ui.ts`; this exists for the bulk send, which has no screen to sign in
+ * from.
+ * @param request The API context to sign in through.
+ * @param staff The account to sign in as.
+ */
+export async function loginStaff(
+  request: APIRequestContext,
+  staff: StaffFixture,
+): Promise<void> {
+  const response = await request.post(`${BACKEND_URL}/api/auth/staff/login`, {
+    data: {email: staff.email, password: staff.password},
+  });
+  expect(response.status(), await response.text()).toBe(200);
+}
+
+/**
+ * Asks for a bulk send to every entry of `tournamentId`, as the signed-in
+ * staff member.
+ *
+ * Answers as soon as the recipients are enqueued: what it returns is the
+ * job to watch, not a delivery report.
+ * @param request The API context, already holding a staff session.
+ * @param tournamentId The tournament whose entries to mail.
+ * @param mail The subject and HTML body to send.
+ */
+export async function sendBulkMail(
+  request: APIRequestContext,
+  tournamentId: string,
+  mail: {subject: string; body: string},
+): Promise<StaffMailResult> {
+  const response = await request.post(
+    `${BACKEND_URL}/api/staff/tournaments/${tournamentId}/mail`,
+    {data: mail},
+  );
+  expect(response.status(), await response.text()).toBe(202);
+  return (await response.json()) as StaffMailResult;
+}
+
+/**
+ * Waits for a bulk send to finish, i.e. for the queue's consumer to have
+ * settled every recipient it was given.
+ *
+ * The wait is what makes this an end-to-end check of the queue: the
+ * request that started the send only enqueued the addresses, so the
+ * counters can only move if the consumer ran.
+ * @param request The API context, already holding a staff session.
+ * @param tournamentId The tournament the job belongs to.
+ * @param jobId The job to watch.
+ */
+export async function waitForMailJob(
+  request: APIRequestContext,
+  tournamentId: string,
+  jobId: string,
+): Promise<StaffMailJob> {
+  const deadline = Date.now() + MAIL_JOB_TIMEOUT_MS;
+  for (;;) {
+    const response = await request.get(
+      `${BACKEND_URL}/api/staff/tournaments/${tournamentId}/mail/${jobId}`,
+    );
+    expect(response.status(), await response.text()).toBe(200);
+    const job = (await response.json()) as StaffMailJob;
+    if (job.sent + job.failed >= job.total) {
+      return job;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Mail job ${jobId} settled ${job.sent + job.failed} of ${job.total} ` +
+          `recipients within ${MAIL_JOB_TIMEOUT_MS}ms.`,
+      );
+    }
+    await new Promise(resolve => setTimeout(resolve, MAIL_POLL_INTERVAL_MS));
+  }
 }

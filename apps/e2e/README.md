@@ -55,22 +55,30 @@ Supabase は起動しません(Docker イメージの取得を毎回のテスト
 
 ## カバーしているフロー
 
-`tests/` の3本が issue #41 の3フローに対応します。
+`tests/` の最初の3本が issue #41 の3フローに対応し、4本目は Task 10-4 で足した一斉メールの経路です。
 
 | ファイル | フロー |
 | --- | --- |
 | `entry-flow.spec.ts` | エントリー登録 → 確認メール → マイページ確認 |
 | `waitlist-flow.spec.ts` | 定員超過時のキャンセル待ち登録 → キャンセル発生 → 繰り上げ確認 |
 | `staff-csv.spec.ts` | 地域スタッフのログイン → 参加者一覧確認 → CSV ダウンロード |
+| `staff-bulk-mail.spec.ts` | 地域スタッフの一斉メール送信 → Queue のコンシューマが送信 → 送信結果の確認 |
 
-3本ともブラウザ操作です。画面の掴み方(ラベル・ボタン・リンク)は `support/ui.ts` にまとめてあり、CSS クラスやテスト専用の属性には依存していません。
+上の3本はブラウザ操作です。画面の掴み方(ラベル・ボタン・リンク)は `support/ui.ts` にまとめてあり、CSS クラスやテスト専用の属性には依存していません。
 
-この3フローに加えて、`entry-flow.spec.ts` には #90(ハイドレーション前の入力が消える)の回帰テストが1本入っています(後述)。
+この4フローのうち上の3本に加えて、`entry-flow.spec.ts` には #90(ハイドレーション前の入力が消える)の回帰テストが1本入っています(後述)。
 
-API を直接叩いているのは2箇所だけです(`support/api.ts`)。
+API を直接叩いているのは3箇所です(`support/api.ts`)。
 
 - メール stub の読み出し。確認リンクの生トークンはメール本文にしか無く、stub に画面は無いため
 - `staff-csv.spec.ts` の前準備。この spec が見たいのはスタッフ側の画面で、参加者側は `entry-flow.spec.ts` がブラウザで通している
+- `staff-bulk-mail.spec.ts` 全体。一斉メールにはまだ画面が無く、この spec が確かめたいのは 2 本のエンドポイントの**間にある Cloudflare Queues** だから(下記)
+
+### 一斉メールは Queue 越しに検証する
+
+`staff-bulk-mail.spec.ts` が通すのは `POST /api/staff/tournaments/:id/mail` → Cloudflare Queues → コンシューマ(`apps/backend/src/lib/bulk-mail-queue.ts`)→ メール stub → `GET .../mail/:jobId` という経路です(Task 10-4 / #114)。**キューは `wrangler dev` がローカルで模擬する**ので、有料プランも Cloudflare アカウントも要りません(起動ログに `BULK_MAIL_QUEUE: ... [simulated locally]` と出ます)。
+
+送信を依頼したリクエストは宛先をキューに積んだだけで応答しているので、**stub にメールが届いたこと自体がコンシューマの動いた証拠**です。届くまでには consumer のバッチが埋まるか `max_batch_timeout`(`apps/backend/wrangler.toml` で 5 秒)が切れるのを待つ必要があるため、`waitForMailJob()` の待ち時間は他のメール待ちより長く取ってあります。
 
 ## 設計上のポイント
 

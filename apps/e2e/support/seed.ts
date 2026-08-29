@@ -20,6 +20,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const TABLES_TO_CLEAR = [
   'email_verification_tokens',
   'password_reset_tokens',
+  // The bulk sends `staff-bulk-mail.spec.ts` leaves behind, which reference
+  // `tournaments` (Task 10-4). Without them the wipe fails on that foreign
+  // key the *second* time a run is made against the same stack.
+  'mail_jobs',
   'entries',
   'participants',
   'form_field_defs',
