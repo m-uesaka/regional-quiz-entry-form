@@ -1,12 +1,19 @@
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 
-/** What a staff bulk send is recorded as while it runs and after it ends. */
+/**
+ * What a staff bulk send is recorded as while it runs and after it ends.
+ *
+ * The body is not part of this. It is read separately, as `MailJobContent`
+ * and only by the queue consumer: this shape backs the endpoint the staff
+ * screen polls while a send runs, and pulling 20 000 characters out of
+ * Postgres several times a second to then drop them is waste on the one
+ * path that repeats.
+ */
 export interface MailJob {
   id: string;
   tournamentId: string;
   subject: string;
-  bodyHtml: string;
   /** Addresses enqueued when the send was accepted. */
   total: number;
   sent: number;
@@ -16,19 +23,29 @@ export interface MailJob {
 }
 
 /** The content half of a job, which is all the queue consumer reads. */
-export type MailJobContent = Pick<MailJob, 'id' | 'subject' | 'bodyHtml'>;
+export interface MailJobContent {
+  id: string;
+  subject: string;
+  bodyHtml: string;
+}
 
-/** Shape of a `mail_jobs` row (snake_case). */
+/** Shape of a `mail_jobs` row (snake_case), minus the body. */
 interface MailJobRow {
   id: string;
   tournament_id: string;
   subject: string;
-  body_html: string;
   total: number;
   sent: number;
   failed: number;
   created_at: string;
   updated_at: string;
+}
+
+/** The columns `MailJobContent` is built from. */
+interface MailJobContentRow {
+  id: string;
+  subject: string;
+  body_html: string;
 }
 
 type Result<T> = {ok: true; value: T} | {ok: false; error: string};
@@ -38,7 +55,6 @@ function rowToMailJob(row: MailJobRow): MailJob {
     id: row.id,
     tournamentId: row.tournament_id,
     subject: row.subject,
-    bodyHtml: row.body_html,
     total: row.total,
     sent: row.sent,
     failed: row.failed,
@@ -105,7 +121,7 @@ export async function fetchMailJobContent(
     .from('mail_jobs')
     .select('id, subject, body_html')
     .eq('id', jobId)
-    .maybeSingle<Pick<MailJobRow, 'id' | 'subject' | 'body_html'>>();
+    .maybeSingle<MailJobContentRow>();
   if (error) {
     return {ok: false, error: error.message};
   }
@@ -121,7 +137,8 @@ export async function fetchMailJobContent(
 /**
  * Reads one job of one tournament, or `null` when there is no such job.
  *
- * The tournament is part of the lookup rather than checked afterwards:
+ * The body is left out of the select on purpose -- see `MailJob`. The
+ * tournament is part of the lookup rather than checked afterwards:
  * this is what the staff endpoint scopes on, so a job id belonging to
  * another region's tournament has to come back as "not found" rather than
  * as a row the caller then has to remember to compare.
@@ -138,7 +155,7 @@ export async function fetchMailJob(
   const {data, error} = await db
     .from('mail_jobs')
     .select(
-      'id, tournament_id, subject, body_html, total, sent, failed, created_at, updated_at',
+      'id, tournament_id, subject, total, sent, failed, created_at, updated_at',
     )
     .eq('id', jobId)
     .eq('tournament_id', tournamentId)

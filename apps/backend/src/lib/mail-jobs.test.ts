@@ -100,6 +100,9 @@ describe.skipIf(!(await isDbReachable()))(
     it('records a send with its content and recipient count', async () => {
       const jobId = await newJob(7);
 
+      // The body is deliberately absent: it is read back through
+      // `fetchMailJobContent()` below, not through the row this endpoint
+      // is polled for.
       const job = await fetchMailJob(env, tournamentId, jobId);
 
       expect(job).toEqual({
@@ -108,7 +111,6 @@ describe.skipIf(!(await isDbReachable()))(
           id: jobId,
           tournamentId,
           subject: CONTENT.subject,
-          bodyHtml: CONTENT.bodyHtml,
           total: 7,
           sent: 0,
           failed: 0,
