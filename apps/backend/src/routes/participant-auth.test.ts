@@ -4,12 +4,12 @@ import {participantAuthRoute} from './participant-auth';
 import {hashPassword} from '../lib/password';
 import type {Bindings} from '../types/env';
 import {
-  PERMISSIVE_SECURITY_BINDINGS,
+  PERMISSIVE_PLATFORM_BINDINGS,
   refusingRateLimiter,
 } from '../test-support/bindings';
 
 const ENV: Bindings = {
-  ...PERMISSIVE_SECURITY_BINDINGS,
+  ...PERMISSIVE_PLATFORM_BINDINGS,
   SUPABASE_URL: 'https://example.supabase.co',
   SUPABASE_SERVICE_ROLE_KEY: 'dummy-service-role-key',
   MAIL_API_KEY: 'dummy-mail-api-key',

@@ -4,10 +4,10 @@ import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
 import {clientIp, emailKey, rateLimit} from './rate-limit';
 import type {Bindings, Env} from '../types/env';
-import {PERMISSIVE_SECURITY_BINDINGS} from '../test-support/bindings';
+import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
 
 const ENV: Bindings = {
-  ...PERMISSIVE_SECURITY_BINDINGS,
+  ...PERMISSIVE_PLATFORM_BINDINGS,
   SUPABASE_URL: 'https://example.supabase.co',
   SUPABASE_SERVICE_ROLE_KEY: 'dummy-service-role-key',
   MAIL_API_KEY: 'dummy-mail-api-key',

@@ -7,7 +7,7 @@ import {
   TournamentNotFoundError,
   TournamentSlugMismatchError,
 } from './form-definitions';
-import {PERMISSIVE_SECURITY_BINDINGS} from '../test-support/bindings';
+import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
 
 // Local Supabase Postgres connection (`supabase start` default). Overridable
 // via SUPABASE_DB_URL for other local setups, same convention as
@@ -36,7 +36,7 @@ async function isDbReachable(): Promise<boolean> {
 }
 
 const env: Bindings = {
-  ...PERMISSIVE_SECURITY_BINDINGS,
+  ...PERMISSIVE_PLATFORM_BINDINGS,
   SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY,
   MAIL_API_KEY: 'dummy-mail-api-key',

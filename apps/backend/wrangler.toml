@@ -76,6 +76,48 @@ type = "ratelimit"
 namespace_id = "3004"
 simple = {limit = 1000, period = 60}
 
+# The bulk mail queue (Task 10-4). `POST /api/staff/tournaments/:id/mail`
+# produces one message per recipient and the consumer below sends them
+# (`src/lib/bulk-mail-queue.ts`), which is what removed the old 80-recipient
+# ceiling: a consumer invocation has its own execution time rather than the
+# ~30 seconds of post-response budget a request's `waitUntil()` gets.
+#
+# **Queues are a paid-plan feature.** `wrangler dev` simulates them locally,
+# so development and the end-to-end run need nothing bought, but a deploy to
+# an account without Workers Paid fails on these tables. The queues also
+# have to exist before the first deploy that names them — see
+# `docs/supabase-deployment.md` §6.2.2 for the `wrangler queues create` calls.
+#
+# Like `vars` and the rate limiters above, `queues` is non-inheritable: an
+# `[env.*]` block that doesn't restate it gets no queue at all, and a Worker
+# whose `env.BULK_MAIL_QUEUE` is undefined answers 500 on every bulk send.
+# Each environment therefore repeats the tables below with **its own queue
+# names**: one shared queue would have a staging test's messages consumed by
+# the production Worker, which would then really send that mail.
+[[queues.producers]]
+queue = "regional-quiz-bulk-mail-dev"
+binding = "BULK_MAIL_QUEUE"
+
+# 1 message = 1 recipient, so a retry costs one address rather than a whole
+# list. The batch is what `src/lib/bulk-mail.ts` then paces against the mail
+# provider's rate limit, and `max_concurrency = 1` is what keeps that pacing
+# meaningful: the limit is per account, so several consumer invocations
+# running at once would each pace themselves and still add up to more than
+# the provider allows.
+#
+# `max_retries` is mirrored by `MAIL_QUEUE_MAX_ATTEMPTS` in
+# `src/lib/bulk-mail-queue.ts` (which counts the first delivery too, hence 4
+# there and 3 here); change one and change the other, or a recipient the
+# consumer hands back on its last attempt is silently dead-lettered instead
+# of being counted as failed.
+[[queues.consumers]]
+queue = "regional-quiz-bulk-mail-dev"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 3
+max_concurrency = 1
+dead_letter_queue = "regional-quiz-bulk-mail-dev-dlq"
+
 # Deployed by `.github/workflows/deploy-staging.yml` on a push to any branch
 # other than `main`.
 #
@@ -154,6 +196,20 @@ type = "ratelimit"
 namespace_id = "2002"
 simple = {limit = 20, period = 60}
 
+# The bulk mail queue, on staging's own queue — see the comments on the
+# top-level tables.
+[[env.staging.queues.producers]]
+queue = "regional-quiz-bulk-mail-staging"
+binding = "BULK_MAIL_QUEUE"
+
+[[env.staging.queues.consumers]]
+queue = "regional-quiz-bulk-mail-staging"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 3
+max_concurrency = 1
+dead_letter_queue = "regional-quiz-bulk-mail-staging-dlq"
+
 # Deployed by `.github/workflows/deploy-production.yml` on a push to `main`.
 # `name` is set back to the unsuffixed one: without it, `--env production`
 # would deploy a Worker called `regional-quiz-backend-production`.
@@ -193,3 +249,17 @@ name = "MAIL_TRIGGER_IP_RATE_LIMITER"
 type = "ratelimit"
 namespace_id = "1002"
 simple = {limit = 20, period = 60}
+
+# The bulk mail queue, on production's own queue — see the comments on the
+# top-level tables.
+[[env.production.queues.producers]]
+queue = "regional-quiz-bulk-mail"
+binding = "BULK_MAIL_QUEUE"
+
+[[env.production.queues.consumers]]
+queue = "regional-quiz-bulk-mail"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 3
+max_concurrency = 1
+dead_letter_queue = "regional-quiz-bulk-mail-dlq"

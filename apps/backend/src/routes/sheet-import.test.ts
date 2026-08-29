@@ -2,13 +2,13 @@ import {afterEach, describe, expect, it} from 'bun:test';
 import {sign} from 'hono/jwt';
 import {parseFormDefinitionYaml} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
-import app from '../index';
-import {PERMISSIVE_SECURITY_BINDINGS} from '../test-support/bindings';
+import {app} from '../index';
+import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
 
 const SESSION_SECRET = 'test-session-secret';
 
 const env: Bindings = {
-  ...PERMISSIVE_SECURITY_BINDINGS,
+  ...PERMISSIVE_PLATFORM_BINDINGS,
   SUPABASE_URL: 'https://example.supabase.co',
   SUPABASE_SERVICE_ROLE_KEY: 'dummy-service-role-key',
   MAIL_API_KEY: 'dummy-mail-api-key',

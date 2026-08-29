@@ -3,7 +3,7 @@ import {SQL} from 'bun';
 import type {Bindings} from '../types/env';
 import {promoteNextWaitlistedEntry} from './waitlist';
 import {hashPassword} from './password';
-import {PERMISSIVE_SECURITY_BINDINGS} from '../test-support/bindings';
+import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
 
 // Local Supabase Postgres connection (`supabase start` default), same
 // convention as `lib/db-schema.test.ts`. Skipped automatically when one
@@ -29,7 +29,7 @@ async function isDbReachable(): Promise<boolean> {
 }
 
 const env: Bindings = {
-  ...PERMISSIVE_SECURITY_BINDINGS,
+  ...PERMISSIVE_PLATFORM_BINDINGS,
   SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY,
   MAIL_API_KEY: 'dummy-mail-api-key',

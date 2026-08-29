@@ -1,5 +1,6 @@
 import {Hono} from 'hono';
-import type {Env} from './types/env';
+import type {Bindings, Env} from './types/env';
+import {handleBulkMailQueue, type BulkMailMessage} from './lib/bulk-mail-queue';
 import {staffAuthRoute} from './routes/staff-auth';
 import {participantAuthRoute} from './routes/participant-auth';
 import {passwordResetRoute} from './routes/password-reset';
@@ -17,7 +18,11 @@ import {formDefinitionsRoute} from './routes/form-definitions';
 import {sheetImportRoute} from './routes/sheet-import';
 import {mypageRoute} from './routes/mypage';
 
-const app = new Hono<Env>().basePath('/api');
+// Exported by name for the tests, which drive the API through
+// `app.request()`. The default export below is the Worker itself, and it is
+// no longer this object: a Worker with a queue consumer has to export the
+// `queue` handler alongside `fetch`.
+export const app = new Hono<Env>().basePath('/api');
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- only read via `typeof routes` below for the Hono RPC AppType export.
 const routes = app
@@ -44,4 +49,15 @@ const routes = app
   .route('/mypage', mypageRoute);
 
 export type AppType = typeof routes;
-export default app;
+
+// The Worker's entry points. `fetch` answers the HTTP API as before;
+// `queue` is the consumer of the bulk mail queue declared in
+// `wrangler.toml` (Task 10-4), which is what does the sending now that the
+// staff bulk mail route only enqueues its recipients.
+export default {
+  fetch: app.fetch,
+  // Wrapped rather than passed straight through: `handleBulkMailQueue()`
+  // takes pacing overrides as its third argument, where the runtime hands
+  // the consumer an `ExecutionContext`.
+  queue: (batch, env) => handleBulkMailQueue(batch, env),
+} satisfies ExportedHandler<Bindings, BulkMailMessage>;
