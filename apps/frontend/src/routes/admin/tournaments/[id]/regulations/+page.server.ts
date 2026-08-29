@@ -32,16 +32,35 @@ interface RegulationsActionResult {
 const ROW_CONTROL_PATTERN = /^regulations\[(\d+)\]\.(\w+)$/;
 
 export const load: PageServerLoad = async ({params, fetch, url}) => {
-  const res = await createApiClient(fetch).api.tournaments[
-    ':tournamentId'
-  ].regulations.$get({param: {tournamentId: params.id}});
-  if (!res.ok) {
-    if (isUnauthorized(res)) {
+  const api = createApiClient(fetch);
+  // The regulations endpoint is public and answers `200 []` for any
+  // well-formed id, so a mistyped or stale `[id]` would otherwise render a
+  // working-looking empty form whose save is the first thing to 404. The
+  // tournament list settles that the tournament exists — and, being the
+  // staff-only request of the two, is what makes the 401 below reachable.
+  const [tournamentsRes, regulationsRes] = await Promise.all([
+    api.api.tournaments.$get(),
+    api.api.tournaments[':tournamentId'].regulations.$get({
+      param: {tournamentId: params.id},
+    }),
+  ]);
+  if (!tournamentsRes.ok || !regulationsRes.ok) {
+    // The layout guard cannot rule this out: the JWT may expire between
+    // `hooks.server.ts` parsing it and these requests reaching the backend.
+    if (isUnauthorized(tournamentsRes) || isUnauthorized(regulationsRes)) {
       redirect(303, staffLoginPath(url));
     }
     error(502, 'レギュレーションの取得に失敗しました');
   }
-  return {regulations: await res.json()};
+
+  // `GET /api/tournaments/:id` doesn't exist (only list + create + update),
+  // so the tournament being edited is picked out of the full list.
+  const tournaments = await tournamentsRes.json();
+  if (!tournaments.some(tournament => tournament.id === params.id)) {
+    error(404, '大会が見つかりません');
+  }
+
+  return {regulations: await regulationsRes.json()};
 };
 
 export const actions = {

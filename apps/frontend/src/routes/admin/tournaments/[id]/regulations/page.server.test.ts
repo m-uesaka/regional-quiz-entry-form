@@ -1,9 +1,21 @@
 import {describe, expect, it} from 'vitest';
 import type {HttpError} from '@sveltejs/kit';
-import type {Regulation} from '@regional-quiz/shared';
+import type {Regulation, Tournament} from '@regional-quiz/shared';
 import {actions, load} from './+page.server';
 
 const TOURNAMENT_ID = '00000000-0000-0000-0000-000000000001';
+
+// `load` reads the tournament list to settle that `[id]` names a tournament
+// at all: the regulations endpoint answers `200 []` for any well-formed id.
+const TOURNAMENT: Tournament = {
+  id: TOURNAMENT_ID,
+  regionId: '00000000-0000-0000-0000-000000000021',
+  type: 'saikyoi',
+  name: '第1回テスト最強位',
+  capacity: 64,
+  entryOpensAt: '2026-01-01T00:00:00.000Z',
+  entryClosesAt: '2026-02-01T00:00:00.000Z',
+};
 
 const GENERAL: Regulation = {
   id: '00000000-0000-0000-0000-000000000011',
@@ -35,7 +47,11 @@ interface FetchLog {
  * @param log Collects the saved bodies.
  */
 function fakeFetch(
-  options: {putStatus?: number; putError?: string} = {},
+  options: {
+    putStatus?: number;
+    putError?: string;
+    tournaments?: Tournament[];
+  } = {},
   log: FetchLog = {putBodies: []},
 ): typeof fetch {
   return (async (input, init) => {
@@ -47,7 +63,10 @@ function fakeFetch(
         status,
       );
     }
-    return jsonResponse([GENERAL, STUDENT]);
+    if (String(input).endsWith('/regulations')) {
+      return jsonResponse([GENERAL, STUDENT]);
+    }
+    return jsonResponse(options.tournaments ?? [TOURNAMENT]);
   }) as typeof fetch;
 }
 
@@ -130,6 +149,15 @@ describe('admin regulations +page.server load', () => {
     await expect(load(buildLoadEvent(failing))).rejects.toMatchObject({
       status: 502,
     } satisfies Partial<HttpError>);
+  });
+
+  // The regulations endpoint is public and answers `200 []` for a
+  // well-formed id that names nothing, so without this a stale or mistyped
+  // `[id]` rendered a working-looking empty form that only failed on save.
+  it('reports an id that names no tournament as not found', async () => {
+    await expect(
+      load(buildLoadEvent(fakeFetch({tournaments: []}))),
+    ).rejects.toMatchObject({status: 404} satisfies Partial<HttpError>);
   });
 });
 

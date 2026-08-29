@@ -23,9 +23,7 @@ export function emptyRegulationRow(): RegulationRowValues {
  *
  * @param row The row to judge.
  */
-export function isUntouchedNewRegulationRow(
-  row: RegulationRowValues,
-): boolean {
+export function isUntouchedNewRegulationRow(row: RegulationRowValues): boolean {
   return (
     row.id === '' &&
     row.label.trim() === '' &&
