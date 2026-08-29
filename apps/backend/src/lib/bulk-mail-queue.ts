@@ -54,6 +54,20 @@ interface JobProgress {
 }
 
 /**
+ * The tally a batch is accumulating for one job, created on first use.
+ * @param progress The tallies collected so far, keyed by job id.
+ * @param jobId The job to count against.
+ */
+function tallyOf(
+  progress: Map<string, JobProgress>,
+  jobId: string,
+): JobProgress {
+  const tally = progress.get(jobId) ?? {sent: 0, failed: 0};
+  progress.set(jobId, tally);
+  return tally;
+}
+
+/**
  * Whether `error` is the provider throttling us rather than refusing the
  * address.
  *
@@ -149,11 +163,20 @@ export async function handleBulkMailQueue(
   for (const message of batch.messages) {
     const content = contents.get(message.body.jobId);
     if (!content) {
-      if (unreadable.has(message.body.jobId)) {
+      if (!unreadable.has(message.body.jobId)) {
+        message.ack();
+      } else if (message.attempts < MAIL_QUEUE_MAX_ATTEMPTS) {
         // The job's row could not be read, which is a fault of this
         // attempt rather than of the message: try again later.
         message.retry({delaySeconds: MAIL_QUEUE_RETRY_DELAY_SECONDS});
       } else {
+        // Same reasoning as the send failure below: `attempts` counts this
+        // delivery, so a retry on the last one hands the message to the
+        // dead letter queue with nothing added to either counter, and the
+        // job would read as still sending for good. An outage long enough
+        // to burn every delivery is one the recipient is not going to
+        // survive anyway, so it is closed out as failed.
+        tallyOf(progress, message.body.jobId).failed++;
         message.ack();
       }
       continue;
@@ -170,9 +193,7 @@ export async function handleBulkMailQueue(
 
   outcomes.forEach((outcome, index) => {
     const message = sendable[index];
-    const {jobId} = message.body;
-    const tally = progress.get(jobId) ?? {sent: 0, failed: 0};
-    progress.set(jobId, tally);
+    const tally = tallyOf(progress, message.body.jobId);
 
     if (outcome.ok) {
       tally.sent++;

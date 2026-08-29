@@ -307,6 +307,27 @@ describe('handleBulkMailQueue', () => {
     expect(messages[0].retried).toBe(true);
   });
 
+  it('gives up on an unreadable job on its last delivery', async () => {
+    const log = mockFetch(
+      Response.json({message: 'db is down'}, {status: 500}),
+    );
+    const messages = [
+      new FakeMessage(
+        {jobId: JOB_ID, to: 'taro@example.com'},
+        MAIL_QUEUE_MAX_ATTEMPTS,
+      ),
+    ];
+
+    await handleBulkMailQueue(batchOf(messages), ENV);
+
+    // Another retry would hand the message to the dead letter queue with
+    // neither counter moved, and the job would sit at `sent + failed <
+    // total` reading as a send that is still running.
+    expect(messages[0].acked).toBe(true);
+    expect(messages[0].retried).toBe(false);
+    expect(log.progress).toEqual([{p_job_id: JOB_ID, p_sent: 0, p_failed: 1}]);
+  });
+
   it('reports nothing for a batch it sent nothing from', async () => {
     const log = mockFetch([]);
 
