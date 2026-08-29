@@ -1,6 +1,10 @@
 <script lang="ts">
   import type {Regulation} from '@regional-quiz/shared';
   import {toJstDatetimeLocal} from '$lib/jst-datetime';
+  import {
+    emptyRegulationRow,
+    isUntouchedNewRegulationRow,
+  } from '$lib/regulation-rows';
   import type {RegulationRowValues} from '$lib/types/regulation-form';
   import type {PageProps} from './$types';
 
@@ -25,30 +29,25 @@
     };
   }
 
-  function emptyRow(): RegulationRowValues {
-    return {
-      id: '',
-      order: '',
-      label: '',
-      priorityStartsAt: '',
-      priorityEndsAt: '',
-      remove: false,
-    };
-  }
-
   /**
    * Keeps exactly one blank row at the bottom, which is how a regulation is
-   * added without any client-side scripting. A rejected save comes back with
-   * its own blank row already in place, so another is only appended when the
-   * last row is a saved one.
+   * added without any client-side scripting.
+   *
+   * Every blank row is dropped first rather than only the trailing one being
+   * checked: a rejected save echoes back what was submitted, and a "表示順"
+   * typed into the blank row sorts it away from the end — so a form that only
+   * appended when the *last* row was a saved one grew another junk row on
+   * every retry.
+   *
    * @param current The rows to display.
    */
   function withBlankRow(
     current: RegulationRowValues[],
   ): RegulationRowValues[] {
-    const last = current.at(-1);
-    if (last && last.id === '' && last.label.trim() === '') return current;
-    return [...current, emptyRow()];
+    return [
+      ...current.filter(row => !isUntouchedNewRegulationRow(row)),
+      emptyRegulationRow(),
+    ];
   }
 
   // A refused save re-renders what was submitted; anything else shows the

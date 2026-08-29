@@ -2,6 +2,10 @@ import {error, fail, redirect} from '@sveltejs/kit';
 import {RegulationSyncInputSchema} from '@regional-quiz/shared';
 import {createApiClient, isUnauthorized} from '$lib/api';
 import {fromJstDatetimeLocal} from '$lib/jst-datetime';
+import {
+  emptyRegulationRow,
+  isUntouchedNewRegulationRow,
+} from '$lib/regulation-rows';
 import {staffLoginPath} from '$lib/server/staff-login';
 import type {RegulationRowValues} from '$lib/types/regulation-form';
 import type {Actions, PageServerLoad} from './$types';
@@ -47,7 +51,9 @@ export const actions = {
     // The rows are sent as the whole set the tournament should end up with,
     // so a row ticked for removal is simply left out — and the blank row the
     // page always renders last is too, unless something was typed into it.
-    const kept = rows.filter(row => !row.remove && !isUntouchedNewRow(row));
+    const kept = rows.filter(
+      row => !row.remove && !isUntouchedNewRegulationRow(row),
+    );
     // Both of these are refused by the schema too, but only in English —
     // `min(1)` and the label's own length check carry Zod's default
     // wording, and this screen is read in Japanese. Everything the schema
@@ -152,7 +158,7 @@ function readRegulationRows(formData: FormData): RegulationRowValues[] {
     const match = ROW_CONTROL_PATTERN.exec(name);
     if (!match) continue;
     const index = Number(match[1]);
-    const row = rows.get(index) ?? emptyRow();
+    const row = rows.get(index) ?? emptyRegulationRow();
     switch (match[2]) {
       case 'id':
         row.id = String(value);
@@ -227,33 +233,6 @@ function rowPosition(index: number, row: RegulationRowValues): number {
   if (row.order.trim() === '') return index + 1;
   const requested = Number(row.order);
   return Number.isFinite(requested) ? requested : index + 1;
-}
-
-function emptyRow(): RegulationRowValues {
-  return {
-    id: '',
-    order: '',
-    label: '',
-    priorityStartsAt: '',
-    priorityEndsAt: '',
-    remove: false,
-  };
-}
-
-/**
- * Whether this is the blank row the page renders under the saved ones and
- * nobody filled in. Only a row that has never been saved can be dropped this
- * way — an existing regulation whose label was cleared is a mistake the
- * schema should report, not a row to silently discard.
- * @param row The submitted row.
- */
-function isUntouchedNewRow(row: RegulationRowValues): boolean {
-  return (
-    row.id === '' &&
-    row.label.trim() === '' &&
-    row.priorityStartsAt === '' &&
-    row.priorityEndsAt === ''
-  );
 }
 
 /**

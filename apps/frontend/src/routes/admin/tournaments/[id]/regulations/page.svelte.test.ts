@@ -104,6 +104,41 @@ describe('admin regulations +page.svelte', () => {
     expect(screen.getByLabelText('削除する')).toBeChecked();
   });
 
+  // A "表示順" typed into the trailing blank row sorts it away from the end,
+  // so the echoed rows no longer finish with a blank one — and a page that
+  // only appended when the last row was a saved one grew another junk row on
+  // every retry.
+  it('keeps a single blank row when a refused save echoes one back', () => {
+    renderPage([GENERAL], {
+      saved: false,
+      error: 'レギュレーション名を入力してください',
+      rows: [
+        {
+          id: '',
+          order: '1',
+          label: '',
+          priorityStartsAt: '',
+          priorityEndsAt: '',
+          remove: false,
+        },
+        {
+          id: GENERAL.id,
+          order: '2',
+          label: '一般の部',
+          priorityStartsAt: '',
+          priorityEndsAt: '',
+          remove: false,
+        },
+      ],
+    });
+
+    expect(
+      screen
+        .getAllByLabelText('レギュレーション名')
+        .map(input => (input as HTMLInputElement).value),
+    ).toEqual(['一般の部', '']);
+  });
+
   it('links back to the tournament it belongs to', () => {
     renderPage([GENERAL]);
 
