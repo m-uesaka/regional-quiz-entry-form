@@ -3,6 +3,9 @@
   import {createApiClient} from '$lib/api';
   import TournamentForm from '$lib/components/TournamentForm.svelte';
   import type {TournamentFormValues} from '$lib/types/tournament-form';
+  import type {PageProps} from './$types';
+
+  const {data}: PageProps = $props();
 
   const api = createApiClient();
 
@@ -28,4 +31,8 @@
 
 <h1>大会を作成</h1>
 
-<TournamentForm submitLabel="作成" onSubmit={handleCreate} />
+<TournamentForm
+  regions={data.regions}
+  submitLabel="作成"
+  onSubmit={handleCreate}
+/>

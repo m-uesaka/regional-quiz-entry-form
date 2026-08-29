@@ -1,7 +1,7 @@
 import {render, screen} from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import type {Tournament} from '@regional-quiz/shared';
+import type {Region, StaffClaims, Tournament} from '@regional-quiz/shared';
 import Page from './+page.svelte';
 
 const TOURNAMENT: Tournament = {
@@ -12,6 +12,29 @@ const TOURNAMENT: Tournament = {
   capacity: 64,
   entryOpensAt: '2026-01-01T00:00:00.000Z',
   entryClosesAt: '2026-02-01T00:00:00.000Z',
+};
+
+const REGIONS: Region[] = [
+  {
+    id: '00000000-0000-0000-0000-000000000011',
+    slug: 'tokyo',
+    name: '東京',
+    allowsDualEntry: false,
+  },
+  {
+    id: '00000000-0000-0000-0000-000000000022',
+    slug: 'osaka',
+    name: '大阪',
+    allowsDualEntry: true,
+  },
+];
+
+// Handed down by `routes/admin/+layout.server.ts`.
+const STAFF: StaffClaims = {
+  sub: '00000000-0000-0000-0000-0000000000ff',
+  role: 'general',
+  regionId: null,
+  tournamentType: null,
 };
 
 /** A second tournament, reached by a link that only changes `[id]`. */
@@ -34,7 +57,11 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function renderPage(tournament: Tournament = TOURNAMENT) {
   return render(Page, {
-    props: {params: {id: tournament.id}, data: {tournament}},
+    props: {
+      params: {id: tournament.id},
+      data: {staff: STAFF, tournament, regions: REGIONS},
+      form: null,
+    },
   });
 }
 
@@ -53,7 +80,7 @@ describe('admin tournament edit +page.svelte', () => {
   it('prefills the form with the tournament being edited', () => {
     renderPage();
 
-    expect(screen.getByLabelText(/地域ID/)).toHaveValue(TOURNAMENT.regionId);
+    expect(screen.getByLabelText('地域')).toHaveValue(TOURNAMENT.regionId);
     expect(screen.getByLabelText('大会名')).toHaveValue(TOURNAMENT.name);
     expect(screen.getByLabelText(/定員/)).toHaveValue(TOURNAMENT.capacity);
     expect(screen.getByLabelText('種別')).toHaveValue('saikyoi');
@@ -104,8 +131,7 @@ describe('admin tournament edit +page.svelte', () => {
     await user.click(screen.getByRole('button', {name: '更新'}));
     await screen.findByText('更新しました');
 
-    await user.clear(screen.getByLabelText(/地域ID/));
-    await user.type(screen.getByLabelText(/地域ID/), 'not-a-uuid');
+    await user.selectOptions(screen.getByLabelText('地域'), REGIONS[1].id);
     await user.click(screen.getByRole('button', {name: '更新'}));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
@@ -171,11 +197,12 @@ describe('admin tournament edit +page.svelte', () => {
 
     await rerender({
       params: {id: OTHER_TOURNAMENT.id},
-      data: {tournament: OTHER_TOURNAMENT},
+      data: {staff: STAFF, tournament: OTHER_TOURNAMENT, regions: REGIONS},
+      form: null,
     });
 
     expect(screen.getByLabelText('大会名')).toHaveValue(OTHER_TOURNAMENT.name);
-    expect(screen.getByLabelText(/地域ID/)).toHaveValue(
+    expect(screen.getByLabelText('地域')).toHaveValue(
       OTHER_TOURNAMENT.regionId,
     );
     expect(screen.getByLabelText(/定員/)).toHaveValue(null);

@@ -11,3 +11,18 @@ import type {AppType} from '@regional-quiz/backend';
 export function createApiClient(fetchImpl: typeof fetch = fetch) {
   return hc<AppType>('/', {fetch: fetchImpl});
 }
+
+/**
+ * Whether a backend answer is the 401 an expired staff session earns.
+ *
+ * Hono builds the RPC client's response union out of what the route handlers
+ * themselves return, so the 401 the `requireGeneralStaff()` middleware
+ * answers with never appears in it — and `res.status === 401` on one of
+ * those routes is a comparison TypeScript rejects as impossible. The status
+ * is widened here, once, rather than asserted at every call site.
+ *
+ * @param res The backend response.
+ */
+export function isUnauthorized(res: {status: number}): boolean {
+  return res.status === 401;
+}

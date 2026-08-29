@@ -16,5 +16,13 @@
      file the first tournament's sheet under the second one's id. Keying on
      the tournament builds all of it afresh instead. See #98. -->
 {#key data.tournament.id}
-  <TournamentEditor tournament={data.tournament} />
+  <TournamentEditor tournament={data.tournament} regions={data.regions} />
 {/key}
+
+<h2>レギュレーション</h2>
+
+<p>
+  <a href="/admin/tournaments/{data.tournament.id}/regulations">
+    レギュレーションを管理
+  </a>
+</p>

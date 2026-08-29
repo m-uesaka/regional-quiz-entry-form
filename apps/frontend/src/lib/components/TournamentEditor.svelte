@@ -3,11 +3,17 @@
   import {createApiClient} from '$lib/api';
   import TournamentForm from '$lib/components/TournamentForm.svelte';
   import SheetImportPanel from '$lib/components/SheetImportPanel.svelte';
-  import type {Tournament, TournamentType} from '@regional-quiz/shared';
+  import type {
+    Region,
+    Tournament,
+    TournamentType,
+  } from '@regional-quiz/shared';
   import type {TournamentFormValues} from '$lib/types/tournament-form';
 
   interface Props {
     tournament: Tournament;
+    /** Passed straight through to the form's region select. */
+    regions: Region[];
   }
 
   // Everything below is seeded from this once and owned from then on, so a
@@ -16,7 +22,7 @@
   // page component across a navigation that changes only the route
   // parameters, so the page wraps this in `{#key data.tournament.id}`.
   // See #98.
-  const {tournament}: Props = $props();
+  const {tournament, regions}: Props = $props();
 
   const api = createApiClient();
 
@@ -55,6 +61,7 @@
 </script>
 
 <TournamentForm
+  {regions}
   submitLabel="更新"
   initialValues={tournament}
   onSubmit={handleUpdate}
