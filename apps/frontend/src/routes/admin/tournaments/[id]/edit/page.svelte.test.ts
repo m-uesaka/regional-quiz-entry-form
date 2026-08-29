@@ -87,6 +87,41 @@ describe('admin tournament edit +page.svelte', () => {
     expect(screen.getByText(/取り込み先: 最強位/)).toBeInTheDocument();
   });
 
+  // The entry window is labelled JST, and is server-rendered by a Worker
+  // whose own clock is UTC — so neither end may be read in whatever zone the
+  // runtime happens to be set to.
+  it('shows the entry window as its JST wall-clock time', () => {
+    renderPage();
+
+    // 2026-01-01T00:00Z and 2026-02-01T00:00Z, in JST.
+    expect(screen.getByLabelText(/エントリー開始日時/)).toHaveValue(
+      '2026-01-01T09:00',
+    );
+    expect(screen.getByLabelText(/エントリー終了日時/)).toHaveValue(
+      '2026-02-01T09:00',
+    );
+  });
+
+  it('files an edited entry window as the instant that JST names', async () => {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValueOnce(jsonResponse(TOURNAMENT));
+
+    renderPage();
+    await user.clear(screen.getByLabelText(/エントリー開始日時/));
+    await user.type(
+      screen.getByLabelText(/エントリー開始日時/),
+      '2026-01-05T10:30',
+    );
+    await user.click(screen.getByRole('button', {name: '更新'}));
+
+    await screen.findByText('更新しました');
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toMatchObject({
+      entryOpensAt: '2026-01-05T01:30:00.000Z',
+      entryClosesAt: '2026-02-01T00:00:00.000Z',
+    });
+  });
+
   it('sends the update to the tournament being edited', async () => {
     const user = userEvent.setup();
     fetchMock.mockResolvedValueOnce(

@@ -1,6 +1,11 @@
 <script lang="ts">
   import {untrack} from 'svelte';
   import type {Region, TournamentType} from '@regional-quiz/shared';
+  import {
+    datetimeLocalStep,
+    fromJstDatetimeLocal,
+    toJstDatetimeLocal,
+  } from '$lib/jst-datetime';
   import type {
     TournamentFormInitialValues,
     TournamentFormValues,
@@ -18,23 +23,6 @@
 
   const {regions, initialValues = {}, submitLabel, onSubmit}: Props = $props();
 
-  // Converts an ISO datetime string into the `YYYY-MM-DDTHH:mm` value a
-  // `datetime-local` input expects.
-  function toDatetimeLocalValue(iso?: string): string {
-    if (!iso) {
-      return '';
-    }
-    const date = new Date(iso);
-    if (Number.isNaN(date.getTime())) {
-      return '';
-    }
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return (
-      `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
-      `T${pad(date.getHours())}:${pad(date.getMinutes())}`
-    );
-  }
-
   // `initialValues` only seeds the form once — this is an uncontrolled
   // form, so later prop changes intentionally don't overwrite in-progress
   // user edits. `untrack` documents that and avoids Svelte's
@@ -48,8 +36,15 @@
   // An empty number input binds as `null` rather than as `0`, which is
   // exactly the "no limit" the API takes.
   let capacity = $state<number | null>(initial.capacity ?? null);
-  let entryOpensAt = $state(toDatetimeLocalValue(initial.entryOpensAt));
-  let entryClosesAt = $state(toDatetimeLocalValue(initial.entryClosesAt));
+  // Read and written in JST rather than in whatever zone the runtime is set
+  // to. The form is server-rendered by a Cloudflare Worker, whose clock is
+  // UTC, so a value formatted in the runtime's own zone came out nine hours
+  // off until hydration corrected it — and the submitted wall-clock time was
+  // then read back in the *browser's* zone, filing the wrong instant for
+  // anyone working from a machine that isn't on JST. The screen says "JST",
+  // so that is what both directions mean.
+  let entryOpensAt = $state(toJstDatetimeLocal(initial.entryOpensAt ?? null));
+  let entryClosesAt = $state(toJstDatetimeLocal(initial.entryClosesAt ?? null));
   let submitting = $state(false);
   let error = $state<string | null>(null);
 
@@ -63,8 +58,11 @@
         type,
         name,
         capacity,
-        entryOpensAt: new Date(entryOpensAt).toISOString(),
-        entryClosesAt: new Date(entryClosesAt).toISOString(),
+        // Both controls are `required`, so an empty value never reaches the
+        // API; the fallback is only here because the reader reports "no
+        // instant at all" as null.
+        entryOpensAt: fromJstDatetimeLocal(entryOpensAt) ?? '',
+        entryClosesAt: fromJstDatetimeLocal(entryClosesAt) ?? '',
       });
     } catch (e: unknown) {
       error = e instanceof Error ? e.message : '送信に失敗しました';
@@ -113,14 +111,26 @@
     <input type="number" min="1" bind:value={capacity} />
   </label>
 
+  <!-- The step only drops to a second for a stored instant that falls
+       mid-minute, which the default minute step would refuse outright. -->
   <label>
-    エントリー開始日時
-    <input type="datetime-local" bind:value={entryOpensAt} required />
+    エントリー開始日時 (JST)
+    <input
+      type="datetime-local"
+      step={datetimeLocalStep(entryOpensAt)}
+      bind:value={entryOpensAt}
+      required
+    />
   </label>
 
   <label>
-    エントリー終了日時
-    <input type="datetime-local" bind:value={entryClosesAt} required />
+    エントリー終了日時 (JST)
+    <input
+      type="datetime-local"
+      step={datetimeLocalStep(entryClosesAt)}
+      bind:value={entryClosesAt}
+      required
+    />
   </label>
 
   {#if error}
