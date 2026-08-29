@@ -115,9 +115,17 @@ export const actions = {
         });
       }
       if (res.status === 400) {
-        return inviteFailure(400, values, INVALID_INPUT_MESSAGE, {
-          regionId: ['地域が見つかりません'],
-        });
+        // The one 400 the create endpoint raises on its own account is the
+        // foreign key on `region_id`, so the message names the control that
+        // has to change — but only for the role that has that control.
+        // `zValidator` answers 400 too, for a body this action's own check
+        // should already have caught; on a `general` invite, where there is
+        // no region to speak of, that is all this can be.
+        return values.role === 'regional'
+          ? inviteFailure(400, values, INVALID_INPUT_MESSAGE, {
+              regionId: ['地域が見つかりません'],
+            })
+          : inviteFailure(400, values, INVALID_INPUT_MESSAGE, NO_FIELD_ERRORS);
       }
       if ((await readErrorMessage(res)) === MAIL_NOT_SENT_ERROR) {
         return inviteFailure(

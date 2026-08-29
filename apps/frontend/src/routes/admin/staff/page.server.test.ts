@@ -180,6 +180,33 @@ describe('admin staff invite action', () => {
     expect(calls).toEqual([]);
   });
 
+  // 400 is the API's answer for a `region_id` naming no region, so it is
+  // attached to the control that has to change — but only for the role that
+  // has that control. A `general` invite has no region select at all.
+  it('attaches a refused region to its control for a regional invite', async () => {
+    const event = buildActionEvent(
+      fakeFetch({status: 400, error: 'unknown region'}),
+      inviteFormData(),
+    );
+
+    await expect(actions.invite(event)).resolves.toMatchObject({
+      status: 400,
+      data: {fieldErrors: {regionId: ['地域が見つかりません']}},
+    });
+  });
+
+  it('names no control when a general invite is refused', async () => {
+    const event = buildActionEvent(
+      fakeFetch({status: 400, error: 'unknown region'}),
+      inviteFormData({role: 'general'}),
+    );
+
+    await expect(actions.invite(event)).resolves.toMatchObject({
+      status: 400,
+      data: {error: '入力内容を確認してください', fieldErrors: {}},
+    });
+  });
+
   // The account exists at this point, so sending them back to the invite
   // form would only earn them a 409; the message has to point at the
   // re-send button instead.
