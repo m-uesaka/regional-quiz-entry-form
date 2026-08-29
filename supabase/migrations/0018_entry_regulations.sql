@@ -47,9 +47,29 @@ alter table entries drop column regulation_id;
 
 -- `sync_regulations()`(migration 0014)の「参照が残っている行は消せない」判定を
 -- 中間テーブルへ向け直す。本体のロジックは 0014 のままで、参照先の探し方だけが
--- 変わる。ロックの議論も変わらない: エントリー作成は `entries.tournament_id` の
--- FK でこの関数が `for update` した大会行に `for key share` を取るので、
--- この関数とエントリー作成は依然として直列化される。
+-- 変わる。
+--
+-- ただし 0014 の delete に付いていたロックの議論はここで成り立たなくなる。
+-- あちらは「エントリー作成は `entries.tournament_id` の FK でこの関数が
+-- `for update` した大会行に `for key share` を取るので直列化される」と書いて
+-- いたが、いま参照を持つのは `entries` ではなく `entry_regulations` で、この
+-- テーブルは `tournaments` への FK を持たない。しかも Supabase は REST 越し
+-- なので `entries` の insert と `entry_regulations` の insert は別トランザク
+-- ションになり(`replaceEntryRegulations()` in `apps/backend/src/lib/entries.ts`)、
+-- 後者は大会行に何のロックも取らない。よってこの関数とエントリー作成の後半は
+-- 直列化されず、次の 2 つの結末があり得る:
+--
+--   * `entries` の commit 後・`entry_regulations` の insert 前にこの関数が
+--     走ると、参照なしと見なしてレギュレーションを消す。参加者側の insert は
+--     複合 FK 違反(23503)で落ち、バックエンドはエントリーごと rollback して
+--     409 を返す。
+--   * 逆に in-use 判定と delete の間に insert が commit すると、delete 自身が
+--     23503 で落ちる。呼び出し側(`apps/backend/src/lib/regulations.ts`)は
+--     これを「使用中」として扱う。
+--
+-- どちらも「消されたレギュレーションを参照するエントリーが残る」ことはなく、
+-- 塞ぐには 2 つの書き込みを 1 トランザクションにまとめる必要があるため、
+-- この窓は許容する。
 create or replace function sync_regulations(
   p_tournament_id uuid,
   p_regulations jsonb
