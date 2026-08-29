@@ -424,6 +424,11 @@ describe('POST /staff/tournaments/:tournamentId/mail', () => {
     // The job would otherwise sit at `sent + failed < total` for good and
     // read as a send that is still running.
     expect(log.progress).toEqual([{p_job_id: JOB_ID, p_sent: 0, p_failed: 10}]);
+    // The first chunk is already on its way, so the caller has to be able
+    // to read the job back before re-sending -- which takes the id, and
+    // nothing else hands it out.
+    const body = await res.json();
+    expect(body).toEqual({error: 'internal server error', jobId: JOB_ID});
   });
 });
 

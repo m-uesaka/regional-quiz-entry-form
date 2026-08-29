@@ -109,8 +109,15 @@ export const staffMailRoute = new Hono<StaffEnv>()
               error: recorded.error,
             });
           }
+          // The job id goes out with the error rather than only with the
+          // 202: this is exactly the case where the caller has to read the
+          // job back before deciding whether to re-send, and there is no
+          // other endpoint it could recover the id from.
           return c.json(
-            internalError('failed to enqueue the bulk mail', error),
+            {
+              ...internalError('failed to enqueue the bulk mail', error),
+              jobId,
+            },
             500,
           );
         }
