@@ -2,8 +2,10 @@ import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
 import {
+  TournamentCreateInputSchema,
   TournamentSchema,
   TournamentTypeSchema,
+  TournamentUpdateInputSchema,
   type Tournament,
 } from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
@@ -11,8 +13,6 @@ import {requireGeneralStaff} from '../middleware/staff-auth';
 import {createDbClient} from '../lib/db';
 import {internalError} from '../lib/errors';
 
-const CreateTournamentSchema = TournamentSchema.omit({id: true});
-const UpdateTournamentSchema = CreateTournamentSchema.partial();
 const TournamentIdParamSchema = z.object({id: z.string().uuid()});
 const TournamentBySlugParamSchema = z.object({
   regionSlug: z.string(),
@@ -48,7 +48,7 @@ function rowToTournament(row: TournamentRow): Tournament {
  * update (only the fields the caller chose to change).
  */
 function toTournamentRow(
-  input: Partial<z.infer<typeof CreateTournamentSchema>>,
+  input: Partial<z.infer<typeof TournamentCreateInputSchema>>,
 ): Record<string, unknown> {
   const row: Record<string, unknown> = {};
   if (input.regionId !== undefined) {
@@ -94,7 +94,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
   .post(
     '/',
     requireGeneralStaff(),
-    zValidator('json', CreateTournamentSchema),
+    zValidator('json', TournamentCreateInputSchema),
     async c => {
       const db = createDbClient(c.env);
       const {data, error} = await db
@@ -112,7 +112,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
     '/:id',
     requireGeneralStaff(),
     zValidator('param', TournamentIdParamSchema),
-    zValidator('json', UpdateTournamentSchema),
+    zValidator('json', TournamentUpdateInputSchema),
     async c => {
       const db = createDbClient(c.env);
       const {data, error} = await db

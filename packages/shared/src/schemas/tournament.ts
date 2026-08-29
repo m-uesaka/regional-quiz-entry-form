@@ -14,6 +14,19 @@ export const TournamentSchema = z.object({
 });
 export type Tournament = z.infer<typeof TournamentSchema>;
 
+// Request body of `POST /api/tournaments`: everything but the id, which the
+// database assigns. Shared so the admin form's own check and the API's
+// `zValidator` are the same rule rather than two that can drift apart.
+export const TournamentCreateInputSchema = TournamentSchema.omit({id: true});
+export type TournamentCreateInput = z.infer<typeof TournamentCreateInputSchema>;
+
+// Request body of `PATCH /api/tournaments/:id`. Every field is optional
+// because this is a PATCH: an omitted one keeps the tournament's current
+// value.
+export const TournamentUpdateInputSchema =
+  TournamentCreateInputSchema.partial();
+export type TournamentUpdateInput = z.infer<typeof TournamentUpdateInputSchema>;
+
 // Japanese display labels for each tournament type, shared so staff-facing
 // screens don't each carry their own copy of the wording.
 export const TOURNAMENT_TYPE_LABELS: Record<TournamentType, string> = {
