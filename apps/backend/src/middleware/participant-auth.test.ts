@@ -6,11 +6,11 @@ import {
   PARTICIPANT_SESSION_COOKIE,
 } from './participant-auth';
 import type {Bindings, ParticipantEnv} from '../types/env';
-import {PERMISSIVE_SECURITY_BINDINGS} from '../test-support/bindings';
+import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
 
 const SESSION_SECRET = 'test-session-secret';
 const ENV: Bindings = {
-  ...PERMISSIVE_SECURITY_BINDINGS,
+  ...PERMISSIVE_PLATFORM_BINDINGS,
   SUPABASE_URL: 'https://example.supabase.co',
   SUPABASE_SERVICE_ROLE_KEY: 'dummy-service-role-key',
   MAIL_API_KEY: 'dummy-mail-api-key',

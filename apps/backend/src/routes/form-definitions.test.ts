@@ -3,8 +3,8 @@ import {SQL} from 'bun';
 import {sign} from 'hono/jwt';
 import type {TournamentType} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
-import app from '../index';
-import {PERMISSIVE_SECURITY_BINDINGS} from '../test-support/bindings';
+import {app} from '../index';
+import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
 
 // Local Supabase stack (`supabase start`), same convention as
 // `lib/db-schema.test.ts`. Skipped automatically when it isn't reachable,
@@ -34,7 +34,7 @@ async function isDbReachable(): Promise<boolean> {
 }
 
 const env: Bindings = {
-  ...PERMISSIVE_SECURITY_BINDINGS,
+  ...PERMISSIVE_PLATFORM_BINDINGS,
   SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY,
   MAIL_API_KEY: 'dummy-mail-api-key',

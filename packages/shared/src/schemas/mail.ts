@@ -33,16 +33,41 @@ export type StaffMailInput = z.infer<typeof StaffMailInputSchema>;
  *
  * `accepted` is how many distinct addresses the send was queued for, not
  * how many messages arrived: the request returns as soon as the recipients
- * are known, and the rate-controlled send runs on after it. Per-recipient
- * delivery results therefore aren't in this response -- they belong to the
- * mail provider's own delivery log.
+ * are known and have been handed to the queue, and the sending itself
+ * happens in the queue's consumer afterwards.
  *
- * That background send has to finish inside the hosting platform's budget
- * for post-response work, so a filter matching more recipients than it can
- * pace through is refused with 413 instead of being accepted here and then
- * cut short halfway.
+ * `jobId` is where the outcome shows up. It names the `mail_jobs` row the
+ * consumer counts deliveries and failures into, readable through `GET
+ * /staff/tournaments/:tournamentId/mail/:jobId` -- which is how the staff
+ * screen answers "how many people did that reach?". Which *addresses*
+ * bounced stays with the mail provider's own delivery log.
  */
 export const StaffMailResultSchema = z.object({
+  jobId: z.string().uuid(),
   accepted: z.number().int().nonnegative(),
 });
 export type StaffMailResult = z.infer<typeof StaffMailResultSchema>;
+
+/**
+ * `GET /staff/tournaments/:tournamentId/mail/:jobId` response.
+ *
+ * The progress of one bulk send. `sent + failed` climbs towards `total` as
+ * the queue's consumer works through the recipients, so a job with
+ * `sent + failed < total` is still going (or has recipients waiting on a
+ * retry) and one where they are equal is finished. `updatedAt` moves every
+ * time the consumer reports, which is what tells a slow send from a stuck
+ * one.
+ *
+ * The body staff composed is left out: this is polled while a send runs,
+ * and it may be 20 000 characters that the caller already has.
+ */
+export const StaffMailJobSchema = z.object({
+  jobId: z.string().uuid(),
+  subject: z.string(),
+  total: z.number().int().nonnegative(),
+  sent: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type StaffMailJob = z.infer<typeof StaffMailJobSchema>;

@@ -1,8 +1,8 @@
 import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
 import type {Bindings} from '../types/env';
-import app from '../index';
+import {app} from '../index';
 import {
-  PERMISSIVE_SECURITY_BINDINGS,
+  PERMISSIVE_PLATFORM_BINDINGS,
   refusingRateLimiter,
   TURNSTILE_TEST_TOKEN,
   turnstileAwareFetch,
@@ -13,7 +13,7 @@ import {TURNSTILE_TOKEN_HEADER} from '../middleware/turnstile';
 // of it before any database call, so they run unconditionally (including
 // CI).
 const env: Bindings = {
-  ...PERMISSIVE_SECURITY_BINDINGS,
+  ...PERMISSIVE_PLATFORM_BINDINGS,
   SUPABASE_URL: 'https://example.supabase.co',
   SUPABASE_SERVICE_ROLE_KEY: 'dummy-service-role-key',
   MAIL_API_KEY: 'dummy-mail-api-key',

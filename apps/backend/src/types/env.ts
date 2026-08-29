@@ -1,4 +1,5 @@
 import type {StaffClaims} from '@regional-quiz/shared';
+import type {BulkMailMessage} from '../lib/bulk-mail-queue';
 
 export interface Bindings {
   SUPABASE_URL: string;
@@ -48,6 +49,13 @@ export interface Bindings {
   LOGIN_EMAIL_RATE_LIMITER: RateLimit;
   MAIL_TRIGGER_IP_RATE_LIMITER: RateLimit;
   MAIL_TRIGGER_EMAIL_RATE_LIMITER: RateLimit;
+  // The queue the staff bulk send is handed to (Task 10-4), declared in
+  // `wrangler.toml` as both a producer binding and a consumer. The route
+  // enqueues one message per recipient and answers; `lib/bulk-mail-queue.ts`
+  // does the sending from the consumer, which is what lifted the old
+  // 80-recipient ceiling -- a consumer invocation is not bound by the ~30
+  // seconds of post-response time a request's `waitUntil()` gets.
+  BULK_MAIL_QUEUE: Queue<BulkMailMessage>;
 }
 
 export interface Variables {

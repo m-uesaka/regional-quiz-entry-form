@@ -2,7 +2,7 @@ import {afterEach, describe, expect, it} from 'bun:test';
 import {passwordResetRoute} from './password-reset';
 import type {Bindings} from '../types/env';
 import {
-  PERMISSIVE_SECURITY_BINDINGS,
+  PERMISSIVE_PLATFORM_BINDINGS,
   refusingRateLimiter,
   TURNSTILE_TEST_TOKEN,
   turnstileAwareFetch,
@@ -10,7 +10,7 @@ import {
 import {TURNSTILE_TOKEN_HEADER} from '../middleware/turnstile';
 
 const ENV: Bindings = {
-  ...PERMISSIVE_SECURITY_BINDINGS,
+  ...PERMISSIVE_PLATFORM_BINDINGS,
   SUPABASE_URL: 'https://example.supabase.co',
   SUPABASE_SERVICE_ROLE_KEY: 'dummy-service-role-key',
   MAIL_API_KEY: 'dummy-mail-api-key',

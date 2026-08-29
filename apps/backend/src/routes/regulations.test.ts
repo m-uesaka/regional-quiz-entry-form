@@ -2,8 +2,8 @@ import {afterAll, afterEach, beforeAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
 import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
-import app from '../index';
-import {PERMISSIVE_SECURITY_BINDINGS} from '../test-support/bindings';
+import {app} from '../index';
+import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
 
 // Local Supabase stack (`supabase start`), same convention as
 // `routes/form-definitions.test.ts`. The integration block below is skipped
@@ -34,7 +34,7 @@ const SUPABASE_SERVICE_ROLE_KEY =
 const SESSION_SECRET = 'test-session-secret';
 
 const env: Bindings = {
-  ...PERMISSIVE_SECURITY_BINDINGS,
+  ...PERMISSIVE_PLATFORM_BINDINGS,
   SUPABASE_URL: process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321',
   SUPABASE_SERVICE_ROLE_KEY,
   MAIL_API_KEY: 'dummy-mail-api-key',
