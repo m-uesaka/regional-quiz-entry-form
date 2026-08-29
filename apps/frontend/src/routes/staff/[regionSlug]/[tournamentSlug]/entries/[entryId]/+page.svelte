@@ -61,7 +61,15 @@
   <dd>{data.entry.email}</dd>
 
   <dt>レギュレーション</dt>
-  <dd>{data.entry.regulationLabel}</dd>
+  <!-- An entry may claim several conditions, so they are listed rather than
+       rendered as one value. -->
+  <dd>
+    <ul class="entry-regulations">
+      {#each data.entry.regulationLabels as label (label)}
+        <li>{label}</li>
+      {/each}
+    </ul>
+  </dd>
 
   <dt>ステータス</dt>
   <dd>

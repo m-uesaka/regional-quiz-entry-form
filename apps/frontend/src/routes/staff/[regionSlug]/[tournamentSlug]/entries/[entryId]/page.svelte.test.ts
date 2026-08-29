@@ -10,8 +10,8 @@ const ENTRY: StaffEntryDetail = {
   furigana: 'ヤマダタロウ',
   displayName: '太郎',
   email: 'taro@example.com',
-  regulationId: '00000000-0000-0000-0000-000000000005',
-  regulationLabel: '一般の部',
+  regulationIds: ['00000000-0000-0000-0000-000000000005'],
+  regulationLabels: ['一般の部'],
   freeText: '自由記述の本文です',
   customFieldValues: {
     t_shirt_size: 'L',

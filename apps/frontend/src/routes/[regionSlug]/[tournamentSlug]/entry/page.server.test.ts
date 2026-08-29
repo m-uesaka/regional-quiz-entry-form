@@ -176,8 +176,8 @@ describe('entry +page.server load', () => {
 
 /** A submission that passes `EntryInputSchema`, before any overrides. */
 function validFormData(
-  overrides: Record<string, string> = {},
-): Record<string, string> {
+  overrides: Record<string, string | string[]> = {},
+): Record<string, string | string[]> {
   return {
     name: '山田太郎',
     furigana: 'ヤマダタロウ',
@@ -185,7 +185,7 @@ function validFormData(
     email: 'taro@example.com',
     password: 'password123',
     passwordConfirm: 'password123',
-    regulationId: REGULATIONS[0].id,
+    regulationIds: [REGULATIONS[0].id],
     freeText: '',
     'custom.agree_rules': 'on',
     // The control the Turnstile widget writes its token into.
@@ -197,11 +197,15 @@ function validFormData(
 /** Builds the partial `RequestEvent` the action needs, cast for test use. */
 function buildActionEvent(options: {
   fetch: typeof fetch;
-  fields: Record<string, string>;
+  fields: Record<string, string | string[]>;
 }): Parameters<typeof actions.default>[0] {
   const body = new FormData();
   for (const [key, value] of Object.entries(options.fields)) {
-    body.append(key, value);
+    // A checked checkbox group submits its name once per box, which is
+    // what the regulation selector produces.
+    for (const entry of Array.isArray(value) ? value : [value]) {
+      body.append(key, entry);
+    }
   }
   return {
     params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
@@ -278,7 +282,7 @@ describe('entry +page.server default action', () => {
         values: {
           name: '山田太郎',
           email: 'not-an-email',
-          regulationId: REGULATIONS[0].id,
+          regulationIds: [REGULATIONS[0].id],
           customFieldValues: {agree_rules: ['agree_rules']},
         },
       },
@@ -304,7 +308,7 @@ describe('entry +page.server default action', () => {
     [
       403,
       'regulation not eligible in priority window',
-      '現在は優先期間中のため、選択したレギュレーションではエントリーできません',
+      '現在は優先期間中のため、優先対象のレギュレーションを1つ以上選択してください',
     ],
   ])(
     'maps a %i %s response to its own message',

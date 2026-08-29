@@ -10,7 +10,7 @@ const ENTRY: MypageEntryDetail = {
   name: '山田太郎',
   furigana: 'ヤマダタロウ',
   displayName: '太郎',
-  regulationLabel: '一般の部',
+  regulationLabels: ['一般の部'],
   freeText: '自由記述',
   customFieldValues: {t_shirt_size: 'M', agree_to_rules: ['agree_to_rules']},
   status: 'confirmed',

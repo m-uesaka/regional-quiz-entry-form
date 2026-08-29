@@ -190,10 +190,14 @@ export async function fillEntryForm(
     participant.password,
   );
 
-  await page
-    .getByRole('group', {name: 'レギュレーションを選択してください'})
-    .getByLabel(tournament.regulationLabel, {exact: true})
-    .check();
+  // Every one of them: an entry may claim several conditions, and the
+  // specs assert that all of them come back out on the staff screens.
+  const regulations = page.getByRole('group', {
+    name: 'レギュレーションを選択してください',
+  });
+  for (const regulation of tournament.regulations) {
+    await regulations.getByLabel(regulation.label, {exact: true}).check();
+  }
 
   const answers =
     input.customFieldValues ?? tournament.defaultCustomFieldValues;

@@ -7,7 +7,9 @@
 
 <h1>{data.entry.tournament.name} のエントリー内容を編集</h1>
 
-<p>レギュレーション: {data.entry.regulationLabel}</p>
+<!-- An entry may claim several conditions, so they are listed rather than
+     rendered as one value. -->
+<p>レギュレーション: {data.entry.regulationLabels.join('、')}</p>
 
 {#if form?.error}
   <p role="alert">{form.error}</p>

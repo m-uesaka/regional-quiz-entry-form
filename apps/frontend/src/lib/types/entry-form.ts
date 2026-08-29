@@ -11,7 +11,7 @@ export interface EntryFormValues {
   furigana: string;
   displayName: string;
   email: string;
-  regulationId: string;
+  regulationIds: string[];
   freeText: string;
   customFieldValues: CustomFieldValues;
 }

@@ -18,9 +18,19 @@ function buildRegulation(overrides: Partial<Regulation>): Regulation {
   };
 }
 
+const REGULATION_A = buildRegulation({
+  id: '11111111-1111-1111-1111-111111111111',
+  label: 'A部門',
+  displayOrder: 0,
+});
+const REGULATION_B = buildRegulation({
+  id: '22222222-2222-2222-2222-222222222222',
+  label: 'B部門',
+  displayOrder: 1,
+});
+
 describe('RegulationSelector', () => {
-  it('disables a regulation outside the currently active priority window', () => {
-    const now = new Date('2026-08-23T00:00:00Z');
+  it('marks the priority regulations and asks for one during their window', () => {
     const priorityRegulation = buildRegulation({
       id: '11111111-1111-1111-1111-111111111111',
       label: '優先枠',
@@ -36,71 +46,98 @@ describe('RegulationSelector', () => {
     render(RegulationSelector, {
       props: {
         regulations: [priorityRegulation, generalRegulation],
-        value: null,
-        now,
+        value: [],
+        now: new Date('2026-08-23T00:00:00Z'),
       },
     });
 
-    const generalOption = screen.getByRole('radio', {name: /一般枠/});
-    expect(generalOption).toBeDisabled();
+    // Nothing is disabled: a participant meeting the priority condition may
+    // also claim the general one, so the rule is "at least one priority
+    // regulation", not "only priority regulations".
+    expect(screen.getByRole('checkbox', {name: /一般枠/})).not.toBeDisabled();
+    expect(screen.getByRole('checkbox', {name: /優先枠/})).not.toBeDisabled();
     expect(
-      screen.getByText('優先期間中のため選択できません'),
+      screen.getByText(
+        '現在は優先期間中です。優先対象のレギュレーションを1つ以上選択してください',
+      ),
     ).toBeInTheDocument();
-
-    const priorityOption = screen.getByRole('radio', {name: /優先枠/});
-    expect(priorityOption).not.toBeDisabled();
   });
 
-  it('submits the selected id under the regulationId control name', async () => {
+  it('reports a selection that claims no active priority regulation', () => {
+    const priorityRegulation = buildRegulation({
+      id: '11111111-1111-1111-1111-111111111111',
+      label: '優先枠',
+      priorityStartsAt: '2026-08-01T00:00:00+09:00',
+      priorityEndsAt: '2026-08-31T00:00:00+09:00',
+    });
+    const generalRegulation = buildRegulation({
+      id: '22222222-2222-2222-2222-222222222222',
+      label: '一般枠',
+      displayOrder: 1,
+    });
+
+    render(RegulationSelector, {
+      props: {
+        regulations: [priorityRegulation, generalRegulation],
+        value: [generalRegulation.id],
+        now: new Date('2026-08-23T00:00:00Z'),
+      },
+    });
+
+    expect(
+      screen.getByText(
+        '現在は優先期間中のため、優先対象のレギュレーションを1つ以上選択してください',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('submits every checked id under the regulationIds control name', async () => {
     const user = userEvent.setup();
-    const regulationA = buildRegulation({
-      id: '11111111-1111-1111-1111-111111111111',
-      label: 'A部門',
-      displayOrder: 0,
-    });
-    const regulationB = buildRegulation({
-      id: '22222222-2222-2222-2222-222222222222',
-      label: 'B部門',
-      displayOrder: 1,
-    });
 
     render(RegulationSelector, {
       props: {
-        regulations: [regulationA, regulationB],
-        value: null,
+        regulations: [REGULATION_A, REGULATION_B],
+        value: [],
         now: new Date('2026-08-23T00:00:00Z'),
       },
     });
 
-    const chosen = screen.getByRole('radio', {name: 'B部門'});
-    await user.click(chosen);
+    const first = screen.getByRole('checkbox', {name: 'A部門'});
+    const second = screen.getByRole('checkbox', {name: 'B部門'});
+    await user.click(first);
+    await user.click(second);
 
-    expect(chosen).toBeChecked();
-    expect(chosen).toHaveAttribute('name', 'regulationId');
-    expect(chosen).toHaveAttribute('value', regulationB.id);
-    expect(screen.getByRole('radio', {name: 'A部門'})).not.toBeChecked();
+    expect(first).toBeChecked();
+    expect(second).toBeChecked();
+    for (const box of [first, second]) {
+      expect(box).toHaveAttribute('name', 'regulationIds');
+    }
+    expect(first).toHaveAttribute('value', REGULATION_A.id);
+    expect(second).toHaveAttribute('value', REGULATION_B.id);
   });
 
-  it('preselects the regulation it was given', () => {
-    const regulationA = buildRegulation({
-      id: '11111111-1111-1111-1111-111111111111',
-      label: 'A部門',
-      displayOrder: 0,
-    });
-    const regulationB = buildRegulation({
-      id: '22222222-2222-2222-2222-222222222222',
-      label: 'B部門',
-      displayOrder: 1,
-    });
-
+  it('preselects the regulations it was given', () => {
     render(RegulationSelector, {
       props: {
-        regulations: [regulationA, regulationB],
-        value: regulationB.id,
+        regulations: [REGULATION_A, REGULATION_B],
+        value: [REGULATION_B.id],
         now: new Date('2026-08-23T00:00:00Z'),
       },
     });
 
-    expect(screen.getByRole('radio', {name: 'B部門'})).toBeChecked();
+    expect(screen.getByRole('checkbox', {name: 'B部門'})).toBeChecked();
+    expect(screen.getByRole('checkbox', {name: 'A部門'})).not.toBeChecked();
+  });
+
+  it('says nothing about priority windows when none is active', () => {
+    render(RegulationSelector, {
+      props: {
+        regulations: [REGULATION_A, REGULATION_B],
+        value: [],
+        now: new Date('2026-08-23T00:00:00Z'),
+      },
+    });
+
+    expect(screen.queryByText(/優先期間/)).not.toBeInTheDocument();
   });
 });

@@ -126,12 +126,16 @@ describe.skipIf(!(await isDbReachable()))(
       const [entry] = await sql`
         insert into entries (
           participant_id, tournament_id, name, furigana, display_name,
-          regulation_id, status, waitlist_position
+          status, waitlist_position
         ) values (
           ${participant.id}, ${tournamentId}, '山田太郎', 'ヤマダタロウ', '太郎',
-          ${regulationId}, 'waitlisted', ${waitlistPosition}
+          'waitlisted', ${waitlistPosition}
         )
         returning id
+      `;
+      await sql`
+        insert into entry_regulations (entry_id, regulation_id, tournament_id)
+        values (${entry.id}, ${regulationId}, ${tournamentId})
       `;
       return entry.id as string;
     }

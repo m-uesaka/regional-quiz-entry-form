@@ -22,9 +22,12 @@ export const EntryInputSchema = z
     passwordConfirm: z
       .string()
       .min(8, {message: 'パスワードは8文字以上で入力してください'}),
-    regulationId: z
-      .string()
-      .uuid({message: 'レギュレーションを選択してください'}),
+    // A participant may meet several of a tournament's conditions at once
+    // (requirements.md renders these as checkboxes), so this is a set. At
+    // least one has to be met, which is what `min(1)` says.
+    regulationIds: z
+      .array(z.string().uuid({message: 'レギュレーションを選択してください'}))
+      .min(1, {message: 'レギュレーションを選択してください'}),
     freeText: z.string().optional(),
     customFieldValues: z.record(
       z.string(),
@@ -40,8 +43,8 @@ export type EntryInput = z.infer<typeof EntryInputSchema>;
 // The subset of an entry a participant may change themselves from mypage
 // (`PATCH /mypage/entries/:entryId`). `email` / `password` are account
 // credentials and are changed through the auth flow instead, and
-// `regulationId` is fixed at entry time because regulation priority windows
-// are evaluated then.
+// `regulationIds` are fixed at entry time because regulation priority
+// windows are evaluated then.
 export const EntryEditInputSchema = EntryInputSchema.innerType().pick({
   name: true,
   furigana: true,
@@ -66,8 +69,8 @@ export const EntrySchema = z.object({
   furigana: z.string(),
   displayName: z.string(),
   email: z.string().email(),
-  regulationId: z.string().uuid(),
-  regulationLabel: z.string(),
+  regulationIds: z.array(z.string().uuid()),
+  regulationLabels: z.array(z.string()),
   freeText: z.string().nullable(),
   // Same value union as `EntryInputSchema.customFieldValues` — every stored
   // value originated from that input shape (checkbox/radio/textarea form
@@ -186,7 +189,7 @@ export const MypageEntryDetailSchema = MypageEntrySchema.extend({
   name: z.string(),
   furigana: z.string(),
   displayName: z.string(),
-  regulationLabel: z.string(),
+  regulationLabels: z.array(z.string()),
   freeText: z.string().nullable(),
   customFieldValues: EntrySchema.shape.customFieldValues,
   formFieldDefs: z.array(FormFieldDefSchema),
