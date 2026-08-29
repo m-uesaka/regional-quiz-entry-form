@@ -36,6 +36,28 @@ describe('StaffAccountCreateInputSchema', () => {
     }
   });
 
+  // The admin screen shows these beside the control they belong to, on an
+  // otherwise all-Japanese page — and the region select cannot be marked
+  // `required` instead, because the same form invites `general` staff.
+  it('names the region and the address in Japanese when they are refused', () => {
+    const result = StaffAccountCreateInputSchema.safeParse({
+      role: 'regional',
+      email: 'not-an-address',
+      // What the select submits while nothing has been picked.
+      regionId: '',
+      tournamentType: 'saikyoi',
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const fieldErrors = result.error.flatten().fieldErrors;
+      expect(fieldErrors.regionId).toEqual(['担当地域を選択してください']);
+      expect(fieldErrors.email).toEqual([
+        'メールアドレスの形式が正しくありません',
+      ]);
+    }
+  });
+
   it('drops a scope sent for a general account', () => {
     const result = StaffAccountCreateInputSchema.safeParse({
       role: 'general',

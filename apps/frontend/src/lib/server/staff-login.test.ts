@@ -76,6 +76,18 @@ describe('staffLandingPath', () => {
     expect(staffLandingPath(GENERAL, '/mypage')).toBe('/staff/dashboard');
   });
 
+  it('hands general staff back an /admin screen they were aiming at', () => {
+    // `routes/admin/+layout.server.ts` bounces anonymous visitors through
+    // this login, so `/admin/*` has to survive the round trip.
+    expect(staffLandingPath(GENERAL, '/admin/regions')).toBe('/admin/regions');
+  });
+
+  it('sends regional staff home instead of to an /admin screen', () => {
+    expect(staffLandingPath(REGIONAL, '/admin/regions')).toBe(
+      '/staff/tokyo/saikyoi/entries',
+    );
+  });
+
   it('refuses a redirect back to the login screen itself', () => {
     expect(staffLandingPath(GENERAL, '/staff/login')).toBe('/staff/dashboard');
     expect(

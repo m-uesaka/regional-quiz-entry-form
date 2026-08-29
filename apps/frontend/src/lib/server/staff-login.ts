@@ -59,7 +59,8 @@ function staffHomePath(session: StaffLoginResponse): string | null {
  * bounced a logged-out `regional` account through here comes back as
  * `redirectTo`, and the dashboard is `general`-only. Regional staff are
  * therefore only handed back pages under their own tournament, and sent to
- * their home screen for anything else.
+ * their home screen for anything else — which also covers every `/admin/`
+ * path, since those are `general`-only as a whole.
  *
  * @param session The backend's answer to the login request.
  * @param target A path that already passed `safeStaffPath`.
@@ -83,15 +84,23 @@ function isReachableBy(session: StaffLoginResponse, target: string): boolean {
  *
  * The value comes from the query string, so anything else would be an open
  * redirect: a leading `//` or `/\` is read as a protocol-relative URL and
- * would leave the site entirely. Requiring the `/staff/` prefix rules both
- * out, and excluding the login screen itself keeps a stale `redirectTo` from
- * bouncing straight back here.
+ * would leave the site entirely. Requiring one of the staff-only prefixes
+ * rules both out, and excluding the login screen itself keeps a stale
+ * `redirectTo` from bouncing straight back here.
+ *
+ * `/admin/` is honoured alongside `/staff/` because the guard in
+ * `routes/admin/+layout.server.ts` sends anonymous visitors here too, and
+ * without it a general staff member who followed a link to a management
+ * screen would log in and land on the dashboard instead.
  *
  * @param target The raw `redirectTo` value.
  * @return The path, or `null` when it isn't one to honour.
  */
 function safeStaffPath(target: string | null): string | null {
-  if (!target || !target.startsWith('/staff/')) return null;
+  if (!target) return null;
+  if (!target.startsWith('/staff/') && !target.startsWith('/admin/')) {
+    return null;
+  }
   if (
     target === STAFF_LOGIN_PATH ||
     target.startsWith(`${STAFF_LOGIN_PATH}?`)

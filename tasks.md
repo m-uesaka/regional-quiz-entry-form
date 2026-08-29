@@ -66,7 +66,7 @@ Phase 9 以降のタスクファイルに書かれているマイグレーショ
   * Task 9-1: レギュレーション登録・編集 API
   * Task 9-2: 地域(regions)管理 API ✅
   * Task 9-3: スタッフアカウント管理 API ✅
-  * Task 9-4: 統括スタッフ向け管理画面(地域・レギュレーション・スタッフ)
+  * Task 9-4: 統括スタッフ向け管理画面(地域・レギュレーション・スタッフ) ✅
   * Task 9-5: `/api/*` の Worker route 有効化(#101)
 * Phase 10: 要件との差分の解消 🚧進行中
   * Task 10-1: 地域ごとの「最強位・新人王 重複参加」可否の制御 ✅
@@ -209,7 +209,7 @@ graph TD
 
 ```mermaid
 graph TD
-  T91["9-1 レギュレーションAPI"]:::next --> T94["9-4 管理画面"]:::todo
+  T91["9-1 レギュレーションAPI"]:::next --> T94["9-4 管理画面"]:::done
   T92["9-2 地域API"]:::done --> T93["9-3 スタッフAPI"]:::done
   T92 --> T94
   T93 --> T94
@@ -345,7 +345,7 @@ graph TD
 * [Task 9-1: レギュレーション登録・編集 API](tasks/task-9-1.md) — 優先エントリー期間を含め、現状は Supabase を直接操作しないと設定できない
 * [Task 9-2: 地域(regions)管理 API ✅](tasks/task-9-2.md) — 地域が作れないと大会も作れない。`GET / POST / PATCH /api/regions` を追加済み
 * [Task 9-3: スタッフアカウント管理 API ✅](tasks/task-9-3.md) — スタッフの発行にアプリのコード実行(パスワードハッシュ生成)が要る状態の解消。`GET / POST /api/staff/accounts` と招待メールによる初期パスワード設定を追加済み
-* [Task 9-4: 統括スタッフ向け管理画面(地域・レギュレーション・スタッフ)](tasks/task-9-4.md) — `/admin/*` のサーバ側ガード追加を含む
+* [Task 9-4: 統括スタッフ向け管理画面(地域・レギュレーション・スタッフ) ✅](tasks/task-9-4.md) — `/admin/*` のサーバ側ガード追加を含む。`/admin/regions`・`/admin/staff`・`/admin/tournaments/[id]/regulations` を追加し、大会作成フォームの地域を UUID 直接入力からセレクトボックスに置き換え済み
 * [Task 9-5: `/api/*` の Worker route 有効化(#101)](tasks/task-9-5.md) — 本番で CSV ダウンロードと `/admin` のクライアント側 API 呼び出しが 404 になっている
 
 ### Phase 10: 要件との差分の解消 🚧進行中
