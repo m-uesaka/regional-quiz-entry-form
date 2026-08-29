@@ -69,6 +69,17 @@ const REGULATION_NO_LONGER_AVAILABLE = 'regulation no longer available';
  */
 const REGION_DUAL_ENTRY_SQLSTATE = 'P0005';
 
+/**
+ * Postgres' own `foreign_key_violation`, which is what a regulation dropped
+ * by a concurrent `sync_regulations()` makes the `entry_regulations` write
+ * raise. It is the only failure of that write the participant can act on,
+ * so it alone earns `REGULATION_NO_LONGER_AVAILABLE`; anything else (a
+ * network blip, Supabase being down) is a server fault, and telling the
+ * participant their regulations changed would send them to reload a page
+ * that will fail again in exactly the same way.
+ */
+const FOREIGN_KEY_VIOLATION_SQLSTATE = '23503';
+
 interface ParticipantRow {
   id: string;
   region_id: string;
@@ -132,7 +143,7 @@ async function replaceEntryRegulations(
   entryId: string,
   tournamentId: string,
   regulationIds: readonly string[],
-): Promise<{error: {message: string} | null}> {
+): Promise<{error: {message: string; code: string} | null}> {
   const {error: deleteError} = await db
     .from('entry_regulations')
     .delete()
@@ -230,6 +241,7 @@ async function rollbackEntry(
       regulationIds: existingEntry.entry_regulations.map(
         row => row.regulation_id,
       ),
+      code: regulationsError.code,
       error: regulationsError.message,
     });
   }
@@ -479,10 +491,13 @@ export async function createEntry(
   if (regulationsError) {
     console.error('failed to store the entry regulations', {
       entryId: entry.id,
+      code: regulationsError.code,
       error: regulationsError.message,
     });
     await rollbackEntry(db, entry.id, tournamentId, existingEntry);
-    return {ok: false, status: 409, error: REGULATION_NO_LONGER_AVAILABLE};
+    return regulationsError.code === FOREIGN_KEY_VIOLATION_SQLSTATE
+      ? {ok: false, status: 409, error: REGULATION_NO_LONGER_AVAILABLE}
+      : {ok: false, status: 500, error: regulationsError.message};
   }
 
   try {
