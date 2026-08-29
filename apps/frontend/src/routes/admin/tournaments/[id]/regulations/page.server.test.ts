@@ -151,6 +151,26 @@ describe('admin regulations save action', () => {
     ]);
   });
 
+  // The page tells staff to move a row by rewriting its number, and the only
+  // number that puts a row at the top is `1` — which the row already there
+  // still carries. Ties therefore have to favour the row that was rewritten,
+  // or the front position is the one place nothing can ever be moved to.
+  it('moves a row to the front when the row already there was left alone', async () => {
+    const log: FetchLog = {putBodies: []};
+    const formData = new FormData();
+    setRow(formData, 0, {id: GENERAL.id, label: '一般の部'});
+    setRow(formData, 1, {label: '新設の部'});
+    setRow(formData, 2, {id: STUDENT.id, order: '1', label: '学生の部'});
+    const event = buildActionEvent(fakeFetch({}, log), formData);
+
+    await expect(actions.default(event)).resolves.toMatchObject({saved: true});
+    expect(log.putBodies[0].regulations.map(r => r.label)).toEqual([
+      '学生の部',
+      '一般の部',
+      '新設の部',
+    ]);
+  });
+
   it('keeps the rendered order when nobody renumbered anything', async () => {
     const log: FetchLog = {putBodies: []};
     const formData = new FormData();

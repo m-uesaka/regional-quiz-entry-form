@@ -184,15 +184,36 @@ function readRegulationRows(formData: FormData): RegulationRowValues[] {
   // Sorted by the "表示順" the form carries, which the page pre-fills with
   // each row's current position — so a form nobody reordered saves in the
   // order it was rendered in, and moving a row is a matter of rewriting its
-  // number. The index breaks ties, which keeps two rows claiming the same
-  // position in the order they were displayed rather than an arbitrary one.
+  // number.
+  //
+  // Ties are broken by whether the number was rewritten at all: a row asking
+  // for a position it was not already in takes it, and the rows left where
+  // they were close up behind it in the order they were displayed. Without
+  // that, typing `1` into the third of three rows — the one gesture the page
+  // tells staff to use — would leave it behind the row already numbered `1`,
+  // so nothing could ever be moved to the front.
   return [...rows.entries()]
-    .sort(
-      ([leftIndex, left], [rightIndex, right]) =>
-        rowPosition(leftIndex, left) - rowPosition(rightIndex, right) ||
-        leftIndex - rightIndex,
-    )
+    .sort(([leftIndex, left], [rightIndex, right]) => {
+      const byPosition =
+        rowPosition(leftIndex, left) - rowPosition(rightIndex, right);
+      if (byPosition !== 0) return byPosition;
+      const byMove = moveRank(leftIndex, left) - moveRank(rightIndex, right);
+      if (byMove !== 0) return byMove;
+      return leftIndex - rightIndex;
+    })
     .map(([, row]) => row);
+}
+
+/**
+ * How a row ranks among others claiming the same position: a row whose
+ * "表示順" was rewritten goes ahead of one that still carries the number the
+ * page pre-filled it with.
+ * @param index The row's index in the rendered form.
+ * @param row The submitted row.
+ * @return 0 for a row that was moved, 1 for one that was left alone.
+ */
+function moveRank(index: number, row: RegulationRowValues): number {
+  return rowPosition(index, row) === index + 1 ? 1 : 0;
 }
 
 /**
