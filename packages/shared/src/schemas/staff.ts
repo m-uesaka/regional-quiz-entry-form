@@ -1,6 +1,8 @@
 import {z} from 'zod';
 import {TournamentTypeSchema} from './tournament';
 
+const EMAIL_MESSAGE = 'メールアドレスの形式が正しくありません';
+
 export const StaffRoleSchema = z.enum(['regional', 'general']);
 export type StaffRole = z.infer<typeof StaffRoleSchema>;
 
@@ -45,15 +47,24 @@ export type StaffAccount = z.infer<typeof StaffAccountSchema>;
 // discouraged. The same invariant is a check constraint on the table
 // (`supabase/migrations/0015_staff_accounts_scope_and_password_reset.sql`),
 // so a row written straight through Supabase can't break it either.
+//
+// The messages are written out because the admin screen shows them beside
+// the control they belong to, and that screen is read in Japanese —
+// `Invalid uuid` beside an unselected 担当地域 names neither the control nor
+// what to do about it. The region cannot be marked `required` in the markup
+// instead: the same form invites `general` staff, for whom the control is
+// meant to be left alone.
 export const StaffAccountCreateInputSchema = z.discriminatedUnion('role', [
   z.object({
     role: z.literal('general'),
-    email: z.string().email(),
+    email: z.string().email({message: EMAIL_MESSAGE}),
   }),
   z.object({
     role: z.literal('regional'),
-    email: z.string().email(),
-    regionId: z.string().uuid(),
+    email: z.string().email({message: EMAIL_MESSAGE}),
+    regionId: z.string().uuid({message: '担当地域を選択してください'}),
+    // 担当種別 is a two-option select, so it carries no message of its
+    // own: the form cannot submit a value the enum refuses.
     tournamentType: TournamentTypeSchema,
   }),
 ]);
