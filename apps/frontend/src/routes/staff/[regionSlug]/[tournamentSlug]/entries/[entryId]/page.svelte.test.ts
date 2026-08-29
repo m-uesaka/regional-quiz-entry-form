@@ -126,6 +126,35 @@ describe('staff entry detail +page.svelte', () => {
     expect(screen.queryByText('agree_to_rules')).not.toBeInTheDocument();
   });
 
+  it('renders two regulations that share a label', () => {
+    // Nothing stops a tournament from having two regulations under the same
+    // label (e.g. one per priority window), so the list must not be keyed by
+    // the label — a duplicate key would fail the render outright.
+    render(Page, {
+      props: {
+        params: {
+          regionSlug: 'tokyo',
+          tournamentSlug: 'saikyoi',
+          entryId: ENTRY.id,
+        },
+        data: {
+          loggedIn: true,
+          entry: {
+            ...ENTRY,
+            regulationIds: [
+              '00000000-0000-0000-0000-000000000005',
+              '00000000-0000-0000-0000-000000000006',
+            ],
+            regulationLabels: ['一般の部', '一般の部'],
+          },
+        },
+        form: null,
+      },
+    });
+
+    expect(screen.getAllByText('一般の部')).toHaveLength(2);
+  });
+
   it('links back to the entries list', () => {
     render(Page, {
       props: {
