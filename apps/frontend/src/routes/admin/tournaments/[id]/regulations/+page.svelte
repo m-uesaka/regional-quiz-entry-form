@@ -1,6 +1,6 @@
 <script lang="ts">
   import type {Regulation} from '@regional-quiz/shared';
-  import {toJstDatetimeLocal} from '$lib/jst-datetime';
+  import {datetimeLocalStep, toJstDatetimeLocal} from '$lib/jst-datetime';
   import {
     emptyRegulationRow,
     isUntouchedNewRegulationRow,
@@ -101,12 +101,15 @@
       </label>
 
       <!-- Both ends are set together or not at all; the schema refuses a
-           half-filled window rather than guessing the missing end. -->
+           half-filled window rather than guessing the missing end. The step
+           only drops to a second for a stored instant that falls mid-minute,
+           which the default minute step would refuse outright. -->
       <label>
         優先期間の開始 (JST)
         <input
           name="regulations[{index}].priorityStartsAt"
           type="datetime-local"
+          step={datetimeLocalStep(row.priorityStartsAt)}
           value={row.priorityStartsAt}
         />
       </label>
@@ -116,6 +119,7 @@
         <input
           name="regulations[{index}].priorityEndsAt"
           type="datetime-local"
+          step={datetimeLocalStep(row.priorityEndsAt)}
           value={row.priorityEndsAt}
         />
       </label>
