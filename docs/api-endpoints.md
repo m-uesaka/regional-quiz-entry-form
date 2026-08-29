@@ -567,7 +567,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 `body` を無害化していないのは、この項目が**スタッフの書いたものを信頼する**前提だからです。投稿には担当大会のスタッフセッションが必要で、同じアカウントは既にエントリー一覧から全参加者のアドレスを読めます。ただし送信元は組織の検証済みドメインなので、他所からコピーしてきた HTML はスタッフ側で確認してから貼る運用が前提になります。
 
-**Cloudflare Queues は有料プラン限定**です。`wrangler dev` はローカルでキューを模擬するので開発と E2E には課金は要りませんが、キューの無いアカウントへのデプロイは `wrangler.toml` の `[[queues.*]]` で失敗します。作成手順は `docs/supabase-deployment.md` の §6.5 を参照してください。
+**Cloudflare Queues は有料プラン限定**です。`wrangler dev` はローカルでキューを模擬するので開発と E2E には課金は要りませんが、キューの無いアカウントへのデプロイは `wrangler.toml` の `[[queues.*]]` で失敗します。作成手順は `docs/supabase-deployment.md` の §6.2.2 を参照してください。
 
 ### `GET /api/staff/tournaments/:tournamentId/mail/:jobId`
 
