@@ -137,6 +137,28 @@ bunx wrangler secret put TURNSTILE_SECRET_KEY --env production
 
 `wrangler.toml` の各環境に `LOGIN_IP_RATE_LIMITER` / `LOGIN_EMAIL_RATE_LIMITER` / `MAIL_TRIGGER_IP_RATE_LIMITER` / `MAIL_TRIGGER_EMAIL_RATE_LIMITER`(Cloudflare の Rate Limiting binding)を定義済みです(#116)。**登録作業は不要**で、`namespace_id` は Cloudflare 側の資源を指すものではなく「どのカウンタか」を表すだけの識別子です。ただし環境をまたいで同じ id を使うと staging の負荷が production の枠を食うため、`wrangler.toml` では環境ごとに別の値にしてあります。ここを編集するときは、`period` に **10 か 60 しか指定できない**点にも注意してください。
 
+### 6.2.2 一斉メール用の Queue
+
+スタッフの一斉メールは Cloudflare Queues のコンシューマが送ります(Task 10-4 / #114)。`wrangler.toml` の各環境に producer(`BULK_MAIL_QUEUE`)と consumer を定義済みですが、**キューそのものは先に作っておく必要があります**。存在しないキュー名を指す `wrangler deploy` は失敗します。
+
+> **Queues は Workers Paid(有料)プラン限定の機能です。** ローカル開発と E2E は `wrangler dev` がキューを模擬するので課金は要りませんが、デプロイ先のアカウントが無料プランのままだとこの機能は使えません。その場合の代替は Cloudflare Workflows か、Cron Trigger で送信待ち行列を掃き出す方式で、いずれも `apps/backend/src/lib/bulk-mail-queue.ts` の置き換えになります。
+
+環境ごとに本体と dead letter queue の 2 本ずつ作ります(名前は `wrangler.toml` の `queue` / `dead_letter_queue` と一致させてください)。
+
+```bash
+cd apps/backend
+
+# staging
+bunx wrangler queues create regional-quiz-bulk-mail-staging
+bunx wrangler queues create regional-quiz-bulk-mail-staging-dlq
+
+# production
+bunx wrangler queues create regional-quiz-bulk-mail
+bunx wrangler queues create regional-quiz-bulk-mail-dlq
+```
+
+キューを環境ごとに分けているのは、1 本を共有すると staging の送信テストのメッセージを production の Worker が拾い、**本物のメールとして送ってしまう**ためです。dead letter queue には、3 回の再配信でも送れなかった宛先のメッセージが残ります(コンシューマ側でも最終配信で諦めて `mail_jobs.failed` に計上するので、件数はスタッフ画面から見えます)。
+
 ### 6.3 Cloudflare Pages(`apps/frontend`)側
 
 Pages プロジェクトを staging / production 用にそれぞれ作成します。ワークフローは `wrangler pages deploy --branch main` でアップロードするため、**production branch は `main` にしてください**(一致しないとすべて preview デプロイ扱いになり、本番 URL が更新されません)。
@@ -241,6 +263,7 @@ routes = [
 - [ ] production Environment に Required reviewers を設定した
 - [ ] 各 Worker 環境に `wrangler secret put` でシークレットを登録した(6.2)
 - [ ] 環境ごとに Turnstile widget を作成し、Secret Key を Worker に登録した(6.2)
+- [ ] 一斉メール用の Queue と dead letter queue を環境ごとに作成した(6.2.2。Workers Paid プランが要る)
 - [ ] Pages プロジェクトを production branch `main` で作成した(6.3)
 - [ ] Pages プロジェクトに `BACKEND_URL` / `SESSION_SECRET` / `PUBLIC_TURNSTILE_SITE_KEY` を登録した(6.3)
 - [ ] `wrangler.toml` の `routes` を実ドメインで有効化し、`/api/*` が Worker に届くことを確認した(6.4 / #101)

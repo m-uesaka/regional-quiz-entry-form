@@ -25,6 +25,7 @@ flowchart LR
   password_reset_tokens["password_reset_tokens<br>(パスワード再設定トークン)"]
   staff_accounts["staff_accounts<br>(スタッフアカウント)"]
   staff_password_reset_tokens["staff_password_reset_tokens<br>(スタッフのパスワード設定/再設定トークン)"]
+  mail_jobs["mail_jobs<br>(一斉メールの送信ジョブ)"]
 
   regions --> tournaments
   regions --> participants
@@ -32,6 +33,7 @@ flowchart LR
   tournaments --> regulations
   tournaments --> form_field_defs
   tournaments --> entries
+  tournaments --> mail_jobs
   entries --> email_verification_tokens
   participants --> password_reset_tokens
   staff_accounts --> staff_password_reset_tokens
@@ -267,6 +269,26 @@ flowchart TB
 - この 2 パターン以外の行は check 制約 `staff_accounts_scope_matches_role`(`0015`)が拒否します。`regional` なのに `region_id` か `tournament_type` の片方しか無い行は「担当範囲が狭いアカウント」ではなく**壊れた行**で、上記の範囲チェックがすべての大会で落ちるため、そのアカウントはどこにアクセスしても静かに 403 を返し続けます。Zod 側(`StaffAccountCreateInputSchema` の判別共用体)と両方で縛っているのは、Supabase を直接触って行を作る経路が残るためです。
 - 作成は `POST /api/staff/accounts`(統括スタッフ限定)です。作成時の `password_hash` にはハッシュ形式に合わない固定値が入り、本人が招待メールのリンクでパスワードを設定するまでログインできません。統括スタッフが他人のパスワードを知らずに済ませるための作りです。
 
+### mail_jobs — 一斉メールの送信ジョブ
+
+| カラム | 型 | 制約 | 説明 |
+| --- | --- | --- | --- |
+| `id` | uuid | PK | `POST /api/staff/tournaments/:id/mail` が返す `jobId` |
+| `tournament_id` | uuid | not null, FK → `tournaments.id` | 送信対象の大会 |
+| `subject` | text | not null | 件名 |
+| `body_html` | text | not null | 本文(スタッフが書いた HTML そのまま) |
+| `total` | integer | not null | 受け付けた宛先数 |
+| `sent` | integer | not null, default `0` | 送信できた通数 |
+| `failed` | integer | not null, default `0` | 諦めた宛先数 |
+| `created_at` | timestamptz | not null, default `now()` | |
+| `updated_at` | timestamptz | not null, default `now()` | `mail_jobs_set_updated_at` トリガで更新 |
+
+- Task 10-4(#114)で追加。一斉メールを Cloudflare Queues に載せた際に、**送信内容の置き場**と**送信結果の記録**を兼ねるテーブルです。
+- **本文をここにしか置かないのは、キューのメッセージに入らないからです。** Cloudflare のメッセージ上限は 1 通 128 KB・1 バッチ 256 KB で、本文は最大 20000 文字あり得るため、宛先ごとに複製すると数十件でバッチ上限を超えます。メッセージが運ぶのは `{jobId, to}` だけで、コンシューマ(`apps/backend/src/lib/bulk-mail-queue.ts`)がバッチごとに 1 回だけこの行を読みます。
+- **行はメッセージを投入する前に書きます。** 投入直後にコンシューマが動いても本文が読めるようにするためで、逆順だと「ジョブ id はあるのに行が無い」メッセージが生まれます。
+- `sent + failed` が `total` に達したら送信終了です。`GET /api/staff/tournaments/:tournamentId/mail/:jobId` がこれを返し、スタッフ画面は「何人に送れたか」をここで確認します。それ以前は送信ログしか手掛かりがありませんでした。
+- 大会ごとの新しい順に読む索引 `mail_jobs_tournament_id_created_at_idx` を持ちます。一斉メールを送るたびに行が増える一方のテーブルです。
+
 ## 4. アクセス制御(RLS と権限)
 
 `0001_init.sql` の末尾で、全テーブルに対して次を実行しています。
@@ -277,7 +299,7 @@ revoke all on all tables in schema public from anon, authenticated;
 grant select, insert, update, delete on all tables in schema public to service_role;
 ```
 
-この `all tables in schema public` は**実行時点の**テーブルにしか効きません。あとから足したテーブル(`0015` の `staff_password_reset_tokens`)は、同じ `enable row level security` / `revoke` / `grant` をそのマイグレーション内で自分で書く必要があります。Supabase の default privileges は新しいテーブルを `anon` / `authenticated` にも渡すので、`revoke` を書き忘れると `0001` で剥がした権限が復活します。
+この `all tables in schema public` は**実行時点の**テーブルにしか効きません。あとから足したテーブル(`0015` の `staff_password_reset_tokens`、`0018` の `mail_jobs`)は、同じ `enable row level security` / `revoke` / `grant` をそのマイグレーション内で自分で書く必要があります。Supabase の default privileges は新しいテーブルを `anon` / `authenticated` にも渡すので、`revoke` を書き忘れると `0001` で剥がした権限が復活します。
 
 設計方針:
 
@@ -304,6 +326,7 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | `reset_participant_password(text, text)` | `0009` → `0010` で再定義 | `lib/password-reset.ts` | 再設定トークンを消費してパスワードを更新し、残りのトークンを焼き捨てる |
 | `tournament_entry_summary()` | `0013` | `routes/staff-dashboard.ts` | 全大会のエントリー件数をステータス別に集計する(読み取り専用) |
 | `sync_regulations(uuid, jsonb)` | `0014` | `lib/regulations.ts` | 大会のレギュレーションを差分同期する(update / insert / 参照が無ければ delete) |
+| `record_mail_job_progress(uuid, integer, integer)` | `0018` | `lib/mail-jobs.ts` | 一斉メール 1 バッチ分の結果をジョブの件数に加算する |
 
 ### sync_form_field_defs(p_tournament_id, p_rows)
 
@@ -407,6 +430,14 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 `supabase db push` は各バージョンを一度しか適用しません。そのため、**適用済みのマイグレーションファイルを直接書き換えても、既存環境には反映されません**。関数の挙動を変更する場合は、`0007` / `0008` のように**新しい番号のファイルで `create or replace function` し直す**のが本リポジトリの流儀です。その際は変更しない部分も含めて関数全体を書き直すことになるため、元ファイルからの差分をコメントに明記してください。
 
+### record_mail_job_progress(p_job_id, p_sent, p_failed)
+
+`mail_jobs` の `sent` / `failed` に、キューのコンシューマが処理し終えた 1 バッチ分を**加算**します。
+
+- Worker 側で「読んで足して書き戻す」をしないのは、**コンシューマの呼び出しが並行に走るから**です。同じジョブの 2 バッチが同時に `sent = 40` を読めば両方が `41` を書き、片方のバッチの送信結果が消えます。`update ... set sent = sent + n` なら加算は Postgres が行の排他ロックの下で解決するため、いくつのコンシューマが同時に報告しても取りこぼしません。
+- 存在しないジョブ id は 0 行更新で、エラーにはしません。行が消えているのは誰かが削除した場合だけで、そこでバッチを失敗させると**配信済みのメッセージごと再配信**され、同じメールがもう一度届きます。
+- `updated_at` はトリガが動かすので、この関数は触りません。
+
 ## 6. マイグレーション一覧
 
 | ファイル | 内容 |
@@ -428,3 +459,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0015_staff_accounts_scope_and_password_reset.sql` | `staff_accounts` の役割/担当範囲の check 制約、`staff_password_reset_tokens`、`reset_staff_password()` |
 | `0016_regions_allows_dual_entry.sql` | `regions.allows_dual_entry`(既定 `false`) |
 | `0017_entries_region_dual_entry_trigger.sql` | `check_region_dual_entry()` と `entries` の before insert or update トリガ |
+| `0018_mail_jobs.sql` | `mail_jobs` テーブル・`updated_at` トリガ・索引・`record_mail_job_progress()` |

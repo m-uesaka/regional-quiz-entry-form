@@ -72,7 +72,7 @@ Phase 9 以降のタスクファイルに書かれているマイグレーショ
   * Task 10-1: 地域ごとの「最強位・新人王 重複参加」可否の制御 ✅
   * Task 10-2: レギュレーションの複数選択対応(要確認)
   * Task 10-3: ログアウト機能(参加者・スタッフ) ✅(#113。スタッフ側は `/staff/logout` を専用ルートにし、Cookie 転送は `handleFetch` に一本化した)
-  * Task 10-4: 一斉メールの Cloudflare Queues 化(80 名上限の撤廃)
+  * Task 10-4: 一斉メールの Cloudflare Queues 化(80 名上限の撤廃) ✅(#114。送信をキューのコンシューマへ移し、`mail_jobs` で送信結果を追えるようにした)
   * Task 10-5: エントリー期間外アクセス制御をバックエンドにも実装する
 * Phase 11: セキュリティ強化 🚧進行中
   * Task 11-1: レート制限と Turnstile(ログイン・エントリー・再設定要求) ✅
@@ -229,7 +229,7 @@ graph TD
   T92["9-2 地域API"]:::done --> T101["10-1 重複参加の可否"]:::done
   T91["9-1 レギュレーションAPI"]:::prereq --> T102["10-2 レギュレーション複数選択"]:::todo
   T103["10-3 ログアウト"]:::done
-  T104["10-4 一斉メールQueue化"]:::next
+  T104["10-4 一斉メールQueue化"]:::done
   T105["10-5 期間外アクセス制御"]:::next
 
   classDef done fill:#c6f6d5,stroke:#2f855a,color:#22543d;
@@ -238,7 +238,7 @@ graph TD
   classDef prereq fill:#ffffff,stroke:#a0aec0,color:#4a5568;
 ```
 
-白い枠は Phase 9 のタスク(前提)。10-3 は #113 で完了。10-4・10-5 も Phase 9 を待たずに着手できる。10-2 は要件の読み方の確認が先。
+白い枠は Phase 9 のタスク(前提)。10-3 は #113 で、10-4 は #114 で完了。10-5 も Phase 9 を待たずに着手できる。10-2 は要件の読み方の確認が先。
 
 #### Phase 11: セキュリティ強化(🚧 進行中)
 
@@ -355,7 +355,7 @@ graph TD
 * [Task 10-1: 地域ごとの「最強位・新人王 重複参加」可否の制御 ✅](tasks/task-10-1.md) — `regions.allows_dual_entry`(既定 false)を追加し、`createEntry()` で同一地域の2つ目の有効なエントリーを拒否するようにした
 * [Task 10-2: レギュレーションの複数選択対応](tasks/task-10-2.md) — 「どれか一つを最低限でも満たす」の読み方を統括スタッフに確認してから着手する
 * [Task 10-3: ログアウト機能(参加者・スタッフ)](tasks/task-10-3.md) ✅(#113) — `POST /api/auth/{participant,staff}/logout` と、マイページ / スタッフ画面それぞれのレイアウトにログアウトボタンを追加。発行と削除で Cookie 属性がずれないよう `SESSION_COOKIE_OPTIONS` を共有する。スタッフ側だけは既存ページに action を置けず(レイアウトは action を持てず、`/staff/login` は `default` action 済み)`/staff/logout` を専用ルートにした。あわせて削除 Cookie の転送を `handleFetch` の `forwardBackendCookies()` に一本化し(`forwardSetCookies()` / `backend-cookies.ts` は削除)、バックエンドに届かなかった場合はフロント側で Cookie を落とすフォールバックを入れている。JWT の失効自体は [Task 11-3](tasks/task-11-3.md) の範囲
-* [Task 10-4: 一斉メールの Cloudflare Queues 化](tasks/task-10-4.md) — 1 リクエスト 80 名の上限を外す。課金判断を伴う
+* [Task 10-4: 一斉メールの Cloudflare Queues 化 ✅](tasks/task-10-4.md)(#114) — 送信をリクエストの寿命から切り離し、Cloudflare Queues のコンシューマ(Worker の `queue` ハンドラ)へ移した。ルートは宛先を確定して 1 宛先 = 1 メッセージで積むだけになり、`MAX_BACKGROUND_RECIPIENTS`(80 名)と 413 は撤廃。件名と本文は `mail_jobs` 行に置き(メッセージのサイズ上限に収めるため)、同じ行にコンシューマが送信結果を加算するので、`GET /api/staff/tournaments/:id/mail/:jobId` で「何人に送れたか」を確認できる。**Queues は Workers Paid プラン限定**で、デプロイ前に環境ごとのキュー作成が要る(`docs/supabase-deployment.md` §6.2.2)
 * [Task 10-5: エントリー期間外アクセス制御をバックエンドにも実装する](tasks/task-10-5.md) — 現在はフロントの `load` のみで、スコープ判定も緩い
 
 ### Phase 11: セキュリティ強化 🚧進行中
