@@ -188,7 +188,7 @@ async function rollbackEntry(
   // snapshot taken before it: restoring only the status would still leave
   // the cancelled entry permanently carrying the failed re-entry's answers
   // and its cleared verification timestamp.
-  await db
+  const {error: restoreError} = await db
     .from('entries')
     .update({
       name: existingEntry.name,
@@ -202,14 +202,37 @@ async function rollbackEntry(
       cancelled_at: existingEntry.cancelled_at,
     })
     .eq('id', entryId);
+  if (restoreError) {
+    console.error('failed to restore the cancelled entry', {
+      entryId,
+      error: restoreError.message,
+    });
+  }
+
   // The regulation selection lives in its own table, so it is rewritten
   // rather than restored by the update above.
-  await replaceEntryRegulations(
+  //
+  // Both writes are logged rather than reported: the caller is already on a
+  // failure path and has an error of its own to answer with, and there is
+  // nothing further it could do about a rollback that didn't take. But a
+  // failure here is the one that leaves no trace anywhere else — the
+  // cancelled entry stays in the participant's history carrying none of the
+  // regulations it was entered under — so it must not pass silently.
+  const {error: regulationsError} = await replaceEntryRegulations(
     db,
     entryId,
     tournamentId,
     existingEntry.entry_regulations.map(row => row.regulation_id),
   );
+  if (regulationsError) {
+    console.error('failed to restore the cancelled entry regulations', {
+      entryId,
+      regulationIds: existingEntry.entry_regulations.map(
+        row => row.regulation_id,
+      ),
+      error: regulationsError.message,
+    });
+  }
 }
 
 /**
