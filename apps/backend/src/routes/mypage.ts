@@ -17,6 +17,11 @@ import {
   toFormFieldDef,
   type FormFieldDefRow,
 } from '../lib/form-field-defs';
+import {
+  ENTRY_REGULATIONS_COLUMNS,
+  entryRegulationLabels,
+  type EntryRegulationRow,
+} from '../lib/entry-regulations';
 
 const EntryIdParamSchema = z.object({entryId: z.string().uuid()});
 
@@ -27,7 +32,7 @@ const LIST_COLUMNS =
 const DETAIL_COLUMNS =
   LIST_COLUMNS +
   ', name, furigana, display_name, free_text, custom_field_values, ' +
-  'regulations(label)';
+  ENTRY_REGULATIONS_COLUMNS;
 
 /** Shape of an `entries` row as selected by `LIST_COLUMNS` (snake_case). */
 interface MypageEntryRow {
@@ -51,7 +56,7 @@ interface MypageEntryDetailRow extends MypageEntryRow {
   display_name: string;
   free_text: string | null;
   custom_field_values: Record<string, string | string[]>;
-  regulations: {label: string} | null;
+  entry_regulations: EntryRegulationRow[];
 }
 
 function rowToMypageEntry(row: MypageEntryRow): MypageEntry {
@@ -135,7 +140,7 @@ export const mypageRoute = new Hono<ParticipantEnv>()
           name: data.name,
           furigana: data.furigana,
           displayName: data.display_name,
-          regulationLabel: data.regulations?.label,
+          regulationLabels: entryRegulationLabels(data.entry_regulations),
           freeText: data.free_text,
           customFieldValues: data.custom_field_values,
           formFieldDefs: (formFieldDefRows ?? []).map(toFormFieldDef),

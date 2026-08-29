@@ -31,6 +31,7 @@ function entryRow(overrides: Partial<EntriesCsvRow> = {}): EntriesCsvRow {
     furigana: 'ヤマダタロウ',
     displayName: '太郎',
     status: '確定',
+    regulationLabels: ['一般の部'],
     customFieldValues: {},
     ...overrides,
   };
@@ -41,7 +42,7 @@ describe('buildEntriesCsv', () => {
     const csv = buildEntriesCsv(FIELD_DEFS, []);
 
     expect(csv).toBe(
-      '氏名,ふりがな,掲載名,ステータス,Tシャツサイズ,アレルギー',
+      '氏名,ふりがな,掲載名,ステータス,レギュレーション,Tシャツサイズ,アレルギー',
     );
   });
 
@@ -61,9 +62,9 @@ describe('buildEntriesCsv', () => {
     );
 
     expect(csv.split('\r\n')).toEqual([
-      '氏名,ふりがな,掲載名,ステータス,Tシャツサイズ',
-      '山田太郎,ヤマダタロウ,太郎,確定,M',
-      '鈴木花子,スズキハナコ,花子,キャンセル待ち,S',
+      '氏名,ふりがな,掲載名,ステータス,レギュレーション,Tシャツサイズ',
+      '山田太郎,ヤマダタロウ,太郎,確定,一般の部,M',
+      '鈴木花子,スズキハナコ,花子,キャンセル待ち,一般の部,S',
     ]);
     expect(csv.endsWith('\r\n')).toBe(false);
   });
@@ -88,7 +89,7 @@ describe('buildEntriesCsv', () => {
     );
 
     expect(csv.split('\r\n')[1]).toBe(
-      '"山田, 太郎",ヤマダタロウ,"""太郎""",確定,"1行目',
+      '"山田, 太郎",ヤマダタロウ,"""太郎""",確定,一般の部,"1行目',
     );
     expect(csv).toContain('"1行目\r\n2行目"');
   });
@@ -114,7 +115,8 @@ describe('buildEntriesCsv', () => {
     );
 
     expect(csv.split('\r\n')[1]).toBe(
-      '"\'=HYPERLINK(""http://evil.example"",""x"")",\'+ヤマダ,\'-太郎,確定,\'@SUM(A1:A2)',
+      '"\'=HYPERLINK(""http://evil.example"",""x"")",\'+ヤマダ,\'-太郎,確定,一般の部,' +
+        "'@SUM(A1:A2)",
     );
   });
 
@@ -124,13 +126,36 @@ describe('buildEntriesCsv', () => {
       [entryRow({name: '\t=1+1', displayName: '\r=1+1'})],
     );
 
-    expect(csv.split('\r\n')[1]).toBe('\'\t=1+1,ヤマダタロウ,"\'\r=1+1",確定');
+    expect(csv.split('\r\n')[1]).toBe(
+      '\'\t=1+1,ヤマダタロウ,"\'\r=1+1",確定,一般の部',
+    );
   });
 
   it('leaves cells that only look arithmetic mid-value alone', () => {
     const csv = buildEntriesCsv([], [entryRow({displayName: '太郎=1'})]);
 
-    expect(csv.split('\r\n')[1]).toBe('山田太郎,ヤマダタロウ,太郎=1,確定');
+    expect(csv.split('\r\n')[1]).toBe(
+      '山田太郎,ヤマダタロウ,太郎=1,確定,一般の部',
+    );
+  });
+
+  it('joins multiple regulation labels into one cell', () => {
+    // An entry may meet more than one of a tournament's conditions, and the
+    // header row has exactly one レギュレーション column, so they share it.
+    const csv = buildEntriesCsv(
+      [],
+      [entryRow({regulationLabels: ['一般の部', '学生の部']})],
+    );
+
+    expect(csv.split('\r\n')[1]).toBe(
+      '山田太郎,ヤマダタロウ,太郎,確定,一般の部;学生の部',
+    );
+  });
+
+  it('leaves the regulation cell empty for an entry claiming none', () => {
+    const csv = buildEntriesCsv([], [entryRow({regulationLabels: []})]);
+
+    expect(csv.split('\r\n')[1]).toBe('山田太郎,ヤマダタロウ,太郎,確定,');
   });
 
   it('joins multi-select checkbox values with a semicolon', () => {
@@ -147,7 +172,7 @@ describe('buildEntriesCsv', () => {
     );
 
     expect(csv.split('\r\n')[1]).toBe(
-      '山田太郎,ヤマダタロウ,太郎,確定,土曜;日曜',
+      '山田太郎,ヤマダタロウ,太郎,確定,一般の部,土曜;日曜',
     );
   });
 
@@ -169,9 +194,9 @@ describe('buildEntriesCsv', () => {
     );
 
     expect(csv.split('\r\n').slice(1)).toEqual([
-      '山田太郎,ヤマダタロウ,太郎,確定,はい',
-      '鈴木花子,ヤマダタロウ,太郎,確定,いいえ',
-      '佐藤次郎,ヤマダタロウ,太郎,確定,',
+      '山田太郎,ヤマダタロウ,太郎,確定,一般の部,はい',
+      '鈴木花子,ヤマダタロウ,太郎,確定,一般の部,いいえ',
+      '佐藤次郎,ヤマダタロウ,太郎,確定,一般の部,',
     ]);
   });
 
@@ -180,7 +205,9 @@ describe('buildEntriesCsv', () => {
       entryRow({customFieldValues: {allergies: 'そば'}}),
     ]);
 
-    expect(csv.split('\r\n')[1]).toBe('山田太郎,ヤマダタロウ,太郎,確定,,そば');
+    expect(csv.split('\r\n')[1]).toBe(
+      '山田太郎,ヤマダタロウ,太郎,確定,一般の部,,そば',
+    );
   });
 
   it('ignores stored answers whose field is no longer defined', () => {
@@ -193,6 +220,8 @@ describe('buildEntriesCsv', () => {
       ],
     );
 
-    expect(csv.split('\r\n')[1]).toBe('山田太郎,ヤマダタロウ,太郎,確定,L');
+    expect(csv.split('\r\n')[1]).toBe(
+      '山田太郎,ヤマダタロウ,太郎,確定,一般の部,L',
+    );
   });
 });

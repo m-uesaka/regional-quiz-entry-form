@@ -58,11 +58,6 @@ describe.skipIf(!(await isDbReachable()))(
         )
         returning id
       `;
-      const [regulation] = await sql`
-        insert into regulations (tournament_id, label)
-        values (${tournament.id}, 'テストレギュレーション')
-        returning id
-      `;
       const [participant] = await sql`
         insert into participants (region_id, email, password_hash)
         values (${region.id}, ${testEmail}, 'hash')
@@ -74,7 +69,6 @@ describe.skipIf(!(await isDbReachable()))(
         name: '山田太郎',
         furigana: 'ヤマダタロウ',
         display_name: '太郎',
-        regulation_id: regulation.id,
       };
 
       await sql`insert into entries ${sql(entryInput)}`;
@@ -134,9 +128,9 @@ describe.skipIf(!(await isDbReachable()))(
     const testRegionSlug = 'db-schema-dual-entry-test-region';
 
     /**
-     * Creates a region with both of its tournaments, a participant in it and
-     * one regulation per tournament, and returns a builder for the columns
-     * of that participant's entry into either tournament.
+     * Creates a region with both of its tournaments and a participant in
+     * it, and returns a builder for the columns of that participant's entry
+     * into either tournament.
      * @param allowsDualEntry The region's dual-entry setting.
      */
     async function seedRegion(allowsDualEntry: boolean) {
@@ -154,15 +148,7 @@ describe.skipIf(!(await isDbReachable()))(
           )
           returning id
         `;
-        const [regulation] = await sql`
-          insert into regulations (tournament_id, label)
-          values (${tournament.id}, 'テストレギュレーション')
-          returning id
-        `;
-        return {
-          tournament_id: tournament.id as string,
-          regulation_id: regulation.id as string,
-        };
+        return {tournament_id: tournament.id as string};
       };
       const tournaments = {
         saikyoi: await seedTournament('saikyoi'),
@@ -369,7 +355,6 @@ describe.skipIf(!(await isDbReachable()))(
         name: '山田太郎',
         furigana: 'ヤマダタロウ',
         display_name: '太郎',
-        regulation_id: tournament.regulationId,
         status,
       })}`;
     }
@@ -623,6 +608,172 @@ describe.skipIf(!(await isDbReachable()))(
         select label from regulations where tournament_id = ${tournamentId}
       `;
       expect(rows).toHaveLength(2);
+    });
+  },
+);
+
+// The composite foreign keys are the whole reason `entry_regulations`
+// carries a redundant `tournament_id` (migration 0018): before the move to
+// multiple selection, `entries.regulation_id` was tied to
+// `regulations (id, tournament_id)`, and dropping that guarantee in the
+// migration would have let an entry claim another tournament's regulation.
+describe.skipIf(!(await isDbReachable()))(
+  'entry_regulations table (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const testRegionSlug = 'db-schema-entry-regulations-test-region';
+    const testEmail = 'db-schema-entry-regulations-test@example.com';
+
+    async function deleteTestData(): Promise<void> {
+      // `entry_regulations` goes with its entries (`on delete cascade`).
+      await sql`delete from entries where participant_id in (
+        select id from participants where email = ${testEmail}
+      )`;
+      await sql`delete from participants where email = ${testEmail}`;
+      await sql`delete from regulations where tournament_id in (
+        select id from tournaments where region_id in (
+          select id from regions where slug like ${testRegionSlug + '%'}
+        )
+      )`;
+      await sql`delete from tournaments where region_id in (
+        select id from regions where slug like ${testRegionSlug + '%'}
+      )`;
+      await sql`delete from regions where slug like ${testRegionSlug + '%'}`;
+    }
+
+    beforeEach(deleteTestData);
+
+    afterAll(async () => {
+      await deleteTestData();
+      await sql.close();
+    });
+
+    /**
+     * A region with one tournament and one regulation in it.
+     * @param suffix The region slug suffix, so two of these can coexist.
+     */
+    async function seedTournament(suffix: string): Promise<{
+      regionId: string;
+      tournamentId: string;
+      regulationId: string;
+    }> {
+      const [region] = await sql`
+        insert into regions (slug, name)
+        values (${testRegionSlug + '-' + suffix}, 'テスト地域')
+        returning id
+      `;
+      const [tournament] = await sql`
+        insert into tournaments (
+          region_id, type, name, entry_opens_at, entry_closes_at
+        ) values (
+          ${region.id}, 'saikyoi', 'テスト大会', now(), now()
+        )
+        returning id
+      `;
+      const [regulation] = await sql`
+        insert into regulations (tournament_id, label)
+        values (${tournament.id}, 'テストレギュレーション')
+        returning id
+      `;
+      return {
+        regionId: region.id as string,
+        tournamentId: tournament.id as string,
+        regulationId: regulation.id as string,
+      };
+    }
+
+    /** An entry into `tournament` by a participant of its region. */
+    async function seedEntry(tournament: {
+      regionId: string;
+      tournamentId: string;
+    }): Promise<string> {
+      const [participant] = await sql`
+        insert into participants (region_id, email, password_hash)
+        values (${tournament.regionId}, ${testEmail}, 'hash')
+        returning id
+      `;
+      const [entry] = await sql`
+        insert into entries (
+          participant_id, tournament_id, name, furigana, display_name
+        ) values (
+          ${participant.id}, ${tournament.tournamentId}, '山田太郎',
+          'ヤマダタロウ', '太郎'
+        )
+        returning id
+      `;
+      return entry.id as string;
+    }
+
+    it('accepts several regulations of the entry’s own tournament', async () => {
+      const tournament = await seedTournament('multi');
+      const [secondRegulation] = await sql`
+        insert into regulations (tournament_id, label, display_order)
+        values (${tournament.tournamentId}, '2つ目のレギュレーション', 1)
+        returning id
+      `;
+      const entryId = await seedEntry(tournament);
+
+      await sql`
+        insert into entry_regulations (entry_id, regulation_id, tournament_id)
+        values
+          (${entryId}, ${tournament.regulationId}, ${tournament.tournamentId}),
+          (${entryId}, ${secondRegulation.id}, ${tournament.tournamentId})
+      `;
+
+      const rows = await sql`
+        select regulation_id from entry_regulations where entry_id = ${entryId}
+      `;
+      expect(rows).toHaveLength(2);
+    });
+
+    it("refuses another tournament's regulation", async () => {
+      const own = await seedTournament('own');
+      const other = await seedTournament('other');
+      const entryId = await seedEntry(own);
+
+      // Claiming the other tournament's regulation under this entry's own
+      // tournament breaks the regulation-side composite key...
+      let regulationSideThrew = false;
+      try {
+        await sql`
+          insert into entry_regulations (entry_id, regulation_id, tournament_id)
+          values (${entryId}, ${other.regulationId}, ${own.tournamentId})
+        `;
+      } catch {
+        regulationSideThrew = true;
+      }
+      expect(regulationSideThrew).toBe(true);
+
+      // ...and naming the other tournament instead, so that key resolves,
+      // breaks the entry-side one. There is no third option: both keys
+      // share `tournament_id`, so no row can satisfy one by lying to the
+      // other.
+      let entrySideThrew = false;
+      try {
+        await sql`
+          insert into entry_regulations (entry_id, regulation_id, tournament_id)
+          values (${entryId}, ${other.regulationId}, ${other.tournamentId})
+        `;
+      } catch {
+        entrySideThrew = true;
+      }
+      expect(entrySideThrew).toBe(true);
+    });
+
+    it('drops an entry’s regulations along with the entry', async () => {
+      const tournament = await seedTournament('cascade');
+      const entryId = await seedEntry(tournament);
+      await sql`
+        insert into entry_regulations (entry_id, regulation_id, tournament_id)
+        values (${entryId}, ${tournament.regulationId}, ${tournament.tournamentId})
+      `;
+
+      await sql`delete from entries where id = ${entryId}`;
+
+      const rows = await sql`
+        select regulation_id from entry_regulations where entry_id = ${entryId}
+      `;
+      expect(rows).toHaveLength(0);
     });
   },
 );

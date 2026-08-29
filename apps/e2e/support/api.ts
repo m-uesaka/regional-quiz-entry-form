@@ -93,7 +93,7 @@ export async function submitEntry(
         email,
         password: PARTICIPANT_PASSWORD,
         passwordConfirm: PARTICIPANT_PASSWORD,
-        regulationId: tournament.regulationId,
+        regulationIds: tournament.regulations.map(r => r.id),
         freeText: overrides.freeText,
         customFieldValues:
           overrides.customFieldValues ?? tournament.defaultCustomFieldValues,

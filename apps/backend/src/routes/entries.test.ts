@@ -33,7 +33,7 @@ const validBody = {
   email: 'entrant@example.com',
   password: 'password123',
   passwordConfirm: 'password123',
-  regulationId: '11111111-1111-1111-1111-111111111111',
+  regulationIds: ['11111111-1111-1111-1111-111111111111'],
   customFieldValues: {},
 };
 

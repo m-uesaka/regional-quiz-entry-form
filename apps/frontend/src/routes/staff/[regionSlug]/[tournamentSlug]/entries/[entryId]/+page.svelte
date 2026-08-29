@@ -61,7 +61,17 @@
   <dd>{data.entry.email}</dd>
 
   <dt>レギュレーション</dt>
-  <dd>{data.entry.regulationLabel}</dd>
+  <!-- An entry may claim several conditions, so they are listed rather than
+       rendered as one value. Keyed by the regulation id rather than by the
+       label: nothing stops a tournament from having two regulations under
+       the same label, and a duplicate key is a render-time error. -->
+  <dd>
+    <ul class="entry-regulations">
+      {#each data.entry.regulationLabels as label, i (data.entry.regulationIds[i])}
+        <li>{label}</li>
+      {/each}
+    </ul>
+  </dd>
 
   <dt>ステータス</dt>
   <dd>

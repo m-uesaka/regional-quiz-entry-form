@@ -16,7 +16,7 @@ describe('EntryInputSchema', () => {
       email: 'taro@example.com',
       password: 'password1',
       passwordConfirm: 'password2',
-      regulationId: '00000000-0000-0000-0000-000000000000',
+      regulationIds: ['00000000-0000-0000-0000-000000000000'],
       customFieldValues: {},
     });
 
@@ -34,7 +34,7 @@ describe('EntryInputSchema', () => {
       email: 'taro@localhost',
       password: 'short',
       passwordConfirm: 'short',
-      regulationId: 'not-a-uuid',
+      regulationIds: [],
       customFieldValues: {},
     });
 
@@ -47,7 +47,7 @@ describe('EntryInputSchema', () => {
         email: ['メールアドレスの形式が正しくありません'],
         password: ['パスワードは8文字以上で入力してください'],
         passwordConfirm: ['パスワードは8文字以上で入力してください'],
-        regulationId: ['レギュレーションを選択してください'],
+        regulationIds: ['レギュレーションを選択してください'],
       });
     }
   });
@@ -60,7 +60,7 @@ describe('EntryInputSchema', () => {
       email: 'taro@example.com',
       password: 'password1',
       passwordConfirm: 'password1',
-      regulationId: '00000000-0000-0000-0000-000000000000',
+      regulationIds: ['00000000-0000-0000-0000-000000000000'],
       customFieldValues: {},
     });
 
@@ -82,13 +82,13 @@ describe('EntryEditInputSchema', () => {
     expect(result.success).toBe(true);
   });
 
-  it('strips email, password and regulationId, which are not editable here', () => {
+  it('strips email, password and regulationIds, which are not editable here', () => {
     const result = EntryEditInputSchema.safeParse({
       ...BASE_EDIT,
       email: 'taro@example.com',
       password: 'password1',
       passwordConfirm: 'password1',
-      regulationId: '00000000-0000-0000-0000-000000000000',
+      regulationIds: ['00000000-0000-0000-0000-000000000000'],
     });
 
     expect(result.success).toBe(true);
@@ -114,7 +114,7 @@ describe('MypageEntryDetailSchema', () => {
     name: '山田太郎',
     furigana: 'ヤマダタロウ',
     displayName: '太郎',
-    regulationLabel: '一般の部',
+    regulationLabels: ['一般の部'],
     freeText: null,
     customFieldValues: {},
     status: 'confirmed' as const,
@@ -157,8 +157,8 @@ describe('EntrySchema', () => {
     furigana: 'ヤマダタロウ',
     displayName: '太郎',
     email: 'taro@example.com',
-    regulationId: '00000000-0000-0000-0000-000000000002',
-    regulationLabel: '一般の部',
+    regulationIds: ['00000000-0000-0000-0000-000000000002'],
+    regulationLabels: ['一般の部'],
     freeText: null,
     status: 'confirmed' as const,
     waitlistPosition: null,
@@ -227,8 +227,8 @@ describe('StaffEntryDetailSchema', () => {
     furigana: 'ヤマダタロウ',
     displayName: '太郎',
     email: 'taro@example.com',
-    regulationId: '00000000-0000-0000-0000-000000000002',
-    regulationLabel: '一般の部',
+    regulationIds: ['00000000-0000-0000-0000-000000000002'],
+    regulationLabels: ['一般の部'],
     freeText: null,
     customFieldValues: {},
     status: 'confirmed' as const,

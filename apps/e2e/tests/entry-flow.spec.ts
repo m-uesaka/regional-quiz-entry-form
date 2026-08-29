@@ -108,7 +108,7 @@ test('keeps what was answered before the client bundle took over', async ({
   await name.fill('先走り太郎');
   const regulation = page
     .getByRole('group', {name: 'レギュレーションを選択してください'})
-    .getByLabel(SHINJINOU.regulationLabel, {exact: true});
+    .getByLabel(SHINJINOU.regulations[0].label, {exact: true});
   await regulation.check();
 
   releaseClientBundle();

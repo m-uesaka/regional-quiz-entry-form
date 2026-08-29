@@ -20,6 +20,7 @@ flowchart LR
   regulations["regulations<br>(レギュレーション)"]
   form_field_defs["form_field_defs<br>(大会ごとの追加フォーム項目定義)"]
   entries["entries<br>(エントリー)<br>unique(participant_id, tournament_id)"]
+  entry_regulations["entry_regulations<br>(エントリーが選んだレギュレーション)<br>PK(entry_id, regulation_id)"]
   email_verification_tokens["email_verification_tokens<br>(メール確認トークン)"]
   participants["participants<br>(参加者アカウント)"]
   password_reset_tokens["password_reset_tokens<br>(パスワード再設定トークン)"]
@@ -32,6 +33,8 @@ flowchart LR
   tournaments --> regulations
   tournaments --> form_field_defs
   tournaments --> entries
+  entries --> entry_regulations
+  regulations --> entry_regulations
   entries --> email_verification_tokens
   participants --> password_reset_tokens
   staff_accounts --> staff_password_reset_tokens
@@ -130,8 +133,8 @@ flowchart TB
 | `priority_ends_at` | timestamptz | nullable | 優先エントリー期間の終了 |
 | `display_order` | integer | not null, default 0 | 表示順 |
 
-- `unique (id, tournament_id)`: 一見冗長ですが、これは `entries` 側の複合外部キー `foreign key (regulation_id, tournament_id) references regulations (id, tournament_id)` を張るために必要です。この複合 FK により、**ある大会のエントリーが別の大会のレギュレーションを参照することが DB レベルで不可能**になります。
-- 優先期間の判定ロジックは `packages/shared/src/logic/regulation-eligibility.ts` の `isRegulationSelectionAllowed()`。「いずれかのレギュレーションの優先期間が現在アクティブなら、そのレギュレーションしか選べない。アクティブなものが1つもなければ全て選べる」という規則です。
+- `unique (id, tournament_id)`: 一見冗長ですが、これは `entry_regulations` 側の複合外部キー `foreign key (regulation_id, tournament_id) references regulations (id, tournament_id)` を張るために必要です。この複合 FK により、**ある大会のエントリーが別の大会のレギュレーションを参照することが DB レベルで不可能**になります(`0018` より前は同じ複合 FK が `entries` から直接張られていました)。
+- 優先期間の判定ロジックは `packages/shared/src/logic/regulation-eligibility.ts` の `isRegulationSelectionAllowed()`。「いずれかのレギュレーションの優先期間が現在アクティブなら、選んだ集合にそのうち少なくとも1つが含まれていなければならない。アクティブなものが1つもなければ何を選んでもよい」という規則です。優先期間は「その条件を満たす参加者だけがエントリーできる」という意味なので、優先対象を1つ選んだうえで他の条件も一緒に申告することは許されます。
 - `priority_starts_at` / `priority_ends_at` は**両方揃っているときだけ**優先期間として扱われます(片方だけ設定されている行は優先期間なしと同じ扱い)。
 - `check (regulations_priority_window_complete)`(`0014`): 「両方 null」か「両方非 null かつ開始 < 終了」だけを許します。制約追加は既存行も検証するため、`0014` では制約を張る前に不完全な行(片方だけ / 逆順)を両方 null に正規化しています(`isRegulationSelectionAllowed()` は元々それらを「優先期間なし」として扱っていたので、挙動は変わりません)。片方だけ設定された行を `isRegulationSelectionAllowed()` が「優先期間なし」として扱ってしまうため、そもそも作らせません。Zod の `RegulationUpsertSchema` にも同じ規則がありますが、SQL を直接叩く運用が残るので DB 側にも持たせています。
 - `index (tournament_id, display_order)`(`0014`): `unique (id, tournament_id)` は先頭列が `id` なので `where tournament_id = ?` には使えません。エントリーフォームの表示のたびに走るクエリなので別途張っています。
@@ -181,7 +184,6 @@ flowchart TB
 | `name` | text | not null | 氏名(非公開) |
 | `furigana` | text | not null | ふりがな(非公開) |
 | `display_name` | text | not null | 公開エントリーリストに載る掲載名 |
-| `regulation_id` | uuid | not null | 選択したレギュレーション |
 | `free_text` | text | nullable | 自由記述 |
 | `custom_field_values` | jsonb | not null, default `'{}'` | 追加フォーム項目の回答。`{ field_key: string \| string[] }` |
 | `status` | entry_status | not null, default `pending_verification` | |
@@ -194,7 +196,8 @@ flowchart TB
 制約・インデックス:
 
 - `unique (participant_id, tournament_id)`: 1参加者につき1大会1エントリー。キャンセル後の再エントリーがこの行を再利用する理由でもあります。
-- `foreign key (regulation_id, tournament_id) references regulations (id, tournament_id)`: 前述の複合 FK。
+- `unique (id, tournament_id)`(`0018`): `id` は主キーなので一意性としては冗長ですが、`entry_regulations` から複合外部キーを張るために必要です(参照先はちょうどその列組の一意制約でなければならない)。
+- 選択したレギュレーションは `0018` で `entry_regulations` に移りました。`entries.regulation_id` はもうありません。
 - `entries_tournament_id_created_at_idx`(`0005`): `(tournament_id, created_at)` の**部分インデックス**で、`status in ('confirmed', 'waitlisted', 'cancelled')` の行だけを対象にします。公開エントリーリスト API(`GET /api/tournaments/:tournamentId/entry-list`)が読む行だけを含むため、インデックスが小さく保たれます。既存の unique インデックスは `(participant_id, tournament_id)` で `tournament_id` が先頭列ではないため、この用途には使えません。
 
 `waitlist_position` について:
@@ -202,6 +205,26 @@ flowchart TB
 - 1 始まりの整数です。`cancel_own_entry()` は waitlisted な行をキャンセルする際、後ろの行を1つずつ前に詰めます。
 - ただし**常に隙間なく詰まっているとは限りません**。`promote_next_waitlisted_entry()` は先頭のエントリーを `confirmed` にしてその `waitlist_position` を `null` にするだけで、後続の順位を詰めないため、繰り上げのたびに欠番が残ります(順位 1〜4 の 4 件から先頭を繰り上げると 2, 3, 4 が残る)。
 - そのため、`confirm_entry_by_token()` の「次の順位 = 現在の waitlisted 件数 + 1」という採番は既存の順位と**衝突し得ます**(上の例では waitlisted 件数 3 なので順位 4 を採番するが、すでに 4 が存在する)。`waitlist_position` には unique 制約がないため重複してもエラーにはならず、参加者に見える順位が同着になります。繰り上げ時にも後続を詰めるか、採番を `max(waitlist_position) + 1` にすれば解消できますが、現時点では未対応です。
+
+### entry_regulations — エントリーが選んだレギュレーション
+
+`0018` で追加。requirements.md の「レギュレーションは複数の条件があり、どれか一つを最低限でも満たしている必要があります(チェックボックス)」は複数該当し得る読みなので、単一 FK だった `entries.regulation_id` をこの中間テーブルに移しました(issue #112)。
+
+| カラム | 型 | 制約 | 説明 |
+| --- | --- | --- | --- |
+| `entry_id` | uuid | not null, PK の一部 | |
+| `regulation_id` | uuid | not null, PK の一部 | |
+| `tournament_id` | uuid | not null | エントリーの大会。冗長だが複合 FK のために必要 |
+
+制約・インデックス:
+
+- `primary key (entry_id, regulation_id)`: 同じレギュレーションを1エントリーが二重に主張することはできません。
+- `foreign key (entry_id, tournament_id) references entries (id, tournament_id) on delete cascade`
+- `foreign key (regulation_id, tournament_id) references regulations (id, tournament_id)`
+- 上の2本が `tournament_id` を**共有している**ことが要点です。「この行の大会 = エントリーの大会」かつ「この行の大会 = レギュレーションの大会」が同時に成り立つので、**あるエントリーが別の大会のレギュレーションを参照することは DB レベルで不可能**なまま(移行前の `entries` の複合 FK と同じ保証)。片方だけでは、もう一方とずれた行を止められません。
+- `on delete cascade` なので、エントリーを消せば選択も一緒に消えます。`lib/entries.ts` のロールバック(確認メール送信に失敗したときなど)がこれに乗っています。
+- `entry_regulations_regulation_id_idx`(`0018`): 主キーの先頭列は `entry_id` なので、`sync_regulations()` の「まだ参照されているレギュレーションか」判定と `regulations` 側 FK の参照チェックのために別途張っています。
+- **「1エントリーにつき最低1件」は DB では保証されていません**。旧 `entries.regulation_id` は `not null` だったので DB が担保していましたが、中間テーブルでは0行を止められません。この規則は `EntryInputSchema.regulationIds` の `min(1)` と `isRegulationSelectionAllowed()`(空集合を拒否)がアプリ側で担保しています。
 
 ### email_verification_tokens — メール確認トークン
 
@@ -314,7 +337,7 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 
 ### sync_regulations(p_tournament_id, p_regulations)
 
-指定大会の `regulations` を、渡された JSON 配列が「保存後にこうなっていてほしい状態」になるよう差分同期します。`sync_form_field_defs()` と違い delete → insert が使えないのは、`entries` が複合外部キー `(regulation_id, tournament_id)` でこのテーブルを参照しているためです(全削除は FK 違反になり、仮に消せてもエントリーの参照先 id が変わってしまう)。
+指定大会の `regulations` を、渡された JSON 配列が「保存後にこうなっていてほしい状態」になるよう差分同期します。`sync_form_field_defs()` と違い delete → insert が使えないのは、`entry_regulations` が複合外部キー `(regulation_id, tournament_id)` でこのテーブルを参照しているためです(全削除は FK 違反になり、仮に消せてもエントリーの参照先 id が変わってしまう)。`0018` で参照元が `entries.regulation_id` から `entry_regulations` に変わったのに合わせ、「参照が残っている行は消せない」判定も同テーブルを見るよう更新しています。
 
 処理順:
 
@@ -428,3 +451,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0015_staff_accounts_scope_and_password_reset.sql` | `staff_accounts` の役割/担当範囲の check 制約、`staff_password_reset_tokens`、`reset_staff_password()` |
 | `0016_regions_allows_dual_entry.sql` | `regions.allows_dual_entry`(既定 `false`) |
 | `0017_entries_region_dual_entry_trigger.sql` | `check_region_dual_entry()` と `entries` の before insert or update トリガ |
+| `0018_entry_regulations.sql` | `entry_regulations`(複数選択対応)・`entries` の `unique (id, tournament_id)`・既存行の移送と `entries.regulation_id` の削除・`sync_regulations()` の参照先変更 |

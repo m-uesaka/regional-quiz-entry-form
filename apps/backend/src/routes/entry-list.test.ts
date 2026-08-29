@@ -261,14 +261,19 @@ describe.skipIf(!(await isDbReachable()))(
         values (${region.region_id}, ${email}, ${await hashPassword('password123')})
         returning id
       `;
-      await sql`
+      const [entry] = await sql`
         insert into entries (
           participant_id, tournament_id, name, furigana, display_name,
-          regulation_id, free_text, status, waitlist_position
+          free_text, status, waitlist_position
         ) values (
           ${participant.id}, ${tournamentId}, '山田太郎', 'ヤマダタロウ', '太郎',
-          ${regulationId}, '自由記述', ${status}, ${waitlistPosition}
+          '自由記述', ${status}, ${waitlistPosition}
         )
+        returning id
+      `;
+      await sql`
+        insert into entry_regulations (entry_id, regulation_id, tournament_id)
+        values (${entry.id}, ${regulationId}, ${tournamentId})
       `;
     }
 

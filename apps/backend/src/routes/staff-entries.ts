@@ -21,6 +21,12 @@ import {
   type FormFieldDefRow,
 } from '../lib/form-field-defs';
 import {buildEntriesCsv} from '../lib/entries-csv';
+import {
+  ENTRY_REGULATIONS_COLUMNS,
+  entryRegulationLabels,
+  sortEntryRegulations,
+  type EntryRegulationRow,
+} from '../lib/entry-regulations';
 import {fetchAllRows, type AllRowsResult} from '../lib/paged-select';
 import {internalError} from '../lib/errors';
 
@@ -28,12 +34,16 @@ const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 const EntryIdParamSchema = z.object({entryId: z.string().uuid()});
 
 const ENTRY_COLUMNS =
-  'id, tournament_id, name, furigana, display_name, regulation_id, ' +
+  'id, tournament_id, name, furigana, display_name, ' +
   'free_text, custom_field_values, status, waitlist_position, ' +
-  'participants(email), regulations(label)';
+  'participants(email), ' +
+  // An entry may claim several regulations, so they come through the
+  // `entry_regulations` join table rather than off the entry itself.
+  ENTRY_REGULATIONS_COLUMNS;
 
 const ENTRY_CSV_COLUMNS =
-  'name, furigana, display_name, custom_field_values, status';
+  'name, furigana, display_name, custom_field_values, status, ' +
+  ENTRY_REGULATIONS_COLUMNS;
 
 /** Shape of an `entries` row as selected for the CSV export. */
 interface EntryCsvRow {
@@ -42,6 +52,7 @@ interface EntryCsvRow {
   display_name: string;
   custom_field_values: CustomFieldValues;
   status: EntryStatus;
+  entry_regulations: EntryRegulationRow[];
 }
 
 // Excel on Windows reads a BOM-less file as the system's legacy encoding,
@@ -77,16 +88,16 @@ interface EntryRow {
   name: string;
   furigana: string;
   display_name: string;
-  regulation_id: string;
   free_text: string | null;
   custom_field_values: Record<string, string | string[]>;
   status: EntryStatus;
   waitlist_position: number | null;
   participants: {email: string} | null;
-  regulations: {label: string} | null;
+  entry_regulations: EntryRegulationRow[];
 }
 
 function rowToEntry(row: EntryRow): Entry {
+  const regulations = sortEntryRegulations(row.entry_regulations);
   return EntrySchema.parse({
     id: row.id,
     tournamentId: row.tournament_id,
@@ -94,8 +105,10 @@ function rowToEntry(row: EntryRow): Entry {
     furigana: row.furigana,
     displayName: row.display_name,
     email: row.participants?.email,
-    regulationId: row.regulation_id,
-    regulationLabel: row.regulations?.label,
+    regulationIds: regulations.map(regulation => regulation.regulation_id),
+    regulationLabels: regulations.map(
+      regulation => regulation.regulations.label,
+    ),
     freeText: row.free_text,
     customFieldValues: row.custom_field_values,
     status: row.status,
@@ -171,6 +184,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
           furigana: row.furigana,
           displayName: row.display_name,
           status: ENTRY_STATUS_LABELS[row.status],
+          regulationLabels: entryRegulationLabels(row.entry_regulations),
           customFieldValues: row.custom_field_values,
         })),
       );

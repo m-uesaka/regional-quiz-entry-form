@@ -401,14 +401,17 @@ describe.skipIf(!(await isDbReachable()))(
         )
         returning id
       `;
-      await sql`insert into entries ${sql({
+      const [entry] = await sql`insert into entries ${sql({
         participant_id: participant.id,
         tournament_id: tournamentId,
         name: '山田太郎',
         furigana: 'ヤマダタロウ',
         display_name: '太郎',
-        regulation_id: inUse.id,
-      })}`;
+      })} returning id`;
+      await sql`
+        insert into entry_regulations (entry_id, regulation_id, tournament_id)
+        values (${entry.id}, ${inUse.id}, ${tournamentId})
+      `;
 
       const res = await put(tournamentId, [{label: '別の部'}]);
       const body = (await res.json()) as Record<string, unknown>;

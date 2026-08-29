@@ -51,6 +51,16 @@ const ALREADY_ENTERED_ANOTHER_TOURNAMENT =
   'already entered another tournament in this region';
 
 /**
+ * What a refused `entry_regulations` write answers with. Reached only when
+ * a regulation the submission named stopped existing between
+ * `isRegulationSelectionAllowed()` and the write — a `sync_regulations()`
+ * call that dropped it — so it is a conflict with a concurrent change, not
+ * a malformed submission. Spelled out rather than passing the constraint
+ * violation through, so the entry form has something stable to translate.
+ */
+const REGULATION_NO_LONGER_AVAILABLE = 'regulation no longer available';
+
+/**
  * The SQLSTATE `check_region_dual_entry()` (migration 0016) raises. The
  * trigger only fires for a submission that slipped through the check below
  * while a concurrent one was being inserted, so it is a race, not a bug in
@@ -58,6 +68,17 @@ const ALREADY_ENTERED_ANOTHER_TOURNAMENT =
  * answer.
  */
 const REGION_DUAL_ENTRY_SQLSTATE = 'P0005';
+
+/**
+ * Postgres' own `foreign_key_violation`, which is what a regulation dropped
+ * by a concurrent `sync_regulations()` makes the `entry_regulations` write
+ * raise. It is the only failure of that write the participant can act on,
+ * so it alone earns `REGULATION_NO_LONGER_AVAILABLE`; anything else (a
+ * network blip, Supabase being down) is a server fault, and telling the
+ * participant their regulations changed would send them to reload a page
+ * that will fail again in exactly the same way.
+ */
+const FOREIGN_KEY_VIOLATION_SQLSTATE = '23503';
 
 interface ParticipantRow {
   id: string;
@@ -77,7 +98,10 @@ interface ExistingEntryRow {
   name: string;
   furigana: string;
   display_name: string;
-  regulation_id: string;
+  // The row's own regulation selection, as a to-many embed. Restored as a
+  // whole on rollback, because the reuse path replaces the set rather than
+  // editing it in place.
+  entry_regulations: Array<{regulation_id: string}>;
   free_text: string | null;
   // Same value union as `EntryInput['customFieldValues']`: every stored value
   // originated from that input shape.
@@ -90,9 +114,138 @@ interface ExistingEntryRow {
 
 /** The columns of `ExistingEntryRow`, for the snapshot select. */
 const EXISTING_ENTRY_COLUMNS =
-  'id, name, furigana, display_name, regulation_id, free_text, ' +
-  'custom_field_values, status, waitlist_position, email_verified_at, ' +
-  'cancelled_at';
+  'id, name, furigana, display_name, entry_regulations(regulation_id), ' +
+  'free_text, custom_field_values, status, waitlist_position, ' +
+  'email_verified_at, cancelled_at';
+
+/**
+ * Replaces an entry's regulation selection with `regulationIds`.
+ *
+ * Written as its own statement rather than alongside the entry: the
+ * Supabase client speaks REST, so there is no transaction to put both in.
+ * The delete comes first because the reuse path starts from a row that
+ * still carries the selection of the entry it was cancelled from — a
+ * re-entry's own choice replaces that set wholesale rather than merging
+ * into it.
+ *
+ * Duplicate ids are collapsed. A hand-made request could repeat one, and
+ * the `(entry_id, regulation_id)` primary key would answer that with a
+ * constraint violation rather than with the selection the participant
+ * plainly meant.
+ * @param db The Supabase client to write with.
+ * @param entryId The entry whose selection is being written.
+ * @param tournamentId The entry's tournament, carried on every row so the
+ *     composite foreign keys can tie entry and regulation to one tournament.
+ * @param regulationIds The regulations the entry claims.
+ */
+async function replaceEntryRegulations(
+  db: ReturnType<typeof createDbClient>,
+  entryId: string,
+  tournamentId: string,
+  regulationIds: readonly string[],
+): Promise<{error: {message: string; code: string} | null}> {
+  const {error: deleteError} = await db
+    .from('entry_regulations')
+    .delete()
+    .eq('entry_id', entryId);
+  if (deleteError) {
+    return {error: deleteError};
+  }
+  const {error} = await db.from('entry_regulations').insert(
+    [...new Set(regulationIds)].map(regulationId => ({
+      entry_id: entryId,
+      regulation_id: regulationId,
+      tournament_id: tournamentId,
+    })),
+  );
+  return {error};
+}
+
+/**
+ * Undoes a half-finished `createEntry()`, so a submission that failed after
+ * the `entries` row was written doesn't leave one behind. Leaving it in
+ * place would permanently block a retry — on the unique
+ * (participant_id, tournament_id) constraint for a new row, or on the
+ * 'already entered' check for a reused one — even though the participant
+ * never got an entry out of it.
+ * @param db The Supabase client to write with.
+ * @param entryId The entry written by the attempt being rolled back.
+ * @param tournamentId The entry's tournament.
+ * @param existingEntry The snapshot of the cancelled row the attempt reused,
+ *     or `null` when it inserted a fresh entry.
+ */
+async function rollbackEntry(
+  db: ReturnType<typeof createDbClient>,
+  entryId: string,
+  tournamentId: string,
+  existingEntry: ExistingEntryRow | null,
+): Promise<void> {
+  // The verification tokens go first: the entry can't be deleted while they
+  // reference it by foreign key, and on the reuse path dropping them is what
+  // stops a link that did go out from confirming an entry that has been put
+  // back into its cancellation.
+  await db.from('email_verification_tokens').delete().eq('entry_id', entryId);
+
+  if (!existingEntry) {
+    // `entry_regulations` references the entry `on delete cascade`, so the
+    // selection written for it goes with the row.
+    await db.from('entries').delete().eq('id', entryId);
+    return;
+  }
+
+  // A reused row is put back into the cancellation it came from rather than
+  // deleted, so a failed re-entry doesn't erase the record of the original
+  // entry. Every column the reuse update overwrote is restored from the
+  // snapshot taken before it: restoring only the status would still leave
+  // the cancelled entry permanently carrying the failed re-entry's answers
+  // and its cleared verification timestamp.
+  const {error: restoreError} = await db
+    .from('entries')
+    .update({
+      name: existingEntry.name,
+      furigana: existingEntry.furigana,
+      display_name: existingEntry.display_name,
+      free_text: existingEntry.free_text,
+      custom_field_values: existingEntry.custom_field_values,
+      status: existingEntry.status,
+      waitlist_position: existingEntry.waitlist_position,
+      email_verified_at: existingEntry.email_verified_at,
+      cancelled_at: existingEntry.cancelled_at,
+    })
+    .eq('id', entryId);
+  if (restoreError) {
+    console.error('failed to restore the cancelled entry', {
+      entryId,
+      error: restoreError.message,
+    });
+  }
+
+  // The regulation selection lives in its own table, so it is rewritten
+  // rather than restored by the update above.
+  //
+  // Both writes are logged rather than reported: the caller is already on a
+  // failure path and has an error of its own to answer with, and there is
+  // nothing further it could do about a rollback that didn't take. But a
+  // failure here is the one that leaves no trace anywhere else — the
+  // cancelled entry stays in the participant's history carrying none of the
+  // regulations it was entered under — so it must not pass silently.
+  const {error: regulationsError} = await replaceEntryRegulations(
+    db,
+    entryId,
+    tournamentId,
+    existingEntry.entry_regulations.map(row => row.regulation_id),
+  );
+  if (regulationsError) {
+    console.error('failed to restore the cancelled entry regulations', {
+      entryId,
+      regulationIds: existingEntry.entry_regulations.map(
+        row => row.regulation_id,
+      ),
+      code: regulationsError.code,
+      error: regulationsError.message,
+    });
+  }
+}
 
 /**
  * Runs the full entry-creation flow for `POST /tournaments/:tournamentId/entries`:
@@ -149,7 +302,7 @@ export async function createEntry(
     priorityStartsAt: regulation.priority_starts_at,
     priorityEndsAt: regulation.priority_ends_at,
   }));
-  if (!isRegulationSelectionAllowed(regulations, input.regulationId, now)) {
+  if (!isRegulationSelectionAllowed(regulations, input.regulationIds, now)) {
     return {
       ok: false,
       status: 403,
@@ -284,7 +437,6 @@ export async function createEntry(
     name: input.name,
     furigana: input.furigana,
     display_name: input.displayName,
-    regulation_id: input.regulationId,
     free_text: input.freeText ?? null,
     custom_field_values: input.customFieldValues,
     status: 'pending_verification',
@@ -323,46 +475,38 @@ export async function createEntry(
     };
   }
 
+  // The selection is written after the entry because it references it. The
+  // composite foreign keys behind `entry_regulations` are what refuse a
+  // regulation belonging to another tournament, so a submission that got
+  // past `isRegulationSelectionAllowed()` on a regulation list
+  // `sync_regulations()` deleted from under it is stopped here rather than
+  // stored — which is why a failure rolls the entry back instead of leaving
+  // one claiming nothing.
+  const {error: regulationsError} = await replaceEntryRegulations(
+    db,
+    entry.id,
+    tournamentId,
+    input.regulationIds,
+  );
+  if (regulationsError) {
+    console.error('failed to store the entry regulations', {
+      entryId: entry.id,
+      code: regulationsError.code,
+      error: regulationsError.message,
+    });
+    await rollbackEntry(db, entry.id, tournamentId, existingEntry);
+    return regulationsError.code === FOREIGN_KEY_VIOLATION_SQLSTATE
+      ? {ok: false, status: 409, error: REGULATION_NO_LONGER_AVAILABLE}
+      : {ok: false, status: 500, error: regulationsError.message};
+  }
+
   try {
     await sendVerificationEmail(env, entry.id, input.email);
   } catch (mailError) {
-    // Roll back the entry: leaving it in place would permanently block a
-    // retry — on the unique (participant_id, tournament_id) constraint for a
-    // new row, or on the 'already entered' check above for a reused one —
-    // even though the participant never received a usable verification link.
-    // The verification tokens go first: the entry can't be deleted while
-    // they reference it by foreign key, and on the reuse path dropping them
-    // is what stops a link that did go out from confirming an entry that has
-    // been put back into its cancellation.
-    await db
-      .from('email_verification_tokens')
-      .delete()
-      .eq('entry_id', entry.id);
-    if (existingEntry) {
-      // A reused row is put back into the cancellation it came from rather
-      // than deleted, so a failed re-entry doesn't erase the record of the
-      // original entry. Every column the reuse update overwrote is restored
-      // from the snapshot taken before it: restoring only the status would
-      // still leave the cancelled entry permanently carrying the failed
-      // re-entry's answers and its cleared verification timestamp.
-      await db
-        .from('entries')
-        .update({
-          name: existingEntry.name,
-          furigana: existingEntry.furigana,
-          display_name: existingEntry.display_name,
-          regulation_id: existingEntry.regulation_id,
-          free_text: existingEntry.free_text,
-          custom_field_values: existingEntry.custom_field_values,
-          status: existingEntry.status,
-          waitlist_position: existingEntry.waitlist_position,
-          email_verified_at: existingEntry.email_verified_at,
-          cancelled_at: existingEntry.cancelled_at,
-        })
-        .eq('id', entry.id);
-    } else {
-      await db.from('entries').delete().eq('id', entry.id);
-    }
+    // Rolled back because the participant never received a usable
+    // verification link, so the entry they can't confirm must not stand in
+    // the way of them trying again.
+    await rollbackEntry(db, entry.id, tournamentId, existingEntry);
     const message =
       mailError instanceof Error ? mailError.message : 'unknown error';
     return {
