@@ -62,7 +62,7 @@
 * [ ] Pages プロジェクト(production / staging)にカスタムドメインを割り当てる
 * [ ] GitHub の `staging` / `production` Environment に `FRONTEND_HOST` 変数を登録する
 * [ ] `wrangler.toml` の `[env.*.vars]` の `MAIL_FROM_ADDRESS` を実ドメインに差し替える
-* [ ] Pages プロジェクトの `BACKEND_URL` をその環境のバックエンド Worker のオリジンに合わせる(手順書 6.3)
+* [ ] Pages プロジェクトの `BACKEND_URL` がその環境のバックエンド Worker 自身のオリジン(`https://regional-quiz-backend[-staging].<subdomain>.workers.dev`)になっていることを確認する。フロントエンドのホスト名ではなく、ドメイン取得後も変更不要(手順書 6.3 / 6.4)
 
 #### テスト
 

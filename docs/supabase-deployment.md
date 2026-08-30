@@ -174,7 +174,7 @@ bunx wrangler pages project create regional-quiz-frontend --production-branch ma
 
 | 名前 | 種別 | 値 |
 | --- | --- | --- |
-| `BACKEND_URL` | 通常の変数 | その環境のバックエンド Worker のオリジン(例: `https://entry.regionalquiz.example`)。SSR の `handleFetch` が `/api/*` の転送先に使う |
+| `BACKEND_URL` | 通常の変数 | **その環境のバックエンド Worker 自身のオリジン**。production は `https://regional-quiz-backend.<subdomain>.workers.dev`、staging は `https://regional-quiz-backend-staging.<subdomain>.workers.dev`(`<subdomain>` は Cloudflare アカウントごとの workers.dev サブドメイン)。SSR の `handleFetch` が `/api/*` の転送先に使う。**フロントエンドのホスト名ではない**(6.4) |
 | `SESSION_SECRET` | シークレット | **同じ環境の Worker に登録したものと同一の値**。ズレるとログイン直後のセッションが読めず `/staff/*` がログイン画面に跳ね返される |
 | `PUBLIC_TURNSTILE_SITE_KEY` | 通常の変数 | 6.2 で作成した Turnstile widget の **Site Key**。エントリーフォームとパスワード再設定要求フォームのウィジェットが読む。未設定だとウィジェットが描画されず、トークンが無い送信をバックエンドが 400 で拒否するため、**この 2 つのフォームが誰にも使えなくなる** |
 
@@ -183,6 +183,8 @@ bunx wrangler pages secret put SESSION_SECRET --project-name regional-quiz-front
 ```
 
 `BACKEND_URL` は機密ではないので Dashboard の `Settings > Environment variables` から登録しても構いません。いずれも Pages プロジェクト側の設定で、`wrangler pages deploy` では上書きされません。
+
+`BACKEND_URL` に **workers.dev のオリジンを入れる**のは、これが route の有無に関わらず常に有効なオリジンだからです。`apps/backend/wrangler.toml` の `workers_dev = true` がそれを保証しています(このキーが無いと、6.4 で route を付けた瞬間に wrangler が workers.dev を無効化し、SSR の転送先が消えます)。6.4 で実ドメインを有効化しても `BACKEND_URL` は**変更不要**です。
 
 ### 6.4 `/api/*` をバックエンド Worker へ振り分ける
 
@@ -206,6 +208,8 @@ bunx wrangler deploy --env production \
 2. Pages プロジェクト(production / staging)にカスタムドメインを割り当てる(6.3)
 3. GitHub の `staging` / `production` Environment に `FRONTEND_HOST` 変数を登録する(6.5)
 4. デプロイし直す
+
+Pages の `BACKEND_URL`(6.3)はここでは触りません。SSR の転送先は route ではなく Worker 自身のオリジン、つまり workers.dev のままで正しく、`wrangler.toml` の `workers_dev = true` がそれを維持します。ここで `BACKEND_URL` をフロントエンドのホスト名に書き換える必要はありません。
 
 `FRONTEND_HOST` にはスキームもパスも付けず、**ホスト名だけ**を入れます(例: `entry.example.jp` / `staging.entry.example.jp`)。route のパターンと Pages のカスタムドメインは同一ホストでなければ意味がない(そのホストを Pages が持っているからこそ Workers route が優先される)ため、両者を別々の設定にせず 1 つの変数から導出しています。
 
