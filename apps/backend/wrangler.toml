@@ -2,6 +2,27 @@ name = "regional-quiz-backend"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
 
+# Keep the `*.workers.dev` subdomain enabled.
+#
+# Wrangler decides this as `config.workers_dev ?? routes.length === 0`, and
+# `deploy.yml` passes `--route "$FRONTEND_HOST/api/*"` as soon as an
+# environment has a `FRONTEND_HOST` variable. With no `workers_dev` key that
+# route alone would flip the default to `false`, and the deploy would then
+# POST `{enabled: false}` to the Worker's `/subdomain` endpoint, tearing down
+# `regional-quiz-backend[-staging].<subdomain>.workers.dev`.
+#
+# That origin is not spare. It is what the Pages projects' `BACKEND_URL`
+# points at (`docs/supabase-deployment.md` 6.3), and SSR rewrites every
+# `/api/*` call to it in `handleFetch` (`apps/frontend/src/hooks.server.ts`).
+# Losing it breaks every `load` and every form action — and the smoke test at
+# the end of the deploy would not notice, because it probes `/api/*` on the
+# frontend host, which goes through the new route and answers fine.
+#
+# Unlike `vars`, `routes`, `unsafe` and `queues` below, `workers_dev` *is* an
+# inheritable key, so this one line covers `[env.staging]` and
+# `[env.production]` both.
+workers_dev = true
+
 # `vars` and `routes` are non-inheritable keys: an `[env.*]` block that doesn't
 # restate them gets none at all rather than the top-level ones. So each named
 # environment below carries its own copy.
