@@ -223,8 +223,12 @@ jobs:
                 exit 0
                 ;;
             esac
-            echo "attempt $attempt/5: got '${body:-<no successful response>}'; retrying in 10s"
-            sleep 10
+            if [ "$attempt" -lt 5 ]; then
+              echo "attempt $attempt/5: got '${body:-<no successful response>}'; retrying in 10s"
+              sleep 10
+            else
+              echo "attempt $attempt/5: got '${body:-<no successful response>}'"
+            fi
           done
           echo "::error::/api/* on https://$FRONTEND_HOST does not reach the backend Worker. Check the Workers route and the Pages custom domain (docs/supabase-deployment.md 6.4)."
           exit 1
