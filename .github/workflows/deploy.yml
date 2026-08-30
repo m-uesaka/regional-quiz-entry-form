@@ -118,11 +118,54 @@ jobs:
       # put` and are left untouched by a deploy; only the non-secret `vars` in
       # `wrangler.toml` travel with the code. See `docs/supabase-deployment.md`
       # §6.2.
+      #
+      # `--route` is what makes the *deployed* frontend's same-origin `/api/*`
+      # calls reach this Worker. A Workers route wins over the Pages project
+      # serving the same hostname, so `/api/*` goes to Hono and every other
+      # path stays with Pages. Without it only the SSR calls work — those are
+      # rewritten to `BACKEND_URL` by `handleFetch` — and everything the
+      # browser requests itself (the CSV download links, client-side
+      # `createApiClient()`) answers 404 (#101).
+      #
+      # It is passed here rather than written into `wrangler.toml` because the
+      # hostname is deployment configuration, not code. Wrangler resolves a
+      # route's zone against the Cloudflare account at deploy time, so a
+      # committed `routes` entry naming a zone the account doesn't hold fails
+      # `wrangler deploy` outright — that breaks the pipeline rather than just
+      # the routing, which is why the entry sat commented out until now.
+      # Deploying a real domain is therefore a settings change: set the
+      # environment's `FRONTEND_HOST` variable, with nothing to edit here.
+      # Unset, this deploys with no route, exactly as it did before.
+      #
+      # `FRONTEND_URL` is overridden from the same variable instead of being
+      # read from `[env.*.vars]`, because it is `https://` + that same host by
+      # definition — it is what `src/lib/entry-verification.ts` and the two
+      # password-reset senders build their links from, and a link is only
+      # clickable if it points at the host the visitor is on. Kept as a
+      # separate setting it could disagree with the routed host, and the
+      # symptom of that is not a 404 anyone would notice on deploy: the site
+      # works, and only the verification and password-reset mail sends people
+      # to a hostname that isn't there. `--var` merges into the environment's
+      # vars rather than replacing them, so `MAIL_FROM_ADDRESS` still comes
+      # from `wrangler.toml` — and `TURNSTILE_SECRET_KEY`, which is a real
+      # secret and deliberately absent from `[env.*.vars]`, stays inherited.
+      # `MAIL_FROM_ADDRESS` is *not* derived here: the sending domain is
+      # whatever is verified with the mail provider, which need not be the
+      # host the site is served from.
       - name: Deploy the backend Worker
-        run: bunx wrangler deploy --env "$WRANGLER_ENV"
+        run: |
+          if [ -n "$FRONTEND_HOST" ]; then
+            bunx wrangler deploy --env "$WRANGLER_ENV" \
+              --route "$FRONTEND_HOST/api/*" \
+              --var "FRONTEND_URL:https://$FRONTEND_HOST"
+          else
+            echo "::warning::FRONTEND_HOST is not set for this environment; deploying with no /api/* route, so every API call the browser makes for itself will 404 (docs/supabase-deployment.md 6.4)"
+            bunx wrangler deploy --env "$WRANGLER_ENV"
+          fi
         working-directory: apps/backend
         env:
           WRANGLER_ENV: ${{ inputs.wrangler-env }}
+          FRONTEND_HOST: ${{ vars.FRONTEND_HOST }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
@@ -150,3 +193,40 @@ jobs:
           PAGES_PROJECT_NAME: ${{ inputs.pages-project-name }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # The route is the one part of this deploy that can report success and
+      # still not work. `wrangler deploy` is done once the route record exists;
+      # whether it actually wins over the Pages project on that hostname is
+      # only observable from outside, and the failure is silent — the site
+      # renders, because SSR never needed the route, and only the calls the
+      # browser makes for itself come back 404. That is precisely the state
+      # #101 was filed for, so it is checked here rather than left to be
+      # noticed by whoever first clicks a CSV download link.
+      #
+      # `/api/healthz` on the *frontend* origin is that observation. The Worker
+      # mounts everything under `basePath('/api')`, so this path exists only on
+      # the backend; Pages answers a SvelteKit 404 for it. The body is matched
+      # rather than just the status so that a 200 from some future catch-all on
+      # the Pages side cannot pass for a working route.
+      #
+      # Retried because a newly created route takes a moment to reach every
+      # edge, and failing the run for a condition that clears itself in seconds
+      # would make the gate worse than no gate.
+      - name: Smoke test the /api/* route
+        if: vars.FRONTEND_HOST != ''
+        run: |
+          for attempt in 1 2 3 4 5; do
+            body=$(curl -fsS -m 10 "https://$FRONTEND_HOST/api/healthz" || true)
+            case "$body" in
+              *'"ok":true'*)
+                echo "/api/* on https://$FRONTEND_HOST reaches the backend Worker"
+                exit 0
+                ;;
+            esac
+            echo "attempt $attempt/5: got '${body:-<no successful response>}'; retrying in 10s"
+            sleep 10
+          done
+          echo "::error::/api/* on https://$FRONTEND_HOST does not reach the backend Worker. Check the Workers route and the Pages custom domain (docs/supabase-deployment.md 6.4)."
+          exit 1
+        env:
+          FRONTEND_HOST: ${{ vars.FRONTEND_HOST }}

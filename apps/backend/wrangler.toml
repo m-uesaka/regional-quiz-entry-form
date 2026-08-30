@@ -123,23 +123,41 @@ dead_letter_queue = "regional-quiz-bulk-mail-dev-dlq"
 #
 # The frontend calls the API at a same-origin `/api/*` (`$lib/api.ts`), and
 # nothing in `apps/frontend` proxies that in production — `vite.config.ts`'s
-# proxy is `vite dev` only. What routes it is the `routes` entry below: a
-# Workers route wins over the Pages project serving the same hostname, so
-# `/api/*` reaches Hono while every other path stays with Pages.
+# proxy is `vite dev` only. What routes it is a Workers route: such a route
+# wins over the Pages project serving the same hostname, so `/api/*` reaches
+# Hono while every other path stays with Pages.
 #
-# It is commented out because `regionalquiz.example` is a placeholder, and a
-# `zone_name` the Cloudflare account doesn't hold fails `wrangler deploy`
-# outright — that would break the pipeline rather than the routing. Uncomment
-# it with the real hostname once the domain exists, and leave it where it is:
-# `routes` belongs directly under `[env.staging]`, not below the
-# `[env.staging.vars]` header, where TOML would read it as a var named
-# `routes`. Tracked as #101; see `docs/supabase-deployment.md` §6.4.
+# There is deliberately no `routes` key here. Wrangler resolves a route's zone
+# against the Cloudflare account at deploy time, so a committed entry naming a
+# zone the account doesn't hold fails `wrangler deploy` outright — the whole
+# pipeline breaks, not just the routing. The hostname is therefore deployment
+# configuration rather than code: `.github/workflows/deploy.yml` passes
+# `--route "$FRONTEND_HOST/api/*"` when the environment's `FRONTEND_HOST`
+# GitHub variable is set, and deploys with no route when it isn't. Setting up
+# a real domain is then a settings change, with nothing to edit here. See
+# `docs/supabase-deployment.md` §6.4 and #101.
+#
+# If you nonetheless add a `routes` key by hand, put it directly under
+# `[env.staging]`: below the `[env.staging.vars]` header TOML reads it as a
+# var named `routes`, and the deploy then goes out with no route and no
+# warning (#100).
 [env.staging]
 name = "regional-quiz-backend-staging"
-# routes = [
-#   {pattern = "staging.entry.regionalquiz.example/api/*", zone_name = "regionalquiz.example"},
-# ]
 
+# Both hostnames below are still the `regionalquiz.example` placeholder,
+# because no real domain has been registered yet (#101).
+#
+# `FRONTEND_URL` is the less pressing of the two: `deploy.yml` overrides it
+# with `--var FRONTEND_URL:"https://$FRONTEND_HOST"` whenever the
+# environment's `FRONTEND_HOST` variable is set, so the value here is only
+# what a hand-run `wrangler deploy --env staging` would ship. It is deliberate
+# that the routed host and the host the mail links point at come from one
+# setting — see the comment on that step.
+#
+# `MAIL_FROM_ADDRESS` has no such override and must be edited here, because
+# the sending domain is whichever one is verified with the mail provider and
+# need not be the host the site is served from. Until it is a real, verified
+# domain, every send fails.
 [env.staging.vars]
 MAIL_FROM_ADDRESS = "entry@staging.entry.regionalquiz.example"
 FRONTEND_URL = "https://staging.entry.regionalquiz.example"
@@ -214,13 +232,13 @@ dead_letter_queue = "regional-quiz-bulk-mail-staging-dlq"
 # `name` is set back to the unsuffixed one: without it, `--env production`
 # would deploy a Worker called `regional-quiz-backend-production`.
 #
-# `routes` carries the same caveats as `env.staging`'s above.
+# Like staging, this block carries no `routes` key: the `/api/*` route is
+# passed at deploy time from the environment's `FRONTEND_HOST` variable. See
+# the comment on `[env.staging]` above for why.
 [env.production]
 name = "regional-quiz-backend"
-# routes = [
-#   {pattern = "entry.regionalquiz.example/api/*", zone_name = "regionalquiz.example"},
-# ]
 
+# Placeholders, and overridden, exactly as in `[env.staging.vars]` above.
 [env.production.vars]
 MAIL_FROM_ADDRESS = "entry@entry.regionalquiz.example"
 FRONTEND_URL = "https://entry.regionalquiz.example"
