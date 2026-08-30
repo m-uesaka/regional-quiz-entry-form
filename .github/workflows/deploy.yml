@@ -152,8 +152,24 @@ jobs:
       # `MAIL_FROM_ADDRESS` is *not* derived here: the sending domain is
       # whatever is verified with the mail provider, which need not be the
       # host the site is served from.
+      #
+      # The variable is checked for shape before it is used, because neither of
+      # the two things it feeds rejects a malformed one. Entered with its
+      # scheme, `https://entry.example.jp` yields the route
+      # `https://entry.example.jp/api/*` and
+      # `FRONTEND_URL: https://https://entry.example.jp` — a dead link in every
+      # verification and password-reset mail, which is exactly the failure this
+      # step's own reasoning calls out as the one nobody notices on deploy. The
+      # bare-hostname requirement is stated in `docs/supabase-deployment.md`
+      # 6.4; this is what enforces it.
       - name: Deploy the backend Worker
         run: |
+          case "$FRONTEND_HOST" in
+            *://* | */* | *' '*)
+              echo "::error::FRONTEND_HOST must be a bare hostname, with no scheme, no path and no trailing slash (e.g. entry.example.jp), but is '$FRONTEND_HOST' (docs/supabase-deployment.md 6.4)"
+              exit 1
+              ;;
+          esac
           if [ -n "$FRONTEND_HOST" ]; then
             bunx wrangler deploy --env "$WRANGLER_ENV" \
               --route "$FRONTEND_HOST/api/*" \
