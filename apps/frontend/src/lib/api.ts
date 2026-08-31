@@ -26,3 +26,17 @@ export function createApiClient(fetchImpl: typeof fetch = fetch) {
 export function isUnauthorized(res: {status: number}): boolean {
   return res.status === 401;
 }
+
+/**
+ * Whether a backend answer is the 404 an id naming no tournament earns.
+ *
+ * Widened for the same reason as {@link isUnauthorized}: the 404 comes from
+ * the `requireOpenEntryPeriodOrStaff()` middleware rather than the route
+ * handler, so it is absent from the status union Hono builds the RPC
+ * client's response type out of.
+ *
+ * @param res The backend response.
+ */
+export function isNotFound(res: {status: number}): boolean {
+  return res.status === 404;
+}
