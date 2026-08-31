@@ -2,7 +2,7 @@ import type {Context} from 'hono';
 import {createMiddleware} from 'hono/factory';
 import {getCookie} from 'hono/cookie';
 import {isWithinEntryPeriod} from '@regional-quiz/shared';
-import type {StaffEnv} from '../types/env';
+import type {Env} from '../types/env';
 import {internalError} from '../lib/errors';
 import {
   fetchTournamentById,
@@ -13,9 +13,7 @@ import {
 import {isInScope, readStaffClaims, STAFF_SESSION_COOKIE} from './staff-auth';
 
 /** How a route says which tournament the request is about. */
-type TournamentResolver = (
-  c: Context<StaffEnv>,
-) => Promise<TournamentRow | null>;
+type TournamentResolver = (c: Context<Env>) => Promise<TournamentRow | null>;
 
 /** For routes keyed by a `:tournamentId` path parameter. */
 export const byTournamentIdParam: TournamentResolver = c =>
@@ -49,7 +47,10 @@ export const byTournamentSlugParams: TournamentResolver = c =>
  * this would refuse it.
  *
  * The resolved row is left on the context as `tournament`, so a handler
- * that needs it (the by-slug tournament read) doesn't query it twice.
+ * that needs it (the by-slug tournament read) doesn't query it twice, and
+ * the claims as `entryPeriodStaff` on the path that needed them, so a
+ * handler can tell a staff preview of an unpublished form from the public
+ * in-period read. Both are optional: neither is set on every path here.
  *
  * @param resolveTournament How to find the tournament this request is
  *     about, e.g. `byTournamentIdParam`.
@@ -57,7 +58,7 @@ export const byTournamentSlugParams: TournamentResolver = c =>
 export function requireOpenEntryPeriodOrStaff(
   resolveTournament: TournamentResolver,
 ) {
-  return createMiddleware<StaffEnv>(async (c, next) => {
+  return createMiddleware<Env>(async (c, next) => {
     let tournament: TournamentRow | null;
     try {
       tournament = await resolveTournament(c);
@@ -88,6 +89,7 @@ export function requireOpenEntryPeriodOrStaff(
     if (!staff || !isInScope(staff, tournament)) {
       return c.json({error: 'entry period closed'}, 403);
     }
+    c.set('entryPeriodStaff', staff);
     await next();
   });
 }
