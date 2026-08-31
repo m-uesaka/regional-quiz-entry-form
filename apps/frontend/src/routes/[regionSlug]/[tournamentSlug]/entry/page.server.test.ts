@@ -207,6 +207,20 @@ describe('entry +page.server load', () => {
     } satisfies Partial<HttpError>);
   });
 
+  // A stale staff cookie earns a 401 from that gate instead of the 403
+  // above. On this page it means the same thing -- not staff, period
+  // closed -- so it must not fall through to the bad-gateway branch.
+  it('throws 403 when the tournament read reports a stale staff session', async () => {
+    const event = buildEvent({
+      fetch: fakeApi({tournamentStatus: 401}),
+      staff: null,
+    });
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 403,
+    } satisfies Partial<HttpError>);
+  });
+
   it('returns the regulations and form field defs the form is built from', async () => {
     const event = buildEvent({fetch: fakeApi(), staff: null});
 

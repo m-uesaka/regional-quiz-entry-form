@@ -78,13 +78,20 @@ export function requireOpenEntryPeriodOrStaff(
       return;
     }
 
-    const staff = await readStaffClaims(
-      getCookie(c, STAFF_SESSION_COOKIE),
-      c.env.SESSION_SECRET,
-    );
-    // Answered as 403 rather than 401 even for a caller with no session at
-    // all: the resource is not one a login would generally unlock, and the
-    // entry form's own error mapping already renders this `error` string as
+    const cookie = getCookie(c, STAFF_SESSION_COOKIE);
+    const staff = await readStaffClaims(cookie, c.env.SESSION_SECRET);
+    // A cookie that no longer verifies is a session that died, not a caller
+    // who never had one -- and the difference matters to the staff screens
+    // behind this gate, which check their claims before fetching and can
+    // only be caught out by a token that expires in between. They read this
+    // 401 as "log in again"; a 403 would strand them on 「権限がありません」
+    // with a working account.
+    if (cookie && !staff) {
+      return c.json({error: 'staff session expired'}, 401);
+    }
+    // Having no session at all is answered 403 rather than 401 instead: the
+    // resource is not one a login would generally unlock, and the entry
+    // form's own error mapping already renders this `error` string as
     // 「エントリー期間外です」.
     if (!staff || !isInScope(staff, tournament)) {
       return c.json({error: 'entry period closed'}, 403);

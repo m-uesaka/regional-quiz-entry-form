@@ -58,7 +58,7 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 | `requireStaffForTournament()` | 有効な `staff_session`。`general` なら無条件通過、`regional` なら `:tournamentId` の大会が担当範囲(`region_id` と `type` が両方一致)であること | 401 / 403 / 500 |
 | `requireStaffForEntry()` | 同上。ただし `:entryId` から `tournament_id` を辿って範囲を判定する | 401 / 403 / 500 |
 | `requireParticipant()` | 有効な `participant_session`。加えて `pwdChangedAt` クレームが `participants.password_changed_at` と一致すること(パスワード再設定でセッションが切れる) | 401 / 500 |
-| `requireOpenEntryPeriodOrStaff()` | エントリー期間中なら**誰でも通過**。期間外は担当スタッフ(`general`、または `region_id` と `type` が一致する `regional`)のみ | 403 / 404 / 500 |
+| `requireOpenEntryPeriodOrStaff()` | エントリー期間中なら**誰でも通過**。期間外は担当スタッフ(`general`、または `region_id` と `type` が一致する `regional`)のみ | 401 / 403 / 404 / 500 |
 
 #### `requireOpenEntryPeriodOrStaff()`(エントリー期間外アクセス制御)
 
@@ -75,8 +75,11 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 1. リクエストが指す大会を引く(`:tournamentId` から直接、または `:regionSlug` の地域を経由して)。見つからなければ **404** `{"error": "tournament not found"}`
 2. `isWithinEntryPeriod()`(`packages/shared`)が真なら、セッションを見ずに通過
 3. 期間外なら `staff_session` を読み、**担当スタッフでなければ 403** `{"error": "entry period closed"}`
+4. ただし `staff_session` が**付いているのに検証できなかった**場合(期限切れ・改竄)は 403 ではなく **401** `{"error": "staff session expired"}`。セッションが切れただけのスタッフをログイン画面に戻すためで、セッションを最初から持たない訪問者(403)と区別する必要があるのはこの一点です
 
 「スタッフであること」では足りない点が要点です。担当外の地域スタッフには、他地域の未公開フォームを読む理由がありません。範囲の規則は `packages/shared/src/logic/staff-scope.ts` の `canPreviewTournament()` にあり、バックエンドの `isInScope()` とフロントエンドのエントリーページ `load` が**同じ関数**を使います。
+
+401 を分けるのはフロントエンドの都合です。スタッフ画面は `hooks.server.ts` が読んだクレームを見てから API を叩くので、そこで弾けないのは「クレーム確認の直後にトークンが失効した」場合だけです。これを 403 で返すと、担当範囲は正しいのに「権限がありません」で行き止まりになります。
 
 公開エントリーリスト(§8)には**掛けていません**。エントリーリストは公開された結果であり、最も読まれるのは期間が終わった後だからです。そのためリスト画面用にスラッグ引きの `GET /api/tournaments/:regionSlug/:tournamentSlug/entry-list` を用意しています(大会取得 API 経由で UUID を解決すると、期間終了後にこのゲートに阻まれるため)。
 
@@ -332,6 +335,7 @@ if ('yaml' in body) {
 
 - パス: `tournamentSlug` は `'saikyoi' | 'shinjinou'`
 - `200`: `Tournament`
+- `401`: `{"error": "staff session expired"}` — `staff_session` はあるが検証できない(期限切れ等)
 - `403`: `{"error": "entry period closed"}` — 期間外で、担当スタッフのセッションが無い
 - `404`: `{"error": "tournament not found"}`(地域が無い場合も同じ応答)
 - `500`
@@ -344,6 +348,7 @@ if ('yaml' in body) {
 
 - `200`: `Regulation[]` — `{id, tournamentId, label, priorityStartsAt, priorityEndsAt, displayOrder}`
 - `400`: `:tournamentId` が UUID でない
+- `401`: `{"error": "staff session expired"}` — `staff_session` はあるが検証できない(期限切れ等)
 - `403`: `{"error": "entry period closed"}` — 期間外で、担当スタッフのセッションが無い
 - `404`: `{"error": "tournament not found"}` — ゲートが大会を引けなかった
 - `500`
@@ -479,6 +484,7 @@ if ('yaml' in body) {
 
 - `200`: `FormFieldDef[]` — `{fieldKey, label, fieldType, required, options, displayOrder}`
 - `400`: `:tournamentId` が UUID でない
+- `401`: `{"error": "staff session expired"}` — `staff_session` はあるが検証できない(期限切れ等)
 - `403`: `{"error": "entry period closed"}` — 期間外で、担当スタッフのセッションが無い
 - `404`: `{"error": "tournament not found"}` — ゲートが大会を引けなかった
 - `500`

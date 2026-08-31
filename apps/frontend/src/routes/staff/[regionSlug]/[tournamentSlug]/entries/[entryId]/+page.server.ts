@@ -1,6 +1,6 @@
 import {error, redirect} from '@sveltejs/kit';
 import {TournamentTypeSchema} from '@regional-quiz/shared';
-import {createApiClient} from '$lib/api';
+import {createApiClient, isUnauthorized} from '$lib/api';
 import {staffLoginPath} from '$lib/server/staff-login';
 import type {PageServerLoad} from './$types';
 
@@ -30,6 +30,13 @@ export const load: PageServerLoad = async ({params, fetch, locals, url}) => {
   if (!tournamentRes.ok) {
     if (tournamentRes.status === 404) {
       throw error(404, '大会が見つかりません');
+    }
+    // The claims check above cannot rule this out: the JWT may expire
+    // between `hooks.server.ts` parsing it and this request reaching the
+    // backend. The gate tells that apart from a caller who never had a
+    // session, so a working account isn't stranded on the 403 below.
+    if (isUnauthorized(tournamentRes)) {
+      redirect(303, staffLoginPath(url));
     }
     // Outside the entry period the backend hands the tournament only to the
     // staff who cover it (`middleware/entry-period.ts`), so an out-of-scope

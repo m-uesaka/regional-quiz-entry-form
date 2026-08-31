@@ -179,4 +179,19 @@ describe('staff entries +page.server load', () => {
       status: 403,
     } satisfies Partial<HttpError>);
   });
+
+  // The same read answers 401 when the session died between the claims
+  // check above and the request landing -- an account that still covers
+  // this tournament, so it earns the login screen and not that 403.
+  it('redirects to the login screen when the tournament read reports an expired session', async () => {
+    const event = buildEvent({
+      fetch: fakeFetch({tournamentStatus: 401}),
+      staff: GENERAL_STAFF,
+    });
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 303,
+      location: LOGIN_REDIRECT,
+    } satisfies Partial<Redirect>);
+  });
 });

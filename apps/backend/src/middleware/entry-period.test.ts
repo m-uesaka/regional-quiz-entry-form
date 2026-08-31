@@ -12,6 +12,7 @@ import {
 import {requireOpenEntryPeriodOrStaff} from './entry-period';
 
 const SESSION_SECRET = 'test-session-secret';
+const OTHER_REGION_ID = '77777777-7777-7777-7777-777777777777';
 
 // The gate resolves the tournament itself, so a resolver handed the row
 // outright is all these need — no Supabase, and no route to mount under.
@@ -42,6 +43,47 @@ async function regionalStaffCookie(regionId: string): Promise<string> {
   );
   return `staff_session=${token}`;
 }
+
+describe('requireOpenEntryPeriodOrStaff (refusals)', () => {
+  it('refuses a caller with no session outside the period with 403', async () => {
+    const res = await gatedApp(closedEntryPeriodTournament()).request(
+      '/',
+      {},
+      env,
+    );
+
+    expect(res.status).toBe(403);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'entry period closed',
+    });
+  });
+
+  // Told apart from the case above so the staff screens behind this gate can
+  // send a staff member whose token expired mid-session back to the login
+  // form, rather than to a 「権限がありません」 their account doesn't deserve.
+  it('refuses a session that no longer verifies with 401', async () => {
+    const res = await gatedApp(closedEntryPeriodTournament()).request(
+      '/',
+      {headers: {cookie: 'staff_session=not-a-valid-token'}},
+      env,
+    );
+
+    expect(res.status).toBe(401);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'staff session expired',
+    });
+  });
+
+  it("refuses another region's staff with 403", async () => {
+    const res = await gatedApp(closedEntryPeriodTournament()).request(
+      '/',
+      {headers: {cookie: await regionalStaffCookie(OTHER_REGION_ID)}},
+      env,
+    );
+
+    expect(res.status).toBe(403);
+  });
+});
 
 describe('requireOpenEntryPeriodOrStaff (context variables)', () => {
   it('leaves entryPeriodStaff unset while the entry period is open', async () => {

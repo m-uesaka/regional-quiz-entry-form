@@ -9,7 +9,7 @@ import {
   type Regulation,
   type Tournament,
 } from '@regional-quiz/shared';
-import {createApiClient} from '$lib/api';
+import {createApiClient, isUnauthorized} from '$lib/api';
 import {readTurnstileToken, TURNSTILE_TOKEN_FIELD} from '$lib/turnstile';
 import {
   customFieldErrors,
@@ -122,8 +122,11 @@ async function fetchTournament(
     // The backend applies the same entry-period rule this page does
     // (`middleware/entry-period.ts`), and answers before the tournament is
     // readable at all -- so outside the period this is what a visitor with
-    // no staff session, or one covering another region, actually gets.
-    if (res.status === 403) {
+    // no staff session, or one covering another region, actually gets. A
+    // stale staff cookie earns a 401 there instead, which on this page is
+    // the same answer: whoever is holding it is not staff any more, and the
+    // period is closed.
+    if (res.status === 403 || isUnauthorized(res)) {
       throw error(403, 'エントリー期間外です');
     }
     throw error(502, '大会情報の取得に失敗しました');
