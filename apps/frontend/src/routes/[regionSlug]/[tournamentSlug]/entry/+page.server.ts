@@ -1,5 +1,6 @@
 import {error, fail} from '@sveltejs/kit';
 import {
+  canPreviewTournament,
   EntryInputSchema,
   findCustomFieldValuesErrors,
   isWithinEntryPeriod,
@@ -118,6 +119,13 @@ async function fetchTournament(
     if (res.status === 404) {
       throw error(404, '大会が見つかりません');
     }
+    // The backend applies the same entry-period rule this page does
+    // (`middleware/entry-period.ts`), and answers before the tournament is
+    // readable at all -- so outside the period this is what a visitor with
+    // no staff session, or one covering another region, actually gets.
+    if (res.status === 403) {
+      throw error(403, 'エントリー期間外です');
+    }
     throw error(502, '大会情報の取得に失敗しました');
   }
   return res.json();
@@ -169,9 +177,13 @@ async function fetchFormFieldDefs(
 export const load: PageServerLoad = async ({params, fetch, locals}) => {
   const tournament = await fetchTournament(params, fetch);
 
+  // Holding *a* staff session is not enough: the requirement grants the
+  // out-of-period form to the tournament's own 地域スタッフ and to 統括
+  // スタッフ, not to a regional account covering somewhere else. The rule is
+  // the one the backend enforces, imported rather than restated.
   if (
     !isWithinEntryPeriod(tournament.entryOpensAt, tournament.entryClosesAt) &&
-    !locals.staff
+    !canPreviewTournament(locals.staff, tournament)
   ) {
     throw error(403, 'エントリー期間外です');
   }

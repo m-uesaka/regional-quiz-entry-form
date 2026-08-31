@@ -1,5 +1,6 @@
 import type {StaffClaims} from '@regional-quiz/shared';
 import type {BulkMailMessage} from '../lib/bulk-mail-queue';
+import type {TournamentRow} from '../lib/tournaments';
 
 export interface Bindings {
   SUPABASE_URL: string;
@@ -60,6 +61,11 @@ export interface Bindings {
 
 export interface Variables {
   requestId: string;
+  // Set by `requireOpenEntryPeriodOrStaff()` (`middleware/entry-period.ts`)
+  // with the row it had to read anyway, so the handler behind it doesn't
+  // fetch the same tournament a second time. Optional because most routes
+  // never run that middleware.
+  tournament?: TournamentRow;
 }
 
 export interface Env {

@@ -44,6 +44,8 @@ const ENTRIES: Entry[] = [
 function fakeFetch(options: {
   tournament?: Tournament;
   tournamentOk?: boolean;
+  /** The tournament lookup's status, for the refusals `tournamentOk` can't say. */
+  tournamentStatus?: number;
   entries?: Entry[];
   entriesStatus?: number;
 }): typeof fetch {
@@ -56,7 +58,9 @@ function fakeFetch(options: {
       });
     }
     return new Response(JSON.stringify(options.tournament ?? {}), {
-      status: options.tournamentOk === false ? 404 : 200,
+      status:
+        options.tournamentStatus ??
+        (options.tournamentOk === false ? 404 : 200),
       headers: {'Content-Type': 'application/json'},
     });
   }) as typeof fetch;
@@ -159,6 +163,20 @@ describe('staff entries +page.server load', () => {
 
     await expect(load(event)).rejects.toMatchObject({
       status: 502,
+    } satisfies Partial<HttpError>);
+  });
+
+  // Outside the entry period the backend hands the tournament only to the
+  // staff who cover it, so an out-of-scope account is refused on that read
+  // rather than on the entries read behind it.
+  it('throws 403 when the tournament read is refused as out of scope', async () => {
+    const event = buildEvent({
+      fetch: fakeFetch({tournamentStatus: 403}),
+      staff: GENERAL_STAFF,
+    });
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 403,
     } satisfies Partial<HttpError>);
   });
 });

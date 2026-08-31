@@ -3,44 +3,24 @@ import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
 import {
   TournamentCreateInputSchema,
-  TournamentSchema,
   TournamentTypeSchema,
   TournamentUpdateInputSchema,
-  type Tournament,
 } from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
+import {
+  byTournamentSlugParams,
+  requireOpenEntryPeriodOrStaff,
+} from '../middleware/entry-period';
 import {createDbClient} from '../lib/db';
 import {internalError} from '../lib/errors';
+import {rowToTournament, type TournamentRow} from '../lib/tournaments';
 
 const TournamentIdParamSchema = z.object({id: z.string().uuid()});
 const TournamentBySlugParamSchema = z.object({
   regionSlug: z.string(),
   tournamentSlug: TournamentTypeSchema,
 });
-
-/** Shape of a `tournaments` row as returned by Supabase (snake_case). */
-interface TournamentRow {
-  id: string;
-  region_id: string;
-  type: string;
-  name: string;
-  capacity: number | null;
-  entry_opens_at: string;
-  entry_closes_at: string;
-}
-
-function rowToTournament(row: TournamentRow): Tournament {
-  return TournamentSchema.parse({
-    id: row.id,
-    regionId: row.region_id,
-    type: row.type,
-    name: row.name,
-    capacity: row.capacity,
-    entryOpensAt: row.entry_opens_at,
-    entryClosesAt: row.entry_closes_at,
-  });
-}
 
 /**
  * Maps the camelCase fields the client sends to the snake_case columns
@@ -134,41 +114,21 @@ export const tournamentsRoute = new Hono<StaffEnv>()
       return c.json(rowToTournament(data as TournamentRow));
     },
   )
+  // Public while the entry period is open, and the tournament's own staff
+  // only outside it -- the gate is the middleware, which has already read
+  // (and rejected, or stashed) the tournament by the time this runs.
   .get(
     '/:regionSlug/:tournamentSlug',
     zValidator('param', TournamentBySlugParamSchema),
+    requireOpenEntryPeriodOrStaff(byTournamentSlugParams),
     async c => {
-      const {regionSlug, tournamentSlug} = c.req.valid('param');
-      const db = createDbClient(c.env);
-      const {data: region, error: regionError} = await db
-        .from('regions')
-        .select('id')
-        .eq('slug', regionSlug)
-        .maybeSingle();
-      if (regionError) {
-        return c.json(
-          internalError('failed to read the region', regionError),
-          500,
-        );
-      }
-      if (!region) {
-        return c.json({error: 'tournament not found'}, 404);
-      }
-      const {data: tournament, error: tournamentError} = await db
-        .from('tournaments')
-        .select('*')
-        .eq('region_id', region.id)
-        .eq('type', tournamentSlug)
-        .maybeSingle();
-      if (tournamentError) {
-        return c.json(
-          internalError('failed to read the tournament', tournamentError),
-          500,
-        );
-      }
+      const tournament = c.get('tournament');
       if (!tournament) {
+        // Unreachable: the middleware answers 404 itself when there is no
+        // such tournament. Written out rather than asserted so the handler
+        // typechecks without a non-null assertion.
         return c.json({error: 'tournament not found'}, 404);
       }
-      return c.json(rowToTournament(tournament as TournamentRow));
+      return c.json(rowToTournament(tournament));
     },
   );

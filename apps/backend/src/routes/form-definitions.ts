@@ -7,6 +7,10 @@ import {
 } from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
+import {
+  byTournamentIdParam,
+  requireOpenEntryPeriodOrStaff,
+} from '../middleware/entry-period';
 import {createDbClient} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {
@@ -23,13 +27,17 @@ import {
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 
 // The staff-only upload gets `requireGeneralStaff()` attached per-route
-// rather than through `.use('*', ...)`, because the read below is public:
-// the entry form has to render a tournament's custom fields for a visitor
-// with no session, and a definition carries no personal data.
+// rather than through `.use('*', ...)`, because the read below is public
+// while the entry period is open: the entry form has to render a
+// tournament's custom fields for a visitor with no session, and a
+// definition carries no personal data. Outside the period the definitions
+// *are* the unpublished form, so that read is gated the same way the
+// tournament and regulation reads are.
 export const formDefinitionsRoute = new Hono<StaffEnv>()
   .get(
     '/:tournamentId',
     zValidator('param', TournamentIdParamSchema),
+    requireOpenEntryPeriodOrStaff(byTournamentIdParam),
     async c => {
       const db = createDbClient(c.env);
       const {data, error} = await db

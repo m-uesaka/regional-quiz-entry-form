@@ -29,6 +29,12 @@ export const load: PageServerLoad = async ({params, fetch, locals, url}) => {
     if (tournamentRes.status === 404) {
       throw error(404, '大会が見つかりません');
     }
+    // Outside the entry period the backend hands the tournament only to the
+    // staff who cover it (`middleware/entry-period.ts`), so an out-of-scope
+    // account is refused here rather than one request later.
+    if (tournamentRes.status === 403) {
+      throw error(403, 'この大会のエントリーを閲覧する権限がありません');
+    }
     throw error(502, '大会情報の取得に失敗しました');
   }
   const tournament = await tournamentRes.json();
