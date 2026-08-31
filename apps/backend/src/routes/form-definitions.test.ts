@@ -3,8 +3,15 @@ import {SQL} from 'bun';
 import {sign} from 'hono/jwt';
 import type {TournamentType} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
+import type {TournamentRow} from '../lib/tournaments';
 import {app} from '../index';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {
+  closedEntryPeriodTournament,
+  openEntryPeriodTournament,
+  TEST_REGION_ID,
+  tournamentAwareFetch,
+} from '../test-support/tournaments';
 
 // Local Supabase stack (`supabase start`), same convention as
 // `lib/db-schema.test.ts`. Skipped automatically when it isn't reachable,
@@ -157,14 +164,20 @@ describe('form-definitions routes (request validation)', () => {
 // `.from('form_field_defs').select(...)` (same convention as
 // `routes/entry-list.test.ts`'s `mockEntriesFetch`), so these run
 // unconditionally in CI without a local Supabase stack.
-function mockFormFieldDefsFetch(rows: unknown[]): void {
-  globalThis.fetch = (() =>
-    Promise.resolve(Response.json(rows))) as unknown as typeof fetch;
+// The tournament the entry-period gate reads before the handler runs is
+// answered by `tournamentAwareFetch`, with the period open unless a test
+// says otherwise.
+function mockFormFieldDefsFetch(
+  rows: unknown[],
+  tournament: TournamentRow | null = openEntryPeriodTournament(),
+): void {
+  globalThis.fetch = tournamentAwareFetch(tournament, (() =>
+    Promise.resolve(Response.json(rows))) as unknown as typeof fetch);
 }
 
 describe('GET /form-definitions/:tournamentId (mocked Supabase)', () => {
   const originalFetch = globalThis.fetch;
-  const tournamentId = '12345678-1234-1234-1234-123456789012';
+  const tournamentId = openEntryPeriodTournament().id;
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
@@ -231,6 +244,78 @@ describe('GET /form-definitions/:tournamentId (mocked Supabase)', () => {
 
     expect(res.status).toBe(200);
     expect(body).toEqual([]);
+  });
+
+  it('returns 404 for a tournament that does not exist', async () => {
+    mockFormFieldDefsFetch([], null);
+
+    const res = await app.request(
+      `/api/form-definitions/${tournamentId}`,
+      {},
+      env,
+    );
+
+    expect(res.status).toBe(404);
+  });
+
+  // The definitions are the entry form's custom fields, which the
+  // requirement keeps to staff outside the entry period -- see
+  // `middleware/entry-period.ts`.
+  it('returns 403 outside the entry period without a session', async () => {
+    mockFormFieldDefsFetch([], closedEntryPeriodTournament());
+
+    const res = await app.request(
+      `/api/form-definitions/${tournamentId}`,
+      {},
+      env,
+    );
+
+    expect(res.status).toBe(403);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'entry period closed',
+    });
+  });
+
+  it('serves the definitions outside the entry period to its own regional staff', async () => {
+    mockFormFieldDefsFetch([], closedEntryPeriodTournament());
+
+    const res = await app.request(
+      `/api/form-definitions/${tournamentId}`,
+      {headers: {cookie: await regionalStaffCookie(TEST_REGION_ID)}},
+      env,
+    );
+
+    expect(res.status).toBe(200);
+  });
+
+  it('serves the definitions outside the entry period to general staff', async () => {
+    mockFormFieldDefsFetch([], closedEntryPeriodTournament());
+
+    const res = await app.request(
+      `/api/form-definitions/${tournamentId}`,
+      {headers: {cookie: await generalStaffCookie()}},
+      env,
+    );
+
+    expect(res.status).toBe(200);
+  });
+
+  it("returns 403 outside the entry period for another region's staff", async () => {
+    mockFormFieldDefsFetch([], closedEntryPeriodTournament());
+
+    const res = await app.request(
+      `/api/form-definitions/${tournamentId}`,
+      {
+        headers: {
+          cookie: await regionalStaffCookie(
+            '99999999-9999-9999-9999-999999999999',
+          ),
+        },
+      },
+      env,
+    );
+
+    expect(res.status).toBe(403);
   });
 });
 

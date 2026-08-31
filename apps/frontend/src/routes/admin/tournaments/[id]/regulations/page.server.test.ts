@@ -5,8 +5,9 @@ import {actions, load} from './+page.server';
 
 const TOURNAMENT_ID = '00000000-0000-0000-0000-000000000001';
 
-// `load` reads the tournament list to settle that `[id]` names a tournament
-// at all: the regulations endpoint answers `200 []` for any well-formed id.
+// `load` reads the tournament list alongside the regulations: the gate in
+// front of the regulations endpoint answers an expired session with 403, so
+// the staff-only list is what surfaces the 401 a login redirect needs.
 const TOURNAMENT: Tournament = {
   id: TOURNAMENT_ID,
   regionId: '00000000-0000-0000-0000-000000000021',
@@ -51,6 +52,7 @@ function fakeFetch(
     putStatus?: number;
     putError?: string;
     tournaments?: Tournament[];
+    regulationsStatus?: number;
   } = {},
   log: FetchLog = {putBodies: []},
 ): typeof fetch {
@@ -64,7 +66,10 @@ function fakeFetch(
       );
     }
     if (String(input).endsWith('/regulations')) {
-      return jsonResponse([GENERAL, STUDENT]);
+      const status = options.regulationsStatus ?? 200;
+      return status < 400
+        ? jsonResponse([GENERAL, STUDENT])
+        : jsonResponse({error: 'tournament not found'}, status);
     }
     return jsonResponse(options.tournaments ?? [TOURNAMENT]);
   }) as typeof fetch;
@@ -151,10 +156,16 @@ describe('admin regulations +page.server load', () => {
     } satisfies Partial<HttpError>);
   });
 
-  // The regulations endpoint is public and answers `200 []` for a
-  // well-formed id that names nothing, so without this a stale or mistyped
-  // `[id]` rendered a working-looking empty form that only failed on save.
-  it('reports an id that names no tournament as not found', async () => {
+  // The gate in front of the regulations endpoint answers an unknown id with
+  // 404, which has to be told apart from a backend that is merely down —
+  // otherwise a stale or mistyped `[id]` reads as a bad gateway.
+  it('reports the 404 the regulations gate answers as not found', async () => {
+    await expect(
+      load(buildLoadEvent(fakeFetch({regulationsStatus: 404}))),
+    ).rejects.toMatchObject({status: 404} satisfies Partial<HttpError>);
+  });
+
+  it('reports an id absent from the tournament list as not found', async () => {
     await expect(
       load(buildLoadEvent(fakeFetch({tournaments: []}))),
     ).rejects.toMatchObject({status: 404} satisfies Partial<HttpError>);

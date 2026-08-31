@@ -1,17 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import type {HttpError} from '@sveltejs/kit';
-import type {EntryListItem, Tournament} from '@regional-quiz/shared';
+import type {EntryListItem} from '@regional-quiz/shared';
 import {load} from './+page.server';
-
-const TOURNAMENT: Tournament = {
-  id: '00000000-0000-0000-0000-000000000001',
-  regionId: '00000000-0000-0000-0000-000000000002',
-  type: 'saikyoi',
-  name: 'テスト大会',
-  capacity: null,
-  entryOpensAt: '2020-01-01T00:00:00.000Z',
-  entryClosesAt: '2020-02-01T00:00:00.000Z',
-};
 
 const ENTRIES: EntryListItem[] = [
   {displayName: '参加者A', status: 'confirmed', waitlistPosition: null},
@@ -19,28 +9,23 @@ const ENTRIES: EntryListItem[] = [
 ];
 
 /**
- * Builds a fake `fetch` that dispatches by URL path, mirroring the two
- * backend calls `load` makes (tournament lookup, then entry-list).
+ * Builds a fake `fetch` for the single backend call `load` makes: the
+ * slug-keyed entry list. The URL is matched rather than answered blindly,
+ * so a regression that goes back through the entry-period-gated
+ * `GET /tournaments/:regionSlug/:tournamentSlug` — which stops answering
+ * this page once entries close — fails these tests instead of passing.
  */
 function fakeFetch(options: {
-  tournament?: Tournament;
-  tournamentOk?: boolean;
   entries?: EntryListItem[];
-  entriesOk?: boolean;
+  status?: number;
 }): typeof fetch {
   return (async input => {
     const url = typeof input === 'string' ? input : input.toString();
-    // Match the entry-list call by its resolved tournament UUID (not a
-    // loose substring) so a regression that sends the slug instead of the
-    // UUID as `:tournamentId` fails this test instead of silently passing.
-    if (url.includes(`/${TOURNAMENT.id}/entry-list`)) {
-      return new Response(JSON.stringify(options.entries ?? []), {
-        status: options.entriesOk === false ? 502 : 200,
-        headers: {'Content-Type': 'application/json'},
-      });
+    if (!url.includes('/tokyo/saikyoi/entry-list')) {
+      throw new Error(`unexpected request to ${url}`);
     }
-    return new Response(JSON.stringify(options.tournament ?? {}), {
-      status: options.tournamentOk === false ? 404 : 200,
+    return new Response(JSON.stringify(options.entries ?? []), {
+      status: options.status ?? 200,
       headers: {'Content-Type': 'application/json'},
     });
   }) as typeof fetch;
@@ -62,16 +47,14 @@ function buildEvent(options: {
 
 describe('list +page.server load', () => {
   it('returns the entry list for a valid tournament', async () => {
-    const event = buildEvent({
-      fetch: fakeFetch({tournament: TOURNAMENT, entries: ENTRIES}),
-    });
+    const event = buildEvent({fetch: fakeFetch({entries: ENTRIES})});
 
     await expect(load(event)).resolves.toEqual({entries: ENTRIES});
   });
 
   it('throws 404 when the tournament slug is not a valid tournament type', async () => {
     const event = buildEvent({
-      fetch: fakeFetch({tournament: TOURNAMENT, entries: ENTRIES}),
+      fetch: fakeFetch({entries: ENTRIES}),
       tournamentSlug: 'nope',
     });
 
@@ -81,9 +64,7 @@ describe('list +page.server load', () => {
   });
 
   it('throws 404 when the tournament is not found', async () => {
-    const event = buildEvent({
-      fetch: fakeFetch({tournamentOk: false}),
-    });
+    const event = buildEvent({fetch: fakeFetch({status: 404})});
 
     await expect(load(event)).rejects.toMatchObject({
       status: 404,
@@ -91,9 +72,7 @@ describe('list +page.server load', () => {
   });
 
   it('throws 502 when the entry-list request fails', async () => {
-    const event = buildEvent({
-      fetch: fakeFetch({tournament: TOURNAMENT, entriesOk: false}),
-    });
+    const event = buildEvent({fetch: fakeFetch({status: 500})});
 
     await expect(load(event)).rejects.toMatchObject({
       status: 502,

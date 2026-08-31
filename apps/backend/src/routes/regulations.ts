@@ -8,6 +8,10 @@ import {
 } from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
+import {
+  byTournamentIdParam,
+  requireOpenEntryPeriodOrStaff,
+} from '../middleware/entry-period';
 import {createDbClient} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {
@@ -44,16 +48,19 @@ function rowToRegulation(row: RegulationRow): Regulation {
   });
 }
 
-// The read is public: the entry form has to show which regulations a
-// participant may pick before they have any session at all, and a
-// regulation carries no personal data — only its label and priority
-// window, both of which the form displays. The write next to it is
-// general-staff only, so the middleware is attached per-route rather than
-// through `.use('*', ...)` (same shape as `formDefinitionsRoute`).
+// The read is public *while the entry period is open*: the entry form has
+// to show which regulations a participant may pick before they have any
+// session at all, and a regulation carries no personal data — only its
+// label and priority window, both of which the form displays. Outside the
+// period it is part of the form the requirement keeps unpublished, so the
+// same gate the tournament read uses applies here too. The write next to it
+// is general-staff only, so the middleware is attached per-route rather
+// than through `.use('*', ...)` (same shape as `formDefinitionsRoute`).
 export const regulationsRoute = new Hono<StaffEnv>()
   .get(
     '/:tournamentId/regulations',
     zValidator('param', TournamentIdParamSchema),
+    requireOpenEntryPeriodOrStaff(byTournamentIdParam),
     async c => {
       const db = createDbClient(c.env);
       const {data, error} = await db

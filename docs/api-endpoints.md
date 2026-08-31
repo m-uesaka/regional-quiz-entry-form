@@ -50,7 +50,7 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 
 ### 認可ミドルウェア
 
-`apps/backend/src/middleware/` に3種類のスタッフ用ミドルウェアと1種類の参加者用ミドルウェアがあります。
+`apps/backend/src/middleware/` に3種類のスタッフ用ミドルウェア、1種類の参加者用ミドルウェア、1種類のエントリー期間用ミドルウェアがあります。
 
 | ミドルウェア | 条件 | 失敗時 |
 | --- | --- | --- |
@@ -58,6 +58,32 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 | `requireStaffForTournament()` | 有効な `staff_session`。`general` なら無条件通過、`regional` なら `:tournamentId` の大会が担当範囲(`region_id` と `type` が両方一致)であること | 401 / 403 / 500 |
 | `requireStaffForEntry()` | 同上。ただし `:entryId` から `tournament_id` を辿って範囲を判定する | 401 / 403 / 500 |
 | `requireParticipant()` | 有効な `participant_session`。加えて `pwdChangedAt` クレームが `participants.password_changed_at` と一致すること(パスワード再設定でセッションが切れる) | 401 / 500 |
+| `requireOpenEntryPeriodOrStaff()` | エントリー期間中なら**誰でも通過**。期間外は担当スタッフ(`general`、または `region_id` と `type` が一致する `regional`)のみ | 401 / 403 / 404 / 500 |
+
+#### `requireOpenEntryPeriodOrStaff()`(エントリー期間外アクセス制御)
+
+要件の「エントリーフォームの URL は、エントリー期間中はオープンアクセス、期間外は地域スタッフ及び統括スタッフのみアクセス可能」(`requirements.md`)を **API 側で**担保するミドルウェアです。この判定は以前 SvelteKit の `load` にしか無く、Worker を直接叩けばフォームの中身が誰でも読めていました。
+
+フォームを構成する3つの公開 GET に付けています。
+
+- `GET /api/tournaments/:regionSlug/:tournamentSlug`
+- `GET /api/tournaments/:tournamentId/regulations`
+- `GET /api/form-definitions/:tournamentId`
+
+判定は次の順です。
+
+1. リクエストが指す大会を引く(`:tournamentId` から直接、または `:regionSlug` の地域を経由して)。見つからなければ **404** `{"error": "tournament not found"}`
+2. `isWithinEntryPeriod()`(`packages/shared`)が真なら、セッションを見ずに通過
+3. 期間外なら `staff_session` を読み、**担当スタッフでなければ 403** `{"error": "entry period closed"}`
+4. ただし `staff_session` が**付いているのに検証できなかった**場合(期限切れ・改竄)は 403 ではなく **401** `{"error": "staff session expired"}`。セッションが切れただけのスタッフをログイン画面に戻すためで、セッションを最初から持たない訪問者(403)と区別する必要があるのはこの一点です
+
+「スタッフであること」では足りない点が要点です。担当外の地域スタッフには、他地域の未公開フォームを読む理由がありません。範囲の規則は `packages/shared/src/logic/staff-scope.ts` の `canPreviewTournament()` にあり、バックエンドの `isInScope()` とフロントエンドのエントリーページ `load` が**同じ関数**を使います。
+
+401 を分けるのはフロントエンドの都合です。スタッフ画面は `hooks.server.ts` が読んだクレームを見てから API を叩くので、そこで弾けないのは「クレーム確認の直後にトークンが失効した」場合だけです。これを 403 で返すと、担当範囲は正しいのに「権限がありません」で行き止まりになります。
+
+公開エントリーリスト(§8)には**掛けていません**。エントリーリストは公開された結果であり、最も読まれるのは期間が終わった後だからです。そのためリスト画面用にスラッグ引きの `GET /api/tournaments/:regionSlug/:tournamentSlug/entry-list` を用意しています(大会取得 API 経由で UUID を解決すると、期間終了後にこのゲートに阻まれるため)。
+
+引いた行はコンテキスト変数 `tournament` に載せるので、その後ろのハンドラ(大会取得 API)は同じ大会をもう一度引きません。
 
 > **ルーティング上の注意**: `routes/tournaments.ts` はミドルウェアを `.use('*', ...)` ではなく**ルート単位**で付けています。このサブアプリは `/tournaments` にマウントされており、同じ `/tournaments` に公開ルート(`routes/entries.ts` / `routes/entry-list.ts`)もマウントされているためです。Hono はミドルウェアを「どのサブアプリで登録されたか」ではなく**リクエストの最終パス**でマッチさせるので、ワイルドカードを使うと公開ルートまで認証必須になってしまいます。
 
@@ -127,13 +153,14 @@ if ('yaml' in body) {
 | GET | `/api/tournaments` | 統括スタッフ |
 | POST | `/api/tournaments` | 統括スタッフ |
 | PATCH | `/api/tournaments/:id` | 統括スタッフ |
-| GET | `/api/tournaments/:regionSlug/:tournamentSlug` | なし |
-| GET | `/api/tournaments/:tournamentId/regulations` | なし |
+| GET | `/api/tournaments/:regionSlug/:tournamentSlug` | 期間中はなし / 期間外は担当スタッフ |
+| GET | `/api/tournaments/:tournamentId/regulations` | 期間中はなし / 期間外は担当スタッフ |
 | PUT | `/api/tournaments/:tournamentId/regulations` | 統括スタッフ |
 | GET | `/api/tournaments/:tournamentId/entry-list` | なし |
+| GET | `/api/tournaments/:regionSlug/:tournamentSlug/entry-list` | なし |
 | POST | `/api/tournaments/:tournamentId/entries` | なし(レート制限 + Turnstile) |
 | GET | `/api/entries/verify` | なし(トークン) |
-| GET | `/api/form-definitions/:tournamentId` | なし |
+| GET | `/api/form-definitions/:tournamentId` | 期間中はなし / 期間外は担当スタッフ |
 | PUT | `/api/form-definitions/:tournamentId` | 統括スタッフ |
 | POST | `/api/sheet-import/preview` | 統括スタッフ |
 | GET | `/api/staff/tournaments/:tournamentId/entries` | スタッフ(担当範囲) |
@@ -304,19 +331,26 @@ if ('yaml' in body) {
 
 ### `GET /api/tournaments/:regionSlug/:tournamentSlug`
 
-公開ルート。地域スラッグと大会種別スラッグの組から大会を1件引きます。`regions` を slug で引いてから `tournaments` を `(region_id, type)` で引く2段階のクエリです。
+エントリー期間中は公開、期間外は担当スタッフのみ(`requireOpenEntryPeriodOrStaff()`、§1「認可ミドルウェア」)。地域スラッグと大会種別スラッグの組から大会を1件引きます。`regions` を slug で引いてから `tournaments` を `(region_id, type)` で引く2段階のクエリで、これはミドルウェアが行い、ハンドラはその結果を返すだけです。
 
 - パス: `tournamentSlug` は `'saikyoi' | 'shinjinou'`
 - `200`: `Tournament`
+- `401`: `{"error": "staff session expired"}` — `staff_session` はあるが検証できない(期限切れ等)
+- `403`: `{"error": "entry period closed"}` — 期間外で、担当スタッフのセッションが無い
 - `404`: `{"error": "tournament not found"}`(地域が無い場合も同じ応答)
 - `500`
 
+公開エントリーリスト画面はこの API を使いません。期間終了後こそ読まれる画面なので、スラッグ引きの `GET /api/tournaments/:regionSlug/:tournamentSlug/entry-list`(§8)から直接引きます。
+
 ### `GET /api/tournaments/:tournamentId/regulations`
 
-公開ルート。大会に紐づくレギュレーションを `display_order` 昇順で返します。エントリーフォームは未ログインの訪問者にも選択肢を出す必要があり、レギュレーションは個人情報を含まない(ラベルと優先期間だけ)ため認証を課していません。
+エントリー期間中は公開、期間外は担当スタッフのみ(`requireOpenEntryPeriodOrStaff()`)。大会に紐づくレギュレーションを `display_order` 昇順で返します。期間中に認証を課さないのは、エントリーフォームが未ログインの訪問者にも選択肢を出す必要があり、レギュレーションが個人情報を含まない(ラベルと優先期間だけ)ためです。期間外はこれ自体が未公開フォームの中身なので、大会取得 API と同じゲートが掛かります。
 
 - `200`: `Regulation[]` — `{id, tournamentId, label, priorityStartsAt, priorityEndsAt, displayOrder}`
 - `400`: `:tournamentId` が UUID でない
+- `401`: `{"error": "staff session expired"}` — `staff_session` はあるが検証できない(期限切れ等)
+- `403`: `{"error": "entry period closed"}` — 期間外で、担当スタッフのセッションが無い
+- `404`: `{"error": "tournament not found"}` — ゲートが大会を引けなかった
 - `500`
 
 `src/index.ts` では**`tournamentsRoute` より前**にマウントしています。`tournamentsRoute` の `/:regionSlug/:tournamentSlug` も2セグメントにマッチするため、後ろに置くとその `tournamentSlug` の enum バリデーションが先に 400 を返してしまいます(`entryListRoute` と同じ理由)。
@@ -420,6 +454,18 @@ if ('yaml' in body) {
 認証不要の公開エンドポイント。`created_at` 昇順で返します。
 
 - `200`: `EntryListItem[]` — `{displayName: string, status: 'confirmed' | 'waitlisted' | 'cancelled', waitlistPosition: number | null}`
+- `400`: `:tournamentId` が UUID でない
+- `500`
+
+エントリー期間のゲート(`requireOpenEntryPeriodOrStaff()`)は**意図的に掛けていません**。エントリーリストは公開された結果であり、最も読まれるのは期間が終わった後だからです。
+
+### `GET /api/tournaments/:regionSlug/:tournamentSlug/entry-list`
+
+上と同じものを、公開 URL と同じスラッグの組で引くルート。リスト画面用です。大会取得 API で UUID を解決してから上を叩く形はもう使えません — 大会取得 API はエントリー期間のゲートの後ろにあり、期間終了後にはスタッフ以外を拒むためです。
+
+- パス: `tournamentSlug` は `'saikyoi' | 'shinjinou'`
+- `200`: `EntryListItem[]`
+- `404`: `{"error": "tournament not found"}`(地域が無い場合も同じ応答)
 - `500`
 
 個人情報保護の観点から、以下の設計になっています。
@@ -434,13 +480,16 @@ if ('yaml' in body) {
 
 ### `GET /api/form-definitions/:tournamentId`
 
-公開ルート。その大会の `form_field_defs` を `display_order` 昇順で返します。エントリーフォームが未ログインの訪問者にも追加項目を描画する必要があり、フォーム定義は個人情報を含まないため認証を課していません。
+エントリー期間中は公開、期間外は担当スタッフのみ(`requireOpenEntryPeriodOrStaff()`)。その大会の `form_field_defs` を `display_order` 昇順で返します。期間中に認証を課さないのは、エントリーフォームが未ログインの訪問者にも追加項目を描画する必要があり、フォーム定義が個人情報を含まないためです。期間外はこの定義こそが未公開フォームの中身なので、大会取得 API と同じゲートが掛かります。
 
 - `200`: `FormFieldDef[]` — `{fieldKey, label, fieldType, required, options, displayOrder}`
 - `400`: `:tournamentId` が UUID でない
+- `401`: `{"error": "staff session expired"}` — `staff_session` はあるが検証できない(期限切れ等)
+- `403`: `{"error": "entry period closed"}` — 期間外で、担当スタッフのセッションが無い
+- `404`: `{"error": "tournament not found"}` — ゲートが大会を引けなかった
 - `500`
 
-この公開 GET があるため、`formDefinitionsRoute` は `requireGeneralStaff()` を `.use('*', ...)` ではなく**下の PUT にだけ**付けています。
+この期間中は公開の GET があるため、`formDefinitionsRoute` は `requireGeneralStaff()` を `.use('*', ...)` ではなく**下の PUT にだけ**付けています。
 
 ### `PUT /api/form-definitions/:tournamentId`
 

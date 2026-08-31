@@ -1,5 +1,6 @@
 import type {StaffClaims} from '@regional-quiz/shared';
 import type {BulkMailMessage} from '../lib/bulk-mail-queue';
+import type {TournamentRow} from '../lib/tournaments';
 
 export interface Bindings {
   SUPABASE_URL: string;
@@ -60,6 +61,20 @@ export interface Bindings {
 
 export interface Variables {
   requestId: string;
+  // Set by `requireOpenEntryPeriodOrStaff()` (`middleware/entry-period.ts`)
+  // with the row it had to read anyway, so the handler behind it doesn't
+  // fetch the same tournament a second time. Optional because most routes
+  // never run that middleware.
+  tournament?: TournamentRow;
+  // Also set by `requireOpenEntryPeriodOrStaff()`, and only on the path it
+  // took because the entry period has closed and the caller proved they are
+  // the tournament's own staff. Kept apart from `staff` below because it
+  // carries a weaker promise: that gate also lets anonymous requests through
+  // while the period is open, so a handler behind it has to check. The
+  // routes that mount it are `Hono<StaffEnv>` apps (their write siblings are
+  // staff-only), where `staff` reads as guaranteed -- which for the gated
+  // read it is not.
+  entryPeriodStaff?: StaffClaims;
 }
 
 export interface Env {

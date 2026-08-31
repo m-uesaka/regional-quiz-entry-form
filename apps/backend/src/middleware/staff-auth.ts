@@ -2,6 +2,7 @@ import {createMiddleware} from 'hono/factory';
 import {getCookie} from 'hono/cookie';
 import {verify} from 'hono/jwt';
 import {
+  canPreviewTournament,
   StaffClaimsSchema,
   type StaffClaims,
   type TournamentType,
@@ -11,12 +12,24 @@ import {createDbClient} from '../lib/db';
 
 export const STAFF_SESSION_COOKIE = 'staff_session';
 
-interface TournamentScopeRow {
+export interface TournamentScopeRow {
   region_id: string;
   type: TournamentType;
 }
 
-async function readStaffClaims(
+/**
+ * Verifies and parses the `staff_session` cookie.
+ *
+ * Exported for `middleware/entry-period.ts`, which needs the claims of a
+ * caller it does *not* require to be staff at all: outside a tournament's
+ * entry period a staff session decides the answer, inside it the same
+ * request is served to anyone.
+ * @param token The raw cookie value, if the request carried one.
+ * @param secret `SESSION_SECRET`, the key the token was signed with.
+ * @return The claims, or `null` if the token is missing, invalid, expired,
+ *     or doesn't match the expected shape.
+ */
+export async function readStaffClaims(
   token: string | undefined,
   secret: string,
 ): Promise<StaffClaims | null> {
@@ -58,15 +71,28 @@ export function requireGeneralStaff() {
   });
 }
 
-/** Whether `staff`'s region/tournament-type claims cover `tournament`. */
-function isInScope(
+/**
+ * Whether `staff`'s region/tournament-type claims cover `tournament`.
+ *
+ * The rule itself lives in `@regional-quiz/shared` so the frontend decides
+ * the same way (`canPreviewTournament()`); this wrapper only translates the
+ * snake_case row Supabase hands back and answers `false` for a tournament
+ * that doesn't exist — which is not the same question, but is the same
+ * refusal, and keeps a caller from having to check for it separately.
+ * @param staff The caller's session claims.
+ * @param tournament The tournament being asked for, or `null` if there is
+ *     no such row.
+ */
+export function isInScope(
   staff: StaffClaims,
   tournament: TournamentScopeRow | null,
 ): boolean {
   return (
     tournament !== null &&
-    staff.regionId === tournament.region_id &&
-    staff.tournamentType === tournament.type
+    canPreviewTournament(staff, {
+      regionId: tournament.region_id,
+      type: tournament.type,
+    })
   );
 }
 

@@ -1,6 +1,6 @@
 import {error, fail, redirect} from '@sveltejs/kit';
 import {RegulationSyncInputSchema} from '@regional-quiz/shared';
-import {createApiClient, isUnauthorized} from '$lib/api';
+import {createApiClient, isNotFound, isUnauthorized} from '$lib/api';
 import {fromJstDatetimeLocal} from '$lib/jst-datetime';
 import {
   emptyRegulationRow,
@@ -33,11 +33,12 @@ const ROW_CONTROL_PATTERN = /^regulations\[(\d+)\]\.(\w+)$/;
 
 export const load: PageServerLoad = async ({params, fetch, url}) => {
   const api = createApiClient(fetch);
-  // The regulations endpoint is public and answers `200 []` for any
-  // well-formed id, so a mistyped or stale `[id]` would otherwise render a
-  // working-looking empty form whose save is the first thing to 404. The
-  // tournament list settles that the tournament exists — and, being the
-  // staff-only request of the two, is what makes the 401 below reachable.
+  // The regulations endpoint sits behind `requireOpenEntryPeriodOrStaff()`,
+  // which answers 404 for an id no tournament has — so a mistyped or stale
+  // `[id]` is refused rather than rendering a working-looking empty form
+  // whose save is the first thing to fail. The tournament list is read
+  // alongside it as the check that survives the gate ever being lifted off
+  // the regulations endpoint.
   const [tournamentsRes, regulationsRes] = await Promise.all([
     api.api.tournaments.$get(),
     api.api.tournaments[':tournamentId'].regulations.$get({
@@ -49,6 +50,9 @@ export const load: PageServerLoad = async ({params, fetch, url}) => {
     // `hooks.server.ts` parsing it and these requests reaching the backend.
     if (isUnauthorized(tournamentsRes) || isUnauthorized(regulationsRes)) {
       redirect(303, staffLoginPath(url));
+    }
+    if (isNotFound(regulationsRes)) {
+      error(404, '大会が見つかりません');
     }
     error(502, 'レギュレーションの取得に失敗しました');
   }

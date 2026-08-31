@@ -2,8 +2,15 @@ import {afterAll, afterEach, beforeAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
 import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
+import type {TournamentRow} from '../lib/tournaments';
 import {app} from '../index';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {
+  closedEntryPeriodTournament,
+  openEntryPeriodTournament,
+  TEST_REGION_ID,
+  tournamentAwareFetch,
+} from '../test-support/tournaments';
 
 // Local Supabase stack (`supabase start`), same convention as
 // `routes/form-definitions.test.ts`. The integration block below is skipped
@@ -49,8 +56,7 @@ async function staffCookie(role: 'general' | 'regional'): Promise<string> {
     {
       sub: '99999999-9999-9999-9999-999999999999',
       role,
-      regionId:
-        role === 'general' ? null : '11111111-1111-1111-1111-111111111111',
+      regionId: role === 'general' ? null : TEST_REGION_ID,
       tournamentType: role === 'general' ? null : 'saikyoi',
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
@@ -73,21 +79,26 @@ describe('GET /tournaments/:tournamentId/regulations (request validation)', () =
   });
 });
 
-// Mocks the `fetch` call `@supabase/supabase-js` makes for
+// Mocks the `fetch` calls `@supabase/supabase-js` makes for
 // `.from('regulations').select(...)` (same convention as
 // `routes/entry-list.test.ts`'s `mockEntriesFetch`), so these run
-// unconditionally in CI without a local Supabase stack.
-function mockRegulationsFetch(rows: unknown[]): void {
-  globalThis.fetch = (() =>
-    Promise.resolve(Response.json(rows))) as unknown as typeof fetch;
+// unconditionally in CI without a local Supabase stack. The tournament the
+// entry-period gate reads first is answered by `tournamentAwareFetch`,
+// with the period open unless a test says otherwise.
+function mockRegulationsFetch(
+  rows: unknown[],
+  tournament: TournamentRow | null = openEntryPeriodTournament(),
+): void {
+  globalThis.fetch = tournamentAwareFetch(tournament, (() =>
+    Promise.resolve(Response.json(rows))) as unknown as typeof fetch);
 }
 
-/** Answers the same call with a Supabase-shaped failure instead. */
+/** Answers the regulations call with a Supabase-shaped failure instead. */
 function mockRegulationsFetchFailure(message: string): void {
-  globalThis.fetch = (() =>
+  globalThis.fetch = tournamentAwareFetch(openEntryPeriodTournament(), (() =>
     Promise.resolve(
       Response.json({message}, {status: 500}),
-    )) as unknown as typeof fetch;
+    )) as unknown as typeof fetch);
 }
 
 // Reaching this handler at all already demonstrates route precedence: the
@@ -96,7 +107,7 @@ function mockRegulationsFetchFailure(message: string): void {
 // the mocked fetch below was ever consulted.
 describe('GET /tournaments/:tournamentId/regulations (mocked Supabase)', () => {
   const originalFetch = globalThis.fetch;
-  const tournamentId = '12345678-1234-1234-1234-123456789012';
+  const tournamentId = openEntryPeriodTournament().id;
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
@@ -171,6 +182,76 @@ describe('GET /tournaments/:tournamentId/regulations (mocked Supabase)', () => {
 
     expect(res.status).toBe(200);
     expect(body).toEqual([]);
+  });
+
+  it('returns 404 for a tournament that does not exist', async () => {
+    mockRegulationsFetch([], null);
+
+    const res = await app.request(
+      `/api/tournaments/${tournamentId}/regulations`,
+      {},
+      env,
+    );
+
+    expect(res.status).toBe(404);
+  });
+
+  // The regulations are part of the entry form, which the requirement keeps
+  // to staff outside the entry period -- see `middleware/entry-period.ts`.
+  it('returns 403 outside the entry period without a session', async () => {
+    mockRegulationsFetch([], closedEntryPeriodTournament());
+
+    const res = await app.request(
+      `/api/tournaments/${tournamentId}/regulations`,
+      {},
+      env,
+    );
+
+    expect(res.status).toBe(403);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'entry period closed',
+    });
+  });
+
+  it('returns the regulations outside the entry period for its own regional staff', async () => {
+    mockRegulationsFetch([], closedEntryPeriodTournament());
+
+    const res = await app.request(
+      `/api/tournaments/${tournamentId}/regulations`,
+      {headers: {cookie: await staffCookie('regional')}},
+      env,
+    );
+
+    expect(res.status).toBe(200);
+  });
+
+  it('returns the regulations outside the entry period for general staff', async () => {
+    mockRegulationsFetch([], closedEntryPeriodTournament());
+
+    const res = await app.request(
+      `/api/tournaments/${tournamentId}/regulations`,
+      {headers: {cookie: await staffCookie('general')}},
+      env,
+    );
+
+    expect(res.status).toBe(200);
+  });
+
+  it("returns 403 outside the entry period for another region's staff", async () => {
+    mockRegulationsFetch(
+      [],
+      closedEntryPeriodTournament({
+        region_id: '99999999-9999-9999-9999-999999999999',
+      }),
+    );
+
+    const res = await app.request(
+      `/api/tournaments/${tournamentId}/regulations`,
+      {headers: {cookie: await staffCookie('regional')}},
+      env,
+    );
+
+    expect(res.status).toBe(403);
   });
 });
 
