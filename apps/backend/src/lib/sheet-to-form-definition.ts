@@ -13,7 +13,7 @@ export interface SheetRow {
 }
 
 interface SheetValuesResponse {
-  values?: string[][];
+  values?: unknown[][];
 }
 
 /**
@@ -46,22 +46,31 @@ export class SheetFetchError extends Error {
 }
 
 /**
- * Reads a region staff-filled spreadsheet's field-definition rows via the
- * Google Sheets API v4 `values.get` endpoint. Uses an API key rather than a
- * service account, so the target spreadsheet must be shared as
- * publicly/link viewable. Row 1 is a header row, skipped by starting the
- * range at row 2. Throws `SheetFetchError` if the request fails, whether
- * from a network error or a non-2xx Google response.
+ * Reads one range of a spreadsheet via the Google Sheets API v4
+ * `values.get` endpoint. Uses an API key rather than a service account, so
+ * the target spreadsheet must be shared as publicly/link viewable. Throws
+ * `SheetFetchError` if the request fails, whether from a network error or a
+ * non-2xx Google response.
  * @param spreadsheetId The Google Sheets spreadsheet ID.
+ * @param range The A1 range to read. A range naming no tab reads the first
+ *     one.
  * @param apiKey The Google Sheets API key.
+ * @param query Extra `values.get` query parameters (e.g. the render
+ *     options).
+ * @return The rows Google returned. Trailing empty rows and cells are
+ *     omitted by the API, and a row inside the data that is empty comes
+ *     back as an empty array.
  */
-export async function fetchSheetRows(
+export async function fetchSheetValues(
   spreadsheetId: string,
+  range: string,
   apiKey: string,
-): Promise<SheetRow[]> {
+  query: Record<string, string> = {},
+): Promise<unknown[][]> {
+  const params = new URLSearchParams({...query, key: apiKey});
   const url =
     'https://sheets.googleapis.com/v4/spreadsheets/' +
-    `${spreadsheetId}/values/A2:E?key=${apiKey}`;
+    `${spreadsheetId}/values/${encodeURIComponent(range)}?${params}`;
   let res: Response;
   try {
     res = await fetch(url);
@@ -77,7 +86,28 @@ export async function fetchSheetRows(
     );
   }
   const {values} = (await res.json()) as SheetValuesResponse;
-  return (values ?? []).map(([key, label, type, required, options]) => ({
+  return values ?? [];
+}
+
+/**
+ * Reads a region staff-filled spreadsheet's field-definition rows from its
+ * first tab. Row 1 is a header row, skipped by starting the range at row 2.
+ * Throws `SheetFetchError` if the request fails (see `fetchSheetValues`).
+ * @param spreadsheetId The Google Sheets spreadsheet ID.
+ * @param apiKey The Google Sheets API key.
+ */
+export async function fetchSheetRows(
+  spreadsheetId: string,
+  apiKey: string,
+): Promise<SheetRow[]> {
+  // Read with the default render options, under which every cell comes back
+  // as the string the sheet displays.
+  const values = (await fetchSheetValues(
+    spreadsheetId,
+    'A2:E',
+    apiKey,
+  )) as string[][];
+  return values.map(([key, label, type, required, options]) => ({
     key,
     label,
     type,

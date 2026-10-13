@@ -1,6 +1,10 @@
-# Google スプレッドシート連携(フォーム定義インポート)
+# Google スプレッドシート連携(フォーム定義・レギュレーションのインポート)
 
-このドキュメントは、地域スタッフが Google スプレッドシートに入力したエントリーフォームのフィールド定義を、大会管理画面から YAML としてプレビュー・取り込む機能(Task 2-3/2-4)についてまとめたものです。実装済みのコード(`apps/backend/src/lib/sheet-to-form-definition.ts` ほか)を基に、仕組み・必要な設定・使い方を記載します。
+このドキュメントは、地域スタッフが Google スプレッドシートに入力した内容を、統括スタッフが管理画面から取り込む機能についてまとめたものです。取り込めるのは次の2つで、同じスプレッドシートの別々のシートに書きます。
+
+- **追加の質問項目(フォーム定義)**: 先頭のシート。大会編集画面で YAML としてプレビューして保存する(Task 2-3/2-4)。
+- **レギュレーションと優先エントリー期間**: 「レギュレーション」という名前のシート。レギュレーション管理画面のフォームに読み込み、内容を確認して保存する。
+実装済みのコード(`apps/backend/src/lib/sheet-to-form-definition.ts` ほか)を基に、仕組み・必要な設定・使い方を記載します。
 
 ## 1. 全体像
 
@@ -22,6 +26,7 @@ flowchart LR
 - スプレッドシートの読み取りは **API キー認証**で行う(サービスアカウントではない)。そのため取り込み対象のスプレッドシートは「リンクを知っている全員が閲覧可」に共有しておく必要がある。
 - 「プレビュー」と「保存」は別 API に分かれた 2 段階のフロー。プレビュー段階では DB に何も書き込まれず、YAML 文字列がブラウザに返るだけ。保存段階で初めて `form_field_defs` テーブルに永続化される。
 - スプレッドシート取り込みは大会(tournament)本体の CRUD とは別レイヤの機能で、大会編集画面(`/admin/tournaments/[id]/edit`)に UI として組み込まれている。取り込みには大会の種別が必要なため、大会作成画面(`/admin/tournaments/new`)には置かれていない。
+- レギュレーションと優先エントリー期間も地域スタッフが決めるもので、同じスプレッドシートの「レギュレーション」シートから取り込む。フォーム定義とは画面も API も保存先のテーブルも別(6章・7章)。どちらの取り込みも、読み込んだだけでは DB に書き込まれない。
 
 > **設計書との差異**: `tasks/task-2-3.md` の初期設計では「サービスアカウント認証」を想定していたが、実装では API キー認証に変更されている(理由は後述)。ドキュメントや今後の設計変更時はこの点に注意すること。
 
@@ -30,7 +35,8 @@ flowchart LR
 | ファイル | 役割 |
 | --- | --- |
 | `apps/backend/src/lib/sheet-to-form-definition.ts` | `fetchSheetRows()`(Sheets API v4 呼び出し)・`sheetRowsToYaml()`(行データ→YAML変換) |
-| `apps/backend/src/routes/sheet-import.ts` | `POST /api/sheet-import/preview` ルート。統括スタッフ限定 |
+| `apps/backend/src/lib/sheet-to-regulations.ts` | `fetchRegulationSheetValues()`(「レギュレーション」シートの取得)・`sheetValuesToRegulations()`(行データ→レギュレーション配列) |
+| `apps/backend/src/routes/sheet-import.ts` | `POST /api/sheet-import/preview`(フォーム定義)と `POST /api/sheet-import/regulations/preview`(レギュレーション)。統括スタッフ限定 |
 | `apps/backend/src/routes/form-definitions.ts` | `PUT /api/form-definitions/:tournamentId`。プレビュー済み YAML をパース・検証して保存処理に渡す(Task 2-2)。統括スタッフ限定 |
 | `apps/backend/src/lib/form-definitions.ts` | `syncFormFieldDefs()`。大会種別の照合と `form_field_defs` の置き換え(`sync_form_field_defs` RPC) |
 | `apps/backend/src/types/env.ts` | `Bindings.GOOGLE_SHEETS_API_KEY` を定義 |
@@ -39,6 +45,8 @@ flowchart LR
 | `apps/frontend/src/lib/components/TournamentEditor.svelte` | 大会編集画面の本体。大会フォームの下に `SheetImportPanel` を置く |
 | `apps/frontend/src/routes/admin/tournaments/new/+page.server.ts` | 大会新規作成画面の action。作成成功後は大会編集画面(`SheetImportPanel` 表示)へリダイレクトする |
 | `apps/frontend/src/routes/admin/tournaments/[id]/edit/+page.svelte` | 大会編集画面。`TournamentEditor` 経由で常時 `SheetImportPanel` を表示 |
+| `apps/frontend/src/routes/admin/tournaments/[id]/regulations/+page.server.ts` | レギュレーション管理画面。`import` action がシートを読んでフォームの行を組み立て、`save` action が保存する |
+| `packages/shared/src/schemas/regulation.ts` | `REGULATION_SHEET_NAME`(シート名)・`RegulationSheetImportRequestSchema`・保存時の `RegulationSyncInputSchema` |
 
 Sheets API 専用の SDK(`googleapis` 等)は使わず、`fetch` で REST エンドポイントを直接呼び出している。YAML の変換には `yaml` パッケージ(`stringify`/`parse`)を使用。
 
@@ -49,7 +57,8 @@ Sheets API 専用の SDK(`googleapis` 等)は使わず、`fetch` で REST エン
 > サービスアカウントではなく API キーで認証するため、対象のスプレッドシートは公開/リンク共有にしておく必要がある。
 
 - 使用するのは Google Sheets API v4 の `spreadsheets.values.get` エンドポイント。
-- 呼び出し例: `https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}/values/A2:E?key={apiKey}`
+- 呼び出し例(フォーム定義): `https://sheets.googleapis.com/v4/spreadsheets/{spreadsheetId}/values/A2%3AE?key={apiKey}`
+- 呼び出し例(レギュレーション): 範囲は `'レギュレーション'!A2:C`(URL エンコードして送る)。`valueRenderOption=UNFORMATTED_VALUE` と `dateTimeRenderOption=SERIAL_NUMBER` を付け、日時セルを表示形式に依存しないシリアル値で受け取る。
 - API キーは Cloudflare Workers の Bindings 経由の環境変数 `GOOGLE_SHEETS_API_KEY`(`apps/backend/src/types/env.ts`)として渡す。
 
 このためのトレードオフ:
@@ -65,7 +74,7 @@ Sheets API 専用の SDK(`googleapis` 等)は使わず、`fetch` で REST エン
    - IP アドレス制限は Cloudflare Workers の送信元 IP が固定でないため実質的に使えない。リファラー制限もサーバーサイドからの呼び出しのため効果がない点に注意。
 3. **発行したキーを Cloudflare Workers のシークレットとして登録**(手順は後述)。
 
-## 5. スプレッドシートのフォーマット規約
+## 5. フォーム定義シート(先頭のシート)のフォーマット規約
 
 - 取り込み範囲は固定で `A2:E`(1行目はヘッダー行として扱われ、読み飛ばされる)。シート名を指定していないため、読まれるのは**先頭(左端)のシート**。フォーム定義のシートは先頭に置くこと。
 - データ行は2行目から**空行を挟まず**に詰めて書く。途中に空行があると、その行の `type` が空として扱われ `Unknown field type: undefined` で取り込みに失敗する(末尾の空行は Sheets API が返さないので問題ない)。
@@ -97,7 +106,48 @@ C列(type)・D列(required)は Google スプレッドシート側のデータの
 
 エントリーは `custom_field_values` を `key` で紐付けて永続化しているため、**一度保存したフォーム定義の `key` は変更しない**こと。既存の `key` を再利用しつつ行を並べ替えたり、フィールドを追加する場合は新しい `key` を末尾の行に追記したりする分には問題ない。誤って `key` を変更したまま再インポート・保存すると、既存の回答データが別のフィールドに紐付いたように見えてしまう。
 
-## 6. 処理フロー(詳細)
+## 6. レギュレーションシートのフォーマット規約
+
+レギュレーション(参加条件)と優先エントリー期間も地域スタッフが決める。フォーム定義と同じスプレッドシートに、**「レギュレーション」という名前のシート**を作って記入する。
+
+- シート名は `レギュレーション` と完全に一致させる(`REGULATION_SHEET_NAME`)。シートの位置は問わないが、先頭はフォーム定義のシートなので2枚目以降に置く。
+- 取り込み範囲は `A2:C`(1行目はヘッダー行として読み飛ばされる)。
+- 行の並び順がそのままエントリーフォームでの表示順になる。
+- A〜C列がすべて空の行は読み飛ばされるので、空行を挟んでもよい。
+
+| 列 | 内容 | 例 |
+| --- | --- | --- |
+| A: レギュレーション名 | エントリーフォームに表示する文言。必須。前後の空白は除去される。200文字以内。シート内で重複不可 | `開催地域に在住・在学・在勤の方` |
+| B: 優先期間の開始 | 優先エントリー期間を設ける場合のみ記入。**日本時間**として読まれる | `2026-08-01 10:00` |
+| C: 優先期間の終了 | B列を記入した場合は必須。開始より後の日時 | `2026-08-08 10:00` |
+
+シート例:
+
+| レギュレーション名 | 優先期間の開始 | 優先期間の終了 |
+| --- | --- | --- |
+| 開催地域に在住・在学・在勤の方 | 2026-08-01 10:00 | 2026-08-08 10:00 |
+| 上記以外の方 | | |
+
+### 優先期間の書き方
+
+- B列・C列は**両方記入するか、両方空欄にする**。片方だけ、または終了が開始以前だと取り込みに失敗する。
+- 日時は次のどちらの形でも読める。
+  - 日付/日時の書式のセル(スプレッドシートが日時として認識している値)。表示形式は問わない。
+  - 文字列として入力した `2026-08-01 10:00` / `2026/8/1 10:00` / `2026-08-01 10:00:30`。日付だけ(`2026-08-01`)の場合はその日の 0:00 として読む。
+- それ以外の書き方(`8月1日 10時` など)や、存在しない日付(`2026-02-30`)は読み取れずエラーになる。
+- **スプレッドシートのタイムゾーン設定に関わらず、書かれた日時をそのまま日本時間として扱う**。
+- いずれかのレギュレーションの優先期間中は、その優先対象のレギュレーションを1つ以上選んだ参加者だけがエントリーできる(判定は `isRegulationSelectionAllowed()`。詳細は [`database-schema.md`](./database-schema.md) の `regulations`)。
+
+### 保存済みのレギュレーションとの対応付け
+
+シートには行の ID が無いため、取り込み時は**レギュレーション名の完全一致**で保存済みの行と対応付ける。
+
+- 名前が一致する行は「更新」になる(優先期間や並び順だけを変える場合はこれ)。既存エントリーの紐付けは保たれる。
+- 保存済みに無い名前は「追加」になる。
+- シートに無くなった保存済みの行は、フォームの末尾に「削除する」にチェックが付いた状態で残る。残したい場合はチェックを外す。
+- **名前を書き換えると「旧名の削除 + 新名の追加」になる**。旧名のレギュレーションを選んだエントリーが既にある場合、保存は 409 で拒否される(エントリーで使用中のレギュレーションは削除できない)。エントリー受付後に文言を直したいときは、シートではなくレギュレーション管理画面で該当行の名前を直接書き換える。
+
+## 7. 処理フロー(フォーム定義)
 
 1. 統括スタッフが管理画面(`SheetImportPanel.svelte`)で「スプレッドシートID」を入力し、「YAMLプレビュー」を押す。大会スラッグは手入力させず、**パネルが編集中の大会の `type`(`saikyoi` / `shinjinou`)を親から props で受け取ってそのまま使う**。取り込み先はパネル上部に表示される。
 2. フロントエンドが `POST /api/sheet-import/preview` に `{spreadsheetId, tournamentSlug}`(`packages/shared` の `SheetImportRequestSchema`)を送信。`tournamentSlug` は `TournamentTypeSchema` の enum なので、`saikyoi` / `shinjinou` 以外は 400 で弾かれる。ルートは `requireGeneralStaff()` ミドルウェアで保護されており、統括スタッフ(`role: 'general'`)のみアクセス可能(未ログイン・セッション切れは 401、地域スタッフは 403)。この認証チェックはボディの検証より先に走る。
@@ -118,7 +168,22 @@ C列(type)・D列(required)は Google スプレッドシート側のデータの
 6. プレビューされた YAML を確認し、「保存」を押すと `PUT /api/form-definitions/:tournamentId` に `{yaml: previewYaml}` を送信。
 7. 保存 API 側で `parseFormDefinitionYaml()` により再度パース・検証する(`key` の重複はここで 400)。続いて `syncFormFieldDefs()`(`apps/backend/src/lib/form-definitions.ts`)が、**YAML の `tournamentSlug` が `:tournamentId` の大会の `type` と一致するかを照合**した上で(食い違えば 400。この時点では DB 未変更なので既存定義は消えない。大会が存在しなければ 404)、`toFormFieldDefRows()` で `form_field_defs` テーブルの行形式に変換し、`sync_form_field_defs` RPC で既存の定義を丸ごと置き換える。成功時は `{ok: true}` を返す。詳細は [`form-generation.md`](./form-generation.md#tournamentslug-による取り違え検証) を参照。
 
-## 7. 環境変数・シークレットの登録
+### 処理フロー(レギュレーション)
+
+フォーム定義と違って YAML は経由しない。**レギュレーション管理画面のフォームそのものがプレビュー**になる。
+
+1. 統括スタッフが `/admin/tournaments/[id]/regulations` の「スプレッドシートから読み込む」にスプレッドシートIDを入力して押す(`?/import` action)。
+2. action が `POST /api/sheet-import/regulations/preview` に `{spreadsheetId}`(`RegulationSheetImportRequestSchema`)を送る。ルートは `requireGeneralStaff()` で保護されている。
+3. バックエンドの `fetchRegulationSheetValues()` が「レギュレーション」シートの `A2:C` を取得し、`sheetValuesToRegulations()` が配列に変換する。
+   - 空行を読み飛ばし、名前の空欄・重複、読み取れない日時を行番号付きのエラーにする。
+   - 最後に `RegulationSyncInputSchema` で検証する(優先期間が片方だけ・逆順、1件も無い、など)。
+   - 成功時は `{regulations: [{label, priorityStartsAt, priorityEndsAt}]}` を返す。DB には何も書き込まない。
+4. action が保存済みのレギュレーションと名前で突き合わせ(6章「保存済みのレギュレーションとの対応付け」)、フォームの行として返す。画面には「まだ保存されていません」と表示される。
+5. 統括スタッフが内容を確認し(必要ならその場で手直しして)「保存」を押すと、`?/save` action が `PUT /api/tournaments/:tournamentId/regulations` を呼ぶ。保存の経路は手入力の場合と同じ。
+
+エラー時のステータス(400 / 502 / 503)の切り分けはフォーム定義のプレビューと共通。「レギュレーション」シートが無い場合、Google は 400 を返すので、`error` は「「レギュレーション」シートを読み取れません。シート名とスプレッドシートIDを確認してください」になる。
+
+## 8. 環境変数・シークレットの登録
 
 `docs/supabase-deployment.md` の手順に倣い、`GOOGLE_SHEETS_API_KEY` も他のシークレットと同様に登録する。
 
@@ -144,7 +209,7 @@ bunx wrangler secret put GOOGLE_SHEETS_API_KEY --env production
 
 > 同じコマンドは `docs/supabase-deployment.md` 6.2 節のシークレット一覧にも含まれている。新規環境構築時は同節の手順どおりに登録すれば本キーも登録される。
 
-## 8. 使い方
+## 9. 使い方
 
 このツールは独立した CLI スクリプトではなく、**HTTP API + Web UI** として実装されている。
 
@@ -154,6 +219,7 @@ bunx wrangler secret put GOOGLE_SHEETS_API_KEY --env production
 2. 統括スタッフでログインし、`/admin/tournaments/{id}/edit` を開く。取り込みパネルは大会の種別を必要とするため、大会を作成した**後**の編集画面にのみ置かれている(`/admin/tournaments/new` には無い)。
 3. 「スプレッドシート取り込み」パネルでスプレッドシートIDを入力し「YAMLプレビュー」を押す(大会スラッグは編集中の大会から自動で決まる)。
 4. プレビューされた YAML を確認し、問題なければ「保存」を押す。
+5. レギュレーションを取り込む場合は、同じ画面の「レギュレーションを管理」リンクから `/admin/tournaments/{id}/regulations` を開く。「スプレッドシートから読み込む」に同じスプレッドシートIDを入力して読み込み、フォームの内容を確認して「保存」を押す。
 
 ### API を直接叩く場合
 
@@ -162,9 +228,17 @@ curl -X POST http://localhost:8787/api/sheet-import/preview \
   -H 'Content-Type: application/json' \
   -H 'Cookie: staff_session=<統括スタッフのJWT>' \
   -d '{"spreadsheetId": "<スプレッドシートID>", "tournamentSlug": "saikyoi"}'
+
+# レギュレーション
+curl -X POST http://localhost:8787/api/sheet-import/regulations/preview \
+  -H 'Content-Type: application/json' \
+  -H 'Cookie: staff_session=<統括スタッフのJWT>' \
+  -d '{"spreadsheetId": "<スプレッドシートID>"}'
 ```
 
-## 9. 関連スキーマ(`packages/shared/src/schemas/form-definition.ts`)
+## 10. 関連スキーマ(`packages/shared/src/schemas/`)
+
+`form-definition.ts`:
 
 - `FormFieldTypeSchema`: `z.enum(['checkbox', 'radio', 'textarea'])`
 - `FormFieldDefYamlSchema`: `type` による discriminated union。`radio` のみ `options` が必須(最低1件)。
@@ -174,9 +248,15 @@ curl -X POST http://localhost:8787/api/sheet-import/preview \
 - `SheetImportRequestSchema`: プレビュー API のリクエストボディ(`{spreadsheetId: string, tournamentSlug: 'saikyoi' | 'shinjinou'}`)。
 - `toFormFieldDefRows(definition, tournamentId)`: パース済み定義を `form_field_defs` テーブルの行形式に変換。
 
-これらを直接 import するのはバックエンド(`routes/sheet-import.ts`、`routes/form-definitions.ts`、`lib/form-definitions.ts`、`lib/sheet-to-form-definition.ts`)。フロントエンドの `SheetImportPanel.svelte` はスキーマを直接 import せず、`hc<AppType>()` のクライアント経由でリクエスト/レスポンスの型を受け取る(`@regional-quiz/shared` から import しているのは `TournamentType` と `TOURNAMENT_TYPE_LABELS` のみ)。
+`regulation.ts`:
 
-## 10. トラブルシューティング
+- `REGULATION_SHEET_NAME`: レギュレーションを書くシートの名前(`レギュレーション`)。バックエンドの取得範囲と管理画面の案内文の両方が参照する。
+- `RegulationSheetImportRequestSchema`: レギュレーションのプレビュー API のリクエストボディ(`{spreadsheetId: string}`)。
+- `RegulationSyncInputSchema`: 保存 API のリクエストボディ。プレビューの変換結果もこれで検証する。
+
+フォーム定義のスキーマを直接 import するのはバックエンド(`routes/sheet-import.ts`、`routes/form-definitions.ts`、`lib/form-definitions.ts`、`lib/sheet-to-form-definition.ts`)。フロントエンドの `SheetImportPanel.svelte` はスキーマを直接 import せず、`hc<AppType>()` のクライアント経由でリクエスト/レスポンスの型を受け取る(`@regional-quiz/shared` から import しているのは `TournamentType` と `TOURNAMENT_TYPE_LABELS` のみ)。
+
+## 11. トラブルシューティング
 
 | 症状 | 想定原因 | 対処 |
 | --- | --- | --- |
@@ -190,5 +270,10 @@ curl -X POST http://localhost:8787/api/sheet-import/preview \
 | プレビューで Zod バリデーションエラー(例: `key` が不正な形式、`ラジオボタン` なのに `options` が空) | シートの列内容がフォーマット規約(5章)に沿っていない | シートの列順・`key` の形式(`/^[a-z][a-z0-9_]*$/`)・`options` の記法(カンマ区切り)を修正 |
 | プレビューは成功するが保存で 400、「フィールドキーが重複しています」 | シート内で同じ `key` が複数行に使われている(プレビューでは検出されない) | 重複している `key` を修正してプレビューからやり直す |
 | 保存で 400、`YAML の tournamentSlug (...) が保存先の大会の種別 (...) と一致しません` | YAML の `tournamentSlug` が保存先の大会の種別と違う(API を直接叩いて別種別の YAML を送った場合など。パネル経由では編集中の大会の種別が自動で入る) | 保存先の大会の編集画面でプレビューからやり直す |
+| レギュレーションの読み込みで「「レギュレーション」シートを読み取れません…」 | `レギュレーション` という名前のシートが無い(名前の表記ゆれ・前後の空白を含む)、またはスプレッドシートIDが誤っている | シート名を `レギュレーション` に直す。IDを再確認 |
+| レギュレーションの読み込みで `N行目: 優先期間の開始(終了)を日時として読み取れません` | 日時の書き方が規約(6章)に沿っていない、または存在しない日付 | `2026-08-01 10:00` の形で書き直す |
+| レギュレーションの読み込みで `N行目: 優先期間は開始と終了の両方を指定してください` / `…終了は開始より後にしてください` | 優先期間が片方だけ、または逆順 | B列・C列を両方記入するか両方空欄にする |
+| レギュレーションの読み込みで `N行目: レギュレーション名が空です` / `…が重複しています` | A列が空のまま優先期間だけ書かれている、または同じ名前が2行ある | A列を記入する。重複を解消する |
+| レギュレーションの保存で 409、「エントリーで使用中のため削除できないレギュレーションがあります」 | シートで名前を書き換えた、または行を消したレギュレーションを選んだエントリーが既にある | 該当行の「削除する」を外す。文言を直したい場合は管理画面で名前を直接書き換える |
 | プレビュー/保存で 401 | 未ログイン、またはセッション切れ | 統括スタッフでログインし直す |
 | 統括スタッフでログインしているのに 403 | `role: 'regional'` のスタッフでログインしている | `requireGeneralStaff()` は統括スタッフ(`role: 'general'`)専用。地域スタッフはこの機能を使えない仕様 |

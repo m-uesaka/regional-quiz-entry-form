@@ -75,3 +75,22 @@ export const RegulationSyncInputSchema = z.object({
     ),
 });
 export type RegulationSyncInput = z.infer<typeof RegulationSyncInputSchema>;
+
+/**
+ * The title of the spreadsheet tab region staff list their regulations on.
+ * The import reads the tab by this name, so it has to match exactly; the
+ * form-definition tab, by contrast, is simply whichever tab comes first.
+ */
+export const REGULATION_SHEET_NAME = 'レギュレーション';
+
+/**
+ * Request body for the regulation sheet-import preview API: the spreadsheet
+ * whose regulation tab is to be read. Shared so the frontend and backend
+ * validate the same shape.
+ */
+export const RegulationSheetImportRequestSchema = z.object({
+  spreadsheetId: z.string().min(1),
+});
+export type RegulationSheetImportRequest = z.infer<
+  typeof RegulationSheetImportRequestSchema
+>;

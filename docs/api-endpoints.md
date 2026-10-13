@@ -163,6 +163,7 @@ if ('yaml' in body) {
 | GET | `/api/form-definitions/:tournamentId` | 期間中はなし / 期間外は担当スタッフ |
 | PUT | `/api/form-definitions/:tournamentId` | 統括スタッフ |
 | POST | `/api/sheet-import/preview` | 統括スタッフ |
+| POST | `/api/sheet-import/regulations/preview` | 統括スタッフ |
 | GET | `/api/staff/tournaments/:tournamentId/entries` | スタッフ(担当範囲) |
 | GET | `/api/staff/tournaments/:tournamentId/entries.csv` | スタッフ(担当範囲) |
 | GET | `/api/staff/entries/:entryId` | スタッフ(担当範囲) |
@@ -521,6 +522,21 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 | 503 | Google からのレート制限(429) |
 
 詳細は [`google-sheets-integration.md`](./google-sheets-integration.md) を参照。
+
+### `POST /api/sheet-import/regulations/preview`
+
+同じスプレッドシートの「レギュレーション」シート(`REGULATION_SHEET_NAME`)を読み取り、レギュレーションの配列にして返します。**この時点では DB に何も書き込みません。** 保存はレギュレーション管理画面から `PUT /api/tournaments/:tournamentId/regulations` を別途呼びます。大会には依存しないので、リクエストに大会 ID はありません。
+
+- リクエスト: `RegulationSheetImportRequestSchema` — `{spreadsheetId: string}`
+- `200`: `{"regulations": [{label, priorityStartsAt, priorityEndsAt}, ...]}` — シートの行順。`id` は付きません(シートは保存済みの行を知らないため。保存済みの行との突き合わせは呼び出し側が行います)。優先期間はシート上の日時を日本時間として読んだ ISO 8601 文字列、未設定なら `null`。
+
+| ステータス | 条件 |
+| --- | --- |
+| 400 | 「レギュレーション」シートが無い・スプレッドシート ID が不正・シートにアクセスできない(Google からの 4xx)、レギュレーション名が空または重複、優先期間を日時として読めない、優先期間が片方だけ・終了が開始以前、レギュレーションが1件も無い |
+| 502 | Google への接続失敗(ネットワークエラー)または Google からの 5xx |
+| 503 | Google からのレート制限(429) |
+
+行に起因する 400 の `error` は `3行目: ...` の形でシートの行番号を含みます。詳細は [`google-sheets-integration.md`](./google-sheets-integration.md#6-レギュレーションシートのフォーマット規約) を参照。
 
 ## 10. スタッフ向けエントリー閲覧・一斉メール送信
 

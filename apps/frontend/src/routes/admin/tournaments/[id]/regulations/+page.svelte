@@ -1,33 +1,15 @@
 <script lang="ts">
-  import type {Regulation} from '@regional-quiz/shared';
-  import {datetimeLocalStep, toJstDatetimeLocal} from '$lib/jst-datetime';
+  import {REGULATION_SHEET_NAME} from '@regional-quiz/shared';
+  import {datetimeLocalStep} from '$lib/jst-datetime';
   import {
     emptyRegulationRow,
     isUntouchedNewRegulationRow,
+    toRegulationRow,
   } from '$lib/regulation-rows';
   import type {RegulationRowValues} from '$lib/types/regulation-form';
   import type {PageProps} from './$types';
 
   const {data, form, params}: PageProps = $props();
-
-  /**
-   * Turns a stored regulation into the row the controls carry. The priority
-   * window is shown as JST wall-clock time, which is what the action reads
-   * back.
-   * @param regulation One of the tournament's regulations.
-   */
-  function toRowValues(regulation: Regulation): RegulationRowValues {
-    return {
-      id: regulation.id,
-      // The rendered position fills this in; a row only carries a value of
-      // its own after a rejected save, where it echoes what was typed.
-      order: '',
-      label: regulation.label,
-      priorityStartsAt: toJstDatetimeLocal(regulation.priorityStartsAt),
-      priorityEndsAt: toJstDatetimeLocal(regulation.priorityEndsAt),
-      remove: false,
-    };
-  }
 
   /**
    * Keeps exactly one blank row at the bottom, which is how a regulation is
@@ -50,10 +32,11 @@
     ];
   }
 
-  // A refused save re-renders what was submitted; anything else shows the
-  // stored regulations, which `load` re-reads after every successful save.
+  // A refused save re-renders what was submitted and an import shows what
+  // the spreadsheet holds; anything else shows the stored regulations, which
+  // `load` re-reads after every successful save.
   const rows = $derived(
-    withBlankRow(form?.rows ?? data.regulations.map(toRowValues)),
+    withBlankRow(form?.rows ?? data.regulations.map(toRegulationRow)),
   );
 </script>
 
@@ -67,11 +50,39 @@
 {#if form?.saved}
   <p role="status">レギュレーションを保存しました</p>
 {/if}
+{#if form?.imported}
+  <p role="status">
+    スプレッドシートの内容を読み込みました。まだ保存されていません。内容を確認して
+    「保存」を押してください。スプレッドシートに無いレギュレーションには「削除する」
+    が付いています。
+  </p>
+{/if}
 {#if form?.error}
   <p role="alert">{form.error}</p>
 {/if}
 
-<form method="POST">
+<!-- A separate form from the rows below, so reading a sheet submits only the
+     spreadsheet ID and never the rows on screen. It saves nothing: the
+     action answers with rows for the form underneath, which is the preview. -->
+<form method="POST" action="?/import">
+  <h2>スプレッドシートから読み込む</h2>
+  <p>
+    地域スタッフが記入したスプレッドシートの「{REGULATION_SHEET_NAME}」シートを
+    読み込み、下のフォームに反映します。「保存」を押すまで保存されません。
+  </p>
+  <label>
+    スプレッドシートID
+    <input
+      name="spreadsheetId"
+      type="text"
+      value={form?.spreadsheetId ?? ''}
+      required
+    />
+  </label>
+  <button type="submit">スプレッドシートから読み込む</button>
+</form>
+
+<form method="POST" action="?/save">
   {#each rows as row, index (index)}
     <fieldset>
       <legend>{index + 1} 番目</legend>
