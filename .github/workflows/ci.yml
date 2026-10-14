@@ -1,17 +1,18 @@
 name: ci
-# `push` is limited to `main` so a PR branch doesn't run the whole workflow
+# `push` is limited to the two long-lived branches (`develop` deploys to
+# staging, `main` to production) so a PR branch doesn't run the whole workflow
 # twice (once for the push, once for the pull_request) on every commit.
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
 
 # Supersede an in-flight run when new commits land on the same ref.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # Only on PR branches. Cancelling on `main` would leave a merge commit with
-  # no completed verdict whenever two PRs land close together.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  # Only on PR branches. Cancelling on `main` or `develop` would leave a merge
+  # commit with no completed verdict whenever two PRs land close together.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/develop' }}
 
 jobs:
   check:

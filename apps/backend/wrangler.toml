@@ -118,8 +118,7 @@ max_retries = 3
 max_concurrency = 1
 dead_letter_queue = "regional-quiz-bulk-mail-dev-dlq"
 
-# Deployed by `.github/workflows/deploy-staging.yml` on a push to any branch
-# other than `main`.
+# Deployed by `.github/workflows/deploy-staging.yml` on a push to `develop`.
 #
 # The frontend calls the API at a same-origin `/api/*` (`$lib/api.ts`), and
 # nothing in `apps/frontend` proxies that in production — `vite.config.ts`'s

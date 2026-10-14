@@ -26,8 +26,8 @@ jobs:
       environment: production
       wrangler-env: production
       pages-project-name: regional-quiz-frontend
-      # Staging has already applied the same migrations by the time a branch
-      # reaches `main`, so the interesting case here is the one where it has
+      # Staging has already applied the same migrations by the time `develop`
+      # is merged into `main`, so the interesting case here is the one where it has
       # not — log what is about to run against production either way.
       preview-migrations: true
     secrets: inherit

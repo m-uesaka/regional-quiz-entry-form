@@ -9,7 +9,7 @@
 | 環境 | Supabase プロジェクト | 用途 | マイグレーション適用方法 | 接続先 |
 | --- | --- | --- | --- | --- |
 | ローカル | Supabase CLI のローカルスタック(Docker) | 開発・単体/統合テスト | `bun run db:migrate`(= `supabase db push --local`) | `apps/backend` はローカル Supabase(`http://127.0.0.1:54321`) |
-| テスト環境(staging) | 専用の Supabase プロジェクト(例: `regional-quiz-entry-form-staging`) | PR ごとの動作確認・E2E・本番反映前の最終確認 | GitHub Actions から `supabase db push --linked` | Cloudflare Workers/Pages の staging 環境 |
+| テスト環境(staging、dev 環境) | 専用の Supabase プロジェクト(例: `regional-quiz-entry-form-staging`) | `develop` に入った変更の動作確認・本番反映前の最終確認 | `develop` マージ時に GitHub Actions から `supabase db push --linked` | Cloudflare Workers/Pages の staging 環境 |
 | 本番環境(production) | 専用の Supabase プロジェクト(例: `regional-quiz-entry-form`) | 実運用 | `main` マージ時に GitHub Actions から `supabase db push --linked` | Cloudflare Workers/Pages の production 環境 |
 
 **重要な方針**:
@@ -81,7 +81,7 @@ bunx supabase db push --linked
 
 ### 5.1 remote より古いタイムスタンプのマイグレーション
 
-`db push` は、リモートに適用済みの最後のマイグレーションより古いタイムスタンプのファイルを見つけると `Found local migration files to be inserted before the last migration on remote database` で停止します。staging は全ブランチが共有するため、これは日常的に起きます — ブランチ A(新しいマイグレーション)が staging にデプロイされた後にブランチ B(古いマイグレーション)を push すると、B の staging デプロイがここで落ちます。
+`db push` は、リモートに適用済みの最後のマイグレーションより古いタイムスタンプのファイルを見つけると `Found local migration files to be inserted before the last migration on remote database` で停止します。staging は `develop` に入る全ブランチが共有するため、これは起こり得ます — ブランチ A(新しいマイグレーション)が先に `develop` にマージされて staging にデプロイされた後、ブランチ B(古いマイグレーション)をマージすると、B の staging デプロイがここで落ちます。`workflow_dispatch` で未マージのブランチを staging に手動デプロイした場合も同様です。
 
 順序の入れ替わりが意図通りであれば `--include-all` を付けて適用します。意図通りでない(= 実際に順序依存がある)場合は、マイグレーションファイルを rebase してタイムスタンプを振り直してください。**production で `--include-all` に頼るのは避け、production に到達する前に staging で解消しておきます。**
 
@@ -223,8 +223,15 @@ routes = [
 | ファイル | トリガー | 役割 |
 | --- | --- | --- |
 | `.github/workflows/deploy.yml` | `workflow_call` | 実体。checkout → `bun install` → typecheck/test → Supabase link → マイグレーション適用 → Worker デプロイ → フロントエンドのビルド → Pages デプロイ |
-| `.github/workflows/deploy-staging.yml` | `main` 以外への push / 手動実行 | `environment: staging`、Worker は `--env staging`、Pages は `regional-quiz-frontend-staging` |
+| `.github/workflows/deploy-staging.yml` | `develop` への push / 手動実行(任意のブランチを指定可) | `environment: staging`、Worker は `--env staging`、Pages は `regional-quiz-frontend-staging` |
 | `.github/workflows/deploy-production.yml` | `main` への push / 手動実行 | `environment: production`、Worker は `--env production`、Pages は `regional-quiz-frontend`。適用前に `db push --linked --dry-run` で差分をログに残す |
+
+ブランチ運用は次の通りです。
+
+- 機能ブランチは `develop` から切り、PR は `develop` 向けに出す。マージすると staging(dev 環境)にデプロイされる
+- リリース時は `develop` → `main` の PR を出してマージする。マージすると production にデプロイされる
+- 機能ブランチへの push 自体ではデプロイされない。マージ前に実環境で確認したい場合は、`deploy-staging` を `workflow_dispatch` でそのブランチを指定して実行する(次に `develop` へ push されるまで staging はそのブランチの内容になる)
+- `ci.yml` は PR と、`develop` / `main` への push で実行される
 
 呼び出し側は `secrets: inherit` を使うため、Secrets の参照先は呼び出し先ジョブの `environment:` で決まります。押さえておきたい点は次の通りです。
 

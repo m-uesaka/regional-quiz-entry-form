@@ -10,6 +10,12 @@ TypeScript + Hono のバックエンドと SvelteKit のフロントエンドか
 - 共有パッケージ: `packages/shared` — バックエンド/フロントエンド間で共有する Zod スキーマと型定義
 - E2E テスト: `apps/e2e` — **Playwright**。`vite dev` で起動した `apps/frontend`、`wrangler dev --local-protocol https` で起動した `apps/backend`、`bun run db:start` で起動したローカル Supabase を相手に、主要フローを Chromium のブラウザ操作で通す(画面の掴み方は `support/ui.ts` に集約。詳細は `apps/e2e/README.md`)。実行は `bun run test:e2e`(通常の `bun run test` には含まれない)。事前に `bunx playwright install chromium` が必要
 
+## ブランチ運用 / デプロイ
+
+- `develop` への merge で staging(dev 環境)に、`main` への merge で production にデプロイされる(`.github/workflows/deploy-*.yml`)
+- 機能ブランチは `develop` から切り、PR は `develop` 向けに出す。リリースは `develop` → `main` の PR で行う
+- 詳細は `docs/supabase-deployment.md` 7 章
+
 ## 型安全な API 連携
 
 - `apps/backend` は Hono のルートをチェーンして `export type AppType = typeof routes` を公開する
