@@ -82,6 +82,8 @@ describe('admin regulations +page.svelte', () => {
   it('re-renders what a refused save carried rather than the stored rows', () => {
     renderPage([GENERAL], {
       saved: false,
+      imported: false,
+      spreadsheetId: '',
       error: 'エントリーに使われているレギュレーションは削除できません',
       rows: [
         {
@@ -111,6 +113,8 @@ describe('admin regulations +page.svelte', () => {
   it('keeps a single blank row when a refused save echoes one back', () => {
     renderPage([GENERAL], {
       saved: false,
+      imported: false,
+      spreadsheetId: '',
       error: 'レギュレーション名を入力してください',
       rows: [
         {
@@ -145,5 +149,56 @@ describe('admin regulations +page.svelte', () => {
     expect(
       screen.getByRole('link', {name: '大会の編集へ戻る'}),
     ).toHaveAttribute('href', `/admin/tournaments/${TOURNAMENT_ID}/edit`);
+  });
+
+  it('offers to read the regulations from a spreadsheet', () => {
+    renderPage([GENERAL]);
+
+    expect(screen.getByLabelText('スプレッドシートID')).toHaveValue('');
+    expect(
+      screen.getByRole('button', {name: 'スプレッドシートから読み込む'}),
+    ).toBeInTheDocument();
+  });
+
+  it('shows imported rows as unsaved, with the dropped ones ticked', () => {
+    renderPage([GENERAL], {
+      saved: false,
+      imported: true,
+      spreadsheetId: 'sheet-id',
+      error: null,
+      rows: [
+        {
+          id: '',
+          order: '',
+          label: '地元の部',
+          priorityStartsAt: '2026-08-01T10:00',
+          priorityEndsAt: '2026-08-08T10:00',
+          remove: false,
+        },
+        {
+          id: GENERAL.id,
+          order: '',
+          label: '一般の部',
+          priorityStartsAt: '',
+          priorityEndsAt: '',
+          remove: true,
+        },
+      ],
+    });
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'まだ保存されていません',
+    );
+    expect(screen.getByLabelText('スプレッドシートID')).toHaveValue('sheet-id');
+    expect(
+      screen
+        .getAllByLabelText('レギュレーション名')
+        .map(input => (input as HTMLInputElement).value),
+    ).toEqual(['地元の部', '一般の部', '']);
+    expect(screen.getAllByLabelText(/優先期間の開始/)[0]).toHaveValue(
+      '2026-08-01T10:00',
+    );
+    // Only the stored row can be removed, and the import ticked it.
+    expect(screen.getByLabelText('削除する')).toBeChecked();
   });
 });

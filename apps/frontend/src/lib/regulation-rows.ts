@@ -1,4 +1,34 @@
+import {toJstDatetimeLocal} from '$lib/jst-datetime';
 import type {RegulationRowValues} from '$lib/types/regulation-form';
+
+/** The parts of a regulation the form shows, stored or freshly imported. */
+interface RegulationRowSource {
+  id?: string;
+  label: string;
+  priorityStartsAt: string | null;
+  priorityEndsAt: string | null;
+}
+
+/**
+ * Turns a regulation into the row the controls carry. The priority window is
+ * shown as JST wall-clock time, which is what the save action reads back.
+ * @param regulation A stored regulation, or one read from a spreadsheet
+ *     (which has no `id` unless it was paired with a stored one).
+ */
+export function toRegulationRow(
+  regulation: RegulationRowSource,
+): RegulationRowValues {
+  return {
+    id: regulation.id ?? '',
+    // The rendered position fills this in; a row only carries a value of
+    // its own after a rejected save, where it echoes what was typed.
+    order: '',
+    label: regulation.label,
+    priorityStartsAt: toJstDatetimeLocal(regulation.priorityStartsAt),
+    priorityEndsAt: toJstDatetimeLocal(regulation.priorityEndsAt),
+    remove: false,
+  };
+}
 
 /** A row of the regulation form with nothing filled in. */
 export function emptyRegulationRow(): RegulationRowValues {

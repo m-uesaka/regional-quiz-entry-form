@@ -39,6 +39,8 @@ const STUDENT: Regulation = {
 /** The bodies the action `PUT`s, so a test can assert on the order sent. */
 interface FetchLog {
   putBodies: Array<{regulations: Array<Record<string, unknown>>}>;
+  /** The bodies the import action `POST`s to the preview API. */
+  previewBodies?: Array<Record<string, unknown>>;
 }
 
 /**
@@ -53,6 +55,8 @@ function fakeFetch(
     putError?: string;
     tournaments?: Tournament[];
     regulationsStatus?: number;
+    /** What the sheet-import preview answers with. */
+    preview?: {status?: number; body: unknown};
   } = {},
   log: FetchLog = {putBodies: []},
 ): typeof fetch {
@@ -63,6 +67,13 @@ function fakeFetch(
       return jsonResponse(
         status < 400 ? {ok: true} : {error: options.putError ?? 'nope'},
         status,
+      );
+    }
+    if (String(input).endsWith('/sheet-import/regulations/preview')) {
+      log.previewBodies?.push(JSON.parse(String(init?.body)));
+      return jsonResponse(
+        options.preview?.body ?? {regulations: []},
+        options.preview?.status ?? 200,
       );
     }
     if (String(input).endsWith('/regulations')) {
@@ -97,7 +108,7 @@ function buildLoadEvent(fetchImpl: typeof fetch): Parameters<typeof load>[0] {
 function buildActionEvent(
   fetchImpl: typeof fetch,
   formData: FormData,
-): Parameters<typeof actions.default>[0] {
+): Parameters<typeof actions.save>[0] {
   return {
     params: {id: TOURNAMENT_ID},
     fetch: fetchImpl,
@@ -105,7 +116,7 @@ function buildActionEvent(
       `http://localhost/admin/tournaments/${TOURNAMENT_ID}/regulations`,
     ),
     request: {formData: async () => formData},
-  } as Parameters<typeof actions.default>[0];
+  } as Parameters<typeof actions.save>[0];
 }
 
 /**
@@ -183,7 +194,7 @@ describe('admin regulations save action', () => {
     setRow(formData, 1, {id: STUDENT.id, order: '1', label: '学生の部'});
     const event = buildActionEvent(fakeFetch({}, log), formData);
 
-    await expect(actions.default(event)).resolves.toMatchObject({saved: true});
+    await expect(actions.save(event)).resolves.toMatchObject({saved: true});
     expect(log.putBodies[0].regulations.map(r => r.label)).toEqual([
       '学生の部',
       '一般の部',
@@ -202,7 +213,7 @@ describe('admin regulations save action', () => {
     setRow(formData, 2, {id: STUDENT.id, order: '1', label: '学生の部'});
     const event = buildActionEvent(fakeFetch({}, log), formData);
 
-    await expect(actions.default(event)).resolves.toMatchObject({saved: true});
+    await expect(actions.save(event)).resolves.toMatchObject({saved: true});
     expect(log.putBodies[0].regulations.map(r => r.label)).toEqual([
       '学生の部',
       '一般の部',
@@ -218,7 +229,7 @@ describe('admin regulations save action', () => {
     setRow(formData, 0, {id: GENERAL.id, label: '一般の部'});
     const event = buildActionEvent(fakeFetch({}, log), formData);
 
-    await expect(actions.default(event)).resolves.toMatchObject({saved: true});
+    await expect(actions.save(event)).resolves.toMatchObject({saved: true});
     expect(log.putBodies[0].regulations).toEqual([
       {
         id: GENERAL.id,
@@ -244,7 +255,7 @@ describe('admin regulations save action', () => {
     setRow(formData, 2, {label: ''});
     const event = buildActionEvent(fakeFetch({}, log), formData);
 
-    await expect(actions.default(event)).resolves.toMatchObject({saved: true});
+    await expect(actions.save(event)).resolves.toMatchObject({saved: true});
     expect(log.putBodies[0].regulations).toEqual([
       {
         id: GENERAL.id,
@@ -268,7 +279,7 @@ describe('admin regulations save action', () => {
     setRow(formData, 1, {id: STUDENT.id, label: '学生の部', remove: true});
     const event = buildActionEvent(fakeFetch({}, log), formData);
 
-    await expect(actions.default(event)).resolves.toMatchObject({saved: true});
+    await expect(actions.save(event)).resolves.toMatchObject({saved: true});
     expect(log.putBodies[0].regulations.map(r => r.label)).toEqual([
       '一般の部',
     ]);
@@ -285,7 +296,7 @@ describe('admin regulations save action', () => {
     });
     const event = buildActionEvent(fakeFetch({}, log), formData);
 
-    await expect(actions.default(event)).resolves.toMatchObject({saved: true});
+    await expect(actions.save(event)).resolves.toMatchObject({saved: true});
     expect(log.putBodies[0].regulations[0]).toMatchObject({
       priorityStartsAt: '2026-04-01T00:00:00.000Z',
       priorityEndsAt: '2026-04-30T00:00:00.000Z',
@@ -302,7 +313,7 @@ describe('admin regulations save action', () => {
     });
     const event = buildActionEvent(fakeFetch({}, log), formData);
 
-    await expect(actions.default(event)).resolves.toMatchObject({
+    await expect(actions.save(event)).resolves.toMatchObject({
       status: 400,
       data: {
         saved: false,
@@ -318,7 +329,7 @@ describe('admin regulations save action', () => {
     setRow(formData, 0, {id: GENERAL.id, label: '一般の部', remove: true});
     const event = buildActionEvent(fakeFetch({}, log), formData);
 
-    await expect(actions.default(event)).resolves.toMatchObject({
+    await expect(actions.save(event)).resolves.toMatchObject({
       status: 400,
       data: {error: 'レギュレーションは1つ以上必要です'},
     });
@@ -331,7 +342,7 @@ describe('admin regulations save action', () => {
     setRow(formData, 0, {id: GENERAL.id, label: ''});
     const event = buildActionEvent(fakeFetch({}, log), formData);
 
-    await expect(actions.default(event)).resolves.toMatchObject({
+    await expect(actions.save(event)).resolves.toMatchObject({
       status: 400,
       data: {error: 'レギュレーション名を入力してください'},
     });
@@ -347,7 +358,7 @@ describe('admin regulations save action', () => {
       formData,
     );
 
-    await expect(actions.default(event)).resolves.toMatchObject({
+    await expect(actions.save(event)).resolves.toMatchObject({
       status: 409,
       data: {saved: false, error: message},
     });
@@ -358,8 +369,134 @@ describe('admin regulations save action', () => {
     setRow(formData, 0, {id: GENERAL.id, label: '書き換えた名前'});
     const event = buildActionEvent(fakeFetch({putStatus: 409}), formData);
 
-    await expect(actions.default(event)).resolves.toMatchObject({
+    await expect(actions.save(event)).resolves.toMatchObject({
       data: {rows: [expect.objectContaining({label: '書き換えた名前'})]},
     });
+  });
+});
+
+describe('admin regulations import action', () => {
+  /** Builds the event for an import of the given spreadsheet ID. */
+  function buildImportEvent(
+    fetchImpl: typeof fetch,
+    spreadsheetId: string,
+  ): Parameters<typeof actions.import>[0] {
+    const formData = new FormData();
+    formData.set('spreadsheetId', spreadsheetId);
+    return buildActionEvent(fetchImpl, formData);
+  }
+
+  it('pairs sheet rows with stored ones by name and ticks the rest', async () => {
+    const log: FetchLog = {putBodies: [], previewBodies: []};
+    const event = buildImportEvent(
+      fakeFetch(
+        {
+          preview: {
+            body: {
+              regulations: [
+                {
+                  label: '地元の部',
+                  priorityStartsAt: '2026-08-01T01:00:00.000Z',
+                  priorityEndsAt: '2026-08-08T01:00:00.000Z',
+                },
+                // Stored with a priority window; the sheet drops it.
+                {
+                  label: '学生の部',
+                  priorityStartsAt: null,
+                  priorityEndsAt: null,
+                },
+              ],
+            },
+          },
+        },
+        log,
+      ),
+      ' sheet-id ',
+    );
+
+    await expect(actions.import(event)).resolves.toEqual({
+      saved: false,
+      imported: true,
+      error: null,
+      spreadsheetId: 'sheet-id',
+      rows: [
+        {
+          id: '',
+          order: '',
+          label: '地元の部',
+          priorityStartsAt: '2026-08-01T10:00',
+          priorityEndsAt: '2026-08-08T10:00',
+          remove: false,
+        },
+        {
+          id: STUDENT.id,
+          order: '',
+          label: '学生の部',
+          priorityStartsAt: '',
+          priorityEndsAt: '',
+          remove: false,
+        },
+        {
+          id: GENERAL.id,
+          order: '',
+          label: '一般の部',
+          priorityStartsAt: '',
+          priorityEndsAt: '',
+          remove: true,
+        },
+      ],
+    });
+    expect(log.previewBodies).toEqual([{spreadsheetId: 'sheet-id'}]);
+    // Reading a sheet saves nothing.
+    expect(log.putBodies).toEqual([]);
+  });
+
+  it("surfaces the preview API's message and keeps the stored rows", async () => {
+    const message = '2行目: 優先期間は開始と終了の両方を指定してください';
+    const event = buildImportEvent(
+      fakeFetch({preview: {status: 400, body: {error: message}}}),
+      'sheet-id',
+    );
+
+    await expect(actions.import(event)).resolves.toMatchObject({
+      status: 400,
+      data: {
+        imported: false,
+        error: message,
+        rows: null,
+        spreadsheetId: 'sheet-id',
+      },
+    });
+  });
+
+  it('refuses a blank spreadsheet ID without asking the API', async () => {
+    const log: FetchLog = {putBodies: [], previewBodies: []};
+    const event = buildImportEvent(fakeFetch({}, log), '  ');
+
+    await expect(actions.import(event)).resolves.toMatchObject({
+      status: 400,
+      data: {error: 'スプレッドシートIDを入力してください'},
+    });
+    expect(log.previewBodies).toEqual([]);
+  });
+
+  it('sends an expired session to the login page', async () => {
+    const event = buildImportEvent(
+      fakeFetch({preview: {status: 401, body: {error: 'unauthorized'}}}),
+      'sheet-id',
+    );
+
+    await expect(actions.import(event)).rejects.toMatchObject({status: 303});
+  });
+
+  // The two requests run side by side, so the session can expire between
+  // them: the preview passes and only the stored read is refused.
+  it('sends a session that expired on the stored read to the login page', async () => {
+    const event = buildImportEvent(
+      fakeFetch({regulationsStatus: 401}),
+      'sheet-id',
+    );
+
+    await expect(actions.import(event)).rejects.toMatchObject({status: 303});
   });
 });
