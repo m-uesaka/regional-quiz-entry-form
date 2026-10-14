@@ -3,8 +3,9 @@ name: deploy-staging
 # Staging is the development environment and follows `develop`: feature
 # branches are merged into `develop`, which deploys here, and `develop` is
 # merged into `main` to release (`deploy-production.yml`). Feature branches
-# themselves no longer deploy on push, so staging always shows what is about
-# to go to production rather than whichever branch was pushed last.
+# themselves no longer deploy on push, so automatic deploys keep staging on
+# what is about to go to production rather than whichever branch was pushed
+# last (a manual dispatch, below, is the one exception).
 #
 # To try an unmerged branch against real Supabase and Cloudflare, start this
 # workflow by hand with `workflow_dispatch` on that branch. It overwrites
