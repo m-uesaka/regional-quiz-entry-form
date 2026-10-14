@@ -1,16 +1,19 @@
 name: deploy-staging
 
-# Every branch except `main` deploys to staging, so a change can be exercised
-# against real Supabase and Cloudflare before it is merged. `main` is covered
-# by `deploy-production.yml` instead — listing it here as well would deploy the
-# same commit twice, to two environments, from one push.
+# Staging is the development environment and follows `develop`: feature
+# branches are merged into `develop`, which deploys here, and `develop` is
+# merged into `main` to release (`deploy-production.yml`). Feature branches
+# themselves no longer deploy on push, so automatic deploys keep staging on
+# what is about to go to production rather than whichever branch was pushed
+# last (a manual dispatch, below, is the one exception).
 #
-# There is one staging environment and any number of branches, so the last
-# push wins; `deploy.yml`'s concurrency group queues them rather than letting
-# two overlap. Deploy a specific branch on demand with `workflow_dispatch`.
+# To try an unmerged branch against real Supabase and Cloudflare, start this
+# workflow by hand with `workflow_dispatch` on that branch. It overwrites
+# staging until the next push to `develop`, and `deploy.yml`'s concurrency
+# group queues it behind any deploy already in flight.
 on:
   push:
-    branches-ignore: [main]
+    branches: [develop]
   workflow_dispatch: {}
 
 jobs:
