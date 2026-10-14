@@ -488,4 +488,15 @@ describe('admin regulations import action', () => {
 
     await expect(actions.import(event)).rejects.toMatchObject({status: 303});
   });
+
+  // The two requests run side by side, so the session can expire between
+  // them: the preview passes and only the stored read is refused.
+  it('sends a session that expired on the stored read to the login page', async () => {
+    const event = buildImportEvent(
+      fakeFetch({regulationsStatus: 401}),
+      'sheet-id',
+    );
+
+    await expect(actions.import(event)).rejects.toMatchObject({status: 303});
+  });
 });

@@ -224,7 +224,7 @@ export const actions = {
         param: {tournamentId: params.id},
       }),
     ]);
-    if (isUnauthorized(previewRes)) {
+    if (isUnauthorized(previewRes) || isUnauthorized(storedRes)) {
       redirect(303, staffLoginPath(url));
     }
     if (!previewRes.ok) {
