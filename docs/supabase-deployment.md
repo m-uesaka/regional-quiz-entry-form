@@ -2,7 +2,7 @@
 
 このドキュメントは、`supabase/migrations/` で管理しているスキーマを Supabase のテスト環境(staging)・本番環境(production)へ適用し、`apps/backend`(Cloudflare Workers)・`apps/frontend`(Cloudflare Pages)と接続するまでの手順をまとめたものです。
 
-> **前提**: パイプライン側(`.github/workflows/deploy*.yml`、`apps/backend/wrangler.toml` の環境定義)は Task 8-2(#42)で実装済みですが、Supabase プロジェクトと Cloudflare Workers/Pages プロジェクトの実体、および GitHub Environments の Secrets はまだ作成されていません。本ドキュメントはそれらを作成して初回デプロイを通すための runbook です。作成が済むまで `deploy-staging` / `deploy-production` はシークレット未設定で失敗します。
+> **前提**: パイプライン側(`.github/workflows/deploy*.yml`、`apps/backend/wrangler.toml` の環境定義)は Task 8-2(#42)で実装済みです。staging は 2026-10-22 に本ドキュメントの手順で構築し、初回デプロイが通っています(その記録と、つまずいた点は [`staging-setup-walkthrough.md`](./staging-setup-walkthrough.md))。production の Supabase / Cloudflare の実体と GitHub Environment の Secrets はまだ作成されておらず、作成が済むまで `deploy-production` はシークレット未設定で失敗します。
 
 ## 1. 環境の全体像
 
@@ -100,10 +100,12 @@ bunx supabase db push --linked
 
 | 名前 | 用途 | 発行元 |
 | --- | --- | --- |
-| `SUPABASE_ACCESS_TOKEN` | CLI/CI からのログイン・`db push --linked` に使用する Personal Access Token | Supabase Dashboard > Account > Access Tokens |
+| `SUPABASE_ACCESS_TOKEN` | CI からの `link` / `db push --linked` に使用する Personal Access Token(環境ごとにスコープを絞って発行する。6.5 参照) | Supabase Dashboard > Account > Access Tokens |
 | `SUPABASE_URL` | `@supabase/supabase-js` の接続先(環境ごとに異なる) | 各プロジェクトのダッシュボードの **Connect** ダイアログ(`https://<project ref>.supabase.co`) |
 | `SUPABASE_SECRET_KEY` | バックエンドが RLS をバイパスして操作するための **secret key**(`sb_secret_...`、環境ごとに異なる) | 各プロジェクトの `Project Settings > API Keys` の Secret keys |
 | `SUPABASE_DB_PASSWORD` | `link` / `db push --linked` が Postgres へ接続するためのパスワード(環境ごとに異なる) | プロジェクト作成時に生成した DB パスワード |
+
+登録先は値によって分かれます。`SUPABASE_ACCESS_TOKEN` / `SUPABASE_DB_PASSWORD`(と `SUPABASE_PROJECT_ID`)は CI が使うので **GitHub Environment の Secrets**(6.5)に、`SUPABASE_URL` / `SUPABASE_SECRET_KEY` は Worker が実行時に読むので **Worker のシークレット**(6.2)に登録します。後者を GitHub の Secrets に入れても、ワークフローはどこからも参照しないので Worker には届きません。
 
 ### 6.2 Cloudflare Workers(`apps/backend`)側
 
@@ -134,9 +136,11 @@ bunx wrangler secret put SESSION_SECRET --env production
 bunx wrangler secret put TURNSTILE_SECRET_KEY --env production
 ```
 
-`SESSION_SECRET` は staging/production で必ず異なる値を発行してください(`openssl rand -base64 32` などで生成)。シークレットは `wrangler deploy` では変更されないため、この登録は環境ごとに一度だけで済みます。
+`SESSION_SECRET` は staging/production で必ず異なる値を発行してください(`openssl rand -base64 32` などで生成)。6.3 で Pages にも同じ値を登録するので、シークレット管理ツールに保存しておきます。シークレットは `wrangler deploy` では変更されないため、この登録は環境ごとに一度だけで済みます。
 
-`TURNSTILE_SECRET_KEY` は Cloudflare Dashboard の `Turnstile` で widget を作成すると発行される **Secret Key** です(#116)。ウィジェットは環境ごとに 1 つ作り、その **Site Key** を Pages 側の `PUBLIC_TURNSTILE_SITE_KEY`(6.3)に、Secret Key をここに登録します。widget のドメイン設定には、その環境でフォームを表示するホスト名を入れてください。
+初回デプロイ前は Worker がまだ存在しないため、最初の `secret put` で `There doesn't seem to be a Worker called "..."` と聞かれます。**Yes** と答えると空の Worker が作られ、そこにシークレットが登録されます。`MAIL_API_KEY` / `GOOGLE_SHEETS_API_KEY` は未登録でもデプロイ自体は通り、その機能(メール送信・シート取り込み)が実行時に失敗するだけなので、用意できてから登録しても構いません。
+
+`TURNSTILE_SECRET_KEY` は Cloudflare Dashboard の `Turnstile` で widget を作成すると発行される **Secret Key** です(#116)。ウィジェットは環境ごとに 1 つ作り、その **Site Key** を Pages 側の `PUBLIC_TURNSTILE_SITE_KEY`(6.3)に、Secret Key をここに登録します。widget のドメイン設定には、その環境でフォームを表示するホスト名を入れてください。独自ドメインが無い間は Pages の既定ホスト名(例: `regional-quiz-frontend-staging.pages.dev`)を入れ、6.4 でカスタムドメインを割り当てたときに追加します。
 
 > **`[env.*.vars]` に `TURNSTILE_SECRET_KEY` を書かないでください。** 同名の var があるとデプロイのたびにシークレットが平文の var で上書きされます。トップレベルの `[vars]` にはローカル開発用のテスト鍵(Cloudflare が公開している「常に成功する」固定値)が入っていますが、`vars` は環境に継承されないため `--env` 付きのデプロイには影響しません。
 >
@@ -150,7 +154,7 @@ bunx wrangler secret put TURNSTILE_SECRET_KEY --env production
 
 スタッフの一斉メールは Cloudflare Queues のコンシューマが送ります(Task 10-4 / #114)。`wrangler.toml` の各環境に producer(`BULK_MAIL_QUEUE`)と consumer を定義済みですが、**キューそのものは先に作っておく必要があります**。存在しないキュー名を指す `wrangler deploy` は失敗します。
 
-> **Queues は Workers Paid(有料)プラン限定の機能です。** ローカル開発と E2E は `wrangler dev` がキューを模擬するので課金は要りませんが、デプロイ先のアカウントが無料プランのままだとこの機能は使えません。その場合の代替は Cloudflare Workflows か、Cron Trigger で送信待ち行列を掃き出す方式で、いずれも `apps/backend/src/lib/bulk-mail-queue.ts` の置き換えになります。
+> **Queues は Workers Free プランでも使えます**(2026-02 以降)。ただし Free プランは操作数が 1 日 10,000 回(読み取り・書き込み・削除の合計)まで、メッセージの保持期間が**最大 24 時間**(Paid は 14 日)に制限されます。Wrangler の既定の保持期間は 4 日(345600 秒)なので、Free プランでは下記のように `--message-retention-period-secs 86400` を明示してください。Paid プランでもこの指定のままで問題ありません。ローカル開発と E2E は `wrangler dev` がキューを模擬するので、どちらのプランでも課金は要りません。
 
 環境ごとに本体と dead letter queue の 2 本ずつ作ります(名前は `wrangler.toml` の `queue` / `dead_letter_queue` と一致させてください)。
 
@@ -158,13 +162,15 @@ bunx wrangler secret put TURNSTILE_SECRET_KEY --env production
 cd apps/backend
 
 # staging
-bunx wrangler queues create regional-quiz-bulk-mail-staging
-bunx wrangler queues create regional-quiz-bulk-mail-staging-dlq
+bunx wrangler queues create regional-quiz-bulk-mail-staging --message-retention-period-secs 86400
+bunx wrangler queues create regional-quiz-bulk-mail-staging-dlq --message-retention-period-secs 86400
 
 # production
-bunx wrangler queues create regional-quiz-bulk-mail
-bunx wrangler queues create regional-quiz-bulk-mail-dlq
+bunx wrangler queues create regional-quiz-bulk-mail --message-retention-period-secs 86400
+bunx wrangler queues create regional-quiz-bulk-mail-dlq --message-retention-period-secs 86400
 ```
+
+1 日 10,000 回の操作数は、一斉メール 1 通あたり送信・受信・確認応答で数回ずつ消費します。production で大会規模の一斉メールを送るなら、上限に収まるかを見積もるか Paid プランを検討してください。
 
 キューを環境ごとに分けているのは、1 本を共有すると staging の送信テストのメッセージを production の Worker が拾い、**本物のメールとして送ってしまう**ためです。dead letter queue には、3 回の再配信でも送れなかった宛先のメッセージが残ります(コンシューマ側でも最終配信で諦めて `mail_jobs.failed` に計上するので、件数はスタッフ画面から見えます)。
 
@@ -183,15 +189,21 @@ bunx wrangler pages project create regional-quiz-frontend --production-branch ma
 
 | 名前 | 種別 | 値 |
 | --- | --- | --- |
-| `BACKEND_URL` | 通常の変数 | その環境のバックエンド Worker のオリジン(例: `https://entry.regionalquiz.example`)。SSR の `handleFetch` が `/api/*` の転送先に使う |
+| `BACKEND_URL` | 通常の変数 | その環境のバックエンド Worker のオリジン(例: `https://entry.regionalquiz.example`)。SSR の `handleFetch` が `/api/*` の転送先に使う。末尾の `/` や `/api` は付けない。独自ドメインが無い間は workers.dev の URL(`https://regional-quiz-backend-staging.<アカウントのサブドメイン>.workers.dev`)を入れる |
 | `SESSION_SECRET` | シークレット | **同じ環境の Worker に登録したものと同一の値**。ズレるとログイン直後のセッションが読めず `/staff/*` がログイン画面に跳ね返される |
 | `PUBLIC_TURNSTILE_SITE_KEY` | 通常の変数 | 6.2 で作成した Turnstile widget の **Site Key**。エントリーフォームとパスワード再設定要求フォームのウィジェットが読む。未設定だとウィジェットが描画されず、トークンが無い送信をバックエンドが 400 で拒否するため、**この 2 つのフォームが誰にも使えなくなる** |
 
 ```bash
+# staging
+bunx wrangler pages secret put SESSION_SECRET --project-name regional-quiz-frontend-staging
+
+# production
 bunx wrangler pages secret put SESSION_SECRET --project-name regional-quiz-frontend
 ```
 
-`BACKEND_URL` は機密ではないので Dashboard の `Settings > Environment variables` から登録しても構いません。いずれも Pages プロジェクト側の設定で、`wrangler pages deploy` では上書きされません。
+`BACKEND_URL` / `PUBLIC_TURNSTILE_SITE_KEY` は機密ではないので、Dashboard の `Settings > Variables and Secrets` から登録します。このとき環境は **Production** を選んでください(ワークフローは `--branch main` でアップロードするため、デプロイは Pages の production 環境として扱われます。Preview 側に登録しても読まれません)。いずれも Pages プロジェクト側の設定で、`wrangler pages deploy` では上書きされません。
+
+`<アカウントのサブドメイン>` は Dashboard の `Workers & Pages` の右側に表示される `Subdomain`(`xxx.workers.dev`)で確認できます。
 
 ### 6.4 `/api/*` をバックエンド Worker へ振り分ける
 
@@ -217,13 +229,42 @@ routes = [
 
 | Secret 名 | staging | production |
 | --- | --- | --- |
-| `SUPABASE_ACCESS_TOKEN` | 共通(同じトークンを両 Environment に登録可) | 同左 |
+| `SUPABASE_ACCESS_TOKEN` | staging プロジェクトだけにスコープを絞ったトークン | production プロジェクトだけにスコープを絞ったトークン |
 | `SUPABASE_PROJECT_ID` | staging プロジェクトの project ref | production プロジェクトの project ref |
 | `SUPABASE_DB_PASSWORD` | staging プロジェクト作成時の DB パスワード | production プロジェクトの DB パスワード |
-| `CLOUDFLARE_API_TOKEN` | Workers/Pages への Edit 権限を持つトークン | 同左(スコープを分けたい場合は環境ごとに別トークンでも可) |
-| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare アカウント ID | 同左 |
+| `CLOUDFLARE_API_TOKEN` | 下記の権限を持つ Custom Token | 同左 |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare アカウント ID(`Workers & Pages` の右側に表示) | 同左 |
 
 `SUPABASE_DB_PASSWORD` は `supabase link` / `supabase db push --linked` が DB へ接続するのに使います。未登録だと CI は対話プロンプトを出せずに失敗します。
+
+#### `SUPABASE_ACCESS_TOKEN` の発行
+
+Supabase の Personal Access Token は、プロジェクトと機能ごとにスコープを絞って発行できます(2026-10 に GA)。アカウント全体に効く「Create legacy token」は使わず、**環境ごとに対象プロジェクト 1 つに絞ったトークン**を発行してください。こうしておくと、staging のトークンが漏れても production には届きません。
+
+- 対象: その環境のプロジェクトだけ
+- 権限: projects = read、database = read-write、**API keys(`api_gateway_keys_read`)= read**。`supabase link` はプロジェクトの API キー情報を読むため、最後の権限が無いと `Missing required permission(s): api_gateway_keys_read` で失敗します。auth / storage などは不要です
+- 有効期限: 最長 1 年。期限日を記録しておく
+
+スコープ付きトークンは作成後に権限を変更できません。権限が足りなかった場合は作り直して Secret を上書きし、デプロイが通ってから古いトークンを削除します。
+
+#### `CLOUDFLARE_API_TOKEN` の発行
+
+`My Profile > API Tokens > Create Token > Custom token` で作成します(テンプレートの「Edit Cloudflare Workers」は Pages の権限が無く、不要な権限を含むので使いません)。値は作成直後の画面に一度だけ表示されます。控え損ねたら一覧の「…」から **Roll** で再発行します。
+
+| 区分 | 権限 | レベル |
+| --- | --- | --- |
+| Account | Workers Scripts | Edit |
+| Account | Cloudflare Pages | Edit |
+| Account | Queues | Edit |
+| Account | Account Settings | Read |
+| User | Memberships | Read |
+| User | User Details | Read |
+
+- Account Resources は対象アカウント 1 つに限定する
+- Zone の権限(`Workers Routes: Edit`)は 6.4 で `routes` を有効化するときに必要になる。その時点でトークンを作り直す
+- GitHub のランナーは IP が固定されないので、Client IP Address Filtering は設定しない
+
+Cloudflare のトークンは Worker 単位では絞れないため、staging と production が同じアカウントにある限り、トークンを環境ごとに分けても分離の効果は小さいです。厳密に分けるならアカウント自体を分けます。
 
 ## 7. CI/CD パイプライン
 
@@ -277,12 +318,13 @@ routes = [
 - [ ] `Project Settings > General` の project ref を控えた
 - [ ] `SESSION_SECRET` を環境ごとに個別発行した
 - [ ] GitHub の `staging` / `production` Environments を作成し、Secrets を登録した
+- [ ] `SUPABASE_ACCESS_TOKEN` を環境ごとに対象プロジェクトへスコープを絞って発行した(6.5。`api_gateway_keys_read` を含める)
 - [ ] production Environment に Required reviewers を設定した
 - [ ] 各 Worker 環境に `wrangler secret put` でシークレットを登録した(6.2)
 - [ ] 環境ごとに Turnstile widget を作成し、Secret Key を Worker に登録した(6.2)
-- [ ] 一斉メール用の Queue と dead letter queue を環境ごとに作成した(6.2.2。Workers Paid プランが要る)
+- [ ] 一斉メール用の Queue と dead letter queue を環境ごとに作成した(6.2.2。Free プランでは保持期間 24 時間を指定)
 - [ ] Pages プロジェクトを production branch `main` で作成した(6.3)
-- [ ] Pages プロジェクトに `BACKEND_URL` / `SESSION_SECRET` / `PUBLIC_TURNSTILE_SITE_KEY` を登録した(6.3)
+- [ ] Pages プロジェクトの **Production** 環境に `BACKEND_URL` / `SESSION_SECRET` / `PUBLIC_TURNSTILE_SITE_KEY` を登録した(6.3)
 - [ ] `wrangler.toml` の `routes` を実ドメインで有効化し、`/api/*` が Worker に届くことを確認した(6.4 / #101)
 - [ ] `bunx supabase db push --linked --dry-run` で初回マイグレーション適用の差分を確認した
 - [ ] staging の `deploy-staging` ワークフローが全ステップ成功することを確認した
@@ -292,6 +334,8 @@ routes = [
 
 - Supabase CLI Local Development: https://supabase.com/docs/guides/local-development
 - Supabase API keys(publishable / secret key): https://supabase.com/docs/guides/api/api-keys
+- Supabase スコープ付き Personal Access Token: https://supabase.com/changelog/scoped-personal-access-tokens-ga
+- Cloudflare Queues の Free プラン対応: https://developers.cloudflare.com/changelog/product/queues/
 - Supabase CLI Managing Environments: https://supabase.com/docs/guides/deployment/managing-environments
 - Supabase CLI コマンドリファレンス: https://supabase.com/docs/reference/cli
 - Wrangler Environments: https://developers.cloudflare.com/workers/wrangler/environments/
