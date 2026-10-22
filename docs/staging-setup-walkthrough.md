@@ -57,8 +57,9 @@ flowchart LR
 
 ### 3. Worker のシークレットを登録する
 
+手順 2 の `cd apps/backend` で既に `apps/backend` にいるので、再度移動せずにそのまま続ける。
+
 ```bash
-cd apps/backend
 openssl rand -base64 32          # SESSION_SECRET 用。手順 6 でも使うので保存しておく
 
 bunx wrangler secret put SUPABASE_URL --env staging
