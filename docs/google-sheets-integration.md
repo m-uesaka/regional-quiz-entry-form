@@ -209,6 +209,8 @@ bunx wrangler secret put GOOGLE_SHEETS_API_KEY --env production
 
 > 同じコマンドは `docs/supabase-deployment.md` 6.2 節のシークレット一覧にも含まれている。新規環境構築時は同節の手順どおりに登録すれば本キーも登録される。
 
+キーは環境ごとに別のものを発行する(staging / production で共有しない)。登録前にキー単体で読めるかを確かめる手順と、staging でどの画面から取り込みを試せるかは [`staging-setup-walkthrough.md`](./staging-setup-walkthrough.md) の手順 8 を参照。
+
 ## 9. 使い方
 
 このツールは独立した CLI スクリプトではなく、**HTTP API + Web UI** として実装されている。
