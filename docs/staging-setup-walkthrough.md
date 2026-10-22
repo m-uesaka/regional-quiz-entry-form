@@ -93,8 +93,10 @@ Workers Free プランでも作成できますが、保持期間は最大 24 時
 
 ### 6. Pages プロジェクトを作り、変数を登録する
 
+手順 3〜5 では `apps/backend` にいるので、兄弟ディレクトリの `apps/frontend` へ移動する。
+
 ```bash
-cd apps/frontend
+cd ../frontend
 bunx wrangler pages project create regional-quiz-frontend-staging --production-branch main
 bunx wrangler pages secret put SESSION_SECRET --project-name regional-quiz-frontend-staging
 ```
