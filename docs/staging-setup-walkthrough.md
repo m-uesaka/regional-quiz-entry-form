@@ -130,6 +130,55 @@ gh run watch <run id> --exit-status
 
 ローカルの `link` で、`supabase/.temp/project-ref` が staging を指すようになります。あとで production を手で操作するときは、リンク先を確認してから実行してください(手順書 5 章)。
 
+### 8. Google Sheets の API キーを登録する(初回デプロイの後でよい)
+
+シートからのフォーム定義・レギュレーションの取り込みに使います。未登録でもデプロイは通るので、初回デプロイの後に行いました。キーの位置付けや取り込むシートの書き方は [`google-sheets-integration.md`](./google-sheets-integration.md) にあります。
+
+1. Google Cloud Console(https://console.cloud.google.com/)でプロジェクトを作るか選ぶ(例: `regional-quiz-entry-form`)。Sheets API は無料なので、請求先アカウントは要らない
+2. [Google Sheets API](https://console.cloud.google.com/apis/library/sheets.googleapis.com) を「有効にする」
+3. 「APIとサービス」→「認証情報」→「認証情報を作成」→「API キー」で作成し、編集画面で次のように設定する
+
+   | 項目 | 設定 |
+   | --- | --- |
+   | 名前 | `regional-quiz-sheets-staging` |
+   | アプリケーションの制限 | **なし**(Workers は送信元 IP が固定されず、サーバーから呼ぶのでリファラーの制限も効かない) |
+   | API の制限 | 「キーを制限」→ **Google Sheets API だけ** |
+
+   production 用のキーは別に作る。分けておけば、片方だけを止められる
+
+4. Worker に登録する前に、キーが使えるかをローカルで確かめる。取り込むシートは「リンクを知っている全員が閲覧可」で共有されている必要があるので、テスト用のシートをその設定で作り、URL の `/d/<ここ>/edit` を控えておく
+
+   ```bash
+   read -s KEY      # キーを貼り付けて Enter(画面にもシェルの履歴にも残らない)
+   curl -s "https://sheets.googleapis.com/v4/spreadsheets/<スプレッドシートID>/values/A1:A2?key=$KEY"
+   unset KEY
+   ```
+
+   | 結果 | 意味 |
+   | --- | --- |
+   | `{"range": ..., "values": ...}` | 成功 |
+   | `403` | シートが共有されていない、または API の制限で Sheets API が選ばれていない |
+   | `API_KEY_INVALID` | キーの貼り間違い |
+
+   キーの制限の変更は、反映まで数分かかることがある
+
+5. Worker に登録する(再デプロイは不要)
+
+   ```bash
+   cd apps/backend
+   bunx wrangler secret put GOOGLE_SHEETS_API_KEY --env staging
+   bunx wrangler secret list --env staging     # GOOGLE_SHEETS_API_KEY が並べば OK
+   ```
+
+画面からの取り込みは、Worker の route ができるまで(#101)一部しか staging で試せません。
+
+| 機能 | 呼び方 | staging で今使えるか |
+| --- | --- | --- |
+| レギュレーションの取り込み(`/admin/tournaments/[id]/regulations`) | SSR(`+page.server.ts`)から呼ぶ | 使える |
+| フォーム定義の取り込み(`SheetImportPanel`) | ブラウザから `createApiClient()` で直接 `/api/*` を呼ぶ | 使えない(404) |
+
+取り込み API は統括スタッフのログインが必要です。Worker 経由でも確認する場合は、[`google-sheets-integration.md`](./google-sheets-integration.md) 9 章の curl 例の接続先を staging の Worker オリジンに変更し、有効な `staff_session` Cookie を付けて呼び出します。手順 4 はキー単体で Google Sheets にアクセスできることの確認であり、Worker へのキーの登録や取り込み API の疎通を確認するものではありません。
+
 ## つまずいた点
 
 初回デプロイは 3 回目で通りました。
@@ -197,7 +246,7 @@ bunx wrangler pages deployment tail <deployment id> --project-name regional-quiz
 
 ## この時点での制限と残作業
 
-- **独自ドメインと Worker の route(#101)**: これが済むまで、ブラウザから直接 `/api/*` を呼ぶ処理(CSV ダウンロード、クライアント側の `createApiClient()`)は 404 になる。メール内のリンクも、仮のドメインの `FRONTEND_URL` のまま
+- **独自ドメインと Worker の route(#101)**: これが済むまで、ブラウザから直接 `/api/*` を呼ぶ処理(CSV ダウンロード、フォーム定義のシート取り込みなど、クライアント側の `createApiClient()`)は 404 になる。メール内のリンクも、仮のドメインの `FRONTEND_URL` のまま
 - **メール送信**: `MAIL_API_KEY` の登録と、Resend での送信ドメインの認証が必要。ドメインが決まるまでは送れない
 - **`GOOGLE_SHEETS_API_KEY`**: 未登録ならシートの取り込みが失敗する。Google Cloud Console で Sheets API だけに制限したキーを作る
 - **最初の統括スタッフ**: まだ作っていない。スタッフを招待する API は統括スタッフ限定なので、最初の 1 人だけは `bun run staff:bootstrap` が出す SQL を SQL Editor で実行して作る(手順書 8.1)。この方法はメールを送らないので、`MAIL_API_KEY` が無い今の staging でも使える。2 人目以降を `/admin/staff` から招待するには、メール送信が必要
@@ -206,7 +255,7 @@ bunx wrangler pages deployment tail <deployment id> --project-name regional-quiz
 ## production を構築するときの差分
 
 - Supabase のトークンは **production プロジェクトだけ**に絞って別に発行する
-- `SESSION_SECRET` と Turnstile の widget は staging とは別に作る
+- `SESSION_SECRET`、Turnstile の widget、Google Sheets の API キー(例: `regional-quiz-sheets-production`)は staging とは別に作る
 - Queue の名前は `regional-quiz-bulk-mail` / `regional-quiz-bulk-mail-dlq`、Pages のプロジェクト名は `regional-quiz-frontend`
 - Worker の名前は `regional-quiz-backend`(`apps/backend/wrangler.toml` の `[env.production]` で接尾辞なしに戻している)。手順 6 の `BACKEND_URL` やデプロイ後の確認は `https://regional-quiz-backend.<アカウントのサブドメイン>.workers.dev` にする。単純に置換した `regional-quiz-backend-production` は存在しない
 - 手順 7 の手動デプロイは `gh workflow run deploy-production.yml --ref main` にする。`deploy-production` は `main` 以外から起動したジョブをスキップするため、`--ref develop` のままでは何もデプロイされない
