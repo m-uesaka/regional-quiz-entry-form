@@ -1,5 +1,5 @@
 import {defineConfig} from 'vitest/config';
-import {loadEnv} from 'vite';
+import {defaultServerConditions, loadEnv} from 'vite';
 import adapter from '@sveltejs/adapter-cloudflare';
 import {sveltekit} from '@sveltejs/kit/vite';
 
@@ -7,7 +7,20 @@ import {sveltekit} from '@sveltejs/kit/vite';
 // `BACKEND_URL` isn't set so that `bun run dev:frontend` works out of the box.
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8787';
 
-export default defineConfig(({mode}) => {
+// The SSR build runs on Cloudflare Pages (workerd), not Node, so it resolves
+// packages the way Wrangler does for `apps/backend` rather than with Vite's
+// Node-first defaults. Under the `node` condition `yaml` (via
+// `packages/shared`) resolves to its CommonJS build, which Rolldown wraps in
+// `createRequire(import.meta.url)`; `import.meta.url` is undefined on Pages,
+// so the Function fails to load at deploy time. `vite dev` and vitest run on
+// Node and keep the defaults.
+const WORKERD_SERVER_CONDITIONS = [
+  'workerd',
+  'worker',
+  ...defaultServerConditions.filter(condition => condition !== 'node'),
+];
+
+export default defineConfig(({command, mode}) => {
   // Vite does not put unprefixed `.env` values on `process.env`, so read them
   // here to keep the dev proxy on the same `BACKEND_URL` that
   // `$env/dynamic/private` hands `handleFetch` in `src/hooks.server.ts`.
@@ -24,6 +37,10 @@ export default defineConfig(({mode}) => {
         adapter: adapter(),
       }),
     ],
+    ssr:
+      command === 'build'
+        ? {resolve: {conditions: WORKERD_SERVER_CONDITIONS}}
+        : undefined,
     server: {
       proxy: {
         // Requests the browser makes to `/api/*` on this origin: the CSV
