@@ -4,6 +4,10 @@ import type {Bindings} from '../types/env';
 import {hashPassword} from '../lib/password';
 import {app} from '../index';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {
+  closedEntryPeriodTournament,
+  tournamentAwareFetch,
+} from '../test-support/tournaments';
 
 // Local Supabase stack (`supabase start`), same convention as
 // `lib/db-schema.test.ts`. Skipped automatically when it isn't reachable,
@@ -208,6 +212,76 @@ describe('GET /tournaments/:tournamentId/entry-list (mocked Supabase)', () => {
     expect(body[0].displayName).toBe('次郎');
     expect(body[0].status).toBe('waitlisted');
     expect(body[0].waitlistPosition).toBe(3);
+  });
+});
+
+// The entry list is the one public read the entry-period gate is
+// deliberately *not* on: it is a published result, and it is read most
+// after entries have closed. Both routes are exercised against a tournament
+// whose period is over, so attaching that gate here would fail these.
+describe('the entry list stays public after the entry period', () => {
+  const originalFetch = globalThis.fetch;
+  const closed = closedEntryPeriodTournament();
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function mockClosedTournamentEntriesFetch(rows: MockEntryRow[]): void {
+    let served = false;
+    globalThis.fetch = tournamentAwareFetch(closed, (() => {
+      const body = served ? [] : rows;
+      served = true;
+      return Promise.resolve(Response.json(body));
+    }) as unknown as typeof fetch);
+  }
+
+  it('serves GET /tournaments/:tournamentId/entry-list', async () => {
+    mockClosedTournamentEntriesFetch([
+      {display_name: '太郎', status: 'confirmed', waitlist_position: null},
+    ]);
+
+    const res = await app.request(
+      `/api/tournaments/${closed.id}/entry-list`,
+      {},
+      env,
+    );
+    const body = (await res.json()) as Array<Record<string, unknown>>;
+
+    expect(res.status).toBe(200);
+    expect(body).toHaveLength(1);
+    expect(body[0].displayName).toBe('太郎');
+  });
+
+  // The slug-keyed twin, which is what the public list page calls now that
+  // `GET /tournaments/:regionSlug/:tournamentSlug` is gated on the period.
+  it('serves GET /tournaments/:regionSlug/:tournamentSlug/entry-list', async () => {
+    mockClosedTournamentEntriesFetch([
+      {display_name: '太郎', status: 'confirmed', waitlist_position: null},
+    ]);
+
+    const res = await app.request(
+      '/api/tournaments/some-region/saikyoi/entry-list',
+      {},
+      env,
+    );
+    const body = (await res.json()) as Array<Record<string, unknown>>;
+
+    expect(res.status).toBe(200);
+    expect(body[0].displayName).toBe('太郎');
+  });
+
+  it('answers the slug-keyed route with 404 for an unknown tournament', async () => {
+    globalThis.fetch = tournamentAwareFetch(null, (() =>
+      Promise.resolve(Response.json([]))) as unknown as typeof fetch);
+
+    const res = await app.request(
+      '/api/tournaments/some-region/saikyoi/entry-list',
+      {},
+      env,
+    );
+
+    expect(res.status).toBe(404);
   });
 });
 

@@ -252,4 +252,122 @@ describe('sheet-import routes', () => {
       ],
     });
   });
+
+  describe('POST /regulations/preview', () => {
+    function previewRegulations(cookie?: string, body: unknown = {}) {
+      return app.request(
+        '/api/sheet-import/regulations/preview',
+        {
+          method: 'POST',
+          headers: {
+            ...(cookie ? {cookie} : {}),
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        },
+        env,
+      );
+    }
+
+    it('rejects an unauthenticated request with 401', async () => {
+      const res = await previewRegulations(undefined, {
+        spreadsheetId: 'sheet-id',
+      });
+
+      expect(res.status).toBe(401);
+    });
+
+    it('rejects regional staff with 403', async () => {
+      const cookie = await regionalStaffCookie(
+        '11111111-1111-1111-1111-111111111111',
+      );
+
+      const res = await previewRegulations(cookie, {spreadsheetId: 'sheet-id'});
+
+      expect(res.status).toBe(403);
+    });
+
+    it('rejects a body missing spreadsheetId with 400', async () => {
+      const res = await previewRegulations(await generalStaffCookie(), {});
+
+      expect(res.status).toBe(400);
+    });
+
+    it('returns the regulations read from the sheet', async () => {
+      globalThis.fetch = (() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              // 46235 is 2026-08-01 as a Sheets date serial.
+              values: [['地元の部', 46235, 46242], [], ['一般の部']],
+            }),
+            {status: 200},
+          ),
+        )) as unknown as typeof fetch;
+
+      const res = await previewRegulations(await generalStaffCookie(), {
+        spreadsheetId: 'sheet-id',
+      });
+
+      expect(res.status).toBe(200);
+      expect((await res.json()) as unknown).toEqual({
+        regulations: [
+          {
+            label: '地元の部',
+            priorityStartsAt: '2026-07-31T15:00:00.000Z',
+            priorityEndsAt: '2026-08-07T15:00:00.000Z',
+          },
+          {label: '一般の部', priorityStartsAt: null, priorityEndsAt: null},
+        ],
+      });
+    });
+
+    it('returns 400 with the row at fault for unreadable sheet data', async () => {
+      globalThis.fetch = (() =>
+        Promise.resolve(
+          new Response(JSON.stringify({values: [['地元の部', 46235]]}), {
+            status: 200,
+          }),
+        )) as unknown as typeof fetch;
+
+      const res = await previewRegulations(await generalStaffCookie(), {
+        spreadsheetId: 'sheet-id',
+      });
+
+      expect(res.status).toBe(400);
+      expect((await res.json()) as unknown).toEqual({
+        error: '2行目: 優先期間は開始と終了の両方を指定してください',
+      });
+    });
+
+    it('returns 400 naming the tab when Google cannot find it', async () => {
+      globalThis.fetch = (() =>
+        Promise.resolve(
+          new Response(null, {status: 400}),
+        )) as unknown as typeof fetch;
+
+      const res = await previewRegulations(await generalStaffCookie(), {
+        spreadsheetId: 'sheet-id',
+      });
+      const body = (await res.json()) as {error: string};
+
+      expect(res.status).toBe(400);
+      expect(body.error).toContain(
+        '「レギュレーション」シートを読み取れません',
+      );
+    });
+
+    it('returns 502 when Google Sheets returns a 5xx', async () => {
+      globalThis.fetch = (() =>
+        Promise.resolve(
+          new Response(null, {status: 503}),
+        )) as unknown as typeof fetch;
+
+      const res = await previewRegulations(await generalStaffCookie(), {
+        spreadsheetId: 'sheet-id',
+      });
+
+      expect(res.status).toBe(502);
+    });
+  });
 });

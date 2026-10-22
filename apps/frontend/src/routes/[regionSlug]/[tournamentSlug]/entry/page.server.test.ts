@@ -54,6 +54,24 @@ const GENERAL_STAFF: StaffClaims = {
   tournamentType: null,
 };
 
+/** 地域スタッフ covering exactly the tournament under test. */
+const OWN_REGIONAL_STAFF: StaffClaims = {
+  sub: '00000000-0000-0000-0000-000000000004',
+  role: 'regional',
+  regionId: OUT_OF_PERIOD_TOURNAMENT.regionId,
+  tournamentType: OUT_OF_PERIOD_TOURNAMENT.type,
+};
+
+const OTHER_REGION_STAFF: StaffClaims = {
+  ...OWN_REGIONAL_STAFF,
+  regionId: '00000000-0000-0000-0000-0000000000ff',
+};
+
+const OTHER_TYPE_STAFF: StaffClaims = {
+  ...OWN_REGIONAL_STAFF,
+  tournamentType: 'shinjinou',
+};
+
 interface FakeApiOptions {
   tournament?: Tournament;
   /** When set, the tournament lookup answers with this status instead. */
@@ -127,7 +145,7 @@ describe('entry +page.server load', () => {
     } satisfies Partial<HttpError>);
   });
 
-  it('succeeds outside the entry period when a staff session is present', async () => {
+  it('succeeds outside the entry period for 統括スタッフ', async () => {
     const event = buildEvent({
       fetch: fakeApi({tournament: OUT_OF_PERIOD_TOURNAMENT}),
       staff: GENERAL_STAFF,
@@ -138,6 +156,69 @@ describe('entry +page.server load', () => {
       regulations: REGULATIONS,
       formFieldDefs: FORM_FIELD_DEFS,
     });
+  });
+
+  it("succeeds outside the entry period for the tournament's own 地域スタッフ", async () => {
+    const event = buildEvent({
+      fetch: fakeApi({tournament: OUT_OF_PERIOD_TOURNAMENT}),
+      staff: OWN_REGIONAL_STAFF,
+    });
+
+    await expect(load(event)).resolves.toMatchObject({
+      tournament: OUT_OF_PERIOD_TOURNAMENT,
+    });
+  });
+
+  // Holding a staff session is not the same as covering this tournament:
+  // the requirement grants the closed-period form to its own 地域スタッフ,
+  // not to every regional account there is.
+  it("throws 403 outside the entry period for another region's 地域スタッフ", async () => {
+    const event = buildEvent({
+      fetch: fakeApi({tournament: OUT_OF_PERIOD_TOURNAMENT}),
+      staff: OTHER_REGION_STAFF,
+    });
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 403,
+    } satisfies Partial<HttpError>);
+  });
+
+  it('throws 403 outside the entry period for 地域スタッフ of the other tournament type', async () => {
+    const event = buildEvent({
+      fetch: fakeApi({tournament: OUT_OF_PERIOD_TOURNAMENT}),
+      staff: OTHER_TYPE_STAFF,
+    });
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 403,
+    } satisfies Partial<HttpError>);
+  });
+
+  // The backend applies the same rule and refuses first, so the page never
+  // sees the tournament at all in that case.
+  it('throws 403 when the API refuses the tournament read as out of period', async () => {
+    const event = buildEvent({
+      fetch: fakeApi({tournamentStatus: 403}),
+      staff: null,
+    });
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 403,
+    } satisfies Partial<HttpError>);
+  });
+
+  // A stale staff cookie earns a 401 from that gate instead of the 403
+  // above. On this page it means the same thing -- not staff, period
+  // closed -- so it must not fall through to the bad-gateway branch.
+  it('throws 403 when the tournament read reports a stale staff session', async () => {
+    const event = buildEvent({
+      fetch: fakeApi({tournamentStatus: 401}),
+      staff: null,
+    });
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 403,
+    } satisfies Partial<HttpError>);
   });
 
   it('returns the regulations and form field defs the form is built from', async () => {

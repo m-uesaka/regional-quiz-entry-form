@@ -13,29 +13,21 @@ export const load: PageServerLoad = async ({params, fetch}) => {
 
   const api = createApiClient(fetch);
 
-  // The entry-list endpoint is keyed by the tournament's UUID, not its
-  // slug, so the tournament must be resolved first.
-  const tournamentRes = await api.api.tournaments[':regionSlug'][
-    ':tournamentSlug'
+  // The slug-keyed entry list, not `GET /tournaments/:regionSlug/:tournamentSlug`
+  // followed by the UUID-keyed one. The tournament read is gated on the
+  // entry period now (`middleware/entry-period.ts`), and this page has to
+  // keep working after entries close -- which is when it is read most.
+  const res = await api.api.tournaments[':regionSlug'][':tournamentSlug'][
+    'entry-list'
   ].$get({
     param: {regionSlug: params.regionSlug, tournamentSlug: parsedType.data},
   });
-  if (!tournamentRes.ok) {
-    if (tournamentRes.status === 404) {
+  if (!res.ok) {
+    if (res.status === 404) {
       throw error(404, '大会が見つかりません');
     }
-    throw error(502, '大会情報の取得に失敗しました');
-  }
-  const tournament = await tournamentRes.json();
-
-  const entryListRes = await api.api.tournaments[':tournamentId'][
-    'entry-list'
-  ].$get({
-    param: {tournamentId: tournament.id},
-  });
-  if (!entryListRes.ok) {
     throw error(502, 'エントリーリストの取得に失敗しました');
   }
 
-  return {entries: await entryListRes.json()};
+  return {entries: await res.json()};
 };

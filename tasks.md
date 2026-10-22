@@ -73,7 +73,7 @@ Phase 9 以降のタスクファイルに書かれているマイグレーショ
   * Task 10-2: レギュレーションの複数選択対応(要確認)
   * Task 10-3: ログアウト機能(参加者・スタッフ) ✅(#113。スタッフ側は `/staff/logout` を専用ルートにし、Cookie 転送は `handleFetch` に一本化した)
   * Task 10-4: 一斉メールの Cloudflare Queues 化(80 名上限の撤廃) ✅(#114。送信をキューのコンシューマへ移し、`mail_jobs` で送信結果を追えるようにした)
-  * Task 10-5: エントリー期間外アクセス制御をバックエンドにも実装する
+  * Task 10-5: エントリー期間外アクセス制御をバックエンドにも実装する ✅(#115。`requireOpenEntryPeriodOrStaff()` を公開 GET 3本に付け、期間外は担当スタッフのみに絞った)
 * Phase 11: セキュリティ強化 🚧進行中
   * Task 11-1: レート制限と Turnstile(ログイン・エントリー・再設定要求) ✅
   * Task 11-2: エントリー登録のメールアドレス列挙対策
@@ -356,7 +356,7 @@ graph TD
 * [Task 10-2: レギュレーションの複数選択対応](tasks/task-10-2.md) — 「どれか一つを最低限でも満たす」の読み方を統括スタッフに確認してから着手する
 * [Task 10-3: ログアウト機能(参加者・スタッフ)](tasks/task-10-3.md) ✅(#113) — `POST /api/auth/{participant,staff}/logout` と、マイページ / スタッフ画面それぞれのレイアウトにログアウトボタンを追加。発行と削除で Cookie 属性がずれないよう `SESSION_COOKIE_OPTIONS` を共有する。スタッフ側だけは既存ページに action を置けず(レイアウトは action を持てず、`/staff/login` は `default` action 済み)`/staff/logout` を専用ルートにした。あわせて削除 Cookie の転送を `handleFetch` の `forwardBackendCookies()` に一本化し(`forwardSetCookies()` / `backend-cookies.ts` は削除)、バックエンドに届かなかった場合はフロント側で Cookie を落とすフォールバックを入れている。JWT の失効自体は [Task 11-3](tasks/task-11-3.md) の範囲
 * [Task 10-4: 一斉メールの Cloudflare Queues 化 ✅](tasks/task-10-4.md)(#114) — 送信をリクエストの寿命から切り離し、Cloudflare Queues のコンシューマ(Worker の `queue` ハンドラ)へ移した。ルートは宛先を確定して 1 宛先 = 1 メッセージで積むだけになり、`MAX_BACKGROUND_RECIPIENTS`(80 名)と 413 は撤廃。件名と本文は `mail_jobs` 行に置き(メッセージのサイズ上限に収めるため)、同じ行にコンシューマが送信結果を加算するので、`GET /api/staff/tournaments/:id/mail/:jobId` で「何人に送れたか」を確認できる。**Queues は Workers Paid プラン限定**で、デプロイ前に環境ごとのキュー作成が要る(`docs/supabase-deployment.md` §6.2.2)
-* [Task 10-5: エントリー期間外アクセス制御をバックエンドにも実装する](tasks/task-10-5.md) — 現在はフロントの `load` のみで、スコープ判定も緩い
+* [Task 10-5: エントリー期間外アクセス制御をバックエンドにも実装する ✅](tasks/task-10-5.md)(#115) — 判定がフロントの `load` にしか無く、Worker を直接叩けば期間外でもフォームの中身が読めていた。`middleware/entry-period.ts` の `requireOpenEntryPeriodOrStaff()` を大会取得・レギュレーション・フォーム定義の公開 GET 3本に付け、期間中は誰でも、期間外はその大会の担当スタッフ(統括、または地域 × 種別が一致する地域スタッフ)だけを通す。範囲の規則は `packages/shared` の `canPreviewTournament()` に置き、バックエンドの `isInScope()` とエントリーページの `load` が同じ関数を使う(以前フロント側は `locals.staff` の有無しか見ておらず、他地域のスタッフも通していた)。公開エントリーリストは対象外のまま — 期間終了後こそ読まれるものなので、リスト画面用にスラッグ引きの `GET /api/tournaments/:regionSlug/:tournamentSlug/entry-list` を足し、期間ゲートの後ろにある大会取得 API に依存しないようにした
 
 ### Phase 11: セキュリティ強化 🚧進行中
 

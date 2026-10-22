@@ -1,9 +1,15 @@
-import {afterAll, describe, expect, it} from 'bun:test';
+import {afterAll, afterEach, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
 import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
 import {app} from '../index';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {
+  closedEntryPeriodTournament,
+  openEntryPeriodTournament,
+  TEST_REGION_ID,
+  tournamentAwareFetch,
+} from '../test-support/tournaments';
 
 // Local Supabase stack (`supabase start`), same convention as
 // `lib/db-schema.test.ts`. Skipped automatically when it isn't reachable,
@@ -133,6 +139,92 @@ describe('tournaments routes (request validation)', () => {
   });
 });
 
+// The by-slug read is public only while the entry period is open; outside
+// it, it belongs to the tournament's own staff (`middleware/entry-period.ts`).
+// Mocked rather than run against Supabase so these hold in CI too.
+describe('GET /tournaments/:regionSlug/:tournamentSlug (entry period)', () => {
+  const originalFetch = globalThis.fetch;
+  const path = '/api/tournaments/some-region/saikyoi';
+  const otherRegionId = '77777777-7777-7777-7777-777777777777';
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  /** Answers the region and tournament lookups the gate makes, alone. */
+  function mockTournamentFetch(
+    tournament: ReturnType<typeof openEntryPeriodTournament> | null,
+  ): void {
+    globalThis.fetch = tournamentAwareFetch(tournament, (() =>
+      Promise.resolve(Response.json([]))) as unknown as typeof fetch);
+  }
+
+  it('serves the tournament during the entry period without a session', async () => {
+    mockTournamentFetch(openEntryPeriodTournament());
+
+    const res = await app.request(path, {}, env);
+    const body = (await res.json()) as Record<string, unknown>;
+
+    expect(res.status).toBe(200);
+    expect(body.regionId).toBe(TEST_REGION_ID);
+  });
+
+  it('returns 403 outside the entry period without a session', async () => {
+    mockTournamentFetch(closedEntryPeriodTournament());
+
+    const res = await app.request(path, {}, env);
+
+    expect(res.status).toBe(403);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'entry period closed',
+    });
+  });
+
+  it('returns the tournament outside the entry period for its own regional staff', async () => {
+    mockTournamentFetch(closedEntryPeriodTournament());
+
+    const res = await app.request(
+      path,
+      {headers: {cookie: await regionalStaffCookie(TEST_REGION_ID)}},
+      env,
+    );
+
+    expect(res.status).toBe(200);
+  });
+
+  it('returns the tournament outside the entry period for general staff', async () => {
+    mockTournamentFetch(closedEntryPeriodTournament());
+
+    const res = await app.request(
+      path,
+      {headers: {cookie: await generalStaffCookie()}},
+      env,
+    );
+
+    expect(res.status).toBe(200);
+  });
+
+  it("returns 403 outside the entry period for another region's staff", async () => {
+    mockTournamentFetch(closedEntryPeriodTournament());
+
+    const res = await app.request(
+      path,
+      {headers: {cookie: await regionalStaffCookie(otherRegionId)}},
+      env,
+    );
+
+    expect(res.status).toBe(403);
+  });
+
+  it('returns 404 for a region that has no such tournament', async () => {
+    mockTournamentFetch(null);
+
+    const res = await app.request(path, {}, env);
+
+    expect(res.status).toBe(404);
+  });
+});
+
 describe.skipIf(!(await isDbReachable()))(
   'tournaments routes (local Supabase integration)',
   () => {
@@ -253,6 +345,14 @@ describe.skipIf(!(await isDbReachable()))(
       expect(body.id).toBe(created.id);
     });
 
+    /**
+     * Inserts a tournament whose entry period is open right now. The window
+     * is relative to the clock rather than a pair of literal dates because
+     * the public read below is gated on it (`middleware/entry-period.ts`) —
+     * a fixed window would start answering 403 the day it passed.
+     * @param regionId The region to create it in.
+     * @param type The tournament type.
+     */
     async function createTestTournament(
       regionId: string,
       type: string,
@@ -262,7 +362,7 @@ describe.skipIf(!(await isDbReachable()))(
           (region_id, type, name, capacity, entry_opens_at, entry_closes_at)
         values (
           ${regionId}, ${type}, 'テスト大会', null,
-          '2026-01-01T00:00:00+09:00', '2026-01-31T00:00:00+09:00'
+          now() - interval '1 day', now() + interval '1 day'
         )
       `;
     }

@@ -47,6 +47,8 @@ const ENTRY: StaffEntryDetail = {
 function fakeFetch(options: {
   tournament?: Tournament;
   tournamentOk?: boolean;
+  /** The tournament lookup's status, for the refusals `tournamentOk` can't say. */
+  tournamentStatus?: number;
   entry?: StaffEntryDetail;
   entryStatus?: number;
 }): typeof fetch {
@@ -59,7 +61,9 @@ function fakeFetch(options: {
       });
     }
     return new Response(JSON.stringify(options.tournament ?? {}), {
-      status: options.tournamentOk === false ? 404 : 200,
+      status:
+        options.tournamentStatus ??
+        (options.tournamentOk === false ? 404 : 200),
       headers: {'Content-Type': 'application/json'},
     });
   }) as typeof fetch;
@@ -177,6 +181,35 @@ describe('staff entry detail +page.server load', () => {
     await expect(load(event)).rejects.toMatchObject({
       status: 403,
     } satisfies Partial<HttpError>);
+  });
+
+  // Outside the entry period the backend hands the tournament only to the
+  // staff who cover it, so an out-of-scope account is refused on that read
+  // rather than on the entry read behind it.
+  it('throws 403 when the tournament read is refused as out of scope', async () => {
+    const event = buildEvent({
+      fetch: fakeFetch({tournamentStatus: 403}),
+      staff: GENERAL_STAFF,
+    });
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 403,
+    } satisfies Partial<HttpError>);
+  });
+
+  // The same read answers 401 when the session died between the claims
+  // check above and the request landing -- an account that still covers
+  // this tournament, so it earns the login screen and not that 403.
+  it('redirects to the login screen when the tournament read reports an expired session', async () => {
+    const event = buildEvent({
+      fetch: fakeFetch({tournamentStatus: 401}),
+      staff: GENERAL_STAFF,
+    });
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 303,
+      location: LOGIN_REDIRECT,
+    } satisfies Partial<Redirect>);
   });
 
   it('throws 404 when the entry belongs to a different tournament', async () => {
