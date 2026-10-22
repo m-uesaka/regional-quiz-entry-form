@@ -35,12 +35,12 @@ Supabase Dashboard(https://supabase.com/dashboard)で、staging・production 用
 4. 作成後、`Project Settings > General` から **Project ID(project ref)** を控える。GitHub Actions の Secret `SUPABASE_PROJECT_ID` に使う(staging / production の Environment ごとに別の値を登録する)
 5. 以下を控える(Cloudflare Workers のシークレットに使う)
    - **Project URL** → `SUPABASE_URL`。ダッシュボード上部の **Connect** ダイアログに表示される(形式は `https://<project ref>.supabase.co`)。旧来の `Project Settings > API` ページは廃止されている
-   - **Secret key**(`sb_secret_...`)→ `SUPABASE_SERVICE_ROLE_KEY`。`Project Settings > API Keys` の Secret keys セクションで発行・コピーする(**絶対にフロントエンドや公開リポジトリに含めない**)
+   - **Secret key**(`sb_secret_...`)→ `SUPABASE_SECRET_KEY`。`Project Settings > API Keys` の Secret keys セクションで発行・コピーする(**絶対にフロントエンドや公開リポジトリに含めない**)
 
 > **API キーについて**: Supabase の API キーは publishable key(`sb_publishable_...`)/ secret key(`sb_secret_...`)の新方式に移行しており、従来の `anon` / `service_role` キー(JWT 形式、`eyJ...`)は legacy 扱いで 2026 年末までに廃止予定です。新規環境では legacy キーを使わず secret key を登録してください。
 >
 > - secret key は legacy の `service_role` と同じく `service_role` ロールにマッピングされ、RLS をバイパスします。バックエンドが必要とする権限は変わりません。`@supabase/supabase-js` の `createClient(url, key)` にそのまま渡せるため、`apps/backend/src/lib/db.ts` の変更は不要です。
-> - Worker の binding 名は既存コードとの互換のため `SUPABASE_SERVICE_ROLE_KEY` のままです。**名前は legacy 由来ですが、中身は secret key を入れます。**
+> - Worker の binding 名は `SUPABASE_SECRET_KEY` です(旧名は `SUPABASE_SERVICE_ROLE_KEY`)。旧名でシークレットを登録済みの環境では、名前変更を含むコードをデプロイする**前に** `wrangler secret put SUPABASE_SECRET_KEY --env <name>` で新しい名前に登録してください。未登録のままデプロイすると Supabase に接続できなくなります。デプロイ後、不要になった旧名は `wrangler secret delete SUPABASE_SERVICE_ROLE_KEY --env <name>` で削除します。
 > - secret key は User-Agent がブラウザのリクエストを 401 で拒否します。Workers からのサーバー間通信は対象外ですが、誤ってフロントエンドに露出させない理由は変わりません。
 > - publishable key はこのプロジェクトでは使いません(フロントエンドは Supabase を直接呼ばず、すべて `apps/backend` の Hono API を経由するため)。
 > - secret key はいくつでも発行できるので、staging / production で別々の key を使い、漏洩時は「新しい key を発行 → Worker のシークレットを差し替え → 古い key を削除」の順でローテーションします(削除は取り消せないため、差し替えの確認が済んでから行う)。
@@ -102,7 +102,7 @@ bunx supabase db push --linked
 | --- | --- | --- |
 | `SUPABASE_ACCESS_TOKEN` | CLI/CI からのログイン・`db push --linked` に使用する Personal Access Token | Supabase Dashboard > Account > Access Tokens |
 | `SUPABASE_URL` | `@supabase/supabase-js` の接続先(環境ごとに異なる) | 各プロジェクトのダッシュボードの **Connect** ダイアログ(`https://<project ref>.supabase.co`) |
-| `SUPABASE_SERVICE_ROLE_KEY` | バックエンドが RLS をバイパスして操作するための **secret key**(`sb_secret_...`、環境ごとに異なる)。binding 名は legacy の `service_role` 由来だが、値は secret key を登録する | 各プロジェクトの `Project Settings > API Keys` の Secret keys |
+| `SUPABASE_SECRET_KEY` | バックエンドが RLS をバイパスして操作するための **secret key**(`sb_secret_...`、環境ごとに異なる) | 各プロジェクトの `Project Settings > API Keys` の Secret keys |
 | `SUPABASE_DB_PASSWORD` | `link` / `db push --linked` が Postgres へ接続するためのパスワード(環境ごとに異なる) | プロジェクト作成時に生成した DB パスワード |
 
 ### 6.2 Cloudflare Workers(`apps/backend`)側
@@ -119,7 +119,7 @@ cd apps/backend
 
 # staging
 bunx wrangler secret put SUPABASE_URL --env staging
-bunx wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env staging
+bunx wrangler secret put SUPABASE_SECRET_KEY --env staging
 bunx wrangler secret put MAIL_API_KEY --env staging
 bunx wrangler secret put GOOGLE_SHEETS_API_KEY --env staging
 bunx wrangler secret put SESSION_SECRET --env staging
@@ -127,7 +127,7 @@ bunx wrangler secret put TURNSTILE_SECRET_KEY --env staging
 
 # production
 bunx wrangler secret put SUPABASE_URL --env production
-bunx wrangler secret put SUPABASE_SERVICE_ROLE_KEY --env production
+bunx wrangler secret put SUPABASE_SECRET_KEY --env production
 bunx wrangler secret put MAIL_API_KEY --env production
 bunx wrangler secret put GOOGLE_SHEETS_API_KEY --env production
 bunx wrangler secret put SESSION_SECRET --env production
@@ -272,7 +272,7 @@ routes = [
 
 - [ ] Supabase プロジェクトを作成した(staging / production)
 - [ ] プロジェクトのリージョンを揃えた
-- [ ] `SUPABASE_URL`(Connect ダイアログの Project URL)/ `SUPABASE_SERVICE_ROLE_KEY`(`Project Settings > API Keys` で発行した secret key)を控えた
+- [ ] `SUPABASE_URL`(Connect ダイアログの Project URL)/ `SUPABASE_SECRET_KEY`(`Project Settings > API Keys` で発行した secret key)を控えた
 - [ ] secret key で疎通を確認した後、Legacy API Keys(`anon` / `service_role`)を無効化した
 - [ ] `Project Settings > General` の project ref を控えた
 - [ ] `SESSION_SECRET` を環境ごとに個別発行した

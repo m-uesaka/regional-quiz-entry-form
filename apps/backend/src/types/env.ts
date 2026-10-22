@@ -4,7 +4,7 @@ import type {TournamentRow} from '../lib/tournaments';
 
 export interface Bindings {
   SUPABASE_URL: string;
-  SUPABASE_SERVICE_ROLE_KEY: string;
+  SUPABASE_SECRET_KEY: string;
   MAIL_API_KEY: string;
   // Non-secret and normally unset: the mail provider's API origin. Only
   // the end-to-end tests set it, pointing `createMailSender()` at a local

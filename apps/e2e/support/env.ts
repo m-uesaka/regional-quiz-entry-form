@@ -2,13 +2,14 @@
 // place: `playwright.config.ts` builds the `wrangler dev` command from
 // these, and the tests and the seeding talk to the same addresses.
 
-// The service role key the Supabase CLI issues for a local stack. It is
+// The legacy service role key the Supabase CLI issues for a local stack,
+// which the API still accepts in place of a secret key. It is
 // the same on every machine (it is printed by `supabase status`, and is
 // not a credential for anything but a throwaway local database), so the
 // tests run without any per-developer setup. `supabase status -o env`
 // remains the source of truth: CI exports the key from it, and so can a
 // developer whose CLI issues a different one.
-const LOCAL_SUPABASE_SERVICE_ROLE_KEY =
+const LOCAL_SUPABASE_SECRET_KEY =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.' +
   'eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.' +
   'EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
@@ -16,8 +17,8 @@ const LOCAL_SUPABASE_SERVICE_ROLE_KEY =
 export const SUPABASE_URL =
   process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
 
-export const SUPABASE_SERVICE_ROLE_KEY =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ?? LOCAL_SUPABASE_SERVICE_ROLE_KEY;
+export const SUPABASE_SECRET_KEY =
+  process.env.SUPABASE_SECRET_KEY ?? LOCAL_SUPABASE_SECRET_KEY;
 
 /** The port `wrangler dev` serves `apps/backend` on for the test run. */
 export const BACKEND_PORT = Number(process.env.E2E_BACKEND_PORT ?? 8787);

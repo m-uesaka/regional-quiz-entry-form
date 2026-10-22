@@ -46,7 +46,7 @@ Supabase は起動しません(Docker イメージの取得を毎回のテスト
 | 変数 | 既定値 |
 | --- | --- |
 | `SUPABASE_URL` | `http://127.0.0.1:54321` |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase CLI がローカルスタックに発行する既定のキー |
+| `SUPABASE_SECRET_KEY` | Supabase CLI がローカルスタックに発行する既定のキー |
 | `E2E_BACKEND_PORT` | `8787` |
 | `E2E_MAIL_SINK_PORT` | `8788` |
 | `E2E_FRONTEND_PORT` | `5173` |

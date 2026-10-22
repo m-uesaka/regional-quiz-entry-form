@@ -113,15 +113,21 @@ jobs:
 
           cat "$log"
           [ "$supabase_status" -eq 0 ] && [ "$playwright_status" -eq 0 ]
-      # Prefer the stack's own service role key over the default
+      # Prefer the stack's own key over the default
       # `apps/e2e/support/env.ts` falls back to, so a CLI that issues a
-      # different one still works. If `status` doesn't name one, the
-      # fallback is left to apply rather than failing the job here.
-      - name: Export the local service role key
+      # different one still works. Newer CLIs print a secret key; older ones
+      # only the legacy service role key, which the API accepts as well. If
+      # `status` names neither, the fallback is left to apply rather than
+      # failing the job here.
+      - name: Export the local secret key
         run: |
-          key=$(supabase status -o env | sed -n 's/^SERVICE_ROLE_KEY="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p')
+          status=$(supabase status -o env)
+          key=$(printf '%s\n' "$status" | sed -n 's/^SECRET_KEY="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p')
+          if [ -z "$key" ]; then
+            key=$(printf '%s\n' "$status" | sed -n 's/^SERVICE_ROLE_KEY="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p')
+          fi
           if [ -n "$key" ]; then
-            echo "SUPABASE_SERVICE_ROLE_KEY=$key" >> "$GITHUB_ENV"
+            echo "SUPABASE_SECRET_KEY=$key" >> "$GITHUB_ENV"
           fi
       - run: bun run test:e2e
       - if: failure()

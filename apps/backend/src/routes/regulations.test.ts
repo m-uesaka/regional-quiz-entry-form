@@ -34,8 +34,8 @@ async function isDbReachable(): Promise<boolean> {
 // Publicly documented local-dev demo key for Supabase CLI's default stack
 // (fixed `super-secret-jwt-token-with-at-least-32-characters-long` JWT
 // secret) — not a real credential, safe to commit.
-const SUPABASE_SERVICE_ROLE_KEY =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ??
+const SUPABASE_SECRET_KEY =
+  process.env.SUPABASE_SECRET_KEY ??
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
 
 const SESSION_SECRET = 'test-session-secret';
@@ -43,7 +43,7 @@ const SESSION_SECRET = 'test-session-secret';
 const env: Bindings = {
   ...PERMISSIVE_PLATFORM_BINDINGS,
   SUPABASE_URL: process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321',
-  SUPABASE_SERVICE_ROLE_KEY,
+  SUPABASE_SECRET_KEY,
   MAIL_API_KEY: 'dummy-mail-api-key',
   GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
   MAIL_FROM_ADDRESS: 'entry@example.com',
