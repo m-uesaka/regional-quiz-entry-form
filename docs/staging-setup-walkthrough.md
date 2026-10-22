@@ -157,7 +157,7 @@ bunx wrangler pages dev .svelte-kit/cloudflare --binding BACKEND_URL=http://127.
 | --- | --- |
 | `https://regional-quiz-backend-staging.<サブドメイン>.workers.dev/api/healthz` | `{"ok":true}` |
 | `https://regional-quiz-frontend-staging.pages.dev/`、`/staff/login` | 200 |
-| `https://regional-quiz-frontend-staging.pages.dev/<存在しない地域>/<存在しない大会>/entry` | 404(500 にならなければ、SSR → Worker → Supabase が疎通している) |
+| `https://regional-quiz-frontend-staging.pages.dev/<存在しない地域>/saikyoi/entry` | 404(500 にならなければ、SSR → Worker → Supabase が疎通している)。大会種別は `saikyoi` / `shinjinou` のどちらかに固定し、地域だけを存在しないものにする。大会種別まで不正だと、フロントエンドが API を呼ぶ前に 404 を返すため疎通確認にならない |
 | `https://regional-quiz-frontend-staging.pages.dev/api/healthz` | 404。Worker route が未設定のための想定どおりの挙動(#101) |
 
 ## この時点での制限と残作業
