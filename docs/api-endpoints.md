@@ -702,6 +702,8 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 - `401` / `403`
 - `500`: `{"error": "internal server error"}`、またはメール送信に失敗した場合の `{"error": "account created but the setup mail could not be sent"}`
 
+このエンドポイント自体が統括スタッフ限定なので、環境の**最初の統括スタッフはこれでは作れません**。SQL Editor から作る手順は `docs/supabase-deployment.md` 8.1 にあります。
+
 `regional` は `regionId` と `tournamentType` の**両方が必須**、`general` は**両方持てません**。片方だけ埋まった行は「狭い担当範囲」ではなく壊れた行で、`middleware/staff-auth.ts` の範囲チェックがすべての大会で落ちるため、そのアカウントはどこへ行っても静かに 403 になります。判別共用体はこの body を型の側で作れなくし、同じ不変条件を DB の check 制約(`staff_accounts_scope_matches_role`)でも縛っています。
 
 行の `password_hash` には、`hashPassword()` の形式に合わない固定値(`UNUSABLE_PASSWORD_HASH`)を入れます。`verifyPassword()` は形式が合わない文字列に対して常に false を返すので、招待リンクでパスワードが設定されるまでこのアカウントではログインできません。

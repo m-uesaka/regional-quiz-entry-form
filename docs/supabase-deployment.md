@@ -136,7 +136,19 @@ bunx wrangler secret put SESSION_SECRET --env production
 bunx wrangler secret put TURNSTILE_SECRET_KEY --env production
 ```
 
-`SESSION_SECRET` は staging/production で必ず異なる値を発行してください(`openssl rand -base64 32` などで生成)。6.3 で Pages にも同じ値を登録するので、シークレット管理ツールに保存しておきます。シークレットは `wrangler deploy` では変更されないため、この登録は環境ごとに一度だけで済みます。
+`SESSION_SECRET` は staging/production で必ず異なる値を発行してください。6.3 で Pages にも同じ値を登録するので、シークレット管理ツールに保存しておきます。
+
+**Worker と Pages に同じ値を入れる際は、手で打ち直さずクリップボード経由で貼り付けてください。** 登録した値は `secret list` でも名前しか表示されないので、後から両者が一致しているかを確かめる方法がありません。食い違うと、ログインは成功するのに `/staff/*` がログイン画面へ戻されます(6.3 の表)。一致しているか自信がないときは、値を作り直して両方に登録し直すのが確実です。
+
+```bash
+openssl rand -base64 32 | pbcopy   # 生成した値を画面に出さずクリップボードへ
+bunx wrangler secret put SESSION_SECRET --env staging      # ⌘V
+cd ../frontend
+bunx wrangler pages secret put SESSION_SECRET --project-name regional-quiz-frontend-staging   # ⌘V
+pbcopy < /dev/null                 # クリップボードを空にする
+```
+
+Pages 側の値は次のデプロイから反映されるため、登録し直した後は Pages を再デプロイします(`gh workflow run deploy-staging.yml --ref develop`)。Worker 側は再デプロイ不要です。値を変えると発行済みのセッションはすべて無効になり、スタッフも参加者もログインし直しになります。シークレットは `wrangler deploy` では変更されないため、この登録は環境ごとに一度だけで済みます。
 
 初回デプロイ前は Worker がまだ存在しないため、最初の `secret put` で `There doesn't seem to be a Worker called "..."` と聞かれます。**Yes** と答えると空の Worker が作られ、そこにシークレットが登録されます。`MAIL_API_KEY` / `GOOGLE_SHEETS_API_KEY` は未登録でもデプロイ自体は通り、その機能(メール送信・シート取り込み)が実行時に失敗するだけなので、用意できてから登録しても構いません。
 
@@ -324,6 +336,36 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 - Supabase Dashboard の `Table Editor` で、適用したマイグレーション分のテーブル・型(enum)が反映されていること
 - Supabase Dashboard の `Database > Migrations` で、適用済みマイグレーションの一覧に最新のものが含まれること
 
+### 8.1 最初の統括スタッフを作る
+
+スタッフのアカウントは、統括スタッフが画面(`/admin/staff`)または `POST /api/staff/accounts` から招待して作ります(`docs/api-endpoints.md`)。ただし**この API 自体が統括スタッフ限定**なので、構築したばかりの環境では最初の 1 人を作れません。最初の統括スタッフだけは、Supabase の SQL Editor から直接作ります。
+
+マイグレーションは空のテーブルを作るだけで、スタッフの行は入れません。シードに入れていないのは、環境ごとに担当者のメールアドレスが違うことと、パスワードを決め打ちするとリポジトリや手順書に残ってしまうからです。
+
+#### 手順
+
+1. ローカルで、作りたいアカウントのメールアドレスと、その環境のフロントエンドの URL(Pages の `FRONTEND_URL` と同じもの)を渡してスクリプトを実行する
+
+   ```bash
+   cd apps/backend
+   bun run staff:bootstrap you@example.com https://regional-quiz-frontend-staging.pages.dev
+   ```
+
+   SQL とパスワード設定用のリンクが表示されます。スクリプトは Supabase にも Worker にも接続しないので、シークレットは要りません。
+
+2. 対象の環境の Supabase Dashboard を開き、`SQL Editor` に表示された SQL を貼り付けて実行する。**staging と production を取り違えないよう、左上のプロジェクト名を確認すること**
+3. 24 時間以内に、表示されたリンクをブラウザで開いてパスワードを設定する。招待メールのリンクで設定するときと同じ画面です
+4. `/staff/login` からログインし、`/staff/dashboard` に移動すれば完了
+5. 2 人目以降の統括スタッフと地域スタッフは、`/admin/staff` から招待する
+
+#### 補足
+
+- **パスワードはどこにも書きません。** SQL が入れるのはハッシュ形式に合わない固定値(`UNUSABLE_PASSWORD_HASH`)と、リンクのトークンの SHA-256 ハッシュだけです。API で招待したときと同じ状態の行ができ、パスワードは本人がリンク先で決めます
+- **メールは送りません。** `MAIL_API_KEY` を登録する前の環境でも使えます。一方 `/admin/staff` からの招待はメールでリンクを送るため、メールが送れない環境では「アカウントは作られたがリンクが届かない」状態になります(`500 {"error": "account created but the setup mail could not be sent"}`)
+- **表示されたリンクは、そのアカウントのパスワードを決められる鍵です。** チャットなどに貼らず、自分のブラウザで開くこと。漏れたかもしれないときは、スクリプトを再実行して新しい SQL を実行すれば、古いリンクは使えなくなります
+- **同じメールアドレスで再実行できます。** 統括スタッフが既にあればアカウントは作り直さず、リンクだけを発行し直します。リンクの期限が切れた場合や、統括スタッフが 1 人しかいない環境でその人がパスワードを忘れた場合にも、この手順で再設定できます(統括スタッフが他にいるなら、その人が `/admin/staff` からリンクを再発行する方が早いです)
+- 地域スタッフのアドレスを渡すと、SQL は `... is a regional staff account` で失敗し、何も変更しません。地域スタッフのパスワード再設定は、統括スタッフが `/admin/staff` から行ってください
+
 ## 9. ロールバック・障害対応
 
 - **マイグレーション**: Supabase CLI のマイグレーションは基本的に「進む」方向のみ管理する(down マイグレーションを自動生成しない)。誤ったマイグレーションを適用してしまった場合は、変更を打ち消す新しいマイグレーションを作成して適用する(例: `ALTER TABLE ... DROP COLUMN` を追加したマイグレーションを新規作成)。適用済みマイグレーションのファイルを直接書き換えない。
@@ -351,6 +393,7 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 - [ ] `bunx supabase db push --linked --dry-run` で初回マイグレーション適用の差分を確認した
 - [ ] staging の `deploy-staging` ワークフローが全ステップ成功することを確認した
 - [ ] production への初回デプロイ後、`/api/healthz` とトップページの疎通を確認した
+- [ ] 最初の統括スタッフを SQL Editor から作り、`/staff/login` からログインできることを確認した(8.1)
 
 ## 11. 参考リンク
 
