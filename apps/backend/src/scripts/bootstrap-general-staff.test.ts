@@ -17,9 +17,12 @@ describe('buildBootstrapSql', () => {
   it('drops the links the account already had before adding the new one', () => {
     const sql = buildBootstrapSql('admin@example.com', 'abc123');
 
-    expect(sql.indexOf('delete from staff_password_reset_tokens')).toBeLessThan(
-      sql.indexOf('insert into staff_password_reset_tokens'),
-    );
+    const deleteIndex = sql.indexOf('delete from staff_password_reset_tokens');
+    const insertIndex = sql.indexOf('insert into staff_password_reset_tokens');
+
+    expect(deleteIndex).toBeGreaterThanOrEqual(0);
+    expect(insertIndex).toBeGreaterThanOrEqual(0);
+    expect(deleteIndex).toBeLessThan(insertIndex);
   });
 
   it('escapes single quotes in the address', () => {
