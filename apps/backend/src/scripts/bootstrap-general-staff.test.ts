@@ -25,6 +25,17 @@ describe('buildBootstrapSql', () => {
     expect(deleteIndex).toBeLessThan(insertIndex);
   });
 
+  it('locks the account row before replacing its links', () => {
+    const sql = buildBootstrapSql('admin@example.com', 'abc123');
+
+    const lockIndex = sql.search(/role = 'general'\s+for update;/);
+    const deleteIndex = sql.indexOf('delete from staff_password_reset_tokens');
+
+    expect(lockIndex).toBeGreaterThanOrEqual(0);
+    expect(deleteIndex).toBeGreaterThanOrEqual(0);
+    expect(lockIndex).toBeLessThan(deleteIndex);
+  });
+
   it('escapes single quotes in the address', () => {
     const sql = buildBootstrapSql("o'brien@example.com", 'abc123');
 

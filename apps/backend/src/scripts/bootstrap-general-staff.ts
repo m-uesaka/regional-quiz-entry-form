@@ -36,7 +36,11 @@ function quoteLiteral(value: string): string {
  * one password link whose token hashes to `tokenHash`.
  *
  * Any link the account already had is deleted first, as the API does when it
- * re-issues one, so running this twice leaves only the newer link usable. An
+ * re-issues one, so running this twice leaves only the newer link usable.
+ * The account row is locked (`for update`) before its links are touched, so
+ * concurrent runs for the same address take turns instead of both keeping a
+ * usable link, matching the account-before-token order of
+ * `reset_staff_password()`. An
  * address that belongs to a regional account is refused rather than handed a
  * link: that would be a regional staff member's password reset, which a
  * general staff member can already do from the staff screen.
@@ -54,7 +58,8 @@ begin
   on conflict (email) do nothing;
 
   select id into v_id from staff_accounts
-  where email = ${emailLiteral} and role = 'general';
+  where email = ${emailLiteral} and role = 'general'
+  for update;
   if v_id is null then
     raise exception '% is a regional staff account', ${emailLiteral};
   end if;
