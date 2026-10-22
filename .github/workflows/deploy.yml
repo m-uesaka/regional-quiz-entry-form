@@ -113,7 +113,7 @@ jobs:
       # `apps/frontend` on 4) and Bun resolves the binary per directory, so
       # each app deploys with the Wrangler its own `package.json` pins.
       #
-      # Secrets (`SUPABASE_SERVICE_ROLE_KEY`, `SESSION_SECRET`, …) are not set
+      # Secrets (`SUPABASE_SECRET_KEY`, `SESSION_SECRET`, …) are not set
       # here. They are registered once per environment with `wrangler secret
       # put` and are left untouched by a deploy; only the non-secret `vars` in
       # `wrangler.toml` travel with the code. See `docs/supabase-deployment.md`

@@ -13,6 +13,7 @@
     "build": "wrangler deploy --dry-run",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "staff:bootstrap": "bun src/scripts/bootstrap-general-staff.ts",
     "lint": "gts lint",
     "fix": "gts fix"
   },
