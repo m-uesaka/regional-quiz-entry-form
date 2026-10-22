@@ -327,10 +327,10 @@ grant select, insert, update, delete on all tables in schema public to service_r
 設計方針:
 
 - **`anon` / `authenticated` ロールからは一切アクセスできません。** RLS を有効化した上で、そもそも権限自体を剥奪しています(RLS ポリシーは1つも定義していないため、仮に権限が残っていても全行が不可視になります)。
-- **DB へのアクセス経路は Cloudflare Workers 上の Hono API のみ**です。バックエンドは `SUPABASE_SERVICE_ROLE_KEY`(`service_role` ロール)で Supabase に接続します(`apps/backend/src/lib/db.ts`)。
+- **DB へのアクセス経路は Cloudflare Workers 上の Hono API のみ**です。バックエンドは `SUPABASE_SECRET_KEY`(secret key。`service_role` ロールにマッピングされる)で Supabase に接続します(`apps/backend/src/lib/db.ts`)。
 - したがって、**認可はすべてアプリケーション層(Hono のミドルウェアと `lib/` の関数)の責務**です。RLS ポリシーに認可を委ねてはいません。新しいクエリを追加する際は、「誰がこの行を読んでよいか」をアプリ側で必ず絞り込んでください。
   - 例: マイページ系のクエリは `.eq('participant_id', c.get('participantId'))` を必ず付け、他人のエントリーが存在しないエントリーと区別できないようにしています。
-- `SUPABASE_SERVICE_ROLE_KEY` は RLS を貫通する強い鍵です。フロントエンドには決して渡さず、Worker の secret としてのみ扱ってください。
+- `SUPABASE_SECRET_KEY` は RLS を貫通する強い鍵です。フロントエンドには決して渡さず、Worker の secret としてのみ扱ってください。
 
 ## 5. DB 関数
 

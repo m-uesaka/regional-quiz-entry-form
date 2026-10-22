@@ -8,10 +8,10 @@ import type {Bindings} from '../types/env';
  * `@supabase/supabase-js`'s fetch-based client rather than a
  * Node-specific driver.
  * @param env The Worker bindings containing the Supabase URL and
- *     service role key.
+ *     secret key.
  */
 export function createDbClient(env: Bindings) {
-  return createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
+  return createClient(env.SUPABASE_URL, env.SUPABASE_SECRET_KEY, {
     auth: {
       persistSession: false,
     },

@@ -789,7 +789,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 | 変数 | 秘匿 | 用途 |
 | --- | --- | --- |
 | `SUPABASE_URL` | | Supabase プロジェクトの URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | ✅ | RLS を貫通する service_role キー。フロントエンドに渡さないこと |
+| `SUPABASE_SECRET_KEY` | ✅ | RLS を貫通する Supabase の secret key(`sb_secret_...`)。フロントエンドに渡さないこと |
 | `SESSION_SECRET` | ✅ | セッション JWT の HS256 署名鍵 |
 | `MAIL_API_KEY` | ✅ | Resend の API キー |
 | `MAIL_API_BASE_URL` | | メール送信 API のオリジン。**本番では設定しません**(未設定なら Resend 本体 `https://api.resend.com`)。`apps/e2e` の E2E テストだけがローカルの stub を指すために設定します |
