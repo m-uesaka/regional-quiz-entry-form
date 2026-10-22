@@ -172,5 +172,7 @@ bunx wrangler pages dev .svelte-kit/cloudflare --binding BACKEND_URL=http://127.
 - Supabase のトークンは **production プロジェクトだけ**に絞って別に発行する
 - `SESSION_SECRET` と Turnstile の widget は staging とは別に作る
 - Queue の名前は `regional-quiz-bulk-mail` / `regional-quiz-bulk-mail-dlq`、Pages のプロジェクト名は `regional-quiz-frontend`
+- Worker の名前は `regional-quiz-backend`(`apps/backend/wrangler.toml` の `[env.production]` で接尾辞なしに戻している)。手順 6 の `BACKEND_URL` やデプロイ後の確認は `https://regional-quiz-backend.<アカウントのサブドメイン>.workers.dev` にする。単純に置換した `regional-quiz-backend-production` は存在しない
+- 手順 7 の手動デプロイは `gh workflow run deploy-production.yml --ref main` にする。`deploy-production` は `main` 以外から起動したジョブをスキップするため、`--ref develop` のままでは何もデプロイされない
 - `production` Environment に Required reviewers を設定する(手順書 6.5)
 - `deploy-production` は適用前に `db push --dry-run` の結果をログに残すので、承認する前に確認する
