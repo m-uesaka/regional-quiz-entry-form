@@ -194,14 +194,29 @@ bunx wrangler pages project create regional-quiz-frontend --production-branch ma
 | `PUBLIC_TURNSTILE_SITE_KEY` | 通常の変数 | 6.2 で作成した Turnstile widget の **Site Key**。エントリーフォームとパスワード再設定要求フォームのウィジェットが読む。未設定だとウィジェットが描画されず、トークンが無い送信をバックエンドが 400 で拒否するため、**この 2 つのフォームが誰にも使えなくなる** |
 
 ```bash
+cd apps/frontend
+
 # staging
 bunx wrangler pages secret put SESSION_SECRET --project-name regional-quiz-frontend-staging
+bunx wrangler pages secret put BACKEND_URL --project-name regional-quiz-frontend-staging
+bunx wrangler pages secret put PUBLIC_TURNSTILE_SITE_KEY --project-name regional-quiz-frontend-staging
 
 # production
 bunx wrangler pages secret put SESSION_SECRET --project-name regional-quiz-frontend
+bunx wrangler pages secret put BACKEND_URL --project-name regional-quiz-frontend
+bunx wrangler pages secret put PUBLIC_TURNSTILE_SITE_KEY --project-name regional-quiz-frontend
+
+# 確認(3 つ並べば OK)
+bunx wrangler pages secret list --project-name <プロジェクト名>
 ```
 
-`BACKEND_URL` / `PUBLIC_TURNSTILE_SITE_KEY` は機密ではないので、Dashboard の `Settings > Variables and Secrets` から登録します。このとき環境は **Production** を選んでください(ワークフローは `--branch main` でアップロードするため、デプロイは Pages の production 環境として扱われます。Preview 側に登録しても読まれません)。いずれも Pages プロジェクト側の設定で、`wrangler pages deploy` では上書きされません。
+`BACKEND_URL` / `PUBLIC_TURNSTILE_SITE_KEY` は機密ではありませんが、**3 つとも CLI(`pages secret put`)で登録してください**。表の「種別」は値の性質で、登録方法とは別です。
+
+- `pages secret put` は Production 環境に暗号化された変数として登録します。ワークフローは `--branch main` でアップロードするので、デプロイは Pages の production 環境として扱われ、Preview 側の変数は読まれません。CLI ならこの取り違えが起きません
+- 暗号化された変数も、SvelteKit からは `$env/dynamic/private` / `$env/dynamic/public` のどちらでも通常の変数と同じように読めます(`PUBLIC_` で始まる値はページに埋め込まれます)
+- staging の構築時には、Dashboard から登録した 2 つが保存されておらず、`BACKEND_URL is not set` で SSR が 500 になりました。CLI なら `secret list` で登録できたかをその場で確かめられます
+
+**Pages の変数は、登録した後のデプロイから反映されます。** 既存のデプロイには届かないので、変数を足したり直したりしたら、対象のワークフローを `workflow_dispatch` で再実行してください。Worker のシークレット(6.2)は登録した時点で反映されるので、ここが違います。いずれも Pages プロジェクト側の設定で、`wrangler pages deploy` では上書きされません。
 
 `<アカウントのサブドメイン>` は Dashboard の `Workers & Pages` の右側に表示される `Subdomain`(`xxx.workers.dev`)で確認できます。
 
@@ -296,8 +311,15 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 
 ## 8. デプロイ後の確認
 
-- `GET https://<worker-domain>/api/healthz` が `{ "ok": true }` を返すこと(Hono 側が `basePath('/api')` なので `/healthz` 単体は 404 になる)
-- フロントエンドのトップページが表示され、`hc<AppType>()` 経由の API 呼び出しが疎通すること。フロントエンドのオリジンで `/api/healthz` が返るかどうかが、6.4 の Worker route が効いているかの確認になる
+ワークフローが全ステップ成功しても、Worker / Pages が実行時に読む値(6.2・6.3)の誤りは表に出ません。次の順に確認すると、どこで途切れているかを切り分けられます。
+
+- `GET https://<worker-domain>/api/healthz` が `{ "ok": true }` を返すこと(Hono 側が `basePath('/api')` なので `/healthz` 単体は 404 になる)。**DB を使わないので、Worker が起動していることしか分からない**
+- `GET https://<worker-domain>/api/tournaments/<存在しない地域>/saikyoi` が `404 {"error":"tournament not found"}` を返すこと。500 なら Worker から Supabase に届いていない(`SUPABASE_URL` が `https://<project ref>.supabase.co` の形になっているか、`SUPABASE_SECRET_KEY` が正しいかを確認する)
+- フロントエンドの `/<存在しない地域>/saikyoi/entry` が 404 を返すこと。500 なら Pages から Worker に届いていない(`BACKEND_URL`)。大会種別は `saikyoi` / `shinjinou` にすること。不正な種別だとフロントエンドが API を呼ぶ前に 404 を返すため、確認にならない
+- フロントエンドの `/password-reset` の HTML に埋め込まれた `env` に `PUBLIC_TURNSTILE_SITE_KEY` が入っていること(`env: {}` なら Turnstile が表示されない)
+- フロントエンドのオリジンで `/api/healthz` が返るかどうかが、6.4 の Worker route が効いているかの確認になる(route 未設定の間は 404)
+
+500 の原因は `bunx wrangler tail --env <name>`(Worker)/ `bunx wrangler pages deployment tail <deployment id> --project-name <name>`(Pages)を流しながらリクエストを送ると、エラーとスタックトレースで分かります。
 - GitHub Actions の該当ワークフローが全ステップ成功していること
 - Supabase Dashboard の `Table Editor` で、適用したマイグレーション分のテーブル・型(enum)が反映されていること
 - Supabase Dashboard の `Database > Migrations` で、適用済みマイグレーションの一覧に最新のものが含まれること
@@ -324,7 +346,7 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 - [ ] 環境ごとに Turnstile widget を作成し、Secret Key を Worker に登録した(6.2)
 - [ ] 一斉メール用の Queue と dead letter queue を環境ごとに作成した(6.2.2。Free プランでは保持期間 24 時間を指定)
 - [ ] Pages プロジェクトを production branch `main` で作成した(6.3)
-- [ ] Pages プロジェクトの **Production** 環境に `BACKEND_URL` / `SESSION_SECRET` / `PUBLIC_TURNSTILE_SITE_KEY` を登録した(6.3)
+- [ ] Pages プロジェクトに `BACKEND_URL` / `SESSION_SECRET` / `PUBLIC_TURNSTILE_SITE_KEY` を CLI で登録し、`pages secret list` で 3 つとも確認した(6.3)
 - [ ] `wrangler.toml` の `routes` を実ドメインで有効化し、`/api/*` が Worker に届くことを確認した(6.4 / #101)
 - [ ] `bunx supabase db push --linked --dry-run` で初回マイグレーション適用の差分を確認した
 - [ ] staging の `deploy-staging` ワークフローが全ステップ成功することを確認した

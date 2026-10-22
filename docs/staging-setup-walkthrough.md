@@ -69,8 +69,10 @@ bunx wrangler secret put MAIL_API_KEY --env staging            # 用意できて
 bunx wrangler secret put GOOGLE_SHEETS_API_KEY --env staging   # 用意できていれば
 ```
 
+- `SUPABASE_URL` は `https://<project ref>.supabase.co` の形で入れる(`https://` を付け、引用符・末尾の `/` は付けない)。不正だと DB を使う API がすべて 500 になるが、`/api/healthz` は DB を使わないので気付きにくい
+- 必ず `apps/backend` で実行する。リポジトリのルートなど `wrangler.toml` の無い場所で実行すると `Required Worker name missing` で失敗する
 - 最初の 1 回は Worker がまだ無いので、作成するか聞かれる。**Yes** と答える
-- 確認: `bunx wrangler secret list --env staging`
+- 確認: `bunx wrangler secret list --env staging`。Worker のシークレットは登録した時点で反映され、再デプロイは要らない
 - `"vars.TURNSTILE_SECRET_KEY" exists at the top level ... Please add ...` という警告が出るが、想定どおり。**指示どおりに追記してはいけない**(手順書 6.2)
 
 ### 4. Turnstile の widget を作る
@@ -99,14 +101,20 @@ Workers Free プランでも作成できますが、保持期間は最大 24 時
 cd ../frontend
 bunx wrangler pages project create regional-quiz-frontend-staging --production-branch main
 bunx wrangler pages secret put SESSION_SECRET --project-name regional-quiz-frontend-staging
+bunx wrangler pages secret put BACKEND_URL --project-name regional-quiz-frontend-staging
+bunx wrangler pages secret put PUBLIC_TURNSTILE_SITE_KEY --project-name regional-quiz-frontend-staging
+
+bunx wrangler pages secret list --project-name regional-quiz-frontend-staging   # 3 つ並べば OK
 ```
 
 - production branch は必ず `main` にする(CI は `--branch main` でアップロードする)
 - 作成後の URL が `regional-quiz-frontend-staging.pages.dev` になったか確認する。違う場合は、手順 4 の widget のホスト名を直す
-- Dashboard の `Settings > Variables and Secrets` の **Production** 環境に、次の 2 つを登録する
+- 値は次のとおり
+  - `SESSION_SECRET` = 手順 3 と**同じ値**。ずれると、ログイン後に `/staff/*` がログイン画面へ戻されてしまう
   - `BACKEND_URL` = `https://regional-quiz-backend-staging.<アカウントのサブドメイン>.workers.dev`(末尾の `/` や `/api` は付けない)
   - `PUBLIC_TURNSTILE_SITE_KEY` = 手順 4 の Site Key
-- `SESSION_SECRET` は手順 3 と**同じ値**にする。ずれると、ログイン後に `/staff/*` がログイン画面へ戻されてしまう
+- 3 つとも CLI で登録する。`pages secret put` は Production 環境に暗号化された変数として登録し、SvelteKit からは `$env/dynamic/private` / `$env/dynamic/public` のどちらでも通常の変数と同じように読める。今回 Dashboard から登録した `BACKEND_URL` / `PUBLIC_TURNSTILE_SITE_KEY` は保存されておらず、`secret list` にも出なかった。CLI なら登録できたかをその場で確かめられる
+- **Pages の変数は、登録した後のデプロイから反映される。** 既存のデプロイには届かないので、変数を足したり直したりしたら deploy-staging を再実行する(Worker のシークレットとはここが違う)
 
 ### 7. dry-run を行い、デプロイする
 
@@ -151,21 +159,47 @@ bunx wrangler pages dev .svelte-kit/cloudflare --binding BACKEND_URL=http://127.
 
 起動時に `Uncaught TypeError` が出れば、Pages でも落ちます。
 
+### デプロイ成功後に見つかった設定ミス
+
+ワークフローが全ステップ成功しても、実行時に読む値の誤りは表に出ません。正しい疎通確認(次章)をして初めて、次の 2 つが見つかりました。
+
+| 症状 | ログ | 原因と対処 |
+| --- | --- | --- |
+| Worker の DB を使う API がすべて 500(`/api/healthz` だけは 200) | `Invalid supabaseUrl: Must be a valid HTTP or HTTPS URL.` | Worker の `SUPABASE_URL` が URL として不正だった → `https://<project ref>.supabase.co` で上書きした(再デプロイ不要) |
+| Worker は直ったのに、フロントエンド経由のページが 500 | `BACKEND_URL is not set, so /api/* requests cannot be forwarded to the backend.` | Dashboard から登録した Pages の変数が保存されていなかった(ページに埋め込まれる公開変数も `env: {}` だった) → CLI で登録し直し、deploy-staging を再実行した |
+
+ログは次のコマンドで見られます。どちらも、実行中に問題の URL へリクエストを送ると、エラーとスタックトレースが出ます。
+
+```bash
+# Worker
+cd apps/backend
+bunx wrangler tail --env staging
+
+# Pages(非対話では deployment id が必要)
+cd apps/frontend
+bunx wrangler pages deployment list --project-name regional-quiz-frontend-staging --environment production
+bunx wrangler pages deployment tail <deployment id> --project-name regional-quiz-frontend-staging
+```
+
 ## デプロイ後の確認
 
 | 確認内容 | 期待する結果 |
 | --- | --- |
-| `https://regional-quiz-backend-staging.<サブドメイン>.workers.dev/api/healthz` | `{"ok":true}` |
+| `https://regional-quiz-backend-staging.<サブドメイン>.workers.dev/api/healthz` | `{"ok":true}`。DB を使わないので、Worker が起動していることしか分からない |
+| `https://regional-quiz-backend-staging.<サブドメイン>.workers.dev/api/tournaments/<存在しない地域>/saikyoi` | `404 {"error":"tournament not found"}`。500 なら Worker から Supabase に届いていない(`SUPABASE_URL` / `SUPABASE_SECRET_KEY` を疑う) |
 | `https://regional-quiz-frontend-staging.pages.dev/`、`/staff/login` | 200 |
 | `https://regional-quiz-frontend-staging.pages.dev/<存在しない地域>/saikyoi/entry` | 404(500 にならなければ、SSR → Worker → Supabase が疎通している)。大会種別は `saikyoi` / `shinjinou` のどちらかに固定し、地域だけを存在しないものにする。大会種別まで不正だと、フロントエンドが API を呼ぶ前に 404 を返すため疎通確認にならない |
+| `/password-reset` の HTML に埋め込まれた `__sveltekit_…` の `env` | `{"PUBLIC_TURNSTILE_SITE_KEY": "..."}`。`{}` なら Pages の公開変数が届いておらず、Turnstile のウィジェットが表示されない |
 | `https://regional-quiz-frontend-staging.pages.dev/api/healthz` | 404。Worker route が未設定のための想定どおりの挙動(#101) |
+
+上から順に確認すると、どこで途切れているかを切り分けられます(Worker 単体 → Worker から DB → Pages から Worker → Pages の公開変数)。
 
 ## この時点での制限と残作業
 
 - **独自ドメインと Worker の route(#101)**: これが済むまで、ブラウザから直接 `/api/*` を呼ぶ処理(CSV ダウンロード、クライアント側の `createApiClient()`)は 404 になる。メール内のリンクも、仮のドメインの `FRONTEND_URL` のまま
 - **メール送信**: `MAIL_API_KEY` の登録と、Resend での送信ドメインの認証が必要。ドメインが決まるまでは送れない
 - **`GOOGLE_SHEETS_API_KEY`**: 未登録ならシートの取り込みが失敗する。Google Cloud Console で Sheets API だけに制限したキーを作る
-- **後片付け**: 権限が足りなかった古い Supabase トークンの削除と、GitHub の `staging` Environment に残っている使われない `SUPABASE_URL` / `SUPABASE_SECRET_KEY` の削除
+- **後片付け**: 権限が足りなかった古い Supabase トークンの削除と、GitHub の `staging` Environment に残っている使われない `SUPABASE_URL` / `SUPABASE_SECRET_KEY` の削除。Dashboard で Pages の変数を誤って Worker(`regional-quiz-backend-staging`)の Settings に登録していた場合は、その削除も
 
 ## production を構築するときの差分
 
