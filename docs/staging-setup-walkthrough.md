@@ -60,7 +60,7 @@ flowchart LR
 手順 2 の `cd apps/backend` で既に `apps/backend` にいるので、再度移動せずにそのまま続ける。
 
 ```bash
-openssl rand -base64 32          # SESSION_SECRET 用。手順 6 でも使うので保存しておく
+openssl rand -base64 32 | pbcopy   # SESSION_SECRET 用。手順 6 でも同じ値を貼るので、クリップボードから消える前に保存しておく
 
 bunx wrangler secret put SUPABASE_URL --env staging
 bunx wrangler secret put SUPABASE_SECRET_KEY --env staging
@@ -110,7 +110,7 @@ bunx wrangler pages secret list --project-name regional-quiz-frontend-staging   
 - production branch は必ず `main` にする(CI は `--branch main` でアップロードする)
 - 作成後の URL が `regional-quiz-frontend-staging.pages.dev` になったか確認する。違う場合は、手順 4 の widget のホスト名を直す
 - 値は次のとおり
-  - `SESSION_SECRET` = 手順 3 と**同じ値**。ずれると、ログイン後に `/staff/*` がログイン画面へ戻されてしまう
+  - `SESSION_SECRET` = 手順 3 と**同じ値**。ずれると、ログイン後に `/staff/*` がログイン画面へ戻されてしまう。手で打ち直さず、保存しておいた値をコピーして貼り付ける。`secret list` には名前しか出ないので、後から一致しているかは確かめられない(実際にずれていた。「デプロイ成功後に見つかった設定ミス」参照)
   - `BACKEND_URL` = `https://regional-quiz-backend-staging.<アカウントのサブドメイン>.workers.dev`(末尾の `/` や `/api` は付けない)
   - `PUBLIC_TURNSTILE_SITE_KEY` = 手順 4 の Site Key
 - 3 つとも CLI で登録する。`pages secret put` は Production 環境に暗号化された変数として登録し、SvelteKit からは `$env/dynamic/private` / `$env/dynamic/public` のどちらでも通常の変数と同じように読める。今回 Dashboard から登録した `BACKEND_URL` / `PUBLIC_TURNSTILE_SITE_KEY` は保存されておらず、`secret list` にも出なかった。CLI なら登録できたかをその場で確かめられる
@@ -161,12 +161,13 @@ bunx wrangler pages dev .svelte-kit/cloudflare --binding BACKEND_URL=http://127.
 
 ### デプロイ成功後に見つかった設定ミス
 
-ワークフローが全ステップ成功しても、実行時に読む値の誤りは表に出ません。正しい疎通確認(次章)をして初めて、次の 2 つが見つかりました。
+ワークフローが全ステップ成功しても、実行時に読む値の誤りは表に出ません。正しい疎通確認(次章)をして初めて上の 2 つが見つかり、最初の統括スタッフでログインしてみて 3 つ目が見つかりました。
 
 | 症状 | ログ | 原因と対処 |
 | --- | --- | --- |
 | Worker の DB を使う API がすべて 500(`/api/healthz` だけは 200) | `Invalid supabaseUrl: Must be a valid HTTP or HTTPS URL.` | Worker の `SUPABASE_URL` が URL として不正だった → `https://<project ref>.supabase.co` で上書きした(再デプロイ不要) |
 | Worker は直ったのに、フロントエンド経由のページが 500 | `BACKEND_URL is not set, so /api/* requests cannot be forwarded to the backend.` | Dashboard から登録した Pages の変数が保存されていなかった(ページに埋め込まれる公開変数も `env: {}` だった) → CLI で登録し直し、deploy-staging を再実行した |
+| 最初の統括スタッフ(手順書 8.1)でログインすると、`/staff/dashboard` ではなく `/staff/login?redirectTo=%2Fstaff%2Fdashboard` に戻される。エラー表示は無い | なし(Pages 側はセッションを無効として扱うだけで、エラーを出さない) | Worker と Pages の `SESSION_SECRET` が食い違っていた。ログイン(Worker が署名)は成功するが、ダッシュボード(Pages が検証)でセッションが読めない → `openssl rand -base64 32 \| pbcopy` で値を作り直して両方に貼り付け、deploy-staging を再実行した(手順書 6.2) |
 
 ログは次のコマンドで見られます。どちらも、実行中に問題の URL へリクエストを送ると、エラーとスタックトレースが出ます。
 

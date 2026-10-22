@@ -136,7 +136,19 @@ bunx wrangler secret put SESSION_SECRET --env production
 bunx wrangler secret put TURNSTILE_SECRET_KEY --env production
 ```
 
-`SESSION_SECRET` は staging/production で必ず異なる値を発行してください(`openssl rand -base64 32` などで生成)。6.3 で Pages にも同じ値を登録するので、シークレット管理ツールに保存しておきます。シークレットは `wrangler deploy` では変更されないため、この登録は環境ごとに一度だけで済みます。
+`SESSION_SECRET` は staging/production で必ず異なる値を発行してください。6.3 で Pages にも同じ値を登録するので、シークレット管理ツールに保存しておきます。
+
+**Worker と Pages に同じ値を入れる際は、手で打ち直さずクリップボード経由で貼り付けてください。** 登録した値は `secret list` でも名前しか表示されないので、後から両者が一致しているかを確かめる方法がありません。食い違うと、ログインは成功するのに `/staff/*` がログイン画面へ戻されます(6.3 の表)。一致しているか自信がないときは、値を作り直して両方に登録し直すのが確実です。
+
+```bash
+openssl rand -base64 32 | pbcopy   # 生成した値を画面に出さずクリップボードへ
+bunx wrangler secret put SESSION_SECRET --env staging      # ⌘V
+cd ../frontend
+bunx wrangler pages secret put SESSION_SECRET --project-name regional-quiz-frontend-staging   # ⌘V
+pbcopy < /dev/null                 # クリップボードを空にする
+```
+
+Pages 側の値は次のデプロイから反映されるため、登録し直した後は Pages を再デプロイします(`gh workflow run deploy-staging.yml --ref develop`)。Worker 側は再デプロイ不要です。値を変えると発行済みのセッションはすべて無効になり、スタッフも参加者もログインし直しになります。シークレットは `wrangler deploy` では変更されないため、この登録は環境ごとに一度だけで済みます。
 
 初回デプロイ前は Worker がまだ存在しないため、最初の `secret put` で `There doesn't seem to be a Worker called "..."` と聞かれます。**Yes** と答えると空の Worker が作られ、そこにシークレットが登録されます。`MAIL_API_KEY` / `GOOGLE_SHEETS_API_KEY` は未登録でもデプロイ自体は通り、その機能(メール送信・シート取り込み)が実行時に失敗するだけなので、用意できてから登録しても構いません。
 
