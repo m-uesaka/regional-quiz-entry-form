@@ -199,6 +199,7 @@ bunx wrangler pages deployment tail <deployment id> --project-name regional-quiz
 - **独自ドメインと Worker の route(#101)**: これが済むまで、ブラウザから直接 `/api/*` を呼ぶ処理(CSV ダウンロード、クライアント側の `createApiClient()`)は 404 になる。メール内のリンクも、仮のドメインの `FRONTEND_URL` のまま
 - **メール送信**: `MAIL_API_KEY` の登録と、Resend での送信ドメインの認証が必要。ドメインが決まるまでは送れない
 - **`GOOGLE_SHEETS_API_KEY`**: 未登録ならシートの取り込みが失敗する。Google Cloud Console で Sheets API だけに制限したキーを作る
+- **最初の統括スタッフ**: まだ作っていない。スタッフを招待する API は統括スタッフ限定なので、最初の 1 人だけは `bun run staff:bootstrap` が出す SQL を SQL Editor で実行して作る(手順書 8.1)。この方法はメールを送らないので、`MAIL_API_KEY` が無い今の staging でも使える。2 人目以降を `/admin/staff` から招待するには、メール送信が必要
 - **後片付け**: 権限が足りなかった古い Supabase トークンの削除と、GitHub の `staging` Environment に残っている使われない `SUPABASE_URL` / `SUPABASE_SECRET_KEY` の削除。Dashboard で Pages の変数を誤って Worker(`regional-quiz-backend-staging`)の Settings に登録していた場合は、その削除も
 
 ## production を構築するときの差分
@@ -209,6 +210,7 @@ bunx wrangler pages deployment tail <deployment id> --project-name regional-quiz
 - Worker の名前は `regional-quiz-backend`(`apps/backend/wrangler.toml` の `[env.production]` で接尾辞なしに戻している)。手順 6 の `BACKEND_URL` やデプロイ後の確認は `https://regional-quiz-backend.<アカウントのサブドメイン>.workers.dev` にする。単純に置換した `regional-quiz-backend-production` は存在しない
 - 手順 7 の手動デプロイは `gh workflow run deploy-production.yml --ref main` にする。`deploy-production` は `main` 以外から起動したジョブをスキップするため、`--ref develop` のままでは何もデプロイされない
 - `production` Environment に Required reviewers を設定する(手順書 6.5)
+- 最初の統括スタッフは production でも手順書 8.1 で作る。スクリプトに渡す URL を production のフロントエンドにし、SQL は **production プロジェクトの** SQL Editor で実行する
 - `deploy-production` も `db push --dry-run` の結果をログに残すが、承認の前には確認できない。Environment の承認はジョブ全体の開始を止めるため、dry-run も承認後に実行され、その直後に同じジョブがマイグレーションを適用する。承認する前に差分を確認するには、デプロイ対象のコミット(`main`)をチェックアウトし、production にリンクしたローカル環境で dry-run を別に行う(手順書 5 章)。終わったら、リンク先を staging に戻すのを忘れない
 
   ```bash
