@@ -177,7 +177,7 @@ gh run watch <run id> --exit-status
 | レギュレーションの取り込み(`/admin/tournaments/[id]/regulations`) | SSR(`+page.server.ts`)から呼ぶ | 使える |
 | フォーム定義の取り込み(`SheetImportPanel`) | ブラウザから `createApiClient()` で直接 `/api/*` を呼ぶ | 使えない(404) |
 
-取り込み API はスタッフのログインが必要なので、curl では Worker 経由の確認はできません。手順 4 が通っていれば、キーそのものは問題ありません(Worker は同じリクエストを送るだけです)。
+取り込み API は統括スタッフのログインが必要です。Worker 経由でも確認する場合は、[`google-sheets-integration.md`](./google-sheets-integration.md) 9 章の curl 例の接続先を staging の Worker オリジンに変更し、有効な `staff_session` Cookie を付けて呼び出します。手順 4 はキー単体で Google Sheets にアクセスできることの確認であり、Worker へのキーの登録や取り込み API の疎通を確認するものではありません。
 
 ## つまずいた点
 
