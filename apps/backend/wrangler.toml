@@ -34,7 +34,13 @@ workers_dev = true
 [vars]
 # 非機密の設定値のみここに記載し、機密情報は `wrangler secret put` で登録する
 MAIL_FROM_ADDRESS = "no-reply@mail.regional-quiz-project.app"
-FRONTEND_URL = "https://regional-quiz-project.app"
+# `bun run dev:frontend`(`vite dev`)の既定のオリジン。メール本文のリンクに
+# 加えて、`src/index.ts` の `csrf()` が状態変更リクエストの `Origin` と照合する
+# 値でもあるため、ローカルではフロントエンドの実際のオリジンと一致している
+# 必要がある(本番ドメインのままだと、ログアウトやエントリー取消などの
+# ボディの無い POST/DELETE が 403 になる)。別のポートやホストで動かすときは
+# `apps/backend/.dev.vars` で上書きする。E2E は `--var` で渡している。
+FRONTEND_URL = "http://localhost:5173"
 # Turnstile の「常に成功する」テスト用シークレット(Cloudflare が公開している
 # 固定値)。ローカル開発と E2E はこれで通す。`[env.*.vars]` には**置かない**:
 # 同名の var があるとデプロイのたびに `wrangler secret put` で登録した本物の
