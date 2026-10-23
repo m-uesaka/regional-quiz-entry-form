@@ -103,6 +103,7 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 | `POST /api/auth/participant/login` | `participant-login:email:` | `LOGIN_EMAIL_RATE_LIMITER` | 60 回 / 60 秒 | なし |
 | `POST /api/tournaments/:tournamentId/entries` | `ip:` | `MAIL_TRIGGER_IP_RATE_LIMITER` | 20 回 / 60 秒 | **必須** |
 | `POST /api/tournaments/:tournamentId/entries` | `email:` | `MAIL_TRIGGER_EMAIL_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
+| `POST /api/tournaments/:tournamentId/entries/session` | `ip:` | `MAIL_TRIGGER_IP_RATE_LIMITER` | 20 回 / 60 秒 | **必須** |
 | `POST /api/auth/participant/password-reset/request` | `ip:` | `MAIL_TRIGGER_IP_RATE_LIMITER` | 20 回 / 60 秒 | **必須** |
 | `POST /api/auth/participant/password-reset/request` | `email:` | `MAIL_TRIGGER_EMAIL_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
 
@@ -159,6 +160,7 @@ if ('yaml' in body) {
 | GET | `/api/tournaments/:tournamentId/entry-list` | なし |
 | GET | `/api/tournaments/:regionSlug/:tournamentSlug/entry-list` | なし |
 | POST | `/api/tournaments/:tournamentId/entries` | なし(レート制限 + Turnstile) |
+| POST | `/api/tournaments/:tournamentId/entries/session` | 参加者(レート制限 + Turnstile) |
 | GET | `/api/entries/verify` | なし(トークン) |
 | GET | `/api/form-definitions/:tournamentId` | 期間中はなし / 期間外は担当スタッフ |
 | PUT | `/api/form-definitions/:tournamentId` | 統括スタッフ |
@@ -384,7 +386,26 @@ if ('yaml' in body) {
 
 ### `POST /api/tournaments/:tournamentId/entries`
 
-エントリーの新規登録。処理の本体は `apps/backend/src/lib/entries.ts` の `createEntry()` です。
+未ログインでのエントリー登録。処理の本体は `apps/backend/src/lib/entries.ts` の `checkEntrySubmission()` と `createEntryUnauthenticated()` です。
+
+**応答はメールアドレスの状態によらず同じです**(#117)。「登録済みのアドレスか」「どの地域で登録済みか」が応答から読めると、この API がアドレスの登録有無を調べる手段になってしまうためです(ログインとパスワード再設定要求は既に同じ対策をしています)。そこで:
+
+- アドレスに依存しない検証(大会・エントリー期間・優先期間・追加項目)だけをその場で行い、失敗ならエラーを返す
+- 通ったら **`202 {"ok": true}` を先に返し**、残り(参加者の検索・作成、パスワード照合、エントリー作成、メール送信)は `waitUntil()` で応答の後に行う。分岐ごとの処理時間(PBKDF2 の有無、メール送信の有無)が応答時間に出ないようにするため
+- 既存アカウントに関わる理由で登録できなかった場合は、エラーを返す代わりに**そのアドレスへ理由をメールで送る**(件名「エントリーを受け付けられませんでした」。`lib/entry-notice.ts`)。エントリーは作らない
+
+| アドレスの状態 | 結果 | 送るメール |
+| --- | --- | --- |
+| 未登録 | アカウントとエントリーを作成 | 確認メール |
+| 登録済み + パスワード一致 | エントリーを作成 | 確認メール |
+| 登録済み + パスワード不一致 | 作らない | 「登録済みのパスワードでログインしてからエントリーしてください」 |
+| 別地域で登録済み | 作らない | 「別の地域で登録済み」 |
+| 同じ大会にエントリー済み | 作らない | 「既にエントリー済み」 |
+| 同一地域の別大会にエントリー済み(重複不可の地域) | 作らない | 「どちらか一方にのみエントリーできます」 |
+| フォームを開いている間にレギュレーションが削除された | 作らない | 「レギュレーションが変更された」 |
+| サーバー側の失敗 | 作らない(ロールバック) | なし(ログのみ) |
+
+既にアカウントを持つ参加者には、フォームからログイン画面(`/mypage/login?redirectTo=<フォームのパス>`)へ誘導し、ログイン後は下の `POST .../entries/session` でエントリーさせます。
 
 - リクエスト: `EntryInputSchema`
 
@@ -402,9 +423,9 @@ if ('yaml' in body) {
 
   加えて **`cf-turnstile-response` ヘッダ**(Turnstile のトークン)が必須です。1 章「レート制限と Turnstile」を参照してください。
 
-- `201`: `{"id": "<entry id>"}`
+- `202`: `{"ok": true}`(アドレスの状態によらず同じ。上記参照)
 
-エラー:
+エラー(いずれもアドレスに依存しないもの):
 
 | ステータス | `error` | 条件 |
 | --- | --- | --- |
@@ -414,20 +435,35 @@ if ('yaml' in body) {
 | 400 | `unknown custom field: ...` 等 | `customFieldValues` が大会の `form_field_defs` と一致しない(メッセージは [`form-generation.md`](./form-generation.md) の一覧を参照) |
 | 403 | `entry period closed` | エントリー期間外 |
 | 403 | `regulation not eligible in priority window` | `regulationIds` が空、この大会のものでない id を含む、または優先期間中に優先対象を1つも選んでいない |
-| 401 | `invalid password` | 既存メールアドレスでのエントリーだがパスワードが一致しない |
-| 409 | `already registered in another region` | そのメールアドレスが別地域の participant として登録済み |
+| 500 | `internal server error` | 大会や `form_field_defs` の取得に失敗 |
+
+### `POST /api/tournaments/:tournamentId/entries/session`
+
+ログイン中の参加者のエントリー登録(#117)。本体は `createEntryForParticipant()` です。セッションで本人確認が済んでいるので、アドレスとパスワードは送らず、断る理由も**その場でエラーとして返します**(伝える相手は既にそのアカウントの持ち主なので、漏れる情報がありません)。
+
+- 認証: `participant_session` Cookie(`requireParticipant()`)
+- リクエスト: `EntrySessionInputSchema`(`EntryInputSchema` から `email` / `password` / `passwordConfirm` を除いたもの)と `cf-turnstile-response` ヘッダ
+- `201`: `{"id": "<entry id>"}`。確認メールはアカウントのアドレスへ送る
+
+エラー:
+
+| ステータス | `error` | 条件 |
+| --- | --- | --- |
+| 401 | `unauthorized` | セッションが無い / 無効 |
+| 400 / 403 | (上と同じ) | 大会・期間・優先期間・追加項目の検証 |
+| 409 | `already registered in another region` | アカウントが別地域のもの |
 | 409 | `already entered` | 同じ大会にキャンセル以外のエントリーが既にある |
 | 409 | `regulation no longer available` | フォームを開いている間に `PUT .../regulations` が対象のレギュレーションを削除した(エントリー行はロールバックされる) |
 | 409 | `already entered another tournament in this region` | `regions.allows_dual_entry` が false の地域で、同一地域の**別の**大会にキャンセル以外のエントリーが既にある |
-| 409 | (Supabase のメッセージ) | participant / entry の作成に失敗 |
-| 500 | (Supabase のメッセージ) | 大会の `form_field_defs` の取得に失敗 |
-| 500 | `failed to send verification email: ...` | 確認メールの送信に失敗 |
+| 500 | `internal server error` | エントリーの作成や確認メールの送信に失敗 |
 
 処理の流れ:
 
+2 つのエンドポイントに共通する処理の流れ(未ログインの方では 3. 以降が `waitUntil()` の中で動く):
+
 1. 大会とそのレギュレーション群を取得し、エントリー期間・優先期間を検証。
 2. その大会の `form_field_defs` を取得し、`customFieldValues` を `findCustomFieldValuesError()` で照合(未定義キー、選択肢にない値、必須項目の空欄、型の不一致を 400 で弾く)。
-3. メールアドレスから participant を検索。既存なら**パスワード照合**、無ければ新規作成(PBKDF2 でハッシュ化)。
+3. 未ログインならメールアドレスから participant を検索し、既存なら**パスワード照合**、無ければ新規作成(PBKDF2 でハッシュ化)。ログイン中ならセッションの participant を使う。
 4. 同じ大会の既存エントリーを確認。`cancelled` なら**その行を再利用**して上書き(`unique (participant_id, tournament_id)` があるため2行目は作れない)、それ以外なら 409。
 5. 地域が重複参加を許していなければ(`regions.allows_dual_entry` が false)、同一地域の**別**大会に有効なエントリーが無いことを確認。
 6. 確認メールを送信。
