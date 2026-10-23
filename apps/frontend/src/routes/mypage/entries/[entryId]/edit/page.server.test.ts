@@ -1,6 +1,9 @@
 import {describe, expect, it} from 'vitest';
 import type {Cookies, HttpError, Redirect} from '@sveltejs/kit';
-import type {MypageEntryDetail} from '@regional-quiz/shared';
+import {
+  ENTRY_NAME_MAX_LENGTH,
+  type MypageEntryDetail,
+} from '@regional-quiz/shared';
 import {actions, load} from './+page.server';
 
 const OPEN_PERIOD = {
@@ -241,6 +244,25 @@ describe('mypage entry edit form action', () => {
       },
     });
     // Refused here, so the API is never asked to store it.
+    expect(log.patchBodies).toEqual([]);
+  });
+
+  it('names a field over its length limit, without calling the API', async () => {
+    const log: FetchLog = {patchBodies: []};
+    const formData = validFormData();
+    formData.set('displayName', 'あ'.repeat(ENTRY_NAME_MAX_LENGTH + 1));
+    const event = buildActionEvent(fakeFetch({}, log), formData);
+
+    await expect(actions.default(event)).resolves.toMatchObject({
+      status: 400,
+      data: {
+        fieldErrors: {
+          displayName: [
+            `掲載名は${ENTRY_NAME_MAX_LENGTH}文字以内で入力してください`,
+          ],
+        },
+      },
+    });
     expect(log.patchBodies).toEqual([]);
   });
 

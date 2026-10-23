@@ -1,8 +1,9 @@
-import type {
-  CustomFieldValues,
-  CustomFieldValuesError,
-  CustomFieldValuesErrorReason,
-  FormFieldDef,
+import {
+  CUSTOM_FIELD_VALUE_MAX_LENGTH,
+  type CustomFieldValues,
+  type CustomFieldValuesError,
+  type CustomFieldValuesErrorReason,
+  type FormFieldDef,
 } from '@regional-quiz/shared';
 import {customFieldName} from '$lib/custom-field-name';
 
@@ -51,15 +52,17 @@ export function readCustomFieldValues(
 
 /**
  * The wording each rejection reason gets in front of a participant, given
- * the field's own label. Only `required` describes something the rendered
- * form lets them do — the others mean the body didn't come from the form,
- * so they say no more than "check this field".
+ * the field's own label. Only `required` and `too-long` describe something
+ * the rendered form lets them do — the others mean the body didn't come
+ * from the form, so they say no more than "check this field".
  */
 const CUSTOM_FIELD_ERROR_MESSAGES: Record<
   CustomFieldValuesErrorReason,
   (label: string) => string
 > = {
   required: label => `「${label}」は必須です`,
+  'too-long': label =>
+    `「${label}」は${CUSTOM_FIELD_VALUE_MAX_LENGTH}文字以内で入力してください`,
   'unknown-option': label => `「${label}」の選択内容が正しくありません`,
   'unknown-field': label => `「${label}」の入力内容を確認してください`,
   'expects-list': label => `「${label}」の入力内容を確認してください`,

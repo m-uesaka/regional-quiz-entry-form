@@ -118,12 +118,14 @@ export const actions = {
 
     // Both checks are reported together rather than the custom fields
     // short-circuiting the schema, so every rejected field is marked in one
-    // round trip instead of one per submission.
+    // round trip instead of one per submission. The custom fields' messages
+    // are keyed by their namespaced control names, so they can't collide
+    // with the schema's.
     if (!parsed.success || customFieldValuesErrors.length > 0) {
-      const fieldErrors: EditFieldErrors = customFieldErrors(
-        customFieldValuesErrors,
-        formFieldDefs,
-      );
+      const fieldErrors: EditFieldErrors = {
+        ...(parsed.success ? {} : parsed.error.flatten().fieldErrors),
+        ...customFieldErrors(customFieldValuesErrors, formFieldDefs),
+      };
       return fail(400, {
         error: '入力内容を確認してください',
         fieldErrors,

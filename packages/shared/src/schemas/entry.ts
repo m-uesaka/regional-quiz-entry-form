@@ -1,8 +1,58 @@
 import {z} from 'zod';
 import {PasswordLengthSchema} from './password';
 import {isWithinEntryPeriod} from '../logic/entry-period';
+import {
+  CUSTOM_FIELD_VALUE_MAX_LENGTH,
+  CUSTOM_FIELD_VALUES_TOTAL_MAX_LENGTH,
+  customFieldValuesLength,
+} from '../logic/custom-field-values';
 import {FormFieldDefSchema} from './form-definition';
 import {TournamentTypeSchema} from './tournament';
+
+// Upper bounds on what one entry may store (#122). Without them a single
+// request could store megabytes, and the public entry list, the staff list
+// and the CSV export would all carry it in full. The values leave plenty of
+// room for a Japanese name or reading; the database repeats them as a check
+// constraint (`0021_entry_text_length_limits.sql`) because rows are still
+// written with plain SQL at times.
+export const ENTRY_NAME_MAX_LENGTH = 100;
+export const ENTRY_FREE_TEXT_MAX_LENGTH = 2_000;
+
+/**
+ * A required single-line name field (`name` / `furigana` / `displayName`),
+ * refused in Japanese when empty or longer than `ENTRY_NAME_MAX_LENGTH`.
+ * @param label The field's Japanese name, as the messages call it.
+ */
+function nameFieldSchema(label: string) {
+  return z
+    .string()
+    .min(1, {message: `${label}を入力してください`})
+    .max(ENTRY_NAME_MAX_LENGTH, {
+      message: `${label}は${ENTRY_NAME_MAX_LENGTH}文字以内で入力してください`,
+    });
+}
+
+// Each answer is bounded on its own, and all of them together: a form may
+// have any number of textarea fields, and a checkbox answer may repeat an
+// option. The per-answer bound is also checked field by field in
+// `findCustomFieldValuesErrors()`, which is what puts the message under the
+// control that caused it.
+const customFieldValueSchema = z.string().max(CUSTOM_FIELD_VALUE_MAX_LENGTH, {
+  message: `回答は${CUSTOM_FIELD_VALUE_MAX_LENGTH}文字以内で入力してください`,
+});
+
+export const CustomFieldValuesInputSchema = z
+  .record(
+    z.string(),
+    z.union([customFieldValueSchema, z.array(customFieldValueSchema)]),
+  )
+  .refine(
+    values =>
+      customFieldValuesLength(values) <= CUSTOM_FIELD_VALUES_TOTAL_MAX_LENGTH,
+    {
+      message: `追加項目の回答は合計${CUSTOM_FIELD_VALUES_TOTAL_MAX_LENGTH}文字以内で入力してください`,
+    },
+  );
 
 // Every message is spelled out in Japanese because both consumers show
 // them to the participant as-is: the entry / mypage-edit forms render
@@ -11,9 +61,9 @@ import {TournamentTypeSchema} from './tournament';
 // would otherwise surface in an entirely Japanese form.
 export const EntryInputSchema = z
   .object({
-    name: z.string().min(1, {message: '氏名を入力してください'}),
-    furigana: z.string().min(1, {message: 'ふりがなを入力してください'}),
-    displayName: z.string().min(1, {message: '掲載名を入力してください'}),
+    name: nameFieldSchema('氏名'),
+    furigana: nameFieldSchema('ふりがな'),
+    displayName: nameFieldSchema('掲載名'),
     email: z
       .string()
       .email({message: 'メールアドレスの形式が正しくありません'}),
@@ -30,11 +80,13 @@ export const EntryInputSchema = z
     regulationIds: z
       .array(z.string().uuid({message: 'レギュレーションを選択してください'}))
       .min(1, {message: 'レギュレーションを選択してください'}),
-    freeText: z.string().optional(),
-    customFieldValues: z.record(
-      z.string(),
-      z.union([z.string(), z.array(z.string())]),
-    ),
+    freeText: z
+      .string()
+      .max(ENTRY_FREE_TEXT_MAX_LENGTH, {
+        message: `自由記述は${ENTRY_FREE_TEXT_MAX_LENGTH}文字以内で入力してください`,
+      })
+      .optional(),
+    customFieldValues: CustomFieldValuesInputSchema,
   })
   .refine(data => data.password === data.passwordConfirm, {
     path: ['passwordConfirm'],

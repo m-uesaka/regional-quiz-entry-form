@@ -2,6 +2,8 @@
   import {untrack} from 'svelte';
   import {enhance} from '$app/forms';
   import {
+    ENTRY_FREE_TEXT_MAX_LENGTH,
+    ENTRY_NAME_MAX_LENGTH,
     toFormFieldDefYaml,
     type MypageEntryDetail,
   } from '@regional-quiz/shared';
@@ -73,12 +75,32 @@
 <form method="POST" class="flex flex-col gap-4" use:enhance>
   <div class="flex flex-col gap-1.5">
     <Label for="name">氏名</Label>
-    <Input id="name" name="name" bind:value={name} required />
+    <Input
+      id="name"
+      name="name"
+      bind:value={name}
+      maxlength={ENTRY_NAME_MAX_LENGTH}
+      isError={!!fieldError('name')}
+      required
+    />
+    {#if fieldError('name')}
+      <p class="text-sm text-destructive">{fieldError('name')}</p>
+    {/if}
   </div>
 
   <div class="flex flex-col gap-1.5">
     <Label for="furigana">ふりがな</Label>
-    <Input id="furigana" name="furigana" bind:value={furigana} required />
+    <Input
+      id="furigana"
+      name="furigana"
+      bind:value={furigana}
+      maxlength={ENTRY_NAME_MAX_LENGTH}
+      isError={!!fieldError('furigana')}
+      required
+    />
+    {#if fieldError('furigana')}
+      <p class="text-sm text-destructive">{fieldError('furigana')}</p>
+    {/if}
   </div>
 
   <div class="flex flex-col gap-1.5">
@@ -87,13 +109,27 @@
       id="displayName"
       name="displayName"
       bind:value={displayName}
+      maxlength={ENTRY_NAME_MAX_LENGTH}
+      isError={!!fieldError('displayName')}
       required
     />
+    {#if fieldError('displayName')}
+      <p class="text-sm text-destructive">{fieldError('displayName')}</p>
+    {/if}
   </div>
 
   <div class="flex flex-col gap-1.5">
     <Label for="freeText">自由記述</Label>
-    <Textarea id="freeText" name="freeText" bind:value={freeText} />
+    <Textarea
+      id="freeText"
+      name="freeText"
+      bind:value={freeText}
+      maxlength={ENTRY_FREE_TEXT_MAX_LENGTH}
+      isError={!!fieldError('freeText')}
+    />
+    {#if fieldError('freeText')}
+      <p class="text-sm text-destructive">{fieldError('freeText')}</p>
+    {/if}
   </div>
 
   {#each fields as field (field.key)}
@@ -105,6 +141,11 @@
       error={fieldError(customFieldName(field.key))}
     />
   {/each}
+  <!-- Every answer within its own bound can still add up past the combined
+       one; that has no single control to point at. -->
+  {#if fieldError('customFieldValues')}
+    <p class="text-sm text-destructive">{fieldError('customFieldValues')}</p>
+  {/if}
 
   <div class="flex flex-wrap gap-2 pt-2">
     <Button type="submit" variant="primary" tone="solid">保存する</Button>

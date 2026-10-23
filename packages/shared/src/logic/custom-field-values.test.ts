@@ -1,6 +1,8 @@
 import {describe, expect, it} from 'bun:test';
 import type {FormFieldDef} from '../schemas/form-definition';
 import {
+  CUSTOM_FIELD_VALUE_MAX_LENGTH,
+  customFieldValuesLength,
   findCustomFieldValuesError,
   findCustomFieldValuesErrors,
 } from './custom-field-values';
@@ -165,6 +167,32 @@ describe('findCustomFieldValuesError', () => {
     });
 
     expect(error).toBeNull();
+  });
+
+  it('accepts a free-text answer at the maximum length', () => {
+    const error = findCustomFieldValuesError(FIELD_DEFS, {
+      ...VALID_VALUES,
+      note: 'あ'.repeat(CUSTOM_FIELD_VALUE_MAX_LENGTH),
+    });
+
+    expect(error).toBeNull();
+  });
+
+  it('rejects a free-text answer over the maximum length', () => {
+    const error = findCustomFieldValuesError(FIELD_DEFS, {
+      ...VALID_VALUES,
+      note: 'あ'.repeat(CUSTOM_FIELD_VALUE_MAX_LENGTH + 1),
+    });
+
+    expect(error).toMatchObject({reason: 'too-long', fieldKey: 'note'});
+  });
+});
+
+describe('customFieldValuesLength', () => {
+  it('adds up every answer string, each list element separately', () => {
+    expect(
+      customFieldValuesLength({a: 'abc', b: ['de', 'f'], c: '', d: []}),
+    ).toBe(6);
   });
 });
 
