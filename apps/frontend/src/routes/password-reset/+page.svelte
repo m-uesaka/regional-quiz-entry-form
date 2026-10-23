@@ -24,7 +24,10 @@
     </Message>
   {/if}
 
-  {#if data.hasToken}
+  <!-- The token itself never reaches the page: `load` keeps it in an
+       httpOnly cookie (`$lib/server/reset-token.ts`), which the action reads.
+       Once the API has refused it, the request form is offered again. -->
+  {#if data.hasToken && !form?.tokenRejected}
     <Card class="gap-4">
       <p class="text-sm text-muted-foreground">
         新しいパスワードを入力してください。

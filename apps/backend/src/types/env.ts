@@ -16,8 +16,14 @@ export interface Bindings {
   // Non-secret: the "From" address entry/waitlist mail is sent as.
   MAIL_FROM_ADDRESS: string;
   // Non-secret: the frontend origin used to build links in outgoing mail
-  // (e.g. the entry verification link).
+  // (e.g. the entry verification link), and the origin the CSRF check in
+  // `index.ts` trusts.
   FRONTEND_URL: string;
+  // Non-secret and normally unset: further origins, comma-separated, that
+  // the CSRF check trusts besides `FRONTEND_URL` -- e.g. `127.0.0.1:5173`
+  // beside `localhost:5173` in local development (the `dev` script sets
+  // it), or a Pages preview address an environment is reached through.
+  CSRF_TRUSTED_ORIGINS?: string;
   SESSION_SECRET: string;
   // Secret: the Turnstile secret key `lib/turnstile.ts` verifies the
   // widget's tokens with. It is not among the `vars` of the deployed

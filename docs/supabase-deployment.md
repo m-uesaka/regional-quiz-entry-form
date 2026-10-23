@@ -349,6 +349,8 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 
 `MAIL_FROM_ADDRESS` のドメインが Resend で検証済みでないと、送信はすべて拒否されます。メール本文のリンクは `FRONTEND_URL` から組み立てます。
 
+`FRONTEND_URL` は、バックエンドの Origin 検証(`hono/csrf`、#120)が状態変更リクエストを許すオリジンでもあります。フロントエンドを `FRONTEND_URL` 以外のオリジン(`FRONTEND_HOST` 未設定のまま `*.pages.dev` で開く等)で使うと、ログアウトやエントリー取消などのボディの無い POST/DELETE が 403 になります。詳細は [`api-endpoints.md`](./api-endpoints.md) の「CSRF 対策(Origin 検証)とセキュリティヘッダ」を参照してください。
+
 #### プランとドメイン数
 
 送信ドメインを環境ごとに分けているのは、staging での試験送信がバウンスや迷惑メール報告を招いても、production の送信ドメインの評判に影響させないためです。Resend の Free プランでも検証できるドメインは 3 つまでなので(2026-10 時点の公式料金表)、上の表のとおり 2 ドメインを Free プランのまま検証できます。

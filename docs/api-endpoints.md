@@ -134,6 +134,43 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 
 **トークンは使い捨てです。** siteverify に一度通したトークンを再送すると Cloudflare は `timeout-or-duplicate` を返すため、この 2 本のフォームは送信が拒否された(429・401・400 など何であれ)たびにウィジェットを描き直します。フロントエンドの 2 つのフォームは `use:enhance` + `fail()` でその場に再描画されるだけなので、放っておくと hidden control に使用済みトークンが残り、次の送信が「本当の失敗理由」ではなく Turnstile の 400 で落ちてしまいます。`$lib/components/Turnstile.svelte` が `reset()` を公開し、各フォームの `enhance` コールバックがこれを呼びます。
 
+### CSRF 対策(Origin 検証)とセキュリティヘッダ
+
+(#120 / [Task 11-5](../tasks/task-11-5.md))
+
+以前は、別サイトからのフォーム送信を防いでいたのが「セッション Cookie が `SameSite=Lax` であること」と「API が CORS ヘッダを一切返さないこと」という、どこにも書かれていない 2 つの条件だけでした。`cors()` を足す、Cookie を `SameSite=None` にする、のどちらかで黙って無防備になるため、`index.ts` で **`hono/csrf` による Origin 検証を全ルートに明示的に掛けています**。
+
+- 対象は、ブラウザが別サイトのページからでもプリフライト無しで送れてしまうリクエスト、つまり **GET / HEAD / OPTIONS 以外で、`Content-Type` が `application/x-www-form-urlencoded` / `multipart/form-data` / `text/plain` のもの(`Content-Type` 無しも含む)**です。ボディの無い `POST .../logout`、`POST /api/staff/accounts/:id/revoke-sessions`、`DELETE /api/mypage/entries/:entryId` などがこれに当たります
+- これらは **`Sec-Fetch-Site: same-origin` か、`Origin` が `FRONTEND_URL`(と、設定されていれば `CSRF_TRUSTED_ORIGINS` に並べたもの)のオリジンと一致する場合だけ**通し、それ以外は `403`(本文はプレーンテキストの `Forbidden`)を返します。`FRONTEND_URL` が URL として読めない場合も通しません(fail closed)。許可するオリジンの集合は、バインディングが変わらない限り 1 度だけ組み立てて使い回します
+- JSON ボディ(`application/json`)は検証しません。別サイトのページから JSON を送るには CORS のプリフライトが要り、この API はそれに応えないためです。**将来 `cors()` を足すときは、許可するオリジンをこの前提ごと見直してください**
+
+正規の呼び出し経路はすべてこの検証を通ります。
+
+| 経路 | 通る理由 |
+| --- | --- |
+| ブラウザからの `/api/*`(本番は Workers route、`vite dev` は dev proxy 経由) | フロントエンドと同一オリジンなので `Sec-Fetch-Site: same-origin` が付く |
+| SSR(`load` / form action)からの呼び出し | `hooks.server.ts` の `handleFetch` が Worker に転送する際、SvelteKit のサーバー側 `fetch` がページ自身のオリジン(= `FRONTEND_URL`)を `Origin` に入れる |
+| E2E(`apps/e2e`) | `playwright.config.ts` が `FRONTEND_URL` に `vite dev` のオリジン(`http://127.0.0.1:5173`)を `--var` で渡している。テストが Worker を直接叩くのは JSON の POST だけ |
+| ローカル開発(`bun run dev:backend`) | `apps/backend/package.json` の `dev` スクリプトが `--var` で `FRONTEND_URL=http://localhost:5173` と `CSRF_TRUSTED_ORIGINS=http://127.0.0.1:5173` を渡す。別のホスト・ポートで動かすときは `bunx wrangler dev --var ...` で自分の値を渡す。`wrangler.toml` 最上位の `FRONTEND_URL` は本番の値のまま(`--env` 無しの `wrangler deploy` が本番 Worker を上書きするため、ここにローカル用の値を置かない) |
+
+したがって **`FRONTEND_URL` は「メール本文のリンク」だけでなく「状態変更を許すオリジン」でもあります**。staging / production では `deploy.yml` が `FRONTEND_HOST` から設定するので、`FRONTEND_HOST` 未設定のまま `*.pages.dev` のオリジンでフロントエンドを開くと、ログアウト等のボディ無し POST が 403 になります。プレビュー環境など別のアドレスでも使う場合は、そのオリジンを `CSRF_TRUSTED_ORIGINS`(カンマ区切り)に追加します([`supabase-deployment.md`](./supabase-deployment.md) 6.4 / 6.6)。
+
+**セキュリティヘッダ。** バックエンドは `hono/secure-headers` の `secureHeaders()` を全応答(403 などのエラー応答を含む)に付けます(`X-Content-Type-Options: nosniff`、`X-Frame-Options: SAMEORIGIN`、`Referrer-Policy: no-referrer`、`Strict-Transport-Security` など、ライブラリ既定のまま)。
+
+フロントエンドのページ応答には次を付けます(`apps/frontend/src/lib/server/security-headers.ts` と `vite.config.ts` の `csp`)。
+
+| ヘッダ | 対象 | 値 |
+| --- | --- | --- |
+| `Content-Security-Policy` | 全ページ | SvelteKit の `csp`(`mode: 'auto'`)が生成。インラインの起動スクリプトはリクエストごとの nonce で許可し、`script-src` / `frame-src` には Turnstile の `https://challenges.cloudflare.com` を加える。`style-src` は style 属性のため `'unsafe-inline'`。`frame-ancestors 'none'`、`form-action 'self'`、`object-src 'none'`、`base-uri 'self'` |
+| `X-Content-Type-Options` | 全ページ | `nosniff` |
+| `Referrer-Policy` | 全ページ(下記を除く) | `strict-origin-when-cross-origin`(別サイトにはオリジンのみ) |
+| `Referrer-Policy` | `?token=` 付きの `/verify`・`/password-reset`・`/staff/password-reset`(いずれもトークンを取り除く 303 リダイレクトの応答) | `same-origin`(別サイトには Referer を一切送らない) |
+| `Cache-Control` | `/mypage`・`/staff`・`/admin` 配下、`?token=` 付きの上記 3 ページ、および**全ページの GET 以外の応答**(フォーム送信の結果。公開エントリーフォームの送信結果には氏名・メールアドレスが載るため) | `private, no-store`(共有キャッシュにも bfcache にも残さない)。公開エントリーリストやエントリーフォーム自体の GET は対象外 |
+
+**`no-referrer` を使っていないのは意図的です。** `Referrer-Policy: no-referrer` のページから送られたフォーム送信(JavaScript 無しの通常の POST)には、ブラウザが `Origin: null` を付けます。SvelteKit 自身の CSRF チェックはこれを別サイトからの送信とみなして 403 を返すため、ハイドレーション前や JavaScript 無しでも送れるようにしてあるフォーム(#95)が壊れます。トークン付きページの `same-origin` は、外部サイトへの Referer を止めるという目的は `no-referrer` と同じで、自サイトへのフォーム送信の `Origin` は残ります。また Turnstile は別オリジンの iframe なので、全ページを `same-origin` にはしていません。
+
+**トークンを URL から消す。** パスワード再設定の 2 ページ(`/password-reset`・`/staff/password-reset`)は、`?token=` 付きで開かれると `load` がトークンを**そのページのパスに限定した httpOnly Cookie**(`SameSite=Lax`、有効期限はバックエンドのトークンと同じ 1 時間 / 24 時間)に移し、`?token=` を除いた URL へ 303 でリダイレクトします(`apps/frontend/src/lib/server/reset-token.ts`)。以降トークンは Cookie にしか無く、アドレスバー・履歴・ページの HTML・シリアライズされた `load` データのどれにも載りません。再読み込みやブラウザによるタブの復元でもリンクはそのまま使え、JavaScript も要りません。設定が完了したとき、または API がトークンを拒否したときに Cookie を消し、拒否された場合は再設定フォームの代わりに(参加者は)リンクの再送フォームを出します。`/verify` はもともとサーバー側でトークンを消費した直後に `/verify?status=...` へリダイレクトしているので、トークン付きの URL がページとして描画されることはありません。
+
 ### エラー応答の形式
 
 エラーは基本的に `{"error": "メッセージ"}` の形です。ただし `@hono/zod-validator` によるバリデーション失敗だけは例外で、ライブラリ既定の `{"success": false, "error": <ZodError>}` が 400 で返ります。
@@ -869,7 +906,8 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 | `MAIL_API_BASE_URL` | | メール送信 API のオリジン。**本番では設定しません**(未設定なら Resend 本体 `https://api.resend.com`)。`apps/e2e` の E2E テストだけがローカルの stub を指すために設定します |
 | `MAIL_FROM_ADDRESS` | | 送信元アドレス |
 | `GOOGLE_SHEETS_API_KEY` | ✅ | Google Sheets API v4 の API キー |
-| `FRONTEND_URL` | | メール本文中のリンク(確認リンク等)を組み立てるためのフロントエンド URL |
+| `FRONTEND_URL` | | フロントエンドの URL。メール本文中のリンク(確認リンク等)の組み立てと、状態変更リクエストの Origin 検証(「CSRF 対策(Origin 検証)とセキュリティヘッダ」参照)に使う |
+| `CSRF_TRUSTED_ORIGINS` | | 任意。`FRONTEND_URL` 以外に Origin 検証で許すオリジン(カンマ区切り)。ローカル開発では `dev` スクリプトが `http://127.0.0.1:5173` を渡す。通常の staging / production では設定しない |
 | `TURNSTILE_SECRET_KEY` | ✅ | Turnstile の siteverify に渡すシークレット。`[env.*.vars]` には**置かない**(同名の var はシークレットを上書きします) |
 | `LOGIN_IP_RATE_LIMITER` | | Rate Limiting binding。ログイン 2 本に IP 単位で 10 回 / 60 秒 |
 | `LOGIN_EMAIL_RATE_LIMITER` | | Rate Limiting binding。ログイン 2 本にアカウント単位で 60 回 / 60 秒 |
