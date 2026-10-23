@@ -35,6 +35,7 @@ const STAFF: StaffClaims = {
   role: 'general',
   regionId: null,
   tournamentType: null,
+  sessionsValidFrom: 1756085025678,
 };
 
 /** A second tournament, reached by a link that only changes `[id]`. */

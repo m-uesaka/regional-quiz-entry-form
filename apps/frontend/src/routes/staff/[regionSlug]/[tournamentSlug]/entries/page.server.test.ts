@@ -18,6 +18,7 @@ const GENERAL_STAFF: StaffClaims = {
   role: 'general',
   regionId: null,
   tournamentType: null,
+  sessionsValidFrom: 1756085025678,
 };
 
 const ENTRIES: Entry[] = [

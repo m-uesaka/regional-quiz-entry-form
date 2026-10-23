@@ -10,7 +10,12 @@ import {
   TournamentLookupError,
   type TournamentRow,
 } from '../lib/tournaments';
-import {isInScope, readStaffClaims, STAFF_SESSION_COOKIE} from './staff-auth';
+import {
+  isInScope,
+  isSessionCurrent,
+  readStaffClaims,
+  STAFF_SESSION_COOKIE,
+} from './staff-auth';
 
 /** How a route says which tournament the request is about. */
 type TournamentResolver = (c: Context<Env>) => Promise<TournamentRow | null>;
@@ -95,6 +100,17 @@ export function requireOpenEntryPeriodOrStaff(
     // 「エントリー期間外です」.
     if (!staff || !isInScope(staff, tournament)) {
       return c.json({error: 'entry period closed'}, 403);
+    }
+    // Only now is the session checked against `sessions_valid_from`: every
+    // refusal above stands whether or not it has been revoked, so there is
+    // no reason to pay for the read before them. A revoked session is a dead
+    // one, and answered the same as an expired cookie for the same reason.
+    const check = await isSessionCurrent(c.env, staff);
+    if (!check.ok) {
+      return c.json({error: 'internal server error'}, 500);
+    }
+    if (!check.current) {
+      return c.json({error: 'staff session expired'}, 401);
     }
     c.set('entryPeriodStaff', staff);
     await next();

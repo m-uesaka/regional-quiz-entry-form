@@ -1,3 +1,4 @@
+import type {Context} from 'hono';
 import {createMiddleware} from 'hono/factory';
 import {getCookie} from 'hono/cookie';
 import {verify} from 'hono/jwt';
@@ -7,7 +8,7 @@ import {
   type StaffClaims,
   type TournamentType,
 } from '@regional-quiz/shared';
-import type {StaffEnv} from '../types/env';
+import type {Bindings, StaffEnv} from '../types/env';
 import {createDbClient} from '../lib/db';
 
 export const STAFF_SESSION_COOKIE = 'staff_session';
@@ -20,6 +21,10 @@ export interface TournamentScopeRow {
 /**
  * Verifies and parses the `staff_session` cookie.
  *
+ * This checks the signature, `exp` and the claims' shape only. Whether the
+ * session has since been revoked is `isSessionCurrent()`'s question, which
+ * costs a database read and so is asked separately.
+ *
  * Exported for `middleware/entry-period.ts`, which needs the claims of a
  * caller it does *not* require to be staff at all: outside a tournament's
  * entry period a staff session decides the answer, inside it the same
@@ -27,7 +32,8 @@ export interface TournamentScopeRow {
  * @param token The raw cookie value, if the request carried one.
  * @param secret `SESSION_SECRET`, the key the token was signed with.
  * @return The claims, or `null` if the token is missing, invalid, expired,
- *     or doesn't match the expected shape.
+ *     or doesn't match the expected shape -- including a token issued before
+ *     `sessionsValidFrom` existed, which therefore reads as logged out.
  */
 export async function readStaffClaims(
   token: string | undefined,
@@ -54,18 +60,121 @@ export async function readStaffClaims(
   }
 }
 
+interface StaffSessionRow {
+  sessions_valid_from: string;
+}
+
+/** What `isSessionCurrent()` found out, or that it couldn't find out. */
+export type SessionCheck = {ok: true; current: boolean} | {ok: false};
+
+/**
+ * Whether `staff` is still a live session of its account.
+ *
+ * A signature can't tell whether the session was cut short after it was
+ * issued: the JWT is stateless and lives for 12 hours, so a revocation
+ * (`POST /api/staff/accounts/:id/revoke-sessions`) only shows up in
+ * `staff_accounts.sessions_valid_from`. Without this read, a staff cookie
+ * copied off a lost laptop would keep reaching every participant's name and
+ * address until it expired, with nothing anyone could do about it.
+ *
+ * Mirrors the participant side (`middleware/participant-auth.ts`): the
+ * session is current exactly when it names the generation that is on the
+ * row now -- an equality between two readings of the same column, rather
+ * than an "issued before?" comparison that would need the Worker's clock to
+ * agree with Postgres'. An unparseable timestamp yields `NaN`, which
+ * compares unequal to everything and so fails closed.
+ *
+ * Exported for `middleware/entry-period.ts`, which reads staff claims
+ * without requiring a session and so can't use the guards below.
+ * @param env The bindings to reach Supabase with.
+ * @param staff The claims of a token whose signature already verified.
+ * @return `ok: false` if the row couldn't be read. Callers answer that with
+ *     a 500 rather than a 401: the session may well be fine, and
+ *     "unauthorized" would send staff to log in again over a database
+ *     outage.
+ */
+export async function isSessionCurrent(
+  env: Bindings,
+  staff: StaffClaims,
+): Promise<SessionCheck> {
+  const {data, error} = await createDbClient(env)
+    .from('staff_accounts')
+    .select('sessions_valid_from')
+    .eq('id', staff.sub)
+    .returns<StaffSessionRow[]>()
+    .maybeSingle();
+  if (error) {
+    console.error('failed to check the session against the staff account', {
+      error: error.message,
+    });
+    return {ok: false};
+  }
+  // A missing row means the account was deleted after the cookie was issued,
+  // which is as much a dead session as a revoked one.
+  return {
+    ok: true,
+    current:
+      data !== null &&
+      Date.parse(data.sessions_valid_from) === staff.sessionsValidFrom,
+  };
+}
+
+/**
+ * `staff` if it is still current, or the response to refuse the request
+ * with: 500 when that couldn't be checked, 401 when it is no longer current.
+ */
+async function currentOrRefusal(
+  c: Context<StaffEnv>,
+  staff: StaffClaims,
+): Promise<StaffClaims | Response> {
+  const check = await isSessionCurrent(c.env, staff);
+  if (!check.ok) {
+    return c.json({error: 'internal server error'}, 500);
+  }
+  if (!check.current) {
+    return c.json({error: 'unauthorized'}, 401);
+  }
+  return staff;
+}
+
+/**
+ * The verified, still-current claims of the caller's staff session, or the
+ * response to refuse the request with.
+ *
+ * Shared by the guards below so that none of them can forget the revocation
+ * check: a guard that verified only the signature would be the one door a
+ * revoked cookie still opens.
+ */
+async function authenticateStaff(
+  c: Context<StaffEnv>,
+): Promise<StaffClaims | Response> {
+  const staff = await readStaffClaims(
+    getCookie(c, STAFF_SESSION_COOKIE),
+    c.env.SESSION_SECRET,
+  );
+  if (!staff) {
+    return c.json({error: 'unauthorized'}, 401);
+  }
+  return currentOrRefusal(c, staff);
+}
+
 export function requireGeneralStaff() {
   return createMiddleware<StaffEnv>(async (c, next) => {
-    const staff = await readStaffClaims(
+    const claims = await readStaffClaims(
       getCookie(c, STAFF_SESSION_COOKIE),
       c.env.SESSION_SECRET,
     );
-    if (!staff) {
+    if (!claims) {
       return c.json({error: 'unauthorized'}, 401);
     }
-    if (staff.role !== 'general') {
+    // The role is checked before the revocation read: a regional session is
+    // refused here whether or not it is still current, so the database has
+    // nothing to add to the answer and the refusal stays free.
+    if (claims.role !== 'general') {
       return c.json({error: 'forbidden'}, 403);
     }
+    const staff = await currentOrRefusal(c, claims);
+    if (staff instanceof Response) return staff;
     c.set('staff', staff);
     await next();
   });
@@ -98,13 +207,8 @@ export function isInScope(
 
 export function requireStaffForTournament() {
   return createMiddleware<StaffEnv>(async (c, next) => {
-    const staff = await readStaffClaims(
-      getCookie(c, STAFF_SESSION_COOKIE),
-      c.env.SESSION_SECRET,
-    );
-    if (!staff) {
-      return c.json({error: 'unauthorized'}, 401);
-    }
+    const staff = await authenticateStaff(c);
+    if (staff instanceof Response) return staff;
 
     if (staff.role !== 'general') {
       const db = createDbClient(c.env);
@@ -141,13 +245,8 @@ interface EntryScopeRow {
  */
 export function requireStaffForEntry() {
   return createMiddleware<StaffEnv>(async (c, next) => {
-    const staff = await readStaffClaims(
-      getCookie(c, STAFF_SESSION_COOKIE),
-      c.env.SESSION_SECRET,
-    );
-    if (!staff) {
-      return c.json({error: 'unauthorized'}, 401);
-    }
+    const staff = await authenticateStaff(c);
+    if (staff instanceof Response) return staff;
 
     if (staff.role !== 'general') {
       const db = createDbClient(c.env);

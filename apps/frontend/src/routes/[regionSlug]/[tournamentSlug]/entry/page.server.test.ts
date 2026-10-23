@@ -53,6 +53,7 @@ const GENERAL_STAFF: StaffClaims = {
   role: 'general',
   regionId: null,
   tournamentType: null,
+  sessionsValidFrom: 1756085025678,
 };
 
 /** 地域スタッフ covering exactly the tournament under test. */
@@ -61,6 +62,7 @@ const OWN_REGIONAL_STAFF: StaffClaims = {
   role: 'regional',
   regionId: OUT_OF_PERIOD_TOURNAMENT.regionId,
   tournamentType: OUT_OF_PERIOD_TOURNAMENT.type,
+  sessionsValidFrom: 1756085025678,
 };
 
 const OTHER_REGION_STAFF: StaffClaims = {
@@ -71,6 +73,7 @@ const OTHER_REGION_STAFF: StaffClaims = {
 const OTHER_TYPE_STAFF: StaffClaims = {
   ...OWN_REGIONAL_STAFF,
   tournamentType: 'shinjinou',
+  sessionsValidFrom: 1756085025678,
 };
 
 interface FakeApiOptions {

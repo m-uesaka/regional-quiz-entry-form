@@ -1,9 +1,36 @@
-import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from 'bun:test';
 import {SQL} from 'bun';
 import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
 import {app} from '../index';
+import {
+  isStaffSessionCheck,
+  staffSessionAwareFetch,
+  TEST_SESSIONS_VALID_FROM,
+  TEST_SESSIONS_VALID_FROM_MS,
+} from '../test-support/staff-session';
+
+// Every staff guard checks the session against
+// `staff_accounts.sessions_valid_from` before the handler runs; answer that
+// read for the tests that don't stub `fetch` themselves.
+const fetchWithoutSessionStub = globalThis.fetch;
+
+beforeEach(() => {
+  globalThis.fetch = staffSessionAwareFetch(fetchWithoutSessionStub);
+});
+
+afterEach(() => {
+  globalThis.fetch = fetchWithoutSessionStub;
+});
 
 // Local Supabase stack (`supabase start`), same convention as
 // `routes/regions.test.ts`. Skipped automatically when it isn't reachable,
@@ -50,6 +77,7 @@ async function generalStaffCookie(): Promise<string> {
       role: 'general',
       regionId: null,
       tournamentType: null,
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     SESSION_SECRET,
@@ -64,6 +92,7 @@ async function regionalStaffCookie(): Promise<string> {
       role: 'regional',
       regionId: '00000000-0000-0000-0000-000000000000',
       tournamentType: 'saikyoi',
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     SESSION_SECRET,
@@ -110,6 +139,204 @@ describe('staff account routes (request validation)', () => {
     );
 
     expect(res.status).toBe(400);
+  });
+});
+
+const GENERAL_STAFF_ID = '99999999-9999-9999-9999-999999999999';
+const TARGET_STAFF_ID = '77777777-7777-7777-7777-777777777777';
+
+/** A request the fake below received, other than the session check. */
+interface RecordedRequest {
+  method: string;
+  url: URL;
+  body: Record<string, unknown> | null;
+}
+
+/**
+ * A stand-in for the `staff_accounts` table as far as the revoke endpoint
+ * and the session check touch it: one `sessions_valid_from` per existing
+ * account, which the check reads and the endpoint's PATCH moves.
+ *
+ * Kept stateful rather than answering each call with a canned body, so that
+ * a test can follow a revocation through to the next request and see the
+ * session it cut refused.
+ * @param accounts The `sessions_valid_from` of every account that exists.
+ * @param failWrites Whether the PATCH should fail as a database error would.
+ */
+function fakeStaffAccounts(
+  accounts: Map<string, string>,
+  failWrites = false,
+): {requests: RecordedRequest[]} {
+  const requests: RecordedRequest[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    const id = url.searchParams.get('id')?.replace(/^eq\./, '') ?? '';
+    const current = accounts.get(id);
+    if (isStaffSessionCheck(url.toString())) {
+      return Response.json(
+        current === undefined ? [] : [{sessions_valid_from: current}],
+      );
+    }
+    const body =
+      typeof init?.body === 'string'
+        ? (JSON.parse(init.body) as Record<string, unknown>)
+        : null;
+    requests.push({method: init?.method ?? 'GET', url, body});
+    if (failWrites) {
+      return Response.json({message: 'connection refused'}, {status: 500});
+    }
+    if (current === undefined) {
+      return Response.json([]);
+    }
+    accounts.set(id, String(body?.sessions_valid_from));
+    return Response.json([{id}]);
+  }) as unknown as typeof fetch;
+  return {requests};
+}
+
+async function revokeSessions(
+  staffAccountId: string,
+  cookie: string,
+): Promise<Response> {
+  return app.request(
+    `/api/staff/accounts/${staffAccountId}/revoke-sessions`,
+    {method: 'POST', headers: {cookie}},
+    BASE_ENV,
+  );
+}
+
+describe('POST /staff/accounts/:id/revoke-sessions (mocked Supabase)', () => {
+  it('POST /staff/accounts/:id/revoke-sessions moves sessions_valid_from', async () => {
+    const accounts = new Map([
+      [GENERAL_STAFF_ID, TEST_SESSIONS_VALID_FROM],
+      [TARGET_STAFF_ID, TEST_SESSIONS_VALID_FROM],
+    ]);
+    const {requests} = fakeStaffAccounts(accounts);
+    const startedAt = Date.now();
+
+    const res = await revokeSessions(
+      TARGET_STAFF_ID,
+      await generalStaffCookie(),
+    );
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as unknown).toEqual({ok: true});
+    expect(requests).toHaveLength(1);
+    expect(requests[0].method).toBe('PATCH');
+    expect(requests[0].url.pathname).toEndWith('/rest/v1/staff_accounts');
+    expect(requests[0].url.searchParams.get('id')).toBe(
+      `eq.${TARGET_STAFF_ID}`,
+    );
+    // Only the generation moves: the password (and everything else on the
+    // row) is left alone, so the owner can log straight back in.
+    expect(Object.keys(requests[0].body ?? {})).toEqual([
+      'sessions_valid_from',
+    ]);
+    const movedTo = Date.parse(accounts.get(TARGET_STAFF_ID) ?? '');
+    expect(movedTo).toBeGreaterThanOrEqual(startedAt);
+    expect(movedTo).not.toBe(TEST_SESSIONS_VALID_FROM_MS);
+    // Someone else's revocation leaves the caller's own sessions alone.
+    expect(accounts.get(GENERAL_STAFF_ID)).toBe(TEST_SESSIONS_VALID_FROM);
+  });
+
+  it('POST /staff/accounts/:id/revoke-sessions returns 403 for regional staff', async () => {
+    const accounts = new Map([[TARGET_STAFF_ID, TEST_SESSIONS_VALID_FROM]]);
+    const {requests} = fakeStaffAccounts(accounts);
+
+    const res = await revokeSessions(
+      TARGET_STAFF_ID,
+      await regionalStaffCookie(),
+    );
+
+    expect(res.status).toBe(403);
+    expect(requests).toHaveLength(0);
+    expect(accounts.get(TARGET_STAFF_ID)).toBe(TEST_SESSIONS_VALID_FROM);
+  });
+
+  it('returns 401 without a staff session', async () => {
+    const {requests} = fakeStaffAccounts(new Map());
+
+    const res = await app.request(
+      `/api/staff/accounts/${TARGET_STAFF_ID}/revoke-sessions`,
+      {method: 'POST'},
+      BASE_ENV,
+    );
+
+    expect(res.status).toBe(401);
+    expect(requests).toHaveLength(0);
+  });
+
+  it('a staff member may revoke their own sessions', async () => {
+    // The lost-laptop case: the staff member cuts the session on the device
+    // they no longer have from the one they still do -- which, being a
+    // session of the same account, is cut along with it.
+    const accounts = new Map([[GENERAL_STAFF_ID, TEST_SESSIONS_VALID_FROM]]);
+    fakeStaffAccounts(accounts);
+    const cookie = await generalStaffCookie();
+
+    const res = await revokeSessions(GENERAL_STAFF_ID, cookie);
+
+    expect(res.status).toBe(200);
+    expect(accounts.get(GENERAL_STAFF_ID)).not.toBe(TEST_SESSIONS_VALID_FROM);
+
+    // The request that did it was let through; the next one is not.
+    const next = await app.request(
+      '/api/staff/accounts',
+      {headers: {cookie}},
+      BASE_ENV,
+    );
+    expect(next.status).toBe(401);
+  });
+
+  it('returns 404 for an account that does not exist', async () => {
+    fakeStaffAccounts(new Map([[GENERAL_STAFF_ID, TEST_SESSIONS_VALID_FROM]]));
+
+    const res = await revokeSessions(
+      TARGET_STAFF_ID,
+      await generalStaffCookie(),
+    );
+
+    expect(res.status).toBe(404);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'staff account not found',
+    });
+  });
+
+  it('returns 400 for an id that is not a UUID', async () => {
+    const {requests} = fakeStaffAccounts(
+      new Map([[GENERAL_STAFF_ID, TEST_SESSIONS_VALID_FROM]]),
+    );
+
+    const res = await revokeSessions('not-a-uuid', await generalStaffCookie());
+
+    expect(res.status).toBe(400);
+    expect(requests).toHaveLength(0);
+  });
+
+  it('returns 500 when the update fails', async () => {
+    const originalConsoleError = console.error;
+    console.error = () => {};
+    fakeStaffAccounts(
+      new Map([
+        [GENERAL_STAFF_ID, TEST_SESSIONS_VALID_FROM],
+        [TARGET_STAFF_ID, TEST_SESSIONS_VALID_FROM],
+      ]),
+      true,
+    );
+
+    try {
+      const res = await revokeSessions(
+        TARGET_STAFF_ID,
+        await generalStaffCookie(),
+      );
+
+      expect(res.status).toBe(500);
+      expect((await res.json()) as unknown).toEqual({
+        error: 'internal server error',
+      });
+    } finally {
+      console.error = originalConsoleError;
+    }
   });
 });
 
@@ -432,6 +659,109 @@ describe.skipIf(!(await isDbReachable()))(
 
       expect(res.status).toBe(404);
       expect(body.error).toBe('staff account not found');
+    });
+
+    /**
+     * A cookie for the account `email` names, issued for the generation its
+     * row carries right now -- i.e. what logging in as it would hand back.
+     */
+    async function realSessionCookie(email: string): Promise<string> {
+      const [account] = await sql`
+        select id, sessions_valid_from from staff_accounts where email = ${email}
+      `;
+      const token = await sign(
+        {
+          sub: account.id,
+          role: 'general',
+          regionId: null,
+          tournamentType: null,
+          sessionsValidFrom: new Date(account.sessions_valid_from).getTime(),
+          exp: Math.floor(Date.now() / 1000) + 3600,
+        },
+        SESSION_SECRET,
+      );
+      return `staff_session=${token}`;
+    }
+
+    it('POST /staff/accounts/:id/revoke-sessions moves sessions_valid_from', async () => {
+      const email = `${emailPrefix}-revoke@example.com`;
+      const created = (await (
+        await createAccount({role: 'general', email})
+      ).json()) as {id: string};
+      const [before] = await sql`
+        select sessions_valid_from from staff_accounts where id = ${created.id}
+      `;
+
+      const res = await app.request(
+        `/api/staff/accounts/${created.id}/revoke-sessions`,
+        {method: 'POST', headers: {cookie: await generalStaffCookie()}},
+        env,
+      );
+
+      expect(res.status).toBe(200);
+      const [after] = await sql`
+        select sessions_valid_from from staff_accounts where id = ${created.id}
+      `;
+      expect(new Date(after.sessions_valid_from).getTime()).not.toBe(
+        new Date(before.sessions_valid_from).getTime(),
+      );
+    });
+
+    it('a staff member may revoke their own sessions', async () => {
+      const email = `${emailPrefix}-revoke-own@example.com`;
+      const created = (await (
+        await createAccount({role: 'general', email})
+      ).json()) as {id: string};
+      // From here on, against the real session check rather than the stub
+      // the rest of this file uses, so the column this endpoint writes is
+      // seen to be the one the guards read.
+      globalThis.fetch = fetchWithoutSessionStub;
+      const cookie = await realSessionCookie(email);
+      const list = () =>
+        app.request('/api/staff/accounts', {headers: {cookie}}, env);
+      expect((await list()).status).toBe(200);
+
+      const res = await app.request(
+        `/api/staff/accounts/${created.id}/revoke-sessions`,
+        {method: 'POST', headers: {cookie}},
+        env,
+      );
+
+      expect(res.status).toBe(200);
+      expect((await list()).status).toBe(401);
+    });
+
+    it('a password reset ends the sessions issued before it', async () => {
+      const email = `${emailPrefix}-reset-revokes@example.com`;
+      const created = (await (
+        await createAccount({role: 'general', email})
+      ).json()) as {id: string};
+      const token = await reissueLink(created.id, await generalStaffCookie());
+      expect((await confirmReset(token, 'first-password')).status).toBe(200);
+      globalThis.fetch = fetchWithoutSessionStub;
+      const cookie = await realSessionCookie(email);
+      const list = () =>
+        app.request('/api/staff/accounts', {headers: {cookie}}, env);
+      expect((await list()).status).toBe(200);
+
+      // A second reset, as after a suspected leak. `reset_staff_password()`
+      // moves `sessions_valid_from` with the password (`0020`).
+      globalThis.fetch = staffSessionAwareFetch(fetchWithoutSessionStub);
+      const second = await reissueLink(created.id, await generalStaffCookie());
+      expect((await confirmReset(second, 'second-password')).status).toBe(200);
+      globalThis.fetch = fetchWithoutSessionStub;
+
+      expect((await list()).status).toBe(401);
+    });
+
+    it('returns 404 when revoking the sessions of an account that does not exist', async () => {
+      const res = await app.request(
+        '/api/staff/accounts/33333333-3333-3333-3333-333333333333/revoke-sessions',
+        {method: 'POST', headers: {cookie: await generalStaffCookie()}},
+        env,
+      );
+
+      expect(res.status).toBe(404);
     });
   },
 );

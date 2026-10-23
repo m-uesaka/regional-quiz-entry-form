@@ -12,6 +12,7 @@ const STAFF_CLAIMS: StaffClaims = {
   role: 'general',
   regionId: null,
   tournamentType: null,
+  sessionsValidFrom: 1756085025678,
 };
 
 /** Signs `claims` (plus the given `exp`, if provided) with `secret`. */

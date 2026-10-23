@@ -13,6 +13,18 @@ export const StaffClaimsSchema = z.object({
   role: StaffRoleSchema,
   regionId: z.string().uuid().nullable(),
   tournamentType: TournamentTypeSchema.nullable(),
+  // Which generation of the account's sessions this one belongs to:
+  // `staff_accounts.sessions_valid_from` at login, as epoch milliseconds.
+  // The staff guards compare it against the column on every request, so
+  // moving the column (`POST /api/staff/accounts/:id/revoke-sessions`) ends
+  // every session issued before. Same shape and reasoning as the participant
+  // side's `pwdChangedAt`: an equality between two readings of one column
+  // needs no agreement between the Worker's clock and Postgres'.
+  //
+  // Required: a session that doesn't say which generation it belongs to
+  // can't be shown to be current, so a cookie issued before this claim
+  // existed reads as logged out.
+  sessionsValidFrom: z.number(),
 });
 export type StaffClaims = z.infer<typeof StaffClaimsSchema>;
 

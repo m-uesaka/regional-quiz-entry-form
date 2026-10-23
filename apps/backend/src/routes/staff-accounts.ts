@@ -183,4 +183,47 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
       }
       return c.json({ok: true});
     },
+  )
+  // Ends every session the account has open, wherever it was opened: the
+  // guards in `middleware/staff-auth.ts` compare each session's
+  // `sessionsValidFrom` claim against this column on every request, so
+  // moving it makes every cookie issued before refuse with 401 from the next
+  // request on. This is the only way to cut a staff JWT short -- for a
+  // cookie copied off a lost laptop, or the sessions of someone stepping
+  // down -- and it doesn't touch the password, so the owner can log straight
+  // back in.
+  //
+  // The caller may name their own account. That is deliberate (a staff
+  // member who lost a device can cut its session themselves), and it ends
+  // the caller's own session too: the request that does it still answers
+  // 200, the one after it 401s.
+  .post(
+    '/accounts/:id/revoke-sessions',
+    requireGeneralStaff(),
+    zValidator('param', StaffAccountIdParamSchema),
+    async c => {
+      const db = createDbClient(c.env);
+      // The new value comes from the Worker's clock rather than Postgres'
+      // `now()`, which an update through PostgREST can't name. That is safe
+      // because nothing compares it with a clock: a session is current only
+      // if its claim *equals* the column, so all that matters is that the
+      // value changes, and a fresh millisecond timestamp does.
+      const {data: account, error} = await db
+        .from('staff_accounts')
+        .update({sessions_valid_from: new Date().toISOString()})
+        .eq('id', c.req.valid('param').id)
+        .select('id')
+        .returns<Array<{id: string}>>()
+        .maybeSingle();
+      if (error) {
+        return c.json(
+          internalError('failed to revoke the staff sessions', error),
+          500,
+        );
+      }
+      if (!account) {
+        return c.json({error: 'staff account not found'}, 404);
+      }
+      return c.json({ok: true});
+    },
   );

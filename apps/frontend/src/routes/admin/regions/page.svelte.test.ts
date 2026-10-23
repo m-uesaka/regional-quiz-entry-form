@@ -10,6 +10,7 @@ const STAFF: StaffClaims = {
   role: 'general',
   regionId: null,
   tournamentType: null,
+  sessionsValidFrom: 1756085025678,
 };
 
 const TOKYO: Region = {

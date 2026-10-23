@@ -39,6 +39,7 @@ const STAFF: StaffClaims = {
   role: 'general',
   regionId: null,
   tournamentType: null,
+  sessionsValidFrom: 1756085025678,
 };
 
 function renderPage(accounts: StaffAccount[], regions: Region[] = [TOKYO]) {
