@@ -283,6 +283,39 @@ describe('POST /staff/tournaments/:tournamentId/mail', () => {
     ]);
   });
 
+  it('stores the body with disallowed markup removed', async () => {
+    const log = mockFetch({
+      tournament: IN_SCOPE_TOURNAMENT,
+      entries: [[entryRow('taro@example.com')]],
+    });
+    const cookie = await regionalStaffCookie();
+
+    const res = await postMail(cookie, {
+      ...MAIL_INPUT,
+      body:
+        '<p onclick="x()">集合時間</p><script>alert(1)</script>' +
+        '<a href="javascript:alert(1)">詳細</a>',
+    });
+
+    expect(res.status).toBe(202);
+    expect(log.insertedJobs).toMatchObject([
+      {body_html: '<p>集合時間</p><a>詳細</a>'},
+    ]);
+  });
+
+  it('returns 400 for a body that is empty once sanitized', async () => {
+    mockFetch({tournament: IN_SCOPE_TOURNAMENT});
+    const cookie = await regionalStaffCookie();
+
+    const res = await postMail(cookie, {
+      ...MAIL_INPUT,
+      body: '<script>alert(1)</script>',
+    });
+
+    expect(res.status).toBe(400);
+    expect(queue.sent).toEqual([]);
+  });
+
   it('no longer refuses a list over 80 recipients', async () => {
     const recipientCount = 250;
     mockFetch({

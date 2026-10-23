@@ -16,6 +16,7 @@ import {
   recordMailJobProgress,
 } from '../lib/mail-jobs';
 import {internalError} from '../lib/errors';
+import {sanitizeMailHtml} from '../lib/mail-html';
 
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 const MailJobParamSchema = TournamentIdParamSchema.extend({
@@ -43,6 +44,15 @@ export const staffMailRoute = new Hono<StaffEnv>()
       const {tournamentId} = c.req.valid('param');
       const {subject, body, statusFilter} = c.req.valid('json');
 
+      // Narrowed to a few formatting tags before it is stored, so the
+      // `mail_jobs` row holds exactly what goes out: one compromised staff
+      // account must not be able to mail every participant arbitrary HTML
+      // from the verified sending domain (#122).
+      const bodyHtml = sanitizeMailHtml(body);
+      if (bodyHtml.trim() === '') {
+        return c.json({error: 'mail body is empty after sanitizing'}, 400);
+      }
+
       const result = await fetchTournamentRecipients(
         c.env,
         tournamentId,
@@ -64,7 +74,7 @@ export const staffMailRoute = new Hono<StaffEnv>()
       const job = await createMailJob(c.env, {
         tournamentId,
         subject,
-        bodyHtml: body,
+        bodyHtml,
         total: recipients.length,
       });
       if (!job.ok) {
