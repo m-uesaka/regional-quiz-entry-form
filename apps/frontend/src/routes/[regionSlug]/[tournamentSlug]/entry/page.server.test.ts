@@ -53,6 +53,7 @@ const GENERAL_STAFF: StaffClaims = {
   role: 'general',
   regionId: null,
   tournamentType: null,
+  sessionsValidFrom: 1756085025678,
 };
 
 /** 地域スタッフ covering exactly the tournament under test. */
@@ -61,6 +62,7 @@ const OWN_REGIONAL_STAFF: StaffClaims = {
   role: 'regional',
   regionId: OUT_OF_PERIOD_TOURNAMENT.regionId,
   tournamentType: OUT_OF_PERIOD_TOURNAMENT.type,
+  sessionsValidFrom: 1756085025678,
 };
 
 const OTHER_REGION_STAFF: StaffClaims = {
@@ -71,6 +73,7 @@ const OTHER_REGION_STAFF: StaffClaims = {
 const OTHER_TYPE_STAFF: StaffClaims = {
   ...OWN_REGIONAL_STAFF,
   tournamentType: 'shinjinou',
+  sessionsValidFrom: 1756085025678,
 };
 
 interface FakeApiOptions {
@@ -131,6 +134,7 @@ function buildEvent(options: {
   fetch: typeof fetch;
   staff: StaffClaims | null;
   tournamentSlug?: string;
+  deletedCookies?: string[];
 }): Parameters<typeof load>[0] {
   return {
     params: {
@@ -140,7 +144,12 @@ function buildEvent(options: {
     fetch: options.fetch,
     locals: {staff: options.staff, participant: null},
     url: new URL('http://localhost/tokyo/saikyoi/entry'),
-  } as Parameters<typeof load>[0];
+    cookies: {
+      delete: (name: string) => {
+        options.deletedCookies?.push(name);
+      },
+    },
+  } as unknown as Parameters<typeof load>[0];
 }
 
 describe('entry +page.server load', () => {
@@ -217,18 +226,23 @@ describe('entry +page.server load', () => {
     } satisfies Partial<HttpError>);
   });
 
-  // A stale staff cookie earns a 401 from that gate instead of the 403
-  // above. On this page it means the same thing -- not staff, period
-  // closed -- so it must not fall through to the bad-gateway branch.
-  it('throws 403 when the tournament read reports a stale staff session', async () => {
+  // A stale or revoked staff cookie earns a 401 from that gate instead of
+  // the 403 above. Only staff hold one, so it is dropped and its holder sent
+  // to log in again, rather than told the period is closed while the dead
+  // cookie stays put.
+  it('drops a refused staff cookie and sends its holder to log in', async () => {
+    const deletedCookies: string[] = [];
     const event = buildEvent({
       fetch: fakeApi({tournamentStatus: 401}),
       staff: null,
+      deletedCookies,
     });
 
     await expect(load(event)).rejects.toMatchObject({
-      status: 403,
-    } satisfies Partial<HttpError>);
+      status: 303,
+      location: `/staff/login?redirectTo=${encodeURIComponent('/tokyo/saikyoi/entry')}`,
+    });
+    expect(deletedCookies).toEqual(['staff_session']);
   });
 
   it('returns the regulations and form field defs the form is built from', async () => {

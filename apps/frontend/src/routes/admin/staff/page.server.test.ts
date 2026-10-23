@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import type {HttpError} from '@sveltejs/kit';
+import type {Cookies, HttpError, Redirect} from '@sveltejs/kit';
 import type {Region, StaffAccount} from '@regional-quiz/shared';
 import {actions, load} from './+page.server';
 
@@ -66,21 +66,49 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+/**
+ * A stand-in for `event.cookies`, recording the names deleted on it: a
+ * session the API refuses is dropped on the way to the login screen.
+ * @param deleted Collects the deleted cookie names.
+ */
+function fakeCookies(deleted: string[] = []): Cookies {
+  return {
+    delete: (name: string) => {
+      deleted.push(name);
+    },
+  } as unknown as Cookies;
+}
+
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
 function buildLoadEvent(fetchImpl: typeof fetch): Parameters<typeof load>[0] {
   return {
     fetch: fetchImpl,
+    cookies: fakeCookies(),
     url: new URL('http://localhost/admin/staff'),
   } as Parameters<typeof load>[0];
 }
 
-/** Builds the partial `RequestEvent` either action needs. */
+/** The general staff member the actions run as, unless a test says not. */
+const CALLER_ID = '00000000-0000-0000-0000-0000000000ff';
+
+/** Builds the partial `RequestEvent` any of the actions needs. */
 function buildActionEvent(
   fetchImpl: typeof fetch,
   formData: FormData,
+  deletedCookies: string[] = [],
 ): Parameters<typeof actions.invite>[0] {
   return {
     fetch: fetchImpl,
+    cookies: fakeCookies(deletedCookies),
+    locals: {
+      staff: {
+        sub: CALLER_ID,
+        role: 'general',
+        regionId: null,
+        tournamentType: null,
+        sessionsValidFrom: 1756085025678,
+      },
+    },
     url: new URL('http://localhost/admin/staff'),
     request: {formData: async () => formData},
   } as Parameters<typeof actions.invite>[0];
@@ -262,6 +290,107 @@ describe('admin staff re-send action', () => {
         intent: 'resend',
         accountId: ACCOUNT.id,
         error: 'スタッフアカウントが見つかりません',
+      },
+    });
+  });
+});
+
+describe('admin staff revoke action', () => {
+  /** The body of a press of one row's 「セッションを無効化」. */
+  function revokeFormData(accountId: string): FormData {
+    const formData = new FormData();
+    formData.set('id', accountId);
+    return formData;
+  }
+
+  it("asks the API to end every session of the row's account", async () => {
+    const calls: ApiCall[] = [];
+    const deletedCookies: string[] = [];
+    const event = buildActionEvent(
+      fakeFetch({calls}),
+      revokeFormData(ACCOUNT.id),
+      deletedCookies,
+    );
+
+    await expect(actions.revoke(event)).resolves.toMatchObject({
+      intent: 'revoke',
+      accountId: ACCOUNT.id,
+      saved: true,
+      error: null,
+    });
+    expect(calls).toEqual([
+      {
+        method: 'POST',
+        url: `/api/staff/accounts/${ACCOUNT.id}/revoke-sessions`,
+        body: undefined,
+      },
+    ]);
+    // Someone else's sessions: the caller's own stays.
+    expect(deletedCookies).toEqual([]);
+  });
+
+  it('sends a staff member who revoked their own sessions to the login form', async () => {
+    // Their own session was cut along with the rest, so there is no page
+    // left to show them; the dead cookie goes too, rather than passing for a
+    // session on the way there.
+    const deletedCookies: string[] = [];
+    const event = buildActionEvent(
+      fakeFetch(),
+      revokeFormData(CALLER_ID),
+      deletedCookies,
+    );
+
+    await expect(actions.revoke(event)).rejects.toMatchObject({
+      status: 303,
+      location: '/staff/login?redirectTo=%2Fadmin%2Fstaff',
+    } satisfies Partial<Redirect>);
+    expect(deletedCookies).toEqual(['staff_session']);
+  });
+
+  it('sends a session the API refuses to the login form', async () => {
+    const deletedCookies: string[] = [];
+    const event = buildActionEvent(
+      fakeFetch({status: 401}),
+      revokeFormData(ACCOUNT.id),
+      deletedCookies,
+    );
+
+    await expect(actions.revoke(event)).rejects.toMatchObject({
+      status: 303,
+      location: '/staff/login?redirectTo=%2Fadmin%2Fstaff',
+    } satisfies Partial<Redirect>);
+    expect(deletedCookies).toEqual(['staff_session']);
+  });
+
+  it('attaches an unknown account to the row it came from', async () => {
+    const event = buildActionEvent(
+      fakeFetch({status: 404}),
+      revokeFormData(ACCOUNT.id),
+    );
+
+    await expect(actions.revoke(event)).resolves.toMatchObject({
+      status: 404,
+      data: {
+        intent: 'revoke',
+        accountId: ACCOUNT.id,
+        saved: false,
+        error: 'スタッフアカウントが見つかりません',
+      },
+    });
+  });
+
+  it('reports any other failure as one the revocation did not survive', async () => {
+    const event = buildActionEvent(
+      fakeFetch({status: 500}),
+      revokeFormData(ACCOUNT.id),
+    );
+
+    await expect(actions.revoke(event)).resolves.toMatchObject({
+      status: 502,
+      data: {
+        intent: 'revoke',
+        accountId: ACCOUNT.id,
+        error: 'セッションを無効化できませんでした',
       },
     });
   });

@@ -1,4 +1,4 @@
-import {afterAll, afterEach, describe, expect, it} from 'bun:test';
+import {afterAll, afterEach, beforeEach, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
 import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
@@ -10,6 +10,23 @@ import {
   TEST_REGION_ID,
   tournamentAwareFetch,
 } from '../test-support/tournaments';
+import {
+  staffSessionAwareFetch,
+  TEST_SESSIONS_VALID_FROM_MS,
+} from '../test-support/staff-session';
+
+// Every staff guard checks the session against
+// `staff_accounts.sessions_valid_from` before the handler runs; answer that
+// read for the tests that don't stub `fetch` themselves.
+const fetchWithoutSessionStub = globalThis.fetch;
+
+beforeEach(() => {
+  globalThis.fetch = staffSessionAwareFetch(fetchWithoutSessionStub);
+});
+
+afterEach(() => {
+  globalThis.fetch = fetchWithoutSessionStub;
+});
 
 // Local Supabase stack (`supabase start`), same convention as
 // `lib/db-schema.test.ts`. Skipped automatically when it isn't reachable,
@@ -56,6 +73,7 @@ async function generalStaffCookie(): Promise<string> {
       role: 'general',
       regionId: null,
       tournamentType: null,
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     SESSION_SECRET,
@@ -70,6 +88,7 @@ async function regionalStaffCookie(regionId: string): Promise<string> {
       role: 'regional',
       regionId,
       tournamentType: 'saikyoi',
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     SESSION_SECRET,
@@ -155,8 +174,10 @@ describe('GET /tournaments/:regionSlug/:tournamentSlug (entry period)', () => {
   function mockTournamentFetch(
     tournament: ReturnType<typeof openEntryPeriodTournament> | null,
   ): void {
-    globalThis.fetch = tournamentAwareFetch(tournament, (() =>
-      Promise.resolve(Response.json([]))) as unknown as typeof fetch);
+    globalThis.fetch = staffSessionAwareFetch(
+      tournamentAwareFetch(tournament, (() =>
+        Promise.resolve(Response.json([]))) as unknown as typeof fetch),
+    );
   }
 
   it('serves the tournament during the entry period without a session', async () => {

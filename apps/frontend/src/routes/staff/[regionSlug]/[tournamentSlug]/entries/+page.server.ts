@@ -2,9 +2,16 @@ import {error, redirect} from '@sveltejs/kit';
 import {TournamentTypeSchema} from '@regional-quiz/shared';
 import {createApiClient, isUnauthorized} from '$lib/api';
 import {staffLoginPath} from '$lib/server/staff-login';
+import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {PageServerLoad} from './$types';
 
-export const load: PageServerLoad = async ({params, fetch, locals, url}) => {
+export const load: PageServerLoad = async ({
+  params,
+  fetch,
+  locals,
+  cookies,
+  url,
+}) => {
   if (!locals.staff) {
     redirect(303, staffLoginPath(url));
   }
@@ -34,7 +41,7 @@ export const load: PageServerLoad = async ({params, fetch, locals, url}) => {
     // backend. The gate tells that apart from a caller who never had a
     // session, so a working account isn't stranded on the 403 below.
     if (isUnauthorized(tournamentRes)) {
-      redirect(303, staffLoginPath(url));
+      redirectToStaffLogin(cookies, url);
     }
     // Outside the entry period the backend hands the tournament only to the
     // staff who cover it (`middleware/entry-period.ts`), so an out-of-scope
@@ -55,7 +62,7 @@ export const load: PageServerLoad = async ({params, fetch, locals, url}) => {
     // The claims check above cannot rule this out: the JWT may expire between
     // `hooks.server.ts` parsing it and this request reaching the backend.
     if (entriesRes.status === 401) {
-      redirect(303, staffLoginPath(url));
+      redirectToStaffLogin(cookies, url);
     }
     if (entriesRes.status === 403) {
       throw error(403, 'この大会のエントリーを閲覧する権限がありません');

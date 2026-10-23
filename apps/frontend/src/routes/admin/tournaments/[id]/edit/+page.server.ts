@@ -1,10 +1,10 @@
-import {error, fail, redirect} from '@sveltejs/kit';
+import {error, fail} from '@sveltejs/kit';
 import {createApiClient, isUnauthorized} from '$lib/api';
 import {
   parseTournamentFormValues,
   readTournamentFormValues,
 } from '$lib/tournament-form';
-import {staffLoginPath} from '$lib/server/staff-login';
+import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {TournamentFormValues} from '$lib/types/tournament-form';
 import type {Actions, PageServerLoad} from './$types';
 
@@ -30,7 +30,7 @@ const INVALID_INPUT_MESSAGE = '入力内容を確認してください';
 // `+page.ts` calling the API from the client): `/api/*` is only routed to
 // the backend Worker for requests the frontend makes itself until Task 9-5
 // lands, so a client-side call would 404 in production.
-export const load: PageServerLoad = async ({params, fetch, url}) => {
+export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
   const api = createApiClient(fetch);
   const [tournamentsRes, regionsRes] = await Promise.all([
     api.api.tournaments.$get(),
@@ -38,7 +38,7 @@ export const load: PageServerLoad = async ({params, fetch, url}) => {
   ]);
   if (!tournamentsRes.ok || !regionsRes.ok) {
     if (isUnauthorized(tournamentsRes) || isUnauthorized(regionsRes)) {
-      redirect(303, staffLoginPath(url));
+      redirectToStaffLogin(cookies, url);
     }
     error(502, '大会情報の取得に失敗しました');
   }
@@ -56,7 +56,7 @@ export const load: PageServerLoad = async ({params, fetch, url}) => {
 };
 
 export const actions = {
-  update: async ({params, request, fetch, url}) => {
+  update: async ({params, request, fetch, cookies, url}) => {
     const values = readTournamentFormValues(await request.formData());
     const input = parseTournamentFormValues(values);
     if (!input) {
@@ -69,7 +69,7 @@ export const actions = {
     });
     if (!res.ok) {
       if (isUnauthorized(res)) {
-        redirect(303, staffLoginPath(url));
+        redirectToStaffLogin(cookies, url);
       }
       // 400 is what the database refused — a region that no longer exists,
       // say — and the API passes that message through, so it is shown

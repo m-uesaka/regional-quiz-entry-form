@@ -7,6 +7,7 @@ const GENERAL_STAFF: StaffClaims = {
   role: 'general',
   regionId: null,
   tournamentType: null,
+  sessionsValidFrom: 1756085025678,
 };
 
 const REGIONAL_STAFF: StaffClaims = {
@@ -14,6 +15,7 @@ const REGIONAL_STAFF: StaffClaims = {
   role: 'regional',
   regionId: '00000000-0000-0000-0000-000000000003',
   tournamentType: 'saikyoi',
+  sessionsValidFrom: 1756085025678,
 };
 
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */

@@ -1,8 +1,25 @@
-import {afterEach, describe, expect, it} from 'bun:test';
+import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
 import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
 import {app} from '../index';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {
+  staffSessionAwareFetch,
+  TEST_SESSIONS_VALID_FROM_MS,
+} from '../test-support/staff-session';
+
+// Every staff guard checks the session against
+// `staff_accounts.sessions_valid_from` before the handler runs; answer that
+// read for the tests that don't stub `fetch` themselves.
+const fetchWithoutSessionStub = globalThis.fetch;
+
+beforeEach(() => {
+  globalThis.fetch = staffSessionAwareFetch(fetchWithoutSessionStub);
+});
+
+afterEach(() => {
+  globalThis.fetch = fetchWithoutSessionStub;
+});
 
 const ENV: Bindings = {
   ...PERMISSIVE_PLATFORM_BINDINGS,
@@ -30,6 +47,7 @@ async function regionalStaffCookie(
       role: 'regional',
       regionId,
       tournamentType,
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     ENV.SESSION_SECRET,
@@ -44,6 +62,7 @@ async function generalStaffCookie(): Promise<string> {
       role: 'general',
       regionId: null,
       tournamentType: null,
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     ENV.SESSION_SECRET,
@@ -106,11 +125,11 @@ const FORM_FIELD_DEF_ROWS = [
  */
 function mockSequentialFetch(responses: unknown[]): void {
   let callIndex = 0;
-  globalThis.fetch = (() => {
+  globalThis.fetch = staffSessionAwareFetch((() => {
     const body = responses[callIndex] ?? [];
     callIndex++;
     return Promise.resolve(Response.json(body));
-  }) as unknown as typeof fetch;
+  }) as unknown as typeof fetch);
 }
 
 describe('staff-entries routes (request validation)', () => {

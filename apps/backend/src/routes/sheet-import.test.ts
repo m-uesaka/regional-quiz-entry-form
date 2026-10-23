@@ -1,9 +1,26 @@
-import {afterEach, describe, expect, it} from 'bun:test';
+import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
 import {sign} from 'hono/jwt';
 import {parseFormDefinitionYaml} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {app} from '../index';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {
+  staffSessionAwareFetch,
+  TEST_SESSIONS_VALID_FROM_MS,
+} from '../test-support/staff-session';
+
+// Every staff guard checks the session against
+// `staff_accounts.sessions_valid_from` before the handler runs; answer that
+// read for the tests that don't stub `fetch` themselves.
+const fetchWithoutSessionStub = globalThis.fetch;
+
+beforeEach(() => {
+  globalThis.fetch = staffSessionAwareFetch(fetchWithoutSessionStub);
+});
+
+afterEach(() => {
+  globalThis.fetch = fetchWithoutSessionStub;
+});
 
 const SESSION_SECRET = 'test-session-secret';
 
@@ -25,6 +42,7 @@ async function generalStaffCookie(): Promise<string> {
       role: 'general',
       regionId: null,
       tournamentType: null,
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     SESSION_SECRET,
@@ -39,6 +57,7 @@ async function regionalStaffCookie(regionId: string): Promise<string> {
       role: 'regional',
       regionId,
       tournamentType: 'saikyoi',
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     SESSION_SECRET,
@@ -108,10 +127,10 @@ describe('sheet-import routes', () => {
   });
 
   it('returns 400 with an error message on a fetch failure', async () => {
-    globalThis.fetch = (() =>
+    globalThis.fetch = staffSessionAwareFetch((() =>
       Promise.resolve(
         new Response(null, {status: 404}),
-      )) as unknown as typeof fetch;
+      )) as unknown as typeof fetch);
 
     const cookie = await generalStaffCookie();
 
@@ -134,10 +153,10 @@ describe('sheet-import routes', () => {
   });
 
   it('returns 502 when Google Sheets returns a 5xx', async () => {
-    globalThis.fetch = (() =>
+    globalThis.fetch = staffSessionAwareFetch((() =>
       Promise.resolve(
         new Response(null, {status: 503}),
-      )) as unknown as typeof fetch;
+      )) as unknown as typeof fetch);
 
     const cookie = await generalStaffCookie();
 
@@ -158,8 +177,10 @@ describe('sheet-import routes', () => {
   });
 
   it('returns 502 on a network failure reaching Google Sheets', async () => {
-    globalThis.fetch = (() =>
-      Promise.reject(new TypeError('fetch failed'))) as unknown as typeof fetch;
+    globalThis.fetch = staffSessionAwareFetch((() =>
+      Promise.reject(
+        new TypeError('fetch failed'),
+      )) as unknown as typeof fetch);
 
     const cookie = await generalStaffCookie();
 
@@ -180,10 +201,10 @@ describe('sheet-import routes', () => {
   });
 
   it('returns 503 when Google Sheets rate-limits the request', async () => {
-    globalThis.fetch = (() =>
+    globalThis.fetch = staffSessionAwareFetch((() =>
       Promise.resolve(
         new Response(null, {status: 429}),
-      )) as unknown as typeof fetch;
+      )) as unknown as typeof fetch);
 
     const cookie = await generalStaffCookie();
 
@@ -204,7 +225,7 @@ describe('sheet-import routes', () => {
   });
 
   it('returns 200 with a yaml preview for general staff', async () => {
-    globalThis.fetch = (() =>
+    globalThis.fetch = staffSessionAwareFetch((() =>
       Promise.resolve(
         new Response(
           JSON.stringify({
@@ -220,7 +241,7 @@ describe('sheet-import routes', () => {
           }),
           {status: 200},
         ),
-      )) as unknown as typeof fetch;
+      )) as unknown as typeof fetch);
 
     const cookie = await generalStaffCookie();
 
@@ -294,7 +315,7 @@ describe('sheet-import routes', () => {
     });
 
     it('returns the regulations read from the sheet', async () => {
-      globalThis.fetch = (() =>
+      globalThis.fetch = staffSessionAwareFetch((() =>
         Promise.resolve(
           new Response(
             JSON.stringify({
@@ -303,7 +324,7 @@ describe('sheet-import routes', () => {
             }),
             {status: 200},
           ),
-        )) as unknown as typeof fetch;
+        )) as unknown as typeof fetch);
 
       const res = await previewRegulations(await generalStaffCookie(), {
         spreadsheetId: 'sheet-id',
@@ -323,12 +344,12 @@ describe('sheet-import routes', () => {
     });
 
     it('returns 400 with the row at fault for unreadable sheet data', async () => {
-      globalThis.fetch = (() =>
+      globalThis.fetch = staffSessionAwareFetch((() =>
         Promise.resolve(
           new Response(JSON.stringify({values: [['地元の部', 46235]]}), {
             status: 200,
           }),
-        )) as unknown as typeof fetch;
+        )) as unknown as typeof fetch);
 
       const res = await previewRegulations(await generalStaffCookie(), {
         spreadsheetId: 'sheet-id',
@@ -341,10 +362,10 @@ describe('sheet-import routes', () => {
     });
 
     it('returns 400 naming the tab when Google cannot find it', async () => {
-      globalThis.fetch = (() =>
+      globalThis.fetch = staffSessionAwareFetch((() =>
         Promise.resolve(
           new Response(null, {status: 400}),
-        )) as unknown as typeof fetch;
+        )) as unknown as typeof fetch);
 
       const res = await previewRegulations(await generalStaffCookie(), {
         spreadsheetId: 'sheet-id',
@@ -358,10 +379,10 @@ describe('sheet-import routes', () => {
     });
 
     it('returns 502 when Google Sheets returns a 5xx', async () => {
-      globalThis.fetch = (() =>
+      globalThis.fetch = staffSessionAwareFetch((() =>
         Promise.resolve(
           new Response(null, {status: 503}),
-        )) as unknown as typeof fetch;
+        )) as unknown as typeof fetch);
 
       const res = await previewRegulations(await generalStaffCookie(), {
         spreadsheetId: 'sheet-id',

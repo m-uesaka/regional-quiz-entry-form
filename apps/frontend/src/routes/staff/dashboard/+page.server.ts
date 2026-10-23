@@ -1,9 +1,10 @@
 import {error, redirect} from '@sveltejs/kit';
 import {createApiClient} from '$lib/api';
 import {staffLoginPath} from '$lib/server/staff-login';
+import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {PageServerLoad} from './$types';
 
-export const load: PageServerLoad = async ({fetch, locals, url}) => {
+export const load: PageServerLoad = async ({fetch, locals, cookies, url}) => {
   if (!locals.staff) {
     redirect(303, staffLoginPath(url));
   }
@@ -20,7 +21,7 @@ export const load: PageServerLoad = async ({fetch, locals, url}) => {
     // The claims check above cannot rule this out: the JWT may expire between
     // `hooks.server.ts` parsing it and this request reaching the backend.
     if (res.status === 401) {
-      redirect(303, staffLoginPath(url));
+      redirectToStaffLogin(cookies, url);
     }
     if (res.status === 403) {
       throw error(403, '全地域ダッシュボードは統括スタッフ専用です');

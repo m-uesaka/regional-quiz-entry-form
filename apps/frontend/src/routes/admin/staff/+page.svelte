@@ -25,14 +25,30 @@
   const inviteResult = $derived(form?.intent === 'invite' ? form : null);
 
   /**
-   * The result belonging to one account's row, if that row's button was the
-   * one just pressed.
+   * The result belonging to one of an account's row buttons, if that button
+   * was the one just pressed.
+   * @param intent Which of the row's buttons.
    * @param accountId The row's account.
    */
-  function resendResult(accountId: string) {
-    return form?.intent === 'resend' && form.accountId === accountId
+  function rowResult(intent: 'resend' | 'revoke', accountId: string) {
+    return form?.intent === intent && form.accountId === accountId
       ? form
       : null;
+  }
+
+  /**
+   * Asks before a revocation goes out, since it can't be undone and, on the
+   * caller's own row, logs this very screen out along with every other
+   * device. Cancelling keeps the form from submitting.
+   * @param event The revoke form's submit event.
+   * @param email The account the form is for.
+   * @param isSelf Whether that account is the caller's own.
+   */
+  function confirmRevoke(event: SubmitEvent, email: string, isSelf: boolean) {
+    const message = isSelf
+      ? 'あなた自身のセッションを無効化します。この画面を含むすべての端末からログアウトします。よろしいですか?'
+      : `${email} のセッションを無効化します。よろしいですか?`;
+    if (!confirm(message)) event.preventDefault();
   }
 
   /**
@@ -155,7 +171,9 @@
     {:else}
       <ul class="flex flex-col gap-4">
         {#each data.accounts as account (account.id)}
-          {@const result = resendResult(account.id)}
+          {@const result = rowResult('resend', account.id)}
+          {@const revokeResult = rowResult('revoke', account.id)}
+          {@const isSelf = account.id === data.staff.sub}
           <li>
             <Card class="gap-3">
               <div class="flex flex-wrap items-start justify-between gap-2">
@@ -188,12 +206,48 @@
                 </Message>
               {/if}
 
-              <form method="POST" action="?/resend">
-                <input type="hidden" name="id" value={account.id} />
-                <Button type="submit" variant="secondary" size="small">
-                  パスワード設定メールを再送
-                </Button>
-              </form>
+              {#if revokeResult?.saved}
+                <Message variant="success">
+                  <p role="status" class="text-sm text-foreground">
+                    このアカウントのログイン中のセッションをすべて無効化しました
+                  </p>
+                </Message>
+              {/if}
+              {#if revokeResult?.error}
+                <Message variant="danger">
+                  <p role="alert" class="text-sm text-foreground">
+                    {revokeResult.error}
+                  </p>
+                </Message>
+              {/if}
+
+              <div class="flex flex-wrap gap-2">
+                <form method="POST" action="?/resend">
+                  <input type="hidden" name="id" value={account.id} />
+                  <Button type="submit" variant="secondary" size="small">
+                    パスワード設定メールを再送
+                  </Button>
+                </form>
+
+                <!-- Ends every session the account has open, e.g. on a lost
+                     device. The password stays as it is, so whoever knows it
+                     can log straight back in: this doesn't lock anyone out. -->
+                <form
+                  method="POST"
+                  action="?/revoke"
+                  onsubmit={event => confirmRevoke(event, account.email, isSelf)}
+                >
+                  <input type="hidden" name="id" value={account.id} />
+                  <Button type="submit" variant="danger" tone="ghost" size="small">
+                    セッションを無効化
+                  </Button>
+                </form>
+              </div>
+              <p class="text-xs text-muted-foreground">
+                {isSelf
+                  ? 'セッションを無効化すると、この画面を含むすべての端末からログアウトします。'
+                  : 'セッションを無効化すると、このアカウントはすべての端末でログアウトされます。パスワードは変わらないため、パスワードを知っていれば再びログインできます。'}
+              </p>
             </Card>
           </li>
         {/each}

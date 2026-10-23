@@ -21,6 +21,10 @@ const ENV: Bindings = {
 const STAFF_ID = '33333333-3333-3333-3333-333333333333';
 const REGION_ID = '11111111-1111-1111-1111-111111111111';
 const REGION_SLUG = 'tokyo';
+// What the account's `sessions_valid_from` reads as. PostgREST spells
+// `timestamptz` with an offset, and the claim has to come out as the same
+// instant regardless.
+const SESSIONS_VALID_FROM = '2026-08-25T01:23:45.678+00:00';
 
 function decodeJwtPayload(token: string): Record<string, unknown> {
   const payloadSegment = token.split('.')[1];
@@ -36,6 +40,7 @@ function regionalStaffRow(passwordHash: string): Record<string, unknown> {
     role: 'regional',
     region_id: REGION_ID,
     tournament_type: 'saikyoi',
+    sessions_valid_from: SESSIONS_VALID_FROM,
     regions: {slug: REGION_SLUG},
   };
 }
@@ -96,6 +101,23 @@ describe('POST /login', () => {
     });
   });
 
+  it("embeds the account's sessions_valid_from as sessionsValidFrom", async () => {
+    // What the staff guards compare against the column on every request: a
+    // session issued without it, or with a different instant, would be
+    // refused as revoked from its very first request.
+    mockStaffAccountFetch(
+      regionalStaffRow(await hashPassword('correct-password')),
+    );
+
+    const res = await login('correct-password');
+
+    const setCookieHeader = res.headers.get('set-cookie') ?? '';
+    const token = setCookieHeader.split('staff_session=')[1].split(';')[0];
+    expect(decodeJwtPayload(token).sessionsValidFrom).toBe(
+      Date.parse('2026-08-25T01:23:45.678Z'),
+    );
+  });
+
   it("answers regional staff with their own tournament's region slug", async () => {
     mockStaffAccountFetch(
       regionalStaffRow(await hashPassword('correct-password')),
@@ -119,6 +141,7 @@ describe('POST /login', () => {
       role: 'general',
       region_id: null,
       tournament_type: null,
+      sessions_valid_from: SESSIONS_VALID_FROM,
       regions: null,
     });
 

@@ -6,12 +6,15 @@ const REGION_ID = '11111111-1111-1111-1111-111111111111';
 const OTHER_REGION_ID = '22222222-2222-2222-2222-222222222222';
 
 const tournament = {regionId: REGION_ID, type: 'saikyoi'} as const;
+// Irrelevant to the scope rule; present only because the claims carry it.
+const SESSIONS_VALID_FROM = Date.parse('2026-08-25T01:23:45.678Z');
 
 const generalStaff: StaffClaims = {
   sub: '99999999-9999-9999-9999-999999999999',
   role: 'general',
   regionId: null,
   tournamentType: null,
+  sessionsValidFrom: SESSIONS_VALID_FROM,
 };
 
 function regionalStaff(
@@ -23,6 +26,7 @@ function regionalStaff(
     role: 'regional',
     regionId,
     tournamentType,
+    sessionsValidFrom: SESSIONS_VALID_FROM,
   };
 }
 
