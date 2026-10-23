@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'bun:test';
-import {PasswordSchema} from './password';
+import {isCommonPassword, PasswordSchema} from './password-policy';
 
 /** The messages `PasswordSchema` reports for `value`, or none if it passes. */
 function messages(value: string): string[] {
@@ -37,5 +37,10 @@ describe('PasswordSchema', () => {
     expect(messages('x'.repeat(257))).toEqual([
       'パスワードは256文字以内で入力してください',
     ]);
+  });
+
+  it('isCommonPassword ignores case', () => {
+    expect(isCommonPassword('QWERTYUIOP')).toBe(true);
+    expect(isCommonPassword('violet-harbor-lantern')).toBe(false);
   });
 });

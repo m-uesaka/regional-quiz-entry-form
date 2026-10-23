@@ -12,6 +12,7 @@ export type EntryNoticeReason =
   | 'password-mismatch'
   | 'other-region'
   | 'already-entered'
+  | 'common-password'
   | 'dual-entry'
   | 'regulation-unavailable'
   | 'processing-failed';
@@ -58,6 +59,11 @@ function reasonParagraphs(
       return [
         'このメールアドレスでは、この大会に既にエントリー済みです。',
         `エントリーの内容は、${mypageLogin}からログインして確認できます。`,
+      ];
+    case 'common-password':
+      return [
+        '入力されたパスワードは、よく使われているもののため登録できませんでした。',
+        '推測されにくい別のパスワード(8文字以上)で、エントリーフォームからもう一度エントリーしてください。',
       ];
     case 'dual-entry':
       return [

@@ -1,8 +1,6 @@
 import {fail, redirect} from '@sveltejs/kit';
-import {
-  PasswordResetConfirmInputSchema,
-  PasswordResetRequestInputSchema,
-} from '@regional-quiz/shared';
+import {PasswordResetRequestInputSchema} from '@regional-quiz/shared';
+import {PasswordResetConfirmInputSchema} from '@regional-quiz/shared/password-policy';
 import {createApiClient} from '$lib/api';
 import {readTurnstileToken, TURNSTILE_TOKEN_FIELD} from '$lib/turnstile';
 import {clearParticipantSession} from '$lib/server/participant-session';

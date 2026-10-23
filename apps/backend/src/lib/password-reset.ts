@@ -1,4 +1,4 @@
-import type {PasswordResetConfirmInput} from '@regional-quiz/shared';
+import type {PasswordResetConfirmInput} from '@regional-quiz/shared/password-policy';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import {createMailSender} from './mailer';

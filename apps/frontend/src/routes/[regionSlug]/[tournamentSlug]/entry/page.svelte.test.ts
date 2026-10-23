@@ -164,25 +164,6 @@ describe('entry +page.svelte', () => {
     expect(screen.getByText('パスワードが一致しません')).toBeInTheDocument();
   });
 
-  it('shows the common-password message under the password field', () => {
-    renderPage({
-      error: '入力内容を確認してください',
-      fieldErrors: {
-        password: [
-          'よく使われているパスワードのため使用できません。別のパスワードを入力してください',
-        ],
-      },
-      values: SUBMITTED_VALUES,
-      loginPath: null,
-    });
-
-    expect(
-      screen.getByText(
-        'よく使われているパスワードのため使用できません。別のパスワードを入力してください',
-      ),
-    ).toBeInTheDocument();
-  });
-
   it("shows a custom field's message under its own control", () => {
     // Filed under the namespaced control name, which is also what the
     // page looks the message up by — so a custom field keyed `name` can't

@@ -4,13 +4,13 @@ import {sign} from 'hono/jwt';
 import {deleteCookie, setCookie} from 'hono/cookie';
 import {
   StaffLoginInputSchema,
-  StaffPasswordResetConfirmInputSchema,
   type StaffClaims,
   type StaffLoginInput,
   type StaffLoginResponse,
   type StaffRole,
   type TournamentType,
 } from '@regional-quiz/shared';
+import {StaffPasswordResetConfirmInputSchema} from '@regional-quiz/shared/password-policy';
 import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
 import {verifyAccountPassword} from '../lib/password-rehash';

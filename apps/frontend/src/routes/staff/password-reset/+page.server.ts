@@ -1,5 +1,5 @@
 import {fail, redirect} from '@sveltejs/kit';
-import {StaffPasswordResetConfirmInputSchema} from '@regional-quiz/shared';
+import {StaffPasswordResetConfirmInputSchema} from '@regional-quiz/shared/password-policy';
 import {createApiClient} from '$lib/api';
 import type {Actions, PageServerLoad} from './$types';
 

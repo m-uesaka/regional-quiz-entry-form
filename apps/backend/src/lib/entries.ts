@@ -8,6 +8,7 @@ import {
   type EntrySessionInput,
   type EntryStatus,
 } from '@regional-quiz/shared';
+import {isCommonPassword} from '@regional-quiz/shared/password-policy';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import {sendEntryNoticeEmail, type EntryNoticeReason} from './entry-notice';
@@ -93,6 +94,7 @@ const INVALID_PASSWORD = 'invalid password';
 const ALREADY_REGISTERED_IN_ANOTHER_REGION =
   'already registered in another region';
 const ALREADY_ENTERED = 'already entered';
+const COMMON_PASSWORD = 'password too common';
 
 /**
  * The SQLSTATE `check_region_dual_entry()` (migration 0016) raises. The
@@ -460,6 +462,13 @@ async function createEntryAfterCheck(
     await upgrade;
     participantId = existingParticipant.id;
   } else {
+    // A new account is held to the rules for setting a password. The form's
+    // own schema can't apply them (the same field is how a returning
+    // participant proves an older password), and doing it here keeps the
+    // refusal behind the address like every other answer that depends on it.
+    if (isCommonPassword(input.password)) {
+      return {ok: false, status: 400, error: COMMON_PASSWORD};
+    }
     const {data: created, error} = await db
       .from('participants')
       .insert({
@@ -652,6 +661,7 @@ const ENTRY_NOTICE_REASONS: Record<string, EntryNoticeReason> = {
   [INVALID_PASSWORD]: 'password-mismatch',
   [ALREADY_REGISTERED_IN_ANOTHER_REGION]: 'other-region',
   [ALREADY_ENTERED]: 'already-entered',
+  [COMMON_PASSWORD]: 'common-password',
   [ALREADY_ENTERED_ANOTHER_TOURNAMENT]: 'dual-entry',
   [REGULATION_NO_LONGER_AVAILABLE]: 'regulation-unavailable',
 };

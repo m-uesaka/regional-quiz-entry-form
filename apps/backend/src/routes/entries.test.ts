@@ -415,8 +415,6 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     });
   });
 
-  // The submitter was told a mail was on its way; a failure on our side
-  // after that must not leave them waiting for one that never comes.
   it('rehashes a legacy password when entering under a registered address', async () => {
     // Some participants only ever come back through this form, so the
     // upgrade the login does has to happen here too.
@@ -450,6 +448,50 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
   });
 
+  // A new account is held to the rules for setting a password, which the
+  // form's schema can't apply: the same field proves an existing password.
+  it('mails a new address that chose a common password instead of creating it', async () => {
+    const recorded = mockSupabase({participant: null});
+
+    const res = await observable(
+      await postWithContext(TOURNAMENT_PATH, {
+        ...validBody,
+        password: 'Password123',
+        passwordConfirm: 'Password123',
+      }),
+    );
+    await settleBackgroundWork();
+
+    expect(res).toEqual({status: 202, body: JSON.stringify({ok: true})});
+    expect(recorded.calls).not.toContainEqual({
+      table: 'participants',
+      method: 'POST',
+    });
+    expect(recorded.mails).toHaveLength(1);
+    expect(recorded.mails[0]).toMatchObject({
+      to: validBody.email,
+      subject: ENTRY_NOTICE_SUBJECT,
+    });
+    expect(recorded.mails[0].html).toContain('よく使われている');
+  });
+
+  it('lets a registered address re-enter with a common password it already has', async () => {
+    const recorded = mockSupabase({
+      participant: await registeredParticipant({password: 'Password123'}),
+    });
+
+    await postWithContext(TOURNAMENT_PATH, {
+      ...validBody,
+      password: 'Password123',
+      passwordConfirm: 'Password123',
+    });
+    await settleBackgroundWork();
+
+    expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
+  });
+
+  // The submitter was told a mail was on its way; a failure on our side
+  // after that must not leave them waiting for one that never comes.
   it('mails the owner to try again when the entry fails on our side', async () => {
     const recorded = mockSupabase({
       participant: null,

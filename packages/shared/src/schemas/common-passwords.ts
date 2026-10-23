@@ -1,5 +1,5 @@
 // The most common passwords of eight characters or more, lowercased, in
-// descending order of frequency. `PasswordSchema` (`schemas/password.ts`)
+// descending order of frequency. `isCommonPassword()` (`../password-policy.ts`)
 // refuses any password whose lowercased form is in this set.
 //
 // Source: `Passwords/Common-Credentials/xato-net-10-million-passwords-10000.txt`
@@ -9,8 +9,8 @@
 //
 // Of those 10,000, only the 3309 that the schema's other rules would let
 // through are kept: shorter ones are already refused by the eight-character
-// minimum, so listing them would only grow the bundle (this module ships to
-// the browser with the entry form). Entries were lowercased and
+// minimum, so listing them would only grow the module. (It is kept out of the
+// browser bundle by not being exported from the package's `index.ts`.) Entries were lowercased and
 // de-duplicated, and non-ASCII or non-printable lines dropped. Regenerate
 // from the source file with those same steps rather than editing by hand.
 

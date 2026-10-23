@@ -68,6 +68,26 @@ describe('EntryInputSchema', () => {
   });
 });
 
+describe('EntryInputSchema password', () => {
+  // The same field is how a returning participant proves an existing
+  // password, which may predate the common-password rule; the backend
+  // applies that rule only to a new address.
+  it('accepts a common password', () => {
+    const result = EntryInputSchema.safeParse({
+      name: '山田太郎',
+      furigana: 'やまだたろう',
+      displayName: '太郎',
+      email: 'taro@example.com',
+      password: 'password123',
+      passwordConfirm: 'password123',
+      regulationIds: ['00000000-0000-0000-0000-000000000000'],
+      customFieldValues: {},
+    });
+
+    expect(result.success).toBe(true);
+  });
+});
+
 describe('EntryEditInputSchema', () => {
   const BASE_EDIT = {
     name: '山田太郎',

@@ -484,13 +484,14 @@ describe('entry +page.server default action', () => {
     });
   });
 
-  it('refuses a common password under the password field before calling the API', async () => {
+  // The same field is how a returning participant proves an existing
+  // password, which may predate the common-password rule, so the form lets
+  // one through and the backend refuses it only for a new address -- by
+  // mail, like every other answer that depends on the address (#117).
+  it('passes a common password on to the API', async () => {
     const result = await actions.default(
       buildActionEvent({
-        fetch: fakeApi({
-          entryResponse: {status: 500, body: {error: 'must not be reached'}},
-        }),
-        // Matched case-insensitively against the shared list.
+        fetch: fakeApi(),
         fields: validFormData({
           password: 'Password123',
           passwordConfirm: 'Password123',
@@ -498,16 +499,7 @@ describe('entry +page.server default action', () => {
       }),
     );
 
-    expect(result).toMatchObject({
-      status: 400,
-      data: {
-        fieldErrors: {
-          password: [
-            'よく使われているパスワードのため使用できません。別のパスワードを入力してください',
-          ],
-        },
-      },
-    });
+    expect(result).toEqual({submitted: true, email: 'taro@example.com'});
   });
 
   it('does not read the regulations while handling a submission', async () => {

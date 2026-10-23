@@ -1,10 +1,10 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
 import {
-  PasswordResetConfirmInputSchema,
   PasswordResetRequestInputSchema,
   type PasswordResetRequestInput,
 } from '@regional-quiz/shared';
+import {PasswordResetConfirmInputSchema} from '@regional-quiz/shared/password-policy';
 import type {Env} from '../types/env';
 import {internalError} from '../lib/errors';
 import {
