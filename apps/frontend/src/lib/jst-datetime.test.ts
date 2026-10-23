@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import {
   datetimeLocalStep,
+  formatJstDateTime,
   fromJstDatetimeLocal,
   toJstDatetimeLocal,
 } from './jst-datetime';
@@ -76,5 +77,23 @@ describe('fromJstDatetimeLocal', () => {
 
   it('hands back a value that is not a datetime so the schema can reject it', () => {
     expect(fromJstDatetimeLocal('明日')).toBe('明日');
+  });
+});
+
+describe('formatJstDateTime', () => {
+  it('shows an instant as its JST date, weekday and time', () => {
+    expect(formatJstDateTime('2026-11-01T00:00:00Z')).toBe(
+      '2026年11月1日(日) 9:00',
+    );
+  });
+
+  it('carries the date across the day boundary', () => {
+    expect(formatJstDateTime('2026-11-30T15:05:00Z')).toBe(
+      '2026年12月1日(火) 0:05',
+    );
+  });
+
+  it('answers with an empty string for an unreadable instant', () => {
+    expect(formatJstDateTime('not a date')).toBe('');
   });
 });

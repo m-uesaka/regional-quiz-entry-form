@@ -17,6 +17,7 @@ import {entryVerificationRoute} from './routes/entry-verification';
 import {formDefinitionsRoute} from './routes/form-definitions';
 import {sheetImportRoute} from './routes/sheet-import';
 import {mypageRoute} from './routes/mypage';
+import {portalRoute} from './routes/portal';
 
 // Exported by name for the tests, which drive the API through
 // `app.request()`. The default export below is the Worker itself, and it is
@@ -46,7 +47,8 @@ const routes = app
   .route('/entries', entryVerificationRoute)
   .route('/form-definitions', formDefinitionsRoute)
   .route('/sheet-import', sheetImportRoute)
-  .route('/mypage', mypageRoute);
+  .route('/mypage', mypageRoute)
+  .route('/portal', portalRoute);
 
 export type AppType = typeof routes;
 
