@@ -1,14 +1,27 @@
 import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
 import {Hono} from 'hono';
-import {inspectRoutes} from 'hono/dev';
+import {sign} from 'hono/jwt';
 import type {Bindings, Env, StaffEnv} from './types/env';
 import {app} from './index';
-import {requireGeneralStaff} from './middleware/staff-auth';
+import {
+  requireOpenEntryPeriodOrStaff,
+  byTournamentIdParam,
+} from './middleware/entry-period';
+import {requireParticipant} from './middleware/participant-auth';
+import {
+  requireGeneralStaff,
+  requireStaffForTournament,
+} from './middleware/staff-auth';
 import {
   PERMISSIVE_PLATFORM_BINDINGS,
   TURNSTILE_TEST_TOKEN,
   turnstileAwareFetch,
 } from './test-support/bindings';
+import {
+  isStaffSessionCheck,
+  TEST_SESSIONS_VALID_FROM,
+  TEST_SESSIONS_VALID_FROM_MS,
+} from './test-support/staff-session';
 
 /** A route as `METHOD /path`, the way Hono registered it. */
 interface Route {
@@ -16,90 +29,147 @@ interface Route {
   path: string;
 }
 
-/** A route that answers a request with no session, and why it may. */
-interface PublicRoute extends Route {
-  reason: string;
-}
+/**
+ * Who a route lets in -- and so which requests it must refuse.
+ *
+ * - `public`: anyone. Not probed; the reason says why that is fine.
+ * - `entry-period`: anyone while the tournament's entry period is open, its
+ *   own staff otherwise (`requireOpenEntryPeriodOrStaff()`).
+ * - `general-staff`: 統括スタッフ only (`requireGeneralStaff()`).
+ * - `scoped-staff`: staff whose region and tournament type cover the
+ *   tournament or entry (`requireStaffForTournament()` /
+ *   `requireStaffForEntry()`).
+ * - `participant`: a logged-in participant (`requireParticipant()`). Whether
+ *   the entry is *their own* is the handler's question, decided by a query
+ *   this test can't see, so it is not probed here.
+ */
+type Policy =
+  | {access: 'public'; reason: string}
+  | {access: 'entry-period'}
+  | {access: 'general-staff'}
+  | {access: 'scoped-staff'}
+  | {access: 'participant'};
 
 /**
- * 無認証で到達してよいルートの許可リスト。ここに無いルートは、セッション
- * 無しのリクエストに対して必ず 401 か 403 を返さなければならない。
+ * 全ルートの認可方針。ルートを足したら、ここに方針を書かない限り下の
+ * テストが落ちる。
  *
  * 認可はすべて Worker のミドルウェアが担っている(DB は service_role で
  * 触っており RLS はバイパスされる。`docs/database-schema.md` 4 章)ため、
- * ミドルウェアの付け忘れを止める仕組みが他に無い。ルートを足したらここに
- * 公開と書くか、認証を付けるかの二択になる。ここに足すときは
- * `docs/api-endpoints.md` 2 章の表の「認可」列も「なし」で始めること(下の
- * テストが両者の一致を確かめる)。
- *
- * 「期間中はなし」のルートは `requireOpenEntryPeriodOrStaff()` の後ろに
- * あり、期間外はスタッフに限られるが、期間中は誰でも読めるのでここに載る。
+ * ミドルウェアの付け忘れや付け間違いを止める仕組みが他に無い。方針は
+ * ドキュメントから読まずにここに書く: ドキュメントの表を書き換えただけで
+ * 期待する認可が緩まないようにするため。代わりに `docs/api-endpoints.md`
+ * 2 章の表の「認可」列がこの方針と一致することを確かめる。
  */
-const PUBLIC_ROUTES: readonly PublicRoute[] = [
-  {method: 'GET', path: '/api/healthz', reason: 'ヘルスチェック'},
-  {method: 'POST', path: '/api/auth/staff/login', reason: 'ログイン'},
-  {
-    method: 'POST',
-    path: '/api/auth/staff/password-reset/confirm',
+const ROUTE_POLICIES: Readonly<Record<string, Policy>> = {
+  'GET /api/healthz': {access: 'public', reason: 'ヘルスチェック'},
+  'POST /api/auth/staff/login': {access: 'public', reason: 'ログイン'},
+  'POST /api/auth/staff/password-reset/confirm': {
+    access: 'public',
     reason: 'トークンで認可する',
   },
-  {method: 'POST', path: '/api/auth/staff/logout', reason: 'Cookie を消すだけ'},
-  {method: 'POST', path: '/api/auth/participant/login', reason: 'ログイン'},
-  {
-    method: 'POST',
-    path: '/api/auth/participant/logout',
+  'POST /api/auth/staff/logout': {
+    access: 'public',
     reason: 'Cookie を消すだけ',
   },
-  {
-    method: 'POST',
-    path: '/api/auth/participant/password-reset/request',
+  'POST /api/auth/participant/login': {access: 'public', reason: 'ログイン'},
+  'POST /api/auth/participant/logout': {
+    access: 'public',
+    reason: 'Cookie を消すだけ',
+  },
+  'POST /api/auth/participant/password-reset/request': {
+    access: 'public',
     reason: 'レート制限 + Turnstile。応答は登録の有無によらず同じ',
   },
-  {
-    method: 'POST',
-    path: '/api/auth/participant/password-reset/confirm',
+  'POST /api/auth/participant/password-reset/confirm': {
+    access: 'public',
     reason: 'トークンで認可する',
   },
-  {
-    method: 'GET',
-    path: '/api/tournaments/:tournamentId/entry-list',
+  'GET /api/regions': {access: 'general-staff'},
+  'POST /api/regions': {access: 'general-staff'},
+  'PATCH /api/regions/:id': {access: 'general-staff'},
+  'GET /api/tournaments': {access: 'general-staff'},
+  'POST /api/tournaments': {access: 'general-staff'},
+  'PATCH /api/tournaments/:id': {access: 'general-staff'},
+  'GET /api/tournaments/:regionSlug/:tournamentSlug': {access: 'entry-period'},
+  'GET /api/tournaments/:tournamentId/regulations': {access: 'entry-period'},
+  'PUT /api/tournaments/:tournamentId/regulations': {access: 'general-staff'},
+  'GET /api/tournaments/:tournamentId/entry-list': {
+    access: 'public',
     reason: '公開エントリーリスト(掲載名・ステータス・順位のみ)',
   },
-  {
-    method: 'GET',
-    path: '/api/tournaments/:regionSlug/:tournamentSlug/entry-list',
+  'GET /api/tournaments/:regionSlug/:tournamentSlug/entry-list': {
+    access: 'public',
     reason: '公開エントリーリスト(掲載名・ステータス・順位のみ)',
   },
-  {
-    method: 'GET',
-    path: '/api/tournaments/:tournamentId/regulations',
-    reason: 'エントリーフォームの描画用。期間外はスタッフのみ',
-  },
-  {
-    method: 'GET',
-    path: '/api/tournaments/:regionSlug/:tournamentSlug',
-    reason: 'エントリーフォームの描画用。期間外はスタッフのみ',
-  },
-  {
-    method: 'POST',
-    path: '/api/tournaments/:tournamentId/entries',
+  'POST /api/tournaments/:tournamentId/entries': {
+    access: 'public',
     reason: '未ログインのエントリー。レート制限 + Turnstile',
   },
-  {
-    method: 'GET',
-    path: '/api/entries/verify',
+  'POST /api/tournaments/:tournamentId/entries/session': {
+    access: 'participant',
+  },
+  'GET /api/entries/verify': {
+    access: 'public',
     reason: 'メール確認トークンで認可する',
   },
-  {
-    method: 'GET',
-    path: '/api/form-definitions/:tournamentId',
-    reason: 'エントリーフォームの描画用。期間外はスタッフのみ',
+  'GET /api/form-definitions/:tournamentId': {access: 'entry-period'},
+  'PUT /api/form-definitions/:tournamentId': {access: 'general-staff'},
+  'POST /api/sheet-import/preview': {access: 'general-staff'},
+  'POST /api/sheet-import/regulations/preview': {access: 'general-staff'},
+  'GET /api/staff/tournaments/:tournamentId/entries': {access: 'scoped-staff'},
+  'GET /api/staff/tournaments/:tournamentId/entries.csv': {
+    access: 'scoped-staff',
   },
-  {
-    method: 'GET',
-    path: '/api/portal/tournaments',
+  'GET /api/staff/entries/:entryId': {access: 'scoped-staff'},
+  'POST /api/staff/tournaments/:tournamentId/mail': {access: 'scoped-staff'},
+  'GET /api/staff/tournaments/:tournamentId/mail/:jobId': {
+    access: 'scoped-staff',
+  },
+  'GET /api/staff/dashboard': {access: 'general-staff'},
+  'GET /api/staff/accounts': {access: 'general-staff'},
+  'POST /api/staff/accounts': {access: 'general-staff'},
+  'POST /api/staff/accounts/:id/password-reset': {access: 'general-staff'},
+  'POST /api/staff/accounts/:id/revoke-sessions': {access: 'general-staff'},
+  'GET /api/mypage/entries': {access: 'participant'},
+  'GET /api/mypage/entries/:entryId': {access: 'participant'},
+  'PATCH /api/mypage/entries/:entryId': {access: 'participant'},
+  'DELETE /api/mypage/entries/:entryId': {access: 'participant'},
+  'GET /api/portal/tournaments': {
+    access: 'public',
     reason: 'ポータル(大会名・スラッグ・受付期間のみ)',
   },
+};
+
+/**
+ * Registrations that carry middleware only and no handler of their own:
+ * `.use()` on a path, which runs in front of the routes below it. Any other
+ * middleware-only registration is reported rather than skipped -- see
+ * `collectRoutes()`.
+ */
+const MIDDLEWARE_ONLY_REGISTRATIONS: readonly string[] = [
+  'ALL /api/*',
+  'ALL /api/regions/*',
+  'ALL /api/sheet-import/*',
+  'ALL /api/mypage/*',
+];
+
+/** What `docs/api-endpoints.md`'s 認可 column says for each policy. */
+const DOCUMENTED_ACCESS: ReadonlyArray<[RegExp, Policy['access']]> = [
+  [/^なし/, 'public'],
+  [/^期間中はなし/, 'entry-period'],
+  [/^統括スタッフ/, 'general-staff'],
+  [/^スタッフ\(担当範囲\)/, 'scoped-staff'],
+  [/^参加者/, 'participant'],
+];
+
+/** The methods an `.all()` route is tried with: it may branch on any. */
+const ALL_METHODS: readonly string[] = [
+  'GET',
+  'POST',
+  'PUT',
+  'PATCH',
+  'DELETE',
 ];
 
 /**
@@ -114,28 +184,45 @@ function routeKey({method, path}: Route): string {
 }
 
 /**
- * The (method, path) of every handler registered on `hono`, once each.
+ * The (method, path) of every route registered on `hono`, and the ones that
+ * can't be told apart from middleware.
  *
- * `app.routes` lists middleware too: a `.use('*', ...)` as an `ALL` entry,
- * and every per-route guard and validator as an entry of its own under the
- * route's method and path. `inspectRoutes()` marks the middleware (by
- * arity: a handler takes `c` only, middleware takes `c, next`), so what's
- * left is one entry per route a request can actually end up at.
+ * `app.routes` lists every handler and middleware as an entry of its own:
+ * a route's guards and validators under the route's method and path, and a
+ * `.use()` as an `ALL` entry under its pattern. The only thing that tells a
+ * handler from middleware is its arity (a handler takes `c`, middleware
+ * takes `c, next`). So a registration with nothing but two-argument
+ * functions is either a `.use()` -- listed in
+ * `MIDDLEWARE_ONLY_REGISTRATIONS` -- or a route this test can't see: a
+ * handler written `(c, next) => ...`, or an `app.mount()`ed sub-app. Those
+ * are returned as `unrecognized`, so the test fails instead of quietly
+ * leaving them out of every check.
  */
-function collectHandlerRoutes(hono: ApiApp): Route[] {
-  const seen = new Map<string, Route>();
-  for (const {method, path, isMiddleware} of inspectRoutes(hono)) {
-    if (isMiddleware) {
-      continue;
-    }
+function collectRoutes(
+  hono: ApiApp,
+  middlewareOnly: readonly string[] = MIDDLEWARE_ONLY_REGISTRATIONS,
+): {routes: Route[]; unrecognized: string[]} {
+  const registrations = new Map<string, {route: Route; hasHandler: boolean}>();
+  for (const {method, path, handler} of hono.routes) {
     const route = {method, path};
-    seen.set(routeKey(route), route);
+    const key = routeKey(route);
+    const entry = registrations.get(key) ?? {route, hasHandler: false};
+    entry.hasHandler ||= handler.length < 2;
+    registrations.set(key, entry);
   }
-  return [...seen.values()];
+  const routes: Route[] = [];
+  const unrecognized: string[] = [];
+  for (const [key, {route, hasHandler}] of registrations) {
+    if (hasHandler) {
+      routes.push(route);
+    } else if (!middlewareOnly.includes(key)) {
+      unrecognized.push(key);
+    }
+  }
+  return {routes, unrecognized};
 }
 
-// Any well-formed UUID will do: no request below is meant to get as far as
-// looking it up.
+// Any well-formed UUID will do for an id nobody looks up.
 const PLACEHOLDER_UUID = '00000000-0000-4000-8000-000000000000';
 
 /**
@@ -170,26 +257,95 @@ const TEST_ENV: Bindings = {
   SESSION_SECRET: 'test-session-secret',
 };
 
-/** Every outbound request a route made, other than Turnstile's siteverify. */
-let outboundRequests: string[] = [];
+// The region every tournament and entry the stub below hands back belongs
+// to, and one that is not it.
+const STUB_REGION_ID = '00000000-0000-4000-8000-00000000000a';
+const OTHER_REGION_ID = '00000000-0000-4000-8000-00000000000b';
+const PASSWORD_CHANGED_AT = '2026-08-25T00:00:00.000Z';
+
+/** A tournament whose entry period closed long ago, in `STUB_REGION_ID`. */
+const CLOSED_TOURNAMENT = {
+  id: PLACEHOLDER_UUID,
+  region_id: STUB_REGION_ID,
+  type: 'saikyoi',
+  name: 'テスト大会',
+  capacity: null,
+  entry_opens_at: '2020-01-01T00:00:00.000Z',
+  entry_closes_at: '2020-01-31T00:00:00.000Z',
+};
+
+/** A read a guard makes on its way to refusing, and what it is answered. */
+interface GuardRead {
+  kind: 'staff-session' | 'participant-session' | 'scope' | 'tournament';
+  body: unknown;
+}
+
+/**
+ * The reads the guards make, answered the way that leads each probe to its
+ * refusal: sessions are current (so a refusal is about *who*, not about a
+ * stale cookie), and every tournament or entry is in `STUB_REGION_ID` with
+ * a closed entry period. Anything else is a read a guard doesn't make,
+ * i.e. a handler running.
+ */
+function classifyRead(url: URL): GuardRead | null {
+  const table = url.pathname.replace(/^\/rest\/v1\//, '');
+  const select = (url.searchParams.get('select') ?? '').replace(/\s/g, '');
+  if (isStaffSessionCheck(url.toString())) {
+    return {
+      kind: 'staff-session',
+      body: [{sessions_valid_from: TEST_SESSIONS_VALID_FROM}],
+    };
+  }
+  if (table === 'participants' && select === 'password_changed_at') {
+    return {
+      kind: 'participant-session',
+      body: [{password_changed_at: PASSWORD_CHANGED_AT}],
+    };
+  }
+  if (table === 'tournaments' && select === 'region_id,type') {
+    return {
+      kind: 'scope',
+      body: [{region_id: STUB_REGION_ID, type: 'saikyoi'}],
+    };
+  }
+  if (table === 'entries' && select === 'tournaments(region_id,type)') {
+    return {
+      kind: 'scope',
+      body: [{tournaments: {region_id: STUB_REGION_ID, type: 'saikyoi'}}],
+    };
+  }
+  if (table === 'tournaments' && select.includes('entry_opens_at')) {
+    return {kind: 'tournament', body: [CLOSED_TOURNAMENT]};
+  }
+  if (table === 'regions' && select === 'id') {
+    return {kind: 'tournament', body: [{id: STUB_REGION_ID}]};
+  }
+  return null;
+}
+
+/** Every outbound request a probe caused, other than Turnstile's siteverify. */
+let outboundRequests: Array<{url: string; read: GuardRead | null}> = [];
 const originalFetch = globalThis.fetch;
 
 beforeEach(() => {
   outboundRequests = [];
   // Siteverify says yes, so a challenge in front of a guard can't be the
-  // reason a request is refused. Anything else -- Supabase above all -- is
-  // recorded and refused: a refusal for want of a session is decided from
-  // the (absent) cookie alone, so reaching the database means the guard is
-  // missing or comes too late. It is refused with a 400 rather than a
-  // network error, which `supabase-js` would retry with a backoff long
-  // enough to time the test out before it could say which route it was.
+  // reason a request is refused. Everything else is recorded. The guards'
+  // own reads are answered; anything else is refused with a 400 rather
+  // than a network error, which `supabase-js` would retry with a backoff
+  // long enough to time the test out before it could say which route it
+  // was.
   globalThis.fetch = turnstileAwareFetch(((input: RequestInfo | URL) => {
-    outboundRequests.push(input.toString());
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    const read = classifyRead(url);
+    outboundRequests.push({url: url.toString(), read});
     return Promise.resolve(
-      Response.json(
-        {message: 'no outbound request is expected'},
-        {status: 400},
-      ),
+      read
+        ? Response.json(read.body)
+        : Response.json(
+            {message: 'no outbound request is expected'},
+            {status: 400},
+          ),
     );
   }) as typeof fetch);
 });
@@ -198,69 +354,259 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** A route that let a request with no session through, and how far. */
+/** A session a probe sends, by the cookie that carries it. */
+type Session =
+  | 'none'
+  | 'participant'
+  | 'general-staff'
+  | 'regional-staff-in-scope'
+  | 'regional-staff-out-of-scope';
+
+async function staffCookie(regionId: string | null): Promise<string> {
+  const token = await sign(
+    {
+      sub: PLACEHOLDER_UUID,
+      role: regionId === null ? 'general' : 'regional',
+      regionId,
+      tournamentType: regionId === null ? null : 'saikyoi',
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    },
+    TEST_ENV.SESSION_SECRET,
+  );
+  return `staff_session=${token}`;
+}
+
+async function cookieFor(session: Session): Promise<string | null> {
+  switch (session) {
+    case 'none':
+      return null;
+    case 'participant': {
+      const issuedAt = Math.floor(Date.now() / 1000);
+      const token = await sign(
+        {
+          sub: PLACEHOLDER_UUID,
+          pwdChangedAt: Date.parse(PASSWORD_CHANGED_AT),
+          iat: issuedAt,
+          exp: issuedAt + 3600,
+        },
+        TEST_ENV.SESSION_SECRET,
+      );
+      return `participant_session=${token}`;
+    }
+    case 'general-staff':
+      return staffCookie(null);
+    case 'regional-staff-in-scope':
+      return staffCookie(STUB_REGION_ID);
+    case 'regional-staff-out-of-scope':
+      return staffCookie(OTHER_REGION_ID);
+  }
+}
+
+/** A request a route of some policy must refuse, and how. */
+interface Probe {
+  session: Session;
+  status: 401 | 403;
+  error: string;
+  /** The guard reads this refusal may cost; anything else is a leak. */
+  allowedReads: ReadonlyArray<GuardRead['kind']>;
+}
+
+const UNAUTHORIZED = 'unauthorized';
+const FORBIDDEN = 'forbidden';
+const ENTRY_PERIOD_CLOSED = 'entry period closed';
+
+/**
+ * What each policy must refuse. Each probe is a session that is current and
+ * valid but is not the one the policy asks for, so a route guarded by the
+ * wrong guard is caught as well as one guarded by none: a staff route
+ * behind `requireParticipant()` lets the participant in, a 統括 route
+ * behind a scoped guard lets the in-scope 地域スタッフ in.
+ */
+const PROBES: Readonly<Record<Exclude<Policy['access'], 'public'>, Probe[]>> = {
+  'general-staff': [
+    {session: 'none', status: 401, error: UNAUTHORIZED, allowedReads: []},
+    {
+      session: 'participant',
+      status: 401,
+      error: UNAUTHORIZED,
+      allowedReads: [],
+    },
+    {
+      session: 'regional-staff-in-scope',
+      status: 403,
+      error: FORBIDDEN,
+      allowedReads: ['staff-session'],
+    },
+  ],
+  'scoped-staff': [
+    {session: 'none', status: 401, error: UNAUTHORIZED, allowedReads: []},
+    {
+      session: 'participant',
+      status: 401,
+      error: UNAUTHORIZED,
+      allowedReads: [],
+    },
+    {
+      session: 'regional-staff-out-of-scope',
+      status: 403,
+      error: FORBIDDEN,
+      allowedReads: ['staff-session', 'scope'],
+    },
+  ],
+  participant: [
+    {session: 'none', status: 401, error: UNAUTHORIZED, allowedReads: []},
+    {
+      session: 'general-staff',
+      status: 401,
+      error: UNAUTHORIZED,
+      allowedReads: [],
+    },
+  ],
+  // The tournament the stub answers with is closed, so each of these is
+  // someone a closed form is not for.
+  'entry-period': [
+    {
+      session: 'none',
+      status: 403,
+      error: ENTRY_PERIOD_CLOSED,
+      allowedReads: ['tournament'],
+    },
+    {
+      session: 'participant',
+      status: 403,
+      error: ENTRY_PERIOD_CLOSED,
+      allowedReads: ['tournament'],
+    },
+    {
+      session: 'regional-staff-out-of-scope',
+      status: 403,
+      error: ENTRY_PERIOD_CLOSED,
+      allowedReads: ['tournament', 'staff-session'],
+    },
+  ],
+};
+
+/** A probe a route didn't refuse the way its policy says it must. */
 interface Leak {
   route: string;
+  method: string;
+  session: Session;
   status: number;
   body: string;
   outboundRequests: string[];
 }
 
 /**
- * Sends every handler route of `hono` that isn't in `publicRoutes` a request
- * with no session cookie, and reports the ones that weren't refused for it.
- *
- * Refused for it means a 401 `unauthorized` or 403 `forbidden` from the
- * guards (`middleware/staff-auth.ts`, `middleware/participant-auth.ts`),
- * with nothing sent anywhere first. The status alone isn't enough: a route
- * can also answer 400 (validation, Turnstile), 403 (`entry period closed`),
- * 429 (rate limit) or 500 (a failed read) -- and each of those means the
- * request got past where the guard should have stopped it. To keep those
- * other gates from standing in for the guard, every request is one they
- * let through: the limiters allow everything, siteverify says yes to the
- * Turnstile header, the parameters are well formed, and the body is JSON
- * (which `hono/csrf` leaves alone).
+ * Lets everything a route handed to `waitUntil()`, and anything it started
+ * without awaiting, run to completion, so a read made after the response is
+ * counted against the route that made it rather than the next one.
  */
-async function findUnguardedRoutes(
+async function settle(pending: Array<Promise<unknown>>): Promise<void> {
+  await Promise.allSettled(pending);
+  await new Promise(resolve => setTimeout(resolve, 10));
+}
+
+/**
+ * Sends every route of `hono` the probes its policy must refuse, and reports
+ * each that wasn't refused for the right reason.
+ *
+ * Refused means the guard's own status and body -- 401 `unauthorized` / 403
+ * `forbidden`, or 403 `entry period closed` from the entry-period gate --
+ * with no read beyond the ones that guard makes. The status alone isn't
+ * enough: a route can also answer 400 (validation, Turnstile), 429 (rate
+ * limit) or 500 (a failed read), and each of those means the request got
+ * past where the guard should have stopped it. To keep those other gates
+ * from standing in for the guard, every request is one they let through:
+ * the limiters allow everything, siteverify says yes to the Turnstile
+ * header, the parameters are well formed, and the body is JSON (which
+ * `hono/csrf` in `src/index.ts` leaves alone).
+ *
+ * @param policies The policy of every route; a route without one is
+ *     reported as a leak of its own.
+ */
+async function findLeaks(
   hono: ApiApp,
-  publicRoutes: readonly Route[],
+  policies: Readonly<Record<string, Policy>>,
 ): Promise<Leak[]> {
-  const publicKeys = new Set(publicRoutes.map(routeKey));
   const leaks: Leak[] = [];
-  for (const route of collectHandlerRoutes(hono)) {
-    if (publicKeys.has(routeKey(route))) {
-      continue;
-    }
-    outboundRequests = [];
-    // An `.all()` route answers any method; one is enough to find its guard.
-    const method = route.method === 'ALL' ? 'GET' : route.method;
-    const hasBody = method !== 'GET' && method !== 'HEAD';
-    const res = await hono.request(
-      toConcretePath(route.path),
-      {
-        method,
-        headers: {
-          'cf-turnstile-response': TURNSTILE_TEST_TOKEN,
-          ...(hasBody ? {'content-type': 'application/json'} : {}),
-        },
-        ...(hasBody ? {body: '{}'} : {}),
-      },
-      TEST_ENV,
-    );
-    const body = await res.text();
-    const refused =
-      (res.status === 401 && body === '{"error":"unauthorized"}') ||
-      (res.status === 403 && body === '{"error":"forbidden"}');
-    if (!refused || outboundRequests.length > 0) {
+  for (const route of collectRoutes(hono).routes) {
+    const policy = policies[routeKey(route)];
+    if (!policy) {
       leaks.push({
         route: routeKey(route),
-        status: res.status,
-        body,
-        outboundRequests: [...outboundRequests],
+        method: route.method,
+        session: 'none',
+        status: 0,
+        body: 'no policy declared for this route',
+        outboundRequests: [],
       });
+      continue;
+    }
+    if (policy.access === 'public') {
+      continue;
+    }
+    const methods = route.method === 'ALL' ? ALL_METHODS : [route.method];
+    for (const method of methods) {
+      for (const probe of PROBES[policy.access]) {
+        const leak = await runProbe(hono, route, method, probe);
+        if (leak) leaks.push(leak);
+      }
     }
   }
   return leaks;
+}
+
+async function runProbe(
+  hono: ApiApp,
+  route: Route,
+  method: string,
+  probe: Probe,
+): Promise<Leak | null> {
+  outboundRequests = [];
+  const pending: Array<Promise<unknown>> = [];
+  const executionCtx = {
+    waitUntil: (promise: Promise<unknown>) => {
+      pending.push(promise);
+    },
+    passThroughOnException: () => {},
+    props: {},
+  } as unknown as ExecutionContext;
+  const hasBody = method !== 'GET' && method !== 'HEAD';
+  const cookie = await cookieFor(probe.session);
+  const res = await hono.request(
+    toConcretePath(route.path),
+    {
+      method,
+      headers: {
+        'cf-turnstile-response': TURNSTILE_TEST_TOKEN,
+        ...(hasBody ? {'content-type': 'application/json'} : {}),
+        ...(cookie ? {cookie} : {}),
+      },
+      ...(hasBody ? {body: '{}'} : {}),
+    },
+    TEST_ENV,
+    executionCtx,
+  );
+  const body = await res.text();
+  await settle(pending);
+  const refused =
+    res.status === probe.status &&
+    body === JSON.stringify({error: probe.error});
+  const unexpectedReads = outboundRequests.filter(
+    ({read}) => !read || !probe.allowedReads.includes(read.kind),
+  );
+  if (refused && unexpectedReads.length === 0) {
+    return null;
+  }
+  return {
+    route: routeKey(route),
+    method,
+    session: probe.session,
+    status: res.status,
+    body,
+    outboundRequests: outboundRequests.map(({url}) => url),
+  };
 }
 
 /**
@@ -290,59 +636,87 @@ async function readDocumentedRoutes(): Promise<
 }
 
 describe('route authorization coverage', () => {
-  const registered = collectHandlerRoutes(app);
+  const {routes: registered, unrecognized} = collectRoutes(app);
 
-  it('has no route missing from either the allow list or the auth check', async () => {
-    expect(await findUnguardedRoutes(app, PUBLIC_ROUTES)).toEqual([]);
+  it('can see every registered route', () => {
+    expect(unrecognized).toEqual([]);
   });
 
-  it('has no stale entry in the allow list', () => {
-    const registeredKeys = registered.map(routeKey);
-    for (const route of PUBLIC_ROUTES) {
-      expect(registeredKeys).toContain(routeKey(route));
-    }
+  it('refuses every probe its policy says it must', async () => {
+    expect(await findLeaks(app, ROUTE_POLICIES)).toEqual([]);
   });
 
-  it('the allow list matches the 認証 column of docs/api-endpoints.md', async () => {
+  it('declares a policy for exactly the registered routes', () => {
+    expect(Object.keys(ROUTE_POLICIES).sort()).toEqual(
+      registered.map(routeKey).sort(),
+    );
+  });
+
+  it('agrees with the 認可 column of docs/api-endpoints.md', async () => {
     const documented = await readDocumentedRoutes();
-    // Every registered route is in the table and nothing else is, so a new
-    // route can't skip the column...
     expect(documented.map(routeKey).sort()).toEqual(
       registered.map(routeKey).sort(),
     );
-    // ...and the routes the table calls unauthenticated (なし, or なし while
-    // the entry period is open) are exactly the allow list.
-    expect(
-      documented
-        .filter(({authorization}) => /^(期間中は)?なし/.test(authorization))
-        .map(routeKey)
-        .sort(),
-    ).toEqual(PUBLIC_ROUTES.map(routeKey).sort());
+    for (const row of documented) {
+      const access = DOCUMENTED_ACCESS.find(([pattern]) =>
+        pattern.test(row.authorization),
+      )?.[1];
+      expect({route: routeKey(row), access}).toEqual({
+        route: routeKey(row),
+        access: ROUTE_POLICIES[routeKey(row)]?.access,
+      });
+    }
   });
+});
 
-  // The check above is only worth something if it can fail. These run it
-  // against small apps with a known answer, so a change to it that makes it
-  // pass everything (a filter that drops the routes, a status it accepts)
-  // shows up here rather than as silence.
+// The checks above are only worth something if they can fail. These run
+// them against small apps with a known answer, so a change that makes them
+// pass everything (a filter that drops routes, a status it accepts) shows
+// up here rather than as silence.
+describe('route authorization coverage, tried on known mistakes', () => {
+  /** A one-route app under `/api`, and a policy for its single route. */
+  function appWith(build: (api: Hono<StaffEnv>) => Hono<StaffEnv>): ApiApp {
+    const api = new Hono<Env>().basePath('/api');
+    api.route('/', build(new Hono<StaffEnv>()));
+    return api as unknown as ApiApp;
+  }
+
+  async function leakedSessions(
+    hono: ApiApp,
+    policies: Record<string, Policy>,
+  ): Promise<string[]> {
+    return (await findLeaks(hono, policies)).map(
+      leak => `${leak.method} ${leak.session}`,
+    );
+  }
+
   it('reports a route whose guard is missing', async () => {
-    const unguarded = new Hono<Env>().basePath('/api');
-    unguarded.route(
-      '/',
-      new Hono<StaffEnv>()
+    const hono = appWith(api =>
+      api
         .get('/guarded', requireGeneralStaff(), c => c.json({ok: true}))
         .get('/forgotten/:tournamentId', c => c.json({ok: true})),
     );
-    const leaks = await findUnguardedRoutes(unguarded, []);
-    expect(leaks.map(leak => leak.route)).toEqual([
+    const leaks = await findLeaks(hono, {
+      'GET /api/guarded': {access: 'general-staff'},
+      'GET /api/forgotten/:tournamentId': {access: 'general-staff'},
+    });
+    expect([...new Set(leaks.map(leak => leak.route))]).toEqual([
       'GET /api/forgotten/:tournamentId',
     ]);
   });
 
+  it('reports a route that has no policy', async () => {
+    const hono = appWith(api =>
+      api.get('/new', requireGeneralStaff(), c => c.json({ok: true})),
+    );
+    expect(await findLeaks(hono, {})).toMatchObject([
+      {route: 'GET /api/new', body: 'no policy declared for this route'},
+    ]);
+  });
+
   it('reports a route that reaches the database before refusing', async () => {
-    const lateGuard = new Hono<Env>().basePath('/api');
-    lateGuard.route(
-      '/',
-      new Hono<StaffEnv>().get(
+    const hono = appWith(api =>
+      api.get(
         '/late',
         async (c, next) => {
           await fetch(`${c.env.SUPABASE_URL}/rest/v1/entries`);
@@ -352,14 +726,113 @@ describe('route authorization coverage', () => {
         c => c.json({ok: true}),
       ),
     );
-    const leaks = await findUnguardedRoutes(lateGuard, []);
-    expect(leaks).toEqual([
-      {
-        route: 'GET /api/late',
-        status: 401,
-        body: '{"error":"unauthorized"}',
-        outboundRequests: ['http://supabase.invalid/rest/v1/entries'],
-      },
+    expect(
+      await leakedSessions(hono, {'GET /api/late': {access: 'general-staff'}}),
+    ).toEqual(['GET none', 'GET participant', 'GET regional-staff-in-scope']);
+  });
+
+  // The guard is there, but it is the wrong one.
+  it('reports a staff route that a participant session gets through', async () => {
+    const hono = appWith(api =>
+      api.get('/staff-only', requireParticipant(), c => c.json({ok: true})),
+    );
+    expect(
+      await leakedSessions(hono, {
+        'GET /api/staff-only': {access: 'general-staff'},
+      }),
+    ).toContain('GET participant');
+  });
+
+  it('reports a 統括 route that an in-scope 地域スタッフ gets through', async () => {
+    const hono = appWith(api =>
+      api.get('/x/:tournamentId', requireStaffForTournament(), c =>
+        c.json({ok: true}),
+      ),
+    );
+    expect(
+      await leakedSessions(hono, {
+        'GET /api/x/:tournamentId': {access: 'general-staff'},
+      }),
+    ).toEqual(['GET regional-staff-in-scope']);
+  });
+
+  it('reports a form route that lost its entry-period gate', async () => {
+    const hono = appWith(api =>
+      api.get('/form/:tournamentId', c => c.json({ok: true})),
+    );
+    expect(
+      await leakedSessions(hono, {
+        'GET /api/form/:tournamentId': {access: 'entry-period'},
+      }),
+    ).toEqual([
+      'GET none',
+      'GET participant',
+      'GET regional-staff-out-of-scope',
     ]);
+  });
+
+  it('accepts a form route behind its entry-period gate', async () => {
+    const hono = new Hono<Env>().basePath('/api');
+    hono.get(
+      '/form/:tournamentId',
+      requireOpenEntryPeriodOrStaff(byTournamentIdParam),
+      c => c.json({ok: true}),
+    );
+    expect(
+      await findLeaks(hono as unknown as ApiApp, {
+        'GET /api/form/:tournamentId': {access: 'entry-period'},
+      }),
+    ).toEqual([]);
+  });
+
+  it('reports a read made after the response', async () => {
+    // A guard that refuses, but only after handing a read to `waitUntil()`.
+    const background = appWith(api =>
+      api.get('/background', c => {
+        c.executionCtx.waitUntil(
+          new Promise(resolve => setTimeout(resolve, 1)).then(() =>
+            fetch(`${c.env.SUPABASE_URL}/rest/v1/entries`),
+          ),
+        );
+        return c.json({error: UNAUTHORIZED}, 401);
+      }),
+    );
+    const policy = {'GET /api/background': {access: 'participant'}} as const;
+    expect(await leakedSessions(background, policy)).toEqual([
+      'GET none',
+      'GET general-staff',
+    ]);
+  });
+
+  it('tries every method on an .all() route', async () => {
+    const hono = appWith(api =>
+      api.all(
+        '/any',
+        async (c, next) => {
+          // Guarded on GET only.
+          if (c.req.method === 'GET') {
+            return c.json({error: UNAUTHORIZED}, 401);
+          }
+          await next();
+        },
+        c => c.json({ok: true}),
+      ),
+    );
+    const leaked = await leakedSessions(hono, {
+      'ALL /api/any': {access: 'participant'},
+    });
+    expect(leaked).not.toContain('GET none');
+    expect(leaked).toContain('POST none');
+    expect(leaked).toContain('DELETE none');
+  });
+
+  it('reports a registration with no handler it can recognize', () => {
+    const hono = appWith(api =>
+      // A handler written with `next`, which only arity sets apart from
+      // middleware.
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the unused `next` is the point.
+      api.get('/two-args', (c, _next) => c.json({ok: true})),
+    );
+    expect(collectRoutes(hono, []).unrecognized).toEqual(['GET /api/two-args']);
   });
 });
