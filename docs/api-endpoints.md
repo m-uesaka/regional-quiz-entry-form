@@ -192,13 +192,15 @@ if ('yaml' in body) {
 
 スタッフのログイン。成功時に `staff_session` Cookie を発行します。
 
-- リクエスト: `StaffLoginInputSchema` — `{email: string(email), password: string(min 1)}`
+- リクエスト: `StaffLoginInputSchema` — `{email: string(email), password: string(min 1, max 256)}`(ログインには下記のパスワードポリシーを**適用しません**。ポリシー導入前に設定したパスワードでもログインできる必要があるためです。最大長だけは PBKDF2 の計算量を守るために共通です)
 - `200`: `StaffLoginResponseSchema` — `{"ok": true, "role": "regional" | "general", "regionSlug": string | null, "tournamentType": "saikyoi" | "shinjinou" | null}`
 - `401`: `{"error": "invalid credentials"}`
 - `429`: `{"error": "too many requests"}`(`Retry-After: 60`。1 章「レート制限と Turnstile」を参照)
 - `500`: `{"error": "internal server error"}`
 
-該当アカウントが存在しない場合もダミーのハッシュに対して PBKDF2 を実行してから 401 を返します。これにより「メールアドレスが存在しない」場合と「パスワードが違う」場合の応答時間が揃い、タイミング差からのアカウント列挙を防ぎます。
+該当アカウントが存在しない場合もダミーのハッシュ(`lib/password.ts` の `DUMMY_PASSWORD_HASH`。現行の反復回数で作った形式なので、新規ハッシュと同じコストがかかります)に対して PBKDF2 を実行してから 401 を返します。これにより「メールアドレスが存在しない」場合と「パスワードが違う」場合の応答時間が揃い、タイミング差からのアカウント列挙を防ぎます。
+
+ログインに成功したとき、保存されているハッシュが旧形式・旧パラメータ(`verifyPassword()` の `needsRehash`)なら、**その場で現行パラメータのハッシュに書き換えます**。平文が手元にあるのは照合が通ったこの瞬間だけなので、利用者に何も求めずに移行を進められます。書き換えは `waitUntil()` で応答の後に行い、失敗してもログは残してログイン自体は成功させます(次回のログインで再試行されます)。`password_hash` が照合時の値のままである行だけを更新するので、その間に再設定されたパスワードを古いもので上書きすることはありません。`password_changed_at` は動かしません(パスワードは変わっていないので、セッションを切る理由がないためです)。仕組みの詳細は [`database-schema.md`](./database-schema.md#participants--参加者アカウント) を参照してください。
 
 `regionSlug` / `tournamentType` は `regional` スタッフの担当範囲で、`general` スタッフでは両方 `null` です。スタッフ画面は `/staff/{regionSlug}/{tournamentType}/entries` のように**スラッグ**で引くため、JWT クレームが持つ `regionId` ではなく `regions` を join したスラッグを返しています。ログイン画面(`/staff/login`)はこれを見て、`general` を `/staff/dashboard` へ、`regional` を担当大会のエントリー一覧へリダイレクトします。
 
@@ -206,7 +208,7 @@ if ('yaml' in body) {
 
 スタッフが招待メール(`POST /api/staff/accounts`)またはリンク再発行(`POST /api/staff/accounts/:id/password-reset`)で受け取ったトークンを使い、自分のパスワードを設定します。
 
-- リクエスト: `StaffPasswordResetConfirmInputSchema` — `{token: string(min 1), newPassword: string(min 8)}`
+- リクエスト: `StaffPasswordResetConfirmInputSchema` — `{token: string(min 1), newPassword: PasswordSchema}`(`PasswordSchema` は `packages/shared/src/schemas/password.ts`。8 文字以上 256 文字以内で、よく使われるパスワードの一覧(約 3,300 件、大文字小文字を区別しない)に載っていないこと。記号必須などの文字種の強制はしません)
 - `200`: `{"ok": true}`
 - `400`: `{"error": "invalid or expired token"}`(未知・使用済み・期限切れのトークン)
 - `500`: `{"error": "internal server error"}`
@@ -223,7 +225,7 @@ if ('yaml' in body) {
 
 - リクエスト: `ParticipantLoginInputSchema` — `{email, password}`
 - `200`: `{"ok": true}`
-- `401` / `429` / `500`: スタッフ側と同じ(ダミーハッシュによる時間平準化も同様)
+- `401` / `429` / `500`: スタッフ側と同じ(ダミーハッシュによる時間平準化、ログイン成功時の再ハッシュも同様)。`password` の上限 256 文字もスタッフ側と同じです
 
 発行する JWT には `sub` / `exp` に加えて `pwdChangedAt`(このログインで照合したパスワードの `password_changed_at`)を載せます。追加のクエリは不要で、パスワードハッシュと同じ SELECT で取得しています。
 
@@ -246,7 +248,7 @@ if ('yaml' in body) {
 
 トークンと新しいパスワードを受け取り、パスワードを再設定します。
 
-- リクエスト: `PasswordResetConfirmInputSchema` — `{token: string(min 1), newPassword: string(min 8)}`
+- リクエスト: `PasswordResetConfirmInputSchema` — `{token: string(min 1), newPassword: PasswordSchema}`(エントリー時のパスワードと同じポリシー。スタッフ側の説明を参照)
 - `200`: `{"ok": true}`
 - `400`: `{"error": "invalid or expired token"}`(未知・使用済み・期限切れのトークン)
 - `500`: `{"error": "internal server error"}`
@@ -415,8 +417,8 @@ if ('yaml' in body) {
   | `furigana` | string(min 1) | ふりがな |
   | `displayName` | string(min 1) | 公開リスト掲載名 |
   | `email` | string(email) | アカウントのメールアドレス |
-  | `password` | string(min 8) | |
-  | `passwordConfirm` | string(min 8) | `password` と一致必須 |
+  | `password` | `PasswordSchema`(8〜256 文字、よく使われるパスワードは不可) | `packages/shared/src/schemas/password.ts` |
+  | `passwordConfirm` | string(min 8, max 256) | `password` と一致必須 |
   | `regulationIds` | string(uuid)[] (min 1) | 選択したレギュレーション。複数該当し得るので配列(issue #112) |
   | `freeText` | string(任意) | |
   | `customFieldValues` | `Record<string, string \| string[]>` | 追加フォーム項目の回答 |
