@@ -12,16 +12,14 @@ const REGIONS: PortalRegionView[] = [
         name: '東京最強位',
         typeLabel: '最強位',
         status: 'open',
-        entryOpensAt: '2026-11-01T00:00:00Z',
-        entryClosesAt: '2026-11-30T00:00:00Z',
+        entryPeriodLabel: '2026年11月1日(日) 9:00 〜 2026年11月30日(月) 9:00',
         entryPath: '/tokyo/saikyoi/entry',
       },
       {
         name: '東京新人王',
         typeLabel: '新人王',
         status: 'upcoming',
-        entryOpensAt: '2026-12-01T00:00:00Z',
-        entryClosesAt: '2026-12-31T00:00:00Z',
+        entryPeriodLabel: '2026年12月1日(火) 9:00 〜 2026年12月31日(木) 9:00',
         entryPath: '/tokyo/shinjinou/entry',
       },
     ],
@@ -34,8 +32,7 @@ const REGIONS: PortalRegionView[] = [
         name: '北海道最強位',
         typeLabel: '最強位',
         status: 'closed',
-        entryOpensAt: '2026-09-01T00:00:00Z',
-        entryClosesAt: '2026-09-30T00:00:00Z',
+        entryPeriodLabel: '2026年9月1日(火) 9:00 〜 2026年9月30日(水) 9:00',
         entryPath: '/hokkaido/saikyoi/entry',
       },
     ],
@@ -47,12 +44,16 @@ function renderPage(regions: PortalRegionView[]): void {
 }
 
 describe('portal +page.svelte', () => {
-  it('links to the mypage login screen', () => {
+  // `/mypage` rather than `/mypage/login`: the mypage layout sends a
+  // visitor without a session to the login screen anyway, and one who is
+  // already logged in goes straight to their entries.
+  it('links to the mypage', () => {
     renderPage(REGIONS);
 
-    expect(
-      screen.getByRole('link', {name: 'マイページにログイン'}),
-    ).toHaveAttribute('href', '/mypage/login');
+    expect(screen.getByRole('link', {name: 'マイページへ'})).toHaveAttribute(
+      'href',
+      '/mypage',
+    );
   });
 
   it('lists every region with its tournaments', () => {
@@ -80,7 +81,7 @@ describe('portal +page.svelte', () => {
     ).toBeNull();
   });
 
-  it('says where each entry period stands, with the period in JST', () => {
+  it('says where each entry period stands, with the period', () => {
     renderPage(REGIONS);
 
     const upcoming = screen.getByText('東京新人王').closest('li');

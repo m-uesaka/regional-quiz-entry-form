@@ -4,7 +4,6 @@
   import {buttonVariants} from '$lib/components/ui/atoms/Button.svelte';
   import Card from '$lib/components/ui/atoms/Card.svelte';
   import Chip from '$lib/components/ui/atoms/Chip.svelte';
-  import {formatJstDateTime} from '$lib/jst-datetime';
   import {PORTAL_STATUS_LABELS, type PortalStatus} from '$lib/portal';
   import type {PageProps} from './$types';
 
@@ -31,13 +30,13 @@
       </p>
     </div>
     <a
-      href="/mypage/login"
+      href="/mypage"
       class={[
         buttonVariants({variant: 'secondary', tone: 'solid', size: 'medium'}),
         'shrink-0',
       ]}
     >
-      マイページにログイン
+      マイページへ
     </a>
   </Card>
 
@@ -70,9 +69,7 @@
                     </Chip>
                   </div>
                   <p class="text-sm text-muted-foreground">
-                    受付期間: {formatJstDateTime(tournament.entryOpensAt)} 〜 {formatJstDateTime(
-                      tournament.entryClosesAt,
-                    )}
+                    受付期間: {tournament.entryPeriodLabel}
                   </p>
                 </div>
                 {#if tournament.status === 'open'}

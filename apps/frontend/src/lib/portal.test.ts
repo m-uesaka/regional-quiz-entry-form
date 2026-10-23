@@ -75,7 +75,31 @@ describe('groupPortalTournaments', () => {
       typeLabel: '新人王',
       status: 'open',
       entryPath: '/tokyo/shinjinou/entry',
+      entryPeriodLabel: '2026年11月1日(日) 9:00 〜 2026年11月30日(月) 9:00',
     });
+  });
+
+  // The API sorts by region, but the grouping must not depend on it: a
+  // region split across the list would otherwise come out twice.
+  it('keeps one group per region even when its tournaments are apart', () => {
+    const regions = groupPortalTournaments(
+      [
+        tournament({tournamentName: '東京最強位'}),
+        tournament({
+          regionSlug: 'hokkaido',
+          regionName: '北海道',
+          tournamentName: '北海道最強位',
+        }),
+        tournament({tournamentType: 'shinjinou', tournamentName: '東京新人王'}),
+      ],
+      now,
+    );
+
+    expect(regions.map(r => r.regionSlug)).toEqual(['tokyo', 'hokkaido']);
+    expect(regions[0].tournaments.map(t => t.name)).toEqual([
+      '東京最強位',
+      '東京新人王',
+    ]);
   });
 
   it('answers no regions when there are no tournaments', () => {

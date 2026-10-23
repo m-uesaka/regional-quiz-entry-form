@@ -3,6 +3,7 @@ import {
   TOURNAMENT_TYPE_LABELS,
   type PortalTournament,
 } from '@regional-quiz/shared';
+import {formatJstDateTime} from '$lib/jst-datetime';
 
 /** Whether a tournament's entry form is taking entries. */
 export type PortalStatus = 'open' | 'upcoming' | 'closed';
@@ -19,8 +20,8 @@ export interface PortalTournamentView {
   name: string;
   typeLabel: string;
   status: PortalStatus;
-  entryOpensAt: string;
-  entryClosesAt: string;
+  /** The entry period as the page prints it, in JST. */
+  entryPeriodLabel: string;
   /** The entry form, `/<regionSlug>/<tournamentType>/entry`. */
   entryPath: string;
 }
@@ -53,8 +54,11 @@ export function portalStatus(
 }
 
 /**
- * Groups the API's list into regions, keeping its order: the API sorts by
- * region, so a region's tournaments arrive next to each other.
+ * Groups the API's list into regions. Regions come out in the order each
+ * first appears and tournaments in the order listed, so the API's sort is
+ * kept; but the grouping itself doesn't rely on a region's tournaments
+ * arriving next to each other, which would otherwise yield the same region
+ * twice (and a duplicate `{#each}` key) if that sort ever changed.
  * @param tournaments The list from `GET /api/portal/tournaments`.
  * @param now The moment the statuses are worked out for.
  */
@@ -62,25 +66,24 @@ export function groupPortalTournaments(
   tournaments: PortalTournament[],
   now: Date,
 ): PortalRegionView[] {
-  const regions: PortalRegionView[] = [];
+  const regions = new Map<string, PortalRegionView>();
   for (const tournament of tournaments) {
-    let region = regions.at(-1);
-    if (region?.regionSlug !== tournament.regionSlug) {
+    let region = regions.get(tournament.regionSlug);
+    if (!region) {
       region = {
         regionSlug: tournament.regionSlug,
         regionName: tournament.regionName,
         tournaments: [],
       };
-      regions.push(region);
+      regions.set(tournament.regionSlug, region);
     }
     region.tournaments.push({
       name: tournament.tournamentName,
       typeLabel: TOURNAMENT_TYPE_LABELS[tournament.tournamentType],
       status: portalStatus(tournament, now),
-      entryOpensAt: tournament.entryOpensAt,
-      entryClosesAt: tournament.entryClosesAt,
+      entryPeriodLabel: `${formatJstDateTime(tournament.entryOpensAt)} 〜 ${formatJstDateTime(tournament.entryClosesAt)}`,
       entryPath: `/${encodeURIComponent(tournament.regionSlug)}/${tournament.tournamentType}/entry`,
     });
   }
-  return regions;
+  return [...regions.values()];
 }
