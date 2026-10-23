@@ -101,6 +101,19 @@ describe('GET /portal/tournaments (mocked Supabase)', () => {
     expect((await res.json()) as unknown).toEqual([]);
   });
 
+  it('leaves out a tournament it cannot read rather than failing them all', async () => {
+    mockTournamentsFetch([
+      {...row('tokyo', '東京', 'saikyoi'), entry_opens_at: 'not a date'},
+      row('tokyo', '東京', 'shinjinou'),
+    ]);
+
+    const res = await app.request('/api/portal/tournaments', {}, env);
+    const body = (await res.json()) as Array<{tournamentName: string}>;
+
+    expect(res.status).toBe(200);
+    expect(body.map(t => t.tournamentName)).toEqual(['東京新人王']);
+  });
+
   it('answers 500 when the tournaments cannot be read', async () => {
     mockTournamentsFetch({message: 'boom'}, {status: 500});
 

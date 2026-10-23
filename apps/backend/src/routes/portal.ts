@@ -14,7 +14,9 @@ interface PortalTournamentRow {
   name: string;
   entry_opens_at: string;
   entry_closes_at: string;
-  regions: {slug: string; name: string};
+  // `!inner` makes PostgREST drop a tournament without a region rather than
+  // answer `null` here, but the type stays honest about the join.
+  regions: {slug: string; name: string} | null;
 }
 
 // The order the two tournaments of one region are listed in, matching how
@@ -24,15 +26,31 @@ const TOURNAMENT_TYPE_ORDER: Record<TournamentType, number> = {
   shinjinou: 1,
 };
 
-function rowToPortalTournament(row: PortalTournamentRow): PortalTournament {
-  return PortalTournamentSchema.parse({
-    regionSlug: row.regions.slug,
-    regionName: row.regions.name,
+/**
+ * Turns a row into what the portal answers with, or `null` when the row
+ * doesn't fit the schema. One unreadable tournament is logged and left out
+ * rather than thrown: a throw here would take every other region's form
+ * off the portal with it.
+ */
+function rowToPortalTournament(
+  row: PortalTournamentRow,
+): PortalTournament | null {
+  const result = PortalTournamentSchema.safeParse({
+    regionSlug: row.regions?.slug,
+    regionName: row.regions?.name,
     tournamentType: row.type,
     tournamentName: row.name,
     entryOpensAt: row.entry_opens_at,
     entryClosesAt: row.entry_closes_at,
   });
+  if (!result.success) {
+    console.error(
+      'leaving an unreadable tournament off the portal',
+      result.error.issues,
+    );
+    return null;
+  }
+  return result.data;
 }
 
 /**
@@ -55,9 +73,15 @@ function comparePortalTournaments(
 // Public on purpose, and not behind the entry-period gate
 // (`middleware/entry-period.ts`): the portal is where participants find the
 // forms, and listing the closed ones too is what lets it say when a form
-// opens. It answers only names, slugs and the entry period, none of which
-// is any less public than the form URL itself; whether a closed form can be
-// opened is still decided by that gate on the form's own routes.
+// opens. It answers only names, slugs and the entry period; whether a closed
+// form can be opened is still decided by that gate on the form's own routes.
+//
+// That includes tournaments whose entry period hasn't started, which the
+// gate treats as unpublished: their name and dates are public here, as
+// 受付開始前, even while the form itself is staff-only. This was decided
+// deliberately (2026-10-23) so participants can see when a form opens; it
+// means a tournament should only be created once its name and entry period
+// are fit to announce.
 export const portalRoute = new Hono<Env>().get('/tournaments', async c => {
   const db = createDbClient(c.env);
   const {data, error} = await db
@@ -69,5 +93,9 @@ export const portalRoute = new Hono<Env>().get('/tournaments', async c => {
   if (error) {
     return c.json(internalError('failed to read the tournaments', error), 500);
   }
-  return c.json(data.map(rowToPortalTournament).sort(comparePortalTournaments));
+  const tournaments = data
+    .map(rowToPortalTournament)
+    .filter(tournament => tournament !== null)
+    .sort(comparePortalTournaments);
+  return c.json(tournaments);
 });
