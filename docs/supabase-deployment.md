@@ -505,14 +505,14 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
    - 差出人が `MAIL_FROM_ADDRESS` になっている
    - 本文のリンクが `https://<FRONTEND_HOST>/staff/password-reset?token=...` で、開くとパスワード設定画面が表示される
    - メールのソースで SPF / DKIM / DMARC が `PASS` になっている
-3. 届かないときは、Resend の `Logs` で送信履歴を確認し、送信されていなければ `bunx wrangler tail --env staging` を実行した状態でもう一度招待して、Worker のエラーを確認する
+3. 届かないときは、Resend の `Logs` で送信履歴を確認し、送信されていなければ `bunx wrangler tail --env staging` を実行した状態で、`/admin/staff` の一覧から手順 1 のアカウントの「パスワード設定メールを再送」を押して、Worker のエラーを確認する。送信に失敗してもアカウントは作成済みなので、同じアドレスを**もう一度招待しても 409 になるだけで、メールの送信までは進まない**
 
 | 症状 | 原因 |
 | --- | --- |
 | Resend の `Logs` に記録が無く、Worker が 401 / 403 を返す | `MAIL_API_KEY` の貼り間違い、またはキーの対象ドメインが `MAIL_FROM_ADDRESS` と違う |
 | Worker が 403 を返し、ドメインが未検証というエラーが出る | 手順 2 の DNS レコードが、まだ `Verified` になっていない |
 | `Logs` では `Delivered` なのに受信箱に無い | 迷惑メールフォルダに入っている。手順 3 の DMARC で改善することがある |
-| 招待するとアカウントは作られるが、`500 {"error": "account created but ..."}` になる | 送信に失敗している。上の 2 行を確認したうえで、`/admin/staff` からリンクを再送する |
+| 招待するとアカウントは作られるが、`500 {"error": "account created but ..."}` になる | 送信に失敗している。上の 2 行を確認したうえで、`/admin/staff` の一覧から「パスワード設定メールを再送」を押す(もう一度招待すると 409 になる) |
 
 #### 一斉メールの送信ペース
 
