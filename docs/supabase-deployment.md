@@ -152,7 +152,7 @@ Pages 側の値は次のデプロイから反映されるため、登録し直�
 
 初回デプロイ前は Worker がまだ存在しないため、最初の `secret put` で `There doesn't seem to be a Worker called "..."` と聞かれます。**Yes** と答えると空の Worker が作られ、そこにシークレットが登録されます。`MAIL_API_KEY` / `GOOGLE_SHEETS_API_KEY` は未登録でもデプロイ自体は通り、その機能(メール送信・シート取り込み)が実行時に失敗するだけなので、用意できてから登録しても構いません。
 
-`TURNSTILE_SECRET_KEY` は Cloudflare Dashboard の `Turnstile` で widget を作成すると発行される **Secret Key** です(#116)。ウィジェットは環境ごとに 1 つ作り、その **Site Key** を Pages 側の `PUBLIC_TURNSTILE_SITE_KEY`(6.3)に、Secret Key をここに登録します。widget のドメイン設定には、その環境でフォームを表示するホスト名を入れてください。カスタムドメイン(staging: `staging.regional-quiz-project.app`、production: `regional-quiz-project.app`)と、Pages の既定ホスト名(例: `regional-quiz-frontend-staging.pages.dev`)の両方を入れておきます。
+`TURNSTILE_SECRET_KEY` は Cloudflare Dashboard の `Turnstile` で widget を作成すると発行される **Secret Key** です(#116)。ウィジェットは環境ごとに 1 つ作り、その **Site Key** を Pages 側の `PUBLIC_TURNSTILE_SITE_KEY`(6.3)に、Secret Key をここに登録します。widget のドメイン設定には、その環境でフォームを表示するホスト名を入れてください。カスタムドメイン(staging: `staging.regional-quiz-project.app`、production: `regional-quiz-project.app`。6.4)と Pages の既定ホスト名(例: `regional-quiz-frontend-staging.pages.dev`)の両方を入れておきます。カスタムドメインが入っていないと、そのホストのフォームでウィジェットがエラーになります。
 
 > **`[env.*.vars]` に `TURNSTILE_SECRET_KEY` を書かないでください。** 同名の var があるとデプロイのたびにシークレットが平文の var で上書きされます。トップレベルの `[vars]` にはローカル開発用のテスト鍵(Cloudflare が公開している「常に成功する」固定値)が入っていますが、`vars` は環境に継承されないため `--env` 付きのデプロイには影響しません。
 >
@@ -201,7 +201,7 @@ bunx wrangler pages project create regional-quiz-frontend --production-branch ma
 
 | 名前 | 種別 | 値 |
 | --- | --- | --- |
-| `BACKEND_URL` | 通常の変数 | その環境のバックエンド Worker の workers.dev のオリジン(staging: `https://regional-quiz-backend-staging.<アカウントのサブドメイン>.workers.dev`、production: `https://regional-quiz-backend.<アカウントのサブドメイン>.workers.dev`)。SSR の `handleFetch` が `/api/*` の転送先に使う。末尾の `/` や `/api` は付けない。カスタムドメイン(6.4)を割り当てた後も workers.dev のままにする。Pages Functions から同じゾーンのホスト名へのサブリクエストが Worker route を通るかは保証されておらず、workers.dev なら route に依存せず Worker に直接届く |
+| `BACKEND_URL` | 通常の変数 | **その環境のバックエンド Worker 自身のオリジン**。production は `https://regional-quiz-backend.<subdomain>.workers.dev`、staging は `https://regional-quiz-backend-staging.<subdomain>.workers.dev`(`<subdomain>` は Cloudflare アカウントごとの workers.dev サブドメイン)。SSR の `handleFetch` が `/api/*` の転送先に使う。**フロントエンドのホスト名ではない**(6.4)。末尾の `/` や `/api` は付けない |
 | `SESSION_SECRET` | シークレット | **同じ環境の Worker に登録したものと同一の値**。ズレるとログイン直後のセッションが読めず `/staff/*` がログイン画面に跳ね返される |
 | `PUBLIC_TURNSTILE_SITE_KEY` | 通常の変数 | 6.2 で作成した Turnstile widget の **Site Key**。エントリーフォームとパスワード再設定要求フォームのウィジェットが読む。未設定だとウィジェットが描画されず、トークンが無い送信をバックエンドが 400 で拒否するため、**この 2 つのフォームが誰にも使えなくなる** |
 
@@ -232,44 +232,59 @@ bunx wrangler pages secret list --project-name <プロジェクト名>
 
 `<アカウントのサブドメイン>` は Dashboard の `Workers & Pages` の右側に表示される `Subdomain`(`xxx.workers.dev`)で確認できます。
 
+`BACKEND_URL` に **workers.dev のオリジンを入れる**のは、これが route の有無に関わらず常に有効なオリジンだからです。`apps/backend/wrangler.toml` の `workers_dev = true` がそれを保証しています(このキーが無いと、6.4 で route を付けた瞬間に wrangler が workers.dev を無効化し、SSR の転送先が消えます)。6.4 で実ドメインを有効化しても `BACKEND_URL` は**変更不要**です。
+
 ### 6.4 `/api/*` をバックエンド Worker へ振り分ける
 
 フロントエンドは同一オリジンの `/api/*` を叩きます(`apps/frontend/src/lib/api.ts`)。`apps/frontend` 側にこれを転送する仕組みはなく、`vite.config.ts` の proxy は `vite dev` 専用です。本番でこれを担うのが **Worker route** です。同一ホスト名に対して Workers route は Pages プロジェクトより優先されるため、`/api/*` だけが Hono に届き、それ以外は Pages が返します。
 
-ドメインは Cloudflare Registrar で取得した `regional-quiz-project.app`(Cloudflare に同名のゾーンがある)を使い、環境ごとに次のホスト名を割り当てます。
+route が無いと、SSR(`load` / `actions`)からの呼び出しは `src/hooks.server.ts` の `handleFetch` が `BACKEND_URL` へ書き換えるので動きますが、**ブラウザが自分で発行する呼び出しはすべて 404 になります**(CSV ダウンロードのリンク、クライアント側の `createApiClient()`)。ページは描画されるのに一部の操作だけが壊れるため、気づきにくい壊れ方をします。
 
-| 環境 | フロントエンド(Pages のカスタムドメイン) | Worker route | メール送信元(`MAIL_FROM_ADDRESS`) |
-| --- | --- | --- | --- |
-| staging | `staging.regional-quiz-project.app` | `staging.regional-quiz-project.app/api/*` | `no-reply@staging.mail.regional-quiz-project.app` |
-| production | `regional-quiz-project.app` | `regional-quiz-project.app/api/*` | `no-reply@mail.regional-quiz-project.app` |
+#### 設定手順
 
-`routes` は `apps/backend/wrangler.toml` の各環境に有効化済みです。
+`wrangler.toml` に `routes` は書きません。Wrangler は route のゾーンをデプロイ時に Cloudflare アカウントへ問い合わせるため、アカウントが持たないゾーンを書くと `wrangler deploy` 自体が落ち、振り分けではなく**パイプラインが壊れます**。代わりに `.github/workflows/deploy.yml` が、その環境の `FRONTEND_HOST` 変数が設定されているときだけ route を付けてデプロイします。
 
-```toml
-[env.production]
-name = "regional-quiz-backend"
-routes = [
-  {pattern = "regional-quiz-project.app/api/*", zone_name = "regional-quiz-project.app"},
-]
+```bash
+bunx wrangler deploy --env production \
+  --route "$FRONTEND_HOST/api/*" \
+  --var "FRONTEND_URL:https://$FRONTEND_HOST"
 ```
 
-`routes` は `[env.*]` の**直下**に書いてください。`[env.*.vars]` の下に置くと `routes` という名前の var として解釈され、警告もエラーも出ないまま route 無しでデプロイされます。
+つまり実ドメインの有効化は**設定変更だけ**で済み、リポジトリ側の編集は要りません。
 
-Worker route は、ホスト名にプロキシ済み(オレンジの雲)の DNS レコードがあって初めてトラフィックを受けます。そのレコードは Pages にカスタムドメインを割り当てると作られるので、**環境ごとに次の順で作業します**(staging は `develop` へのマージ前、production は `main` へのマージ前)。
+ドメインは Cloudflare Registrar で取得した `regional-quiz-project.app` で、環境ごとに次のように割り当てています。
 
-1. Dashboard の `Workers & Pages` > Pages プロジェクト(`regional-quiz-frontend-staging` / `regional-quiz-frontend`)> `Custom domains` > `Set up a custom domain` で上表のホスト名を追加する。ゾーンが同じアカウントにあるので、CNAME レコードは自動で作られ、数分で `Active` になる
-2. Turnstile widget の `Hostname Management` に同じホスト名を追加する(6.2)。追加しないとカスタムドメイン上のフォームでウィジェットがエラーになる
-3. Resend の `Domains` で送信用ドメイン(`mail.regional-quiz-project.app` / `staging.mail.regional-quiz-project.app`)を追加し、表示される DNS レコード(SPF / DKIM の TXT・MX)を Cloudflare の DNS に登録して `Verified` にする(Resend の Cloudflare 自動連携を使ってもよい)。未検証のドメインを From にした送信は Resend に拒否される
-4. デプロイ(`develop` / `main` へのマージ、または `workflow_dispatch`)して route を反映する
-5. 8 章の確認に加えて、カスタムドメインで次を確かめる
+| 環境 | `FRONTEND_HOST`(Pages のカスタムドメイン) | `MAIL_FROM_ADDRESS` |
+| --- | --- | --- |
+| staging | `staging.regional-quiz-project.app` | `no-reply@staging.mail.regional-quiz-project.app` |
+| production | `regional-quiz-project.app` | `no-reply@mail.regional-quiz-project.app` |
 
-| URL | 期待する結果 |
-| --- | --- |
-| `https://<ホスト名>/api/healthz` | `{"ok":true}`。404 なら route が当たっていない(Pages が返している) |
-| スタッフ管理画面の CSV ダウンロードのリンク | ファイルがダウンロードされる |
-| パスワード再設定メールのリンク | `FRONTEND_URL`(カスタムドメイン)のページが開く |
+1. ドメインを取得し、Cloudflare のゾーンに追加する
+2. Pages プロジェクト(production / staging)にカスタムドメインを割り当てる(6.3)
+3. GitHub の `staging` / `production` Environment に `FRONTEND_HOST` 変数を登録する(6.5)
+4. Turnstile widget にカスタムドメインのホスト名を追加する(6.2)
+5. Resend の `Domains` で送信用ドメイン(上表の `@` 以降)を追加し、表示される SPF / DKIM の DNS レコードを Cloudflare に登録して `Verified` にする。未検証のドメインを From にした送信は Resend に拒否される
+6. デプロイし直す
 
-`*.pages.dev` の既定ホスト名は割り当て後も残りますが、そちらでは `/api/*` が Worker に届かない(route はカスタムドメインにしか当たらない)ため、利用者にはカスタムドメインだけを案内してください。
+Pages の `BACKEND_URL`(6.3)はここでは触りません。SSR の転送先は route ではなく Worker 自身のオリジン、つまり workers.dev のままで正しく、`wrangler.toml` の `workers_dev = true` がそれを維持します。ここで `BACKEND_URL` をフロントエンドのホスト名に書き換える必要はありません。
+
+`FRONTEND_HOST` にはスキームもパスも付けず、**ホスト名だけ**を入れます(例: `entry.example.jp` / `staging.entry.example.jp`)。route のパターンと Pages のカスタムドメインは同一ホストでなければ意味がない(そのホストを Pages が持っているからこそ Workers route が優先される)ため、両者を別々の設定にせず 1 つの変数から導出しています。
+
+`FRONTEND_URL` を同じ変数から上書きしているのも同じ理由です。これは `src/lib/entry-verification.ts` とパスワード再設定メールがリンクを組み立てる URL で、値がずれても**サイトは正常に見えます**。壊れるのはメール内のリンクだけなので、デプロイ時には誰も気づきません。`--var` は環境の vars を置き換えではなく**マージ**するので、`MAIL_FROM_ADDRESS` は `wrangler.toml` の値のまま、`wrangler secret put` で登録したシークレット(`TURNSTILE_SECRET_KEY` 等)もそのまま引き継がれます。
+
+> `MAIL_FROM_ADDRESS` だけは `apps/backend/wrangler.toml` の `[env.*.vars]` を手で書き換えてください。送信元ドメインはメール事業者側で検証済みのドメインであって、サイトのホスト名とは限らないため、`FRONTEND_HOST` からは導出していません。現在は上表の `mail.` サブドメインのアドレスが入っています。
+
+#### 疎通確認
+
+`deploy.yml` の最後のステップ `Smoke test the /api/* route` が、`FRONTEND_HOST` が設定されている環境で `https://$FRONTEND_HOST/api/healthz` を叩き、`{"ok":true}` が返らなければデプロイを失敗させます(route の伝播待ちのため最大 5 回リトライ)。Worker は `basePath('/api')` を張っているので、このパスはバックエンドにしか存在せず、200 が返ればそれ自体が route の効いている証拠になります。
+
+手で確かめる場合も同じです。
+
+```bash
+curl -i "https://<frontend-host>/api/healthz"   # => {"ok":true}
+```
+
+> `routes` を手で `wrangler.toml` に書き足す場合は、必ず `[env.*]` の**直下**に置いてください。`[env.*.vars]` の下に置くと `routes` という名前の var として解釈され、警告もエラーも出ないまま route 無しでデプロイされます(#100 で実際に踏みました)。
 
 ### 6.5 GitHub Actions 側
 
@@ -284,6 +299,14 @@ Worker route は、ホスト名にプロキシ済み(オレンジの雲)の DNS 
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare アカウント ID(`Workers & Pages` の右側に表示) | 同左 |
 
 `SUPABASE_DB_PASSWORD` は `supabase link` / `supabase db push --linked` が DB へ接続するのに使います。未登録だと CI は対話プロンプトを出せずに失敗します。
+
+同じ Environment に、機密でない **Variables** も 1 つ登録します(`Settings > Environments > <環境> > Environment variables`。Secrets ではなく Variables 側です)。
+
+| 変数名 | staging | production |
+| --- | --- | --- |
+| `FRONTEND_HOST` | `staging.regional-quiz-project.app` | `regional-quiz-project.app` |
+
+スキームもパスも付けない**ホスト名のみ**です。`deploy.yml` はこれを使って Worker の `/api/*` route と `FRONTEND_URL` を組み立て、デプロイ後の疎通確認も行います(6.4)。**未設定でもデプロイは成功します**が、その場合 route が付かないため、ブラウザから直接叩く API がすべて 404 になります(ワークフローのログに warning が出ます)。
 
 #### `SUPABASE_ACCESS_TOKEN` の発行
 
@@ -309,7 +332,7 @@ Supabase の Personal Access Token は、プロジェクトと機能ごとにス
 | User | User Details | Read |
 
 - Account Resources は対象アカウント 1 つに限定する
-- Zone の権限(`Workers Routes: Edit`)は 6.4 で `routes` を有効化するときに必要になる。その時点でトークンを作り直す
+- Zone の権限(`Workers Routes: Edit`)は `FRONTEND_HOST` を登録して `/api/*` の route を付けるとき(6.4)に必要になる。その時点でトークンを作り直す
 - GitHub のランナーは IP が固定されないので、Client IP Address Filtering は設定しない
 
 Cloudflare のトークンは Worker 単位では絞れないため、staging と production が同じアカウントにある限り、トークンを環境ごとに分けても分離の効果は小さいです。厳密に分けるならアカウント自体を分けます。
@@ -320,7 +343,7 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 
 | ファイル | トリガー | 役割 |
 | --- | --- | --- |
-| `.github/workflows/deploy.yml` | `workflow_call` | 実体。checkout → `bun install` → typecheck/test → Supabase link → マイグレーション適用 → Worker デプロイ → フロントエンドのビルド → Pages デプロイ |
+| `.github/workflows/deploy.yml` | `workflow_call` | 実体。checkout → `bun install` → typecheck/test → フロントエンドのビルド → Supabase link → マイグレーション適用 → Worker デプロイ → Pages デプロイ → `/api/*` の疎通確認 |
 | `.github/workflows/deploy-staging.yml` | `develop` への push / 手動実行(任意のブランチを指定可) | `environment: staging`、Worker は `--env staging`、Pages は `regional-quiz-frontend-staging` |
 | `.github/workflows/deploy-production.yml` | `main` への push / 手動実行 | `environment: production`、Worker は `--env production`、Pages は `regional-quiz-frontend`。適用前に `db push --linked --dry-run` で差分をログに残す |
 
@@ -338,6 +361,8 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 - **typecheck / test を再実行する**。`ci.yml` の結果でこのワークフローを gate していないので、`ci.yml` を信用せずに自前で再確認します。lint は落としても本番を止める理由にはならないため再実行しません。
 - **Supabase CLI は `bunx supabase`**(ルートの devDependency)。本番に触れる CLI を `bun.lock` の 1 箇所で固定するためで、`ci.yml` の e2e ジョブが `supabase/setup-cli` を使っているのとは意図的に異なります。
 - **シークレットはデプロイで配布されない**。Worker / Pages のシークレットは 6.2・6.3 で一度登録するだけで、ワークフローは触りません。
+- **`/api/*` の route はワークフローが付ける**。`wrangler.toml` に `routes` は書かず、Environment 変数 `FRONTEND_HOST` から `--route` を組み立てます。アカウントが持たないゾーンを `wrangler.toml` に書くと `wrangler deploy` 自体が落ちるためで、実ドメインの有効化をコード変更なしの設定変更で済ませる狙いもあります(6.4)。
+- **最後に `/api/*` の疎通を確認する**。route はデプロイが成功しても効いていないことがあり、その場合ページは描画されるのにブラウザからの API 呼び出しだけが 404 になります。`FRONTEND_HOST` のオリジンで `/api/healthz` を叩き、返らなければデプロイを失敗させます。
 - **フロントエンドのビルドはマイグレーションより前**。`ci.yml` は typecheck/lint/test/e2e までで `build` を実行しないため、`vite build` が初めて走るのはこのジョブです。Pages アップロードの直前に置くと、ビルド失敗が「マイグレーション適用済み・新 Worker 適用済み・フロントエンドだけ古い」状態を残すので、typecheck / test と並べて前倒ししています。
 
 再デプロイが必要になった場合は、対象ワークフローを `workflow_dispatch` から再実行してください。`supabase db push` は適用済みマイグレーションを飛ばすため、Cloudflare 側だけが失敗したケースはワークフロー全体の再実行で回復できます。
@@ -350,7 +375,8 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 - `GET https://<worker-domain>/api/tournaments/<存在しない地域>/saikyoi` が `404 {"error":"tournament not found"}` を返すこと。500 なら Worker から Supabase に届いていない(`SUPABASE_URL` が `https://<project ref>.supabase.co` の形になっているか、`SUPABASE_SECRET_KEY` が正しいかを確認する)
 - フロントエンドの `/<存在しない地域>/saikyoi/entry` が 404 を返すこと。500 なら Pages から Worker に届いていない(`BACKEND_URL`)。大会種別は `saikyoi` / `shinjinou` にすること。不正な種別だとフロントエンドが API を呼ぶ前に 404 を返すため、確認にならない
 - フロントエンドの `/password-reset` の HTML に埋め込まれた `env` に `PUBLIC_TURNSTILE_SITE_KEY` が入っていること(`env: {}` なら Turnstile が表示されない)
-- フロントエンドのオリジンで `/api/healthz` が返るかどうかが、6.4 の Worker route が効いているかの確認になる(route 未設定の間は 404)
+- フロントエンドのオリジンで `/api/healthz` が返るかどうかが、6.4 の Worker route が効いているかの確認になる(`FRONTEND_HOST` 未設定の間は 404。設定していればワークフローの最後のステップが自動で確認する)
+- **ブラウザから直接叩く API** が疎通すること。SSR は route が無くても `handleFetch` で通ってしまうため、ここだけは別に確認する。スタッフ管理画面のエントリー一覧から CSV ダウンロードのリンクを踏んでファイルが落ちること、`/admin/tournaments/new` から大会を作成できること
 
 500 の原因は `bunx wrangler tail --env <name>`(Worker)/ `bunx wrangler pages deployment tail <deployment id> --project-name <name>`(Pages)を流しながらリクエストを送ると、エラーとスタックトレースで分かります。
 - GitHub Actions の該当ワークフローが全ステップ成功していること
@@ -369,7 +395,7 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 
    ```bash
    cd apps/backend
-   bun run staff:bootstrap you@example.com https://staging.regional-quiz-project.app
+   bun run staff:bootstrap you@example.com https://regional-quiz-frontend-staging.pages.dev
    ```
 
    SQL とパスワード設定用のリンクが表示されます。スクリプトは Supabase にも Worker にも接続しないので、シークレットは要りません。
@@ -410,9 +436,11 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 - [ ] 一斉メール用の Queue と dead letter queue を環境ごとに作成した(6.2.2。Free プランでは保持期間 24 時間を指定)
 - [ ] Pages プロジェクトを production branch `main` で作成した(6.3)
 - [ ] Pages プロジェクトに `BACKEND_URL` / `SESSION_SECRET` / `PUBLIC_TURNSTILE_SITE_KEY` を CLI で登録し、`pages secret list` で 3 つとも確認した(6.3)
-- [ ] Pages プロジェクトにカスタムドメインを割り当て、Turnstile widget にそのホスト名を追加した(6.4)
-- [ ] Resend で送信用ドメインを検証した(6.4)
-- [ ] カスタムドメインの `/api/healthz` が `{"ok":true}` を返す(route が Worker に届く)ことを確認した(6.4 / #101)
+- [ ] ドメインを取得し、Cloudflare のゾーンに追加した(6.4)
+- [ ] Pages プロジェクト(production / staging)にカスタムドメインを割り当てた(6.3 / 6.4)
+- [ ] GitHub の各 Environment に `FRONTEND_HOST` 変数を登録し、`/api/*` が Worker に届くことを確認した(6.4 / 6.5 / #101)
+- [ ] Turnstile widget にカスタムドメインのホスト名を追加した(6.2 / 6.4)
+- [ ] Resend で `MAIL_FROM_ADDRESS` の送信用ドメインを検証した(6.4)
 - [ ] `bunx supabase db push --linked --dry-run` で初回マイグレーション適用の差分を確認した
 - [ ] staging の `deploy-staging` ワークフローが全ステップ成功することを確認した
 - [ ] production への初回デプロイ後、`/api/healthz` とトップページの疎通を確認した

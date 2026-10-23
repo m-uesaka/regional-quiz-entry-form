@@ -46,7 +46,7 @@ because the two call sites take different routes:
 | Caller | Wiring |
 | --- | --- |
 | `load` / `actions` (SSR) | `handleFetch` in `src/hooks.server.ts`. SvelteKit's `event.fetch` short-circuits same-origin requests into its own router instead of the network, so the rewrite has to happen in the hook; it also re-attaches the incoming cookies, which SvelteKit only forwards to the app's own host and its subdomains. |
-| The browser (CSV download links, client-side `createApiClient()`) | `server.proxy` in `vite.config.ts` for `vite dev`. In production the same-origin `/api/*` prefix is routed to the backend Worker by a Workers route (`routes` in `apps/backend/wrangler.toml`, which wins over the Pages project on the same hostname), not by this app — see `docs/supabase-deployment.md` §6.4. |
+| The browser (CSV download links, client-side `createApiClient()`) | `server.proxy` in `vite.config.ts` for `vite dev`. In production the same-origin `/api/*` prefix is routed to the backend Worker by a Workers route, which wins over the Pages project on the same hostname, not by this app. The route is not in `apps/backend/wrangler.toml`: `.github/workflows/deploy.yml` applies it with `--route "$FRONTEND_HOST/api/*"` from the deploying environment's `FRONTEND_HOST` variable — see `docs/supabase-deployment.md` §6.4. |
 
 ## Form controls are bound, not rendered from an expression
 
