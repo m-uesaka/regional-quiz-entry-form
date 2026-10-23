@@ -1,8 +1,12 @@
 import {describe, expect, it} from 'vitest';
 import {sign} from 'hono/jwt';
-import type {Cookies} from '@sveltejs/kit';
+import type {Cookies, Redirect} from '@sveltejs/kit';
 import type {StaffClaims} from '@regional-quiz/shared';
-import {clearStaffSession, readStaffClaims} from './staff-session';
+import {
+  clearStaffSession,
+  readStaffClaims,
+  redirectToStaffLogin,
+} from './staff-session';
 
 const SESSION_SECRET = 'test-session-secret';
 const WRONG_SECRET = 'wrong-session-secret';
@@ -69,6 +73,22 @@ describe('readStaffClaims', () => {
     await expect(readStaffClaims(token, SESSION_SECRET)).resolves.toBeNull();
   });
 
+  it('returns null for a token issued before sessionsValidFrom existed', async () => {
+    // A cookie from before the claim was added can't name the generation of
+    // sessions it belongs to. The backend refuses it outright, so it has to
+    // read as logged out here too rather than as a session every API call
+    // then rejects.
+    const legacyClaims: Partial<StaffClaims> = {...STAFF_CLAIMS};
+    delete legacyClaims.sessionsValidFrom;
+    const token = await tokenFor(
+      legacyClaims,
+      Math.floor(Date.now() / 1000) + 3600,
+      SESSION_SECRET,
+    );
+
+    await expect(readStaffClaims(token, SESSION_SECRET)).resolves.toBeNull();
+  });
+
   it('returns null for a malformed token', async () => {
     await expect(
       readStaffClaims('not-a-real-token', SESSION_SECRET),
@@ -129,5 +149,34 @@ describe('clearStaffSession', () => {
     expect(deleted).toEqual([
       {name: 'staff_session', options: {path: '/', secure: false}},
     ]);
+  });
+});
+
+describe('redirectToStaffLogin', () => {
+  it('drops the cookie the API refused and sends the page to the login form', () => {
+    const deleted: string[] = [];
+    const cookies = {
+      delete: (name: string) => {
+        deleted.push(name);
+      },
+    } as unknown as Cookies;
+
+    let thrown: unknown;
+    try {
+      redirectToStaffLogin(
+        cookies,
+        new URL('https://entry.example.com/admin/staff?x=1'),
+      );
+    } catch (e: unknown) {
+      thrown = e;
+    }
+
+    // A revoked session still verifies here, so the cookie has to go: kept,
+    // it would keep passing for a session on every check this app makes.
+    expect(deleted).toEqual(['staff_session']);
+    expect(thrown).toMatchObject({
+      status: 303,
+      location: '/staff/login?redirectTo=%2Fadmin%2Fstaff%3Fx%3D1',
+    } satisfies Partial<Redirect>);
   });
 });

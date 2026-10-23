@@ -1,10 +1,10 @@
-import {error, fail, redirect} from '@sveltejs/kit';
+import {error, fail} from '@sveltejs/kit';
 import {
   RegionCreateInputSchema,
   RegionUpdateInputSchema,
 } from '@regional-quiz/shared';
 import {createApiClient, isUnauthorized} from '$lib/api';
-import {staffLoginPath} from '$lib/server/staff-login';
+import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {Actions, PageServerLoad} from './$types';
 
 /** Per-field validation messages, keyed by the control's name. */
@@ -48,13 +48,13 @@ const INVALID_INPUT_MESSAGE = '入力内容を確認してください';
 /** Nothing to attach per control — the refusal is about the request itself. */
 const NO_FIELD_ERRORS: RegionFieldErrors = {};
 
-export const load: PageServerLoad = async ({fetch, url}) => {
+export const load: PageServerLoad = async ({fetch, cookies, url}) => {
   const res = await createApiClient(fetch).api.regions.$get();
   if (!res.ok) {
     // The layout guard cannot rule this out: the JWT may expire between
     // `hooks.server.ts` parsing it and this request reaching the backend.
     if (isUnauthorized(res)) {
-      redirect(303, staffLoginPath(url));
+      redirectToStaffLogin(cookies, url);
     }
     error(502, '地域の取得に失敗しました');
   }
@@ -62,7 +62,7 @@ export const load: PageServerLoad = async ({fetch, url}) => {
 };
 
 export const actions = {
-  create: async ({request, fetch, url}) => {
+  create: async ({request, fetch, cookies, url}) => {
     const formData = await request.formData();
     const values: RegionFormValues = {
       slug: readString(formData, 'slug'),
@@ -89,7 +89,7 @@ export const actions = {
     });
     if (!res.ok) {
       if (isUnauthorized(res)) {
-        redirect(303, staffLoginPath(url));
+        redirectToStaffLogin(cookies, url);
       }
       // The API answers 409 for exactly one reason — the slug is taken —
       // and says so in English, so the message is written here and attached
@@ -120,7 +120,7 @@ export const actions = {
     } satisfies RegionsActionResult;
   },
 
-  update: async ({request, fetch, url}) => {
+  update: async ({request, fetch, cookies, url}) => {
     const formData = await request.formData();
     const regionId = readString(formData, 'id');
     // `slug` is fixed at creation time (it is already part of published
@@ -151,7 +151,7 @@ export const actions = {
     });
     if (!res.ok) {
       if (isUnauthorized(res)) {
-        redirect(303, staffLoginPath(url));
+        redirectToStaffLogin(cookies, url);
       }
       if (res.status === 404) {
         return updateFailure(

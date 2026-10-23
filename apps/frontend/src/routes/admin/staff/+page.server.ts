@@ -1,7 +1,7 @@
-import {error, fail, redirect} from '@sveltejs/kit';
+import {error, fail} from '@sveltejs/kit';
 import {StaffAccountCreateInputSchema} from '@regional-quiz/shared';
 import {createApiClient, isUnauthorized} from '$lib/api';
-import {staffLoginPath} from '$lib/server/staff-login';
+import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {Actions, PageServerLoad} from './$types';
 
 /** Per-field validation messages, keyed by the control's name. */
@@ -16,14 +16,17 @@ interface StaffInviteValues {
 }
 
 /**
- * What both actions hand back. Every branch carries the same properties so
+ * What every action hands back. Every branch carries the same properties so
  * the page can read `form.error` without narrowing across the union
- * SvelteKit builds from the two actions.
+ * SvelteKit builds from the actions.
  */
 interface StaffActionResult {
   /** Which form the result belongs to. */
-  intent: 'invite' | 'resend';
-  /** The account a `resend` result belongs to; null for the invite form. */
+  intent: 'invite' | 'resend' | 'revoke';
+  /**
+   * The account a `resend` / `revoke` result belongs to; null for the
+   * invite form.
+   */
   accountId: string | null;
   saved: boolean;
   error: string | null;
@@ -52,7 +55,7 @@ const NO_FIELD_ERRORS: StaffFieldErrors = {};
 const MAIL_NOT_SENT_ERROR =
   'account created but the setup mail could not be sent';
 
-export const load: PageServerLoad = async ({fetch, url}) => {
+export const load: PageServerLoad = async ({fetch, cookies, url}) => {
   const api = createApiClient(fetch);
   // The regions are read alongside the accounts because the invite form
   // scopes a regional account to one of them by id, which is not something
@@ -65,7 +68,7 @@ export const load: PageServerLoad = async ({fetch, url}) => {
     // The layout guard cannot rule this out: the JWT may expire between
     // `hooks.server.ts` parsing it and these requests reaching the backend.
     if (isUnauthorized(accountsRes) || isUnauthorized(regionsRes)) {
-      redirect(303, staffLoginPath(url));
+      redirectToStaffLogin(cookies, url);
     }
     error(502, 'スタッフアカウントの取得に失敗しました');
   }
@@ -76,7 +79,7 @@ export const load: PageServerLoad = async ({fetch, url}) => {
 };
 
 export const actions = {
-  invite: async ({request, fetch, url}) => {
+  invite: async ({request, fetch, cookies, url}) => {
     const formData = await request.formData();
     const values: StaffInviteValues = {
       email: readString(formData, 'email'),
@@ -107,7 +110,7 @@ export const actions = {
     });
     if (!res.ok) {
       if (isUnauthorized(res)) {
-        redirect(303, staffLoginPath(url));
+        redirectToStaffLogin(cookies, url);
       }
       if (res.status === 409) {
         return inviteFailure(409, values, INVALID_INPUT_MESSAGE, {
@@ -158,7 +161,7 @@ export const actions = {
     } satisfies StaffActionResult;
   },
 
-  resend: async ({request, fetch, url}) => {
+  resend: async ({request, fetch, cookies, url}) => {
     const formData = await request.formData();
     const accountId = readString(formData, 'id');
 
@@ -169,9 +172,10 @@ export const actions = {
     ].$post({param: {id: accountId}});
     if (!res.ok) {
       if (isUnauthorized(res)) {
-        redirect(303, staffLoginPath(url));
+        redirectToStaffLogin(cookies, url);
       }
-      return resendFailure(
+      return rowFailure(
+        'resend',
         res.status === 404 ? 404 : 502,
         accountId,
         res.status === 404
@@ -182,6 +186,49 @@ export const actions = {
 
     return {
       intent: 'resend',
+      accountId,
+      saved: true,
+      error: null,
+      fieldErrors: NO_FIELD_ERRORS,
+      values: EMPTY_VALUES,
+    } satisfies StaffActionResult;
+  },
+
+  // Ends every session the account has open (Task 11-3): for a device that
+  // was lost, or someone stepping down. The password is left alone, so the
+  // owner -- if they are still meant to have access -- just logs in again.
+  revoke: async ({request, fetch, cookies, locals, url}) => {
+    const formData = await request.formData();
+    const accountId = readString(formData, 'id');
+
+    const res = await createApiClient(fetch).api.staff.accounts[':id'][
+      'revoke-sessions'
+    ].$post({param: {id: accountId}});
+    if (!res.ok) {
+      if (isUnauthorized(res)) {
+        redirectToStaffLogin(cookies, url);
+      }
+      return rowFailure(
+        'revoke',
+        res.status === 404 ? 404 : 502,
+        accountId,
+        res.status === 404
+          ? 'スタッフアカウントが見つかりません'
+          : 'セッションを無効化できませんでした',
+      );
+    }
+
+    // Revoking one's own account cuts the session this request came in on
+    // too. The API let this one request through, but the reload that would
+    // follow is already refused; going straight to the login form, without
+    // the cookie the API no longer accepts, says so instead of letting that
+    // reload discover it.
+    if (locals.staff?.sub === accountId) {
+      redirectToStaffLogin(cookies, url);
+    }
+
+    return {
+      intent: 'revoke',
       accountId,
       saved: true,
       error: null,
@@ -215,14 +262,20 @@ function inviteFailure(
 }
 
 /**
- * Refuses a re-send, attaching the message to the account's own row.
+ * Refuses an action on one account, attaching the message to its own row.
+ * @param intent Which of the row's buttons was pressed.
  * @param status The status to answer with.
  * @param accountId The account the message belongs beside.
  * @param message The message to show.
  */
-function resendFailure(status: number, accountId: string, message: string) {
+function rowFailure(
+  intent: 'resend' | 'revoke',
+  status: number,
+  accountId: string,
+  message: string,
+) {
   return fail(status, {
-    intent: 'resend',
+    intent,
     accountId,
     saved: false,
     error: message,

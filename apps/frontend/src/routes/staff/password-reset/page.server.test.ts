@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import type {Redirect} from '@sveltejs/kit';
+import type {Cookies, Redirect} from '@sveltejs/kit';
 import {actions, load} from './+page.server';
 
 const TOKEN = 'c0ffee01';
@@ -36,10 +36,16 @@ function buildActionEvent(
   url: string,
   fetchImpl: typeof fetch,
   formData: FormData,
+  deletedCookies: string[] = [],
 ): Parameters<typeof actions.default>[0] {
   return {
     url: new URL(url),
     fetch: fetchImpl,
+    cookies: {
+      delete: (name: string) => {
+        deletedCookies.push(name);
+      },
+    } as unknown as Cookies,
     request: {formData: async () => formData},
   } as Parameters<typeof actions.default>[0];
 }
@@ -73,10 +79,12 @@ describe('staff password reset +page.server load', () => {
 describe('staff password reset +page.server action', () => {
   it('sets the password and sends the staff member to the login screen', async () => {
     const log: FetchLog = {urls: [], bodies: []};
+    const deletedCookies: string[] = [];
     const event = buildActionEvent(
       RESET_URL,
       fakeFetch(200, log),
       passwordForm(),
+      deletedCookies,
     );
 
     await expect(actions.default(event)).rejects.toMatchObject({
@@ -87,6 +95,9 @@ describe('staff password reset +page.server action', () => {
     expect(log.bodies).toEqual([
       {token: TOKEN, newPassword: 'newstaffpassword1'},
     ]);
+    // The reset ended every session of the account, this browser's included,
+    // so a cookie it still holds is dropped rather than left looking live.
+    expect(deletedCookies).toEqual(['staff_session']);
   });
 
   it('fails with 400 without calling the API when there is no token', async () => {

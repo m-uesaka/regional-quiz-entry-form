@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import type {HttpError} from '@sveltejs/kit';
+import type {Cookies, HttpError} from '@sveltejs/kit';
 import type {Region} from '@regional-quiz/shared';
 import {actions, load} from './+page.server';
 
@@ -51,10 +51,24 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+/**
+ * A stand-in for `event.cookies`, recording the names deleted on it: a
+ * session the API refuses is dropped on the way to the login screen.
+ * @param deleted Collects the deleted cookie names.
+ */
+function fakeCookies(deleted: string[] = []): Cookies {
+  return {
+    delete: (name: string) => {
+      deleted.push(name);
+    },
+  } as unknown as Cookies;
+}
+
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
 function buildLoadEvent(fetchImpl: typeof fetch): Parameters<typeof load>[0] {
   return {
     fetch: fetchImpl,
+    cookies: fakeCookies(),
     url: new URL('http://localhost/admin/regions'),
   } as Parameters<typeof load>[0];
 }
@@ -66,6 +80,7 @@ function buildActionEvent(
 ): Parameters<typeof actions.create>[0] {
   return {
     fetch: fetchImpl,
+    cookies: fakeCookies(),
     url: new URL('http://localhost/admin/regions'),
     request: {formData: async () => formData},
   } as Parameters<typeof actions.create>[0];

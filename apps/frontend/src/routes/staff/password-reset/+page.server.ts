@@ -1,6 +1,7 @@
 import {fail, redirect} from '@sveltejs/kit';
 import {StaffPasswordResetConfirmInputSchema} from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
+import {clearStaffSession} from '$lib/server/staff-session';
 import type {Actions, PageServerLoad} from './$types';
 
 // Shown for a token the API refused as well as for a page opened without one:
@@ -40,7 +41,7 @@ function readToken(url: URL): string | null {
 }
 
 export const actions = {
-  default: async ({fetch, request, url}) => {
+  default: async ({fetch, request, cookies, url}) => {
     // The form posts back to this same URL, so the token is read from the
     // query here rather than carried in a hidden field where it would end up
     // in the page source.
@@ -77,11 +78,13 @@ export const actions = {
       return fail(502, {error: 'パスワードの設定に失敗しました'});
     }
 
-    // No session to clear on the way out: a staff member arriving from an
-    // invite has none, and the JWT of one who used the link to reset an
-    // existing password stays valid on its signature alone until Task 11-3
-    // gives it something to check against (see the migration's note on
-    // `reset_staff_password`).
+    // The reset moved `staff_accounts.sessions_valid_from` along with the
+    // password (`reset_staff_password()`, migration `0020`), so any staff
+    // session this browser holds is now refused by the API. It still
+    // verifies here, though, and left in place it would have the login
+    // screen offer a logout to someone who is no longer logged in. A staff
+    // member arriving from an invite has no cookie, which makes this a no-op.
+    clearStaffSession(cookies, url);
     redirect(303, '/staff/login?reset=done');
   },
 } satisfies Actions;
