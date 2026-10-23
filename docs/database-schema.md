@@ -185,11 +185,11 @@ flowchart TB
 | `id` | uuid | PK | |
 | `participant_id` | uuid | not null, FK → `participants.id` | |
 | `tournament_id` | uuid | not null, FK → `tournaments.id` | |
-| `name` | text | not null | 氏名(非公開) |
-| `furigana` | text | not null | ふりがな(非公開) |
-| `display_name` | text | not null | 公開エントリーリストに載る掲載名 |
-| `free_text` | text | nullable | 自由記述 |
-| `custom_field_values` | jsonb | not null, default `'{}'` | 追加フォーム項目の回答。`{ field_key: string \| string[] }` |
+| `name` | text | not null, 100 文字以内 | 氏名(非公開) |
+| `furigana` | text | not null, 100 文字以内 | ふりがな(非公開) |
+| `display_name` | text | not null, 100 文字以内 | 公開エントリーリストに載る掲載名 |
+| `free_text` | text | nullable, 2000 文字以内 | 自由記述 |
+| `custom_field_values` | jsonb | not null, default `'{}'`, 回答の合計 10000 文字以内 | 追加フォーム項目の回答。`{ field_key: string \| string[] }` |
 | `status` | entry_status | not null, default `pending_verification` | |
 | `waitlist_position` | integer | nullable | キャンセル待ちの順位。`waitlisted` 以外では `null` |
 | `email_verified_at` | timestamptz | nullable | メール確認完了時刻 |
@@ -202,6 +202,7 @@ flowchart TB
 - `unique (participant_id, tournament_id)`: 1参加者につき1大会1エントリー。キャンセル後の再エントリーがこの行を再利用する理由でもあります。
 - `unique (id, tournament_id)`(`0018`): `id` は主キーなので一意性としては冗長ですが、`entry_regulations` から複合外部キーを張るために必要です(参照先はちょうどその列組の一意制約でなければならない)。
 - 選択したレギュレーションは `0018` で `entry_regulations` に移りました。`entries.regulation_id` はもうありません。
+- `entries_text_lengths`(`0021`、Task 11-7 / #122): 文字列項目の長さの check 制約。`name` / `furigana` / `display_name` は 100 文字、`free_text` は 2000 文字、`custom_field_values` は回答の合計 10000 文字まで(`custom_field_values_length()` で数える。キーは数えない)。上限の本体は `packages/shared` の Zod スキーマ(`EntryInputSchema` / `CustomFieldValuesInputSchema`。回答 1 件 2000 文字の上限もこちらにある)で、API・フォームとも同じものを使います。DB 側にも持つのは、直接 SQL でデータを入れる運用が当面残るためです。違反は SQLSTATE `23514`。Zod は UTF-16 のコード単位、`char_length()` はコードポイントで数えるため、絵文字などでは DB の方がわずかに緩くなります(Zod を通った値が DB で弾かれることはない向き)。
 - `entries_tournament_id_created_at_idx`(`0005`): `(tournament_id, created_at)` の**部分インデックス**で、`status in ('confirmed', 'waitlisted', 'cancelled')` の行だけを対象にします。公開エントリーリスト API(`GET /api/tournaments/:tournamentId/entry-list`)が読む行だけを含むため、インデックスが小さく保たれます。既存の unique インデックスは `(participant_id, tournament_id)` で `tournament_id` が先頭列ではないため、この用途には使えません。
 
 `waitlist_position` について:
@@ -303,7 +304,7 @@ flowchart TB
 | `id` | uuid | PK | `POST /api/staff/tournaments/:id/mail` が返す `jobId` |
 | `tournament_id` | uuid | not null, FK → `tournaments.id` | 送信対象の大会 |
 | `subject` | text | not null | 件名 |
-| `body_html` | text | not null | 本文(スタッフが書いた HTML そのまま) |
+| `body_html` | text | not null | 本文。スタッフが書いた HTML を `sanitizeMailHtml()` で許可タグだけに絞ったもの(#122) |
 | `total` | integer | not null | 受け付けた宛先数 |
 | `sent` | integer | not null, default `0` | 送信できた通数 |
 | `failed` | integer | not null, default `0` | 諦めた宛先数 |
@@ -354,6 +355,7 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | `tournament_entry_summary()` | `0013` | `routes/staff-dashboard.ts` | 全大会のエントリー件数をステータス別に集計する(読み取り専用) |
 | `sync_regulations(uuid, jsonb)` | `0014` | `lib/regulations.ts` | 大会のレギュレーションを差分同期する(update / insert / 参照が無ければ delete) |
 | `record_mail_job_progress(uuid, integer, integer)` | `0019` | `lib/mail-jobs.ts` | 一斉メール 1 バッチ分の結果をジョブの件数に加算する |
+| `custom_field_values_length(jsonb)` | `0021` | `entries_text_lengths` check 制約 | 追加項目の回答の合計文字数を数える(`language sql` / `immutable`) |
 
 ### sync_form_field_defs(p_tournament_id, p_rows)
 
@@ -489,3 +491,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0018_entry_regulations.sql` | `entry_regulations`(複数選択対応)・`entries` の `unique (id, tournament_id)`・既存行の移送と `entries.regulation_id` の削除・`sync_regulations()` の参照先変更 |
 | `0019_mail_jobs.sql` | `mail_jobs` テーブル・`updated_at` トリガ・索引・`record_mail_job_progress()` |
 | `0020_staff_accounts_sessions_valid_from.sql` | `staff_accounts.sessions_valid_from` を追加し、再設定時に打刻(`0015` の `reset_staff_password()` を再定義) |
+| `0021_entry_text_length_limits.sql` | `custom_field_values_length()` と `entries` の長さの check 制約 `entries_text_lengths` |

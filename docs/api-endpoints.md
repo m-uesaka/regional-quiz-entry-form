@@ -336,7 +336,17 @@ if ('yaml' in body) {
   - `capacity` は `null` 可(定員無制限)。
   - `entryOpensAt` / `entryClosesAt` はオフセット付き ISO 8601 文字列。
 - `201`: 作成された `Tournament`
-- `400`: `{"error": ...}`
+- `400`: `{"error": ...}` — Zod のバリデーションエラー、または DB が拒否した既知の制約違反(下記)
+- `500`: `{"error": "internal server error"}` — それ以外の DB エラー
+
+DB の制約違反は、Postgres のメッセージ(テーブル名・列名・制約名を含む)をそのまま返さず、**既知のものだけを日本語に置き換えて** 400 で返します(#122)。管理画面はこの文言をフォームの上にそのまま表示します。
+
+| SQLSTATE | `error` | 条件 |
+| --- | --- | --- |
+| `23505` | `この地域には同じ種別の大会がすでにあります` | `unique (region_id, type)` 違反 |
+| `23503` | `指定された地域が存在しません` | `regionId` の地域が存在しない |
+
+それ以外は `internalError()` でログに送り、定型文の 500 にします。
 
 ### `PATCH /api/tournaments/:id`
 
@@ -344,7 +354,8 @@ if ('yaml' in body) {
 - リクエスト: 上記の全フィールドを部分適用(`.partial()`)
 - `200`: 更新後の `Tournament`
 - `404`: 対象が存在しない(Supabase の `PGRST116` を 404 に変換)
-- `400`: それ以外の更新失敗
+- `400`: Zod のバリデーションエラー、または上の `POST` と同じ既知の制約違反(日本語の `error`)
+- `500`: それ以外の更新失敗(`{"error": "internal server error"}`)
 
 ### `GET /api/tournaments/:regionSlug/:tournamentSlug`
 
@@ -426,17 +437,19 @@ if ('yaml' in body) {
 
   | フィールド | 型 | 備考 |
   | --- | --- | --- |
-  | `name` | string(min 1) | 氏名 |
-  | `furigana` | string(min 1) | ふりがな |
-  | `displayName` | string(min 1) | 公開リスト掲載名 |
+  | `name` | string(1〜100 文字) | 氏名 |
+  | `furigana` | string(1〜100 文字) | ふりがな |
+  | `displayName` | string(1〜100 文字) | 公開リスト掲載名 |
   | `email` | string(email) | アカウントのメールアドレス |
   | `password` | `PasswordLengthSchema`(8〜256 文字) | `packages/shared/src/schemas/password.ts` |
   | `passwordConfirm` | `PasswordLengthSchema` | `password` と一致必須 |
 
   `password` には**長さの制限しかかけません**。この欄は新規の参加者がパスワードを決める欄であると同時に、登録済みの参加者が既存のパスワードを示す欄でもあり、ポリシー導入前によく使われるパスワードを設定した参加者を締め出さないためです。よく使われるパスワードの拒否(`PasswordSchema`)は、アドレスが未登録だと分かった時点でバックエンドが行い、ほかのアドレス依存の理由と同じくメールで伝えます。
   | `regulationIds` | string(uuid)[] (min 1) | 選択したレギュレーション。複数該当し得るので配列(issue #112) |
-  | `freeText` | string(任意) | |
-  | `customFieldValues` | `Record<string, string \| string[]>` | 追加フォーム項目の回答 |
+  | `freeText` | string(任意、2000 文字以内) | |
+  | `customFieldValues` | `Record<string, string \| string[]>` | 追加フォーム項目の回答。回答 1 件(`checkbox` は各要素)2000 文字以内、全回答の合計 10000 文字以内 |
+
+  長さの上限(#122)は `packages/shared/src/schemas/entry.ts` の定数(`ENTRY_NAME_MAX_LENGTH` / `ENTRY_FREE_TEXT_MAX_LENGTH`)と `packages/shared/src/logic/custom-field-values.ts` の定数(`CUSTOM_FIELD_VALUE_MAX_LENGTH` / `CUSTOM_FIELD_VALUES_TOTAL_MAX_LENGTH`)にあり、`POST .../entries/session` と `PATCH /api/mypage/entries/:entryId` も同じスキーマで同じ上限を掛けます。上限が無いと 1 リクエストで数 MB を保存でき、公開エントリーリスト・スタッフ一覧・CSV にそのまま乗るためです。DB にも同じ値の check 制約があります(`database-schema.md` の `entries`)。超過は Zod のバリデーションエラー(400)です。
 
   加えて **`cf-turnstile-response` ヘッダ**(Turnstile のトークン)が必須です。1 章「レート制限と Turnstile」を参照してください。
 
@@ -662,11 +675,11 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 | フィールド | 必須 | 内容 |
 | --- | --- | --- |
 | `subject` | ✅ | 件名。1〜200 文字 |
-| `body` | ✅ | 本文。1〜20000 文字。**エスケープもサニタイズもせず**メールの HTML 本文としてそのまま送信します(後述) |
+| `body` | ✅ | 本文(HTML)。1〜20000 文字。**許可したタグだけに絞ってから**保存・送信します(後述) |
 | `statusFilter` | | `EntryStatus`(`pending_verification` / `confirmed` / `waitlisted` / `cancelled`)。指定するとそのステータスのエントリーだけに絞り込みます |
 
 - `202`: `StaffMailResult` = `{"jobId": string, "accepted": number}`
-- `400`: ボディが `StaffMailInputSchema` に合わない
+- `400`: ボディが `StaffMailInputSchema` に合わない、または許可タグに絞った結果 `body` が空になった(`{"error": "mail body is empty after sanitizing"}`)
 - `401` / `403` / `500`
 
 **`statusFilter` を省略した場合、`cancelled` 以外の全エントリー**が対象です。キャンセルした人に案内を送り続けないためで、キャンセル者に送るには `statusFilter: "cancelled"` を明示する必要があります。
@@ -685,7 +698,15 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 宛先の取得(`lib/entry-recipients.ts`)は `.range()` で**ページングします**。PostgREST は 1 レスポンスの行数を `db-max-rows` で打ち切るため、単純な SELECT では大きな大会の宛先が黙って途中までしか取れず、「全員に送ったつもりで一部にしか届かない」状態になります。
 
-`body` を無害化していないのは、この項目が**スタッフの書いたものを信頼する**前提だからです。投稿には担当大会のスタッフセッションが必要で、同じアカウントは既にエントリー一覧から全参加者のアドレスを読めます。ただし送信元は組織の検証済みドメインなので、他所からコピーしてきた HTML はスタッフ側で確認してから貼る運用が前提になります。
+`body` は `lib/mail-html.ts` の `sanitizeMailHtml()` で**許可リスト方式に無害化してから** `mail_jobs.body_html` に保存し、そのまま送ります(Task 11-7 / #122)。送信元は組織の検証済みドメインなので、地域スタッフのアカウントが 1 つ侵害されるだけで、担当大会の参加者全員へ任意の HTML(フィッシング)を送れてしまうためです。
+
+- 残すタグは `p` / `br` / `strong` / `em` / `ul` / `ol` / `li` / `a` だけで、**属性はすべて落とします**(`style` / `class` / `onclick` なども)。
+- 例外は `<a>` の `href` で、`http:` / `https:` / `mailto:` の**絶対 URL** のときだけ残します。文字参照(`jav&#97;script:`)や空白を挟んだ書き方も、URL として解釈してからスキームを見るので通りません。相対 URL や他のスキームは `href` だけを落とし、リンクの文字は残します。
+- それ以外のタグはタグだけ除いて中の文字を残します。`script` / `style` / `iframe` / `svg` などは中身ごと除きます。コメントや `<!DOCTYPE>` も除きます。
+- タグ以外の文字はエスケープします(既にある文字参照 `&amp;` などはそのまま)。
+- 無害化した結果が空(空白のみ)になった場合は 400 を返し、送信しません。
+
+**この変更以前は、スタッフが書いた HTML をそのまま送っていました。** 表やインラインのスタイル、画像などを使った本文は、今後は文字だけが残る形で届きます。改行は HTML の本文としては無視されるので、段落は `<p>`、改行は `<br>` で書いてください。
 
 **Cloudflare Queues は有料プラン限定**です。`wrangler dev` はローカルでキューを模擬するので開発と E2E には課金は要りませんが、キューの無いアカウントへのデプロイは `wrangler.toml` の `[[queues.*]]` で失敗します。作成手順は `docs/supabase-deployment.md` の §6.2.2 を参照してください。
 
