@@ -2,6 +2,7 @@ import {error, fail} from '@sveltejs/kit';
 import {
   canPreviewTournament,
   EntryInputSchema,
+  EntrySessionInputSchema,
   findCustomFieldValuesErrors,
   isWithinEntryPeriod,
   TournamentTypeSchema,
@@ -10,6 +11,7 @@ import {
   type Tournament,
 } from '@regional-quiz/shared';
 import {createApiClient, isUnauthorized} from '$lib/api';
+import {participantLoginPath} from '$lib/participant-login';
 import {readTurnstileToken, TURNSTILE_TOKEN_FIELD} from '$lib/turnstile';
 import {
   customFieldErrors,
@@ -29,6 +31,23 @@ const TOO_MANY_REQUESTS_MESSAGE =
   '送信が集中しています。しばらく待ってから再度お試しください';
 
 /**
+ * What a logged-in submission is told when its session is no longer good:
+ * it expired, or it was ended by a logout or a password reset in another
+ * tab while the form was open.
+ */
+const SESSION_EXPIRED_MESSAGE =
+  'ログインの有効期限が切れました。もう一度ログインしてからエントリーしてください';
+
+/**
+ * The hidden field a form rendered for a logged-in participant carries.
+ * It is what tells a session that lapsed while the form was open apart from
+ * a visitor who was never logged in: the form it was rendered as has no
+ * address or password fields to fall back on.
+ */
+const SESSION_ENTRY_FIELD = 'entryMode';
+const SESSION_ENTRY_VALUE = 'session';
+
+/**
  * The backend's `error` strings mapped to what the form shows. The API
  * answers in English identifiers meant for clients, and the same status can
  * stand for several distinct refusals (403 is both "entry period closed"
@@ -40,10 +59,11 @@ const ENTRY_ERROR_MESSAGES: Record<string, string> = {
   'entry period closed': 'エントリー期間外です',
   'regulation not eligible in priority window':
     '現在は優先期間中のため、優先対象のレギュレーションを1つ以上選択してください',
-  'invalid password':
-    'このメールアドレスは登録済みです。登録時のパスワードを入力してください',
+  // Only a logged-in submission is told this: an anonymous one is answered
+  // the same whatever the address, and the reason goes to its owner by mail
+  // (#117).
   'already registered in another region':
-    'このメールアドレスは別の地域で登録済みです',
+    'このアカウントは別の地域で登録済みのため、この大会にはエントリーできません',
   'already entered': 'この大会には既にエントリー済みです',
   // The regulations changed while the form was open, so what the page
   // offered no longer exists. Reloading is what fixes it.
@@ -61,7 +81,7 @@ const ENTRY_ERROR_MESSAGES: Record<string, string> = {
 /** Fallbacks for a status whose `error` string isn't one we know. */
 const ENTRY_STATUS_MESSAGES: Record<number, string> = {
   400: '入力内容を確認してください',
-  401: 'パスワードが正しくありません',
+  401: SESSION_EXPIRED_MESSAGE,
   403: 'この内容ではエントリーできません',
   409: '既にエントリー済みです',
   429: TOO_MANY_REQUESTS_MESSAGE,
@@ -177,7 +197,7 @@ async function fetchFormFieldDefs(
   return res.json();
 }
 
-export const load: PageServerLoad = async ({params, fetch, locals}) => {
+export const load: PageServerLoad = async ({params, fetch, locals, url}) => {
   const tournament = await fetchTournament(params, fetch);
 
   // Holding *a* staff session is not enough: the requirement grants the
@@ -197,11 +217,20 @@ export const load: PageServerLoad = async ({params, fetch, locals}) => {
     fetchRegulations(tournament.id, fetch),
     fetchFormFieldDefs(tournament.id, fetch),
   ]);
-  return {tournament, regulations, formFieldDefs};
+  return {
+    tournament,
+    regulations,
+    formFieldDefs,
+    // A logged-in participant enters under their session, so the form
+    // leaves out the address and password; anyone else is offered the login
+    // screen, which brings them back here (#117).
+    loggedIn: Boolean(locals.participant),
+    loginPath: participantLoginPath(url.pathname),
+  };
 };
 
 export const actions = {
-  default: async ({params, request, fetch}) => {
+  default: async ({params, request, fetch, locals, url}) => {
     const tournament = await fetchTournament(params, fetch);
     // The field definitions decide how the submitted body is interpreted,
     // so they're re-read from the API rather than trusted from the client.
@@ -231,12 +260,45 @@ export const actions = {
       customFieldValues: readCustomFieldValues(formData, formFieldDefs),
     };
 
-    const parsed = EntryInputSchema.safeParse({
-      ...values,
-      password: String(formData.get('password') ?? ''),
-      passwordConfirm: String(formData.get('passwordConfirm') ?? ''),
+    // Rendered for a session that has since lapsed: the form has no address
+    // or password fields, so the schema below could only complain about
+    // fields the participant can't see. Sent to log in again instead.
+    const renderedForSession =
+      formData.get(SESSION_ENTRY_FIELD) === SESSION_ENTRY_VALUE;
+    if (renderedForSession && !locals.participant) {
+      return fail(401, {
+        error: SESSION_EXPIRED_MESSAGE,
+        fieldErrors: {} as EntryFieldErrors,
+        values,
+        loginPath: participantLoginPath(url.pathname),
+      });
+    }
+
+    const entry = {
+      name: values.name,
+      furigana: values.furigana,
+      displayName: values.displayName,
+      regulationIds: values.regulationIds,
       freeText: freeText === '' ? undefined : freeText,
-    });
+      customFieldValues: values.customFieldValues,
+    };
+    // Parsed into one of two shapes: a logged-in participant's entry
+    // carries no credentials, an anonymous one carries the address and
+    // password it is to be registered under.
+    const parsed = locals.participant
+      ? {
+          session: true as const,
+          result: EntrySessionInputSchema.safeParse(entry),
+        }
+      : {
+          session: false as const,
+          result: EntryInputSchema.safeParse({
+            ...entry,
+            email: values.email,
+            password: String(formData.get('password') ?? ''),
+            passwordConfirm: String(formData.get('passwordConfirm') ?? ''),
+          }),
+        };
 
     // The API checks the custom fields too, but it answers in identifiers
     // that name no field the page can point at, so the same rule is applied
@@ -259,28 +321,38 @@ export const actions = {
     // hydration or with JS off, who get no browser-side complaints at all —
     // since the two password fields are never echoed back and so have to be
     // retyped on every failed attempt.
-    if (!parsed.success || customFieldValuesErrors.length > 0) {
+    if (!parsed.result.success || customFieldValuesErrors.length > 0) {
       // Surfaced per field so a mismatched password confirmation — the one
       // failure the participant can't locate from a generic message —
       // points at the field that caused it. The custom fields' messages are
       // keyed by their namespaced control names, so they can't collide with
       // the schema's.
       const fieldErrors: EntryFieldErrors = {
-        ...(parsed.success ? {} : parsed.error.flatten().fieldErrors),
+        ...(parsed.result.success
+          ? {}
+          : parsed.result.error.flatten().fieldErrors),
         ...customFieldErrors(customFieldValuesErrors, formFieldDefs),
       };
       return fail(400, {
         error: '入力内容を確認してください',
         fieldErrors,
         values,
+        loginPath: null,
       });
     }
 
     const api = createApiClient(fetch);
-    const res = await api.api.tournaments[':tournamentId'].entries.$post(
-      {param: {tournamentId: tournament.id}, json: parsed.data},
-      {headers: {[TURNSTILE_TOKEN_FIELD]: turnstileToken}},
-    );
+    const headers = {[TURNSTILE_TOKEN_FIELD]: turnstileToken};
+    const param = {tournamentId: tournament.id};
+    const res = parsed.session
+      ? await api.api.tournaments[':tournamentId'].entries.session.$post(
+          {param, json: parsed.result.data},
+          {headers},
+        )
+      : await api.api.tournaments[':tournamentId'].entries.$post(
+          {param, json: parsed.result.data},
+          {headers},
+        );
     if (!res.ok) {
       const code = await readErrorCode(res);
       // The API's refusal is about the submission as a whole, not about one
@@ -293,13 +365,23 @@ export const actions = {
           'エントリーの登録に失敗しました',
         fieldErrors,
         values,
+        // A 401 here is a session that lapsed between the check above and
+        // the API reading it; the way forward is the login screen.
+        loginPath:
+          res.status === 401 ? participantLoginPath(url.pathname) : null,
       });
     }
 
-    // The entry is created as `pending_verification`; it only counts once
-    // the participant follows the link in the confirmation mail, so the
-    // page says so rather than redirecting somewhere that would imply the
-    // entry is already settled.
+    // A logged-in entry is created there and then, as `pending_verification`
+    // like any other: it counts once the participant follows the link mailed
+    // to their own address.
+    if (parsed.session) {
+      return {submitted: true, loggedIn: true};
+    }
+    // An anonymous submission is answered before anything about the address
+    // is known (#117): the mail that went out is either the confirmation
+    // link or the reason there isn't one, and only its recipient learns
+    // which. So the page says a mail was sent, not that the entry was taken.
     return {submitted: true, email: values.email};
   },
 } satisfies Actions;

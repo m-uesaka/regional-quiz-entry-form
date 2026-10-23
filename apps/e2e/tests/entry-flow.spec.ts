@@ -1,6 +1,7 @@
 // エントリー登録 → 確認メールのリンクをクリック → マイページで確認
 
 import {expect, test} from '@playwright/test';
+import {ENTRY_NOTICE_SUBJECT, waitForMail} from '../support/api';
 import {SAIKYOI, SHINJINOU} from '../support/fixtures';
 import {
   entryFormPath,
@@ -58,7 +59,10 @@ test('an entry is confirmed through its mailed link and shows up on mypage', asy
 
 // #111 の回帰テスト。東京は `allowsDualEntry: false` なので、同じ参加者が
 // 最強位と新人王の両方には出られない。
-test('refuses the second tournament of a region that disallows dual entry', async ({
+//
+// 未ログインの投稿は、アドレスの状態によらず同じ応答を返す(#117)。断った理由は
+// 画面ではなく、そのアドレスの持ち主にだけメールで伝わる。
+test('refuses the second tournament of a region that disallows dual entry, by mail', async ({
   page,
 }) => {
   // Left unverified on purpose: a seat held before the mail was confirmed
@@ -72,11 +76,38 @@ test('refuses the second tournament of a region that disallows dual entry', asyn
   await fillEntryForm(page, SAIKYOI, {email: participant.email});
   await page.getByRole('button', {name: 'エントリーする'}).click();
 
+  // The same notice a new entry gets: nothing on the page tells the
+  // submitter whether this address was registered, or where.
+  await expect(page.getByRole('status')).toContainText(participant.email);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+
+  const notice = await waitForMail(
+    page.request,
+    participant.email,
+    ENTRY_NOTICE_SUBJECT,
+  );
+  expect(notice.html).toContain(
+    'この地域では、最強位と新人王のどちらか一方にのみエントリーできます',
+  );
+});
+
+// ログイン済みなら本人確認が済んでいるので、断った理由をその場で示してよい(#117)。
+test('a logged-in participant enters without credentials and is told refusals directly', async ({
+  page,
+}) => {
+  const participant = await submitEntryForm(page, SHINJINOU, {
+    displayName: '重複次郎',
+  });
+  await loginParticipantThroughForm(page, participant);
+
+  await page.goto(entryFormPath(SAIKYOI));
+  await expect(page.getByLabel('メールアドレス', {exact: true})).toHaveCount(0);
+  await fillEntryForm(page, SAIKYOI, {loggedIn: true});
+  await page.getByRole('button', {name: 'エントリーする'}).click();
+
   await expect(page.getByRole('alert')).toHaveText(
     'この地域では、最強位と新人王のどちらか一方にのみエントリーできます',
   );
-  // The refusal re-renders the form rather than the "check your mail"
-  // notice, so nothing suggests a second entry was taken.
   await expect(page.getByRole('status')).toHaveCount(0);
 });
 

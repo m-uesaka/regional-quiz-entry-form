@@ -40,6 +40,18 @@ export const EntryInputSchema = z
   });
 export type EntryInput = z.infer<typeof EntryInputSchema>;
 
+// The entry form as a logged-in participant submits it
+// (`POST /tournaments/:tournamentId/entries/session`): the session already
+// says who they are, so the address and password are left out rather than
+// re-sent and re-checked. Kept beside `EntryInputSchema` so both forms
+// validate the entry itself with the same rules.
+export const EntrySessionInputSchema = EntryInputSchema.innerType().omit({
+  email: true,
+  password: true,
+  passwordConfirm: true,
+});
+export type EntrySessionInput = z.infer<typeof EntrySessionInputSchema>;
+
 // The subset of an entry a participant may change themselves from mypage
 // (`PATCH /mypage/entries/:entryId`). `email` / `password` are account
 // credentials and are changed through the auth flow instead, and

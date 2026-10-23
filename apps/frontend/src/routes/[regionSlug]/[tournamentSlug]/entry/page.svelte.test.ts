@@ -57,7 +57,12 @@ const FORM_FIELD_DEFS: FormFieldDef[] = [
 
 type ActionResult = Parameters<typeof Page>[1]['form'];
 
-function renderPage(form: ActionResult = null) {
+const LOGIN_PATH = '/mypage/login?redirectTo=%2Ftokyo%2Fsaikyoi%2Fentry';
+
+function renderPage(
+  form: ActionResult = null,
+  options: {loggedIn?: boolean} = {},
+) {
   return render(Page, {
     props: {
       params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
@@ -65,6 +70,8 @@ function renderPage(form: ActionResult = null) {
         tournament: TOURNAMENT,
         regulations: REGULATIONS,
         formFieldDefs: FORM_FIELD_DEFS,
+        loggedIn: options.loggedIn ?? false,
+        loginPath: LOGIN_PATH,
       },
       form,
     },
@@ -114,6 +121,7 @@ describe('entry +page.svelte', () => {
       error: 'この大会には既にエントリー済みです',
       fieldErrors: {},
       values: SUBMITTED_VALUES,
+      loginPath: null,
     });
 
     expect(screen.getByRole('alert')).toHaveTextContent(
@@ -135,9 +143,10 @@ describe('entry +page.svelte', () => {
 
   it('leaves the password fields blank after a rejected submission', () => {
     renderPage({
-      error: 'パスワードが正しくありません',
+      error: '入力内容を確認してください',
       fieldErrors: {},
       values: SUBMITTED_VALUES,
+      loginPath: null,
     });
 
     expect(screen.getByLabelText('パスワード')).toHaveValue('');
@@ -149,6 +158,7 @@ describe('entry +page.svelte', () => {
       error: '入力内容を確認してください',
       fieldErrors: {passwordConfirm: ['パスワードが一致しません']},
       values: SUBMITTED_VALUES,
+      loginPath: null,
     });
 
     expect(screen.getByText('パスワードが一致しません')).toBeInTheDocument();
@@ -162,6 +172,7 @@ describe('entry +page.svelte', () => {
       error: '入力内容を確認してください',
       fieldErrors: {'custom.agree_rules': ['「規約に同意する」は必須です']},
       values: SUBMITTED_VALUES,
+      loginPath: null,
     });
 
     expect(
@@ -174,6 +185,64 @@ describe('entry +page.svelte', () => {
 
     expect(screen.getByRole('status')).toHaveTextContent('taro@example.com');
     expect(screen.queryByLabelText('氏名')).not.toBeInTheDocument();
+  });
+
+  // An anonymous submission is answered the same whatever the address
+  // (#117), so the page must not claim the entry was taken: the mail may be
+  // the reason there is no entry.
+  it('only says a mail was sent after an anonymous submission', () => {
+    renderPage({submitted: true, email: 'taro@example.com'});
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'taro@example.com 宛にメールを送信しました',
+    );
+    expect(screen.getByRole('status')).not.toHaveTextContent('受け付けました');
+  });
+
+  it('the form links to the login page for participants who already have an account', () => {
+    renderPage();
+
+    expect(
+      screen.getByRole('link', {name: 'ログインしてエントリーする'}),
+    ).toHaveAttribute('href', LOGIN_PATH);
+  });
+
+  it('the form hides the credential fields for a logged-in participant', () => {
+    renderPage(null, {loggedIn: true});
+
+    expect(screen.queryByLabelText('メールアドレス')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('パスワード')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('パスワード(確認)')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', {name: 'ログインしてエントリーする'}),
+    ).not.toBeInTheDocument();
+    expect(screen.getByLabelText('氏名')).toBeInTheDocument();
+  });
+
+  it('confirms a logged-in entry without naming an address', () => {
+    renderPage({submitted: true, loggedIn: true}, {loggedIn: true});
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'エントリーを受け付けました',
+    );
+  });
+
+  it('offers the login screen when the session lapsed', () => {
+    renderPage(
+      {
+        error:
+          'ログインの有効期限が切れました。もう一度ログインしてからエントリーしてください',
+        fieldErrors: {},
+        values: SUBMITTED_VALUES,
+        loginPath: LOGIN_PATH,
+      },
+      {loggedIn: true},
+    );
+
+    expect(screen.getByRole('link', {name: 'ログイン画面へ'})).toHaveAttribute(
+      'href',
+      LOGIN_PATH,
+    );
   });
 
   // SvelteKit re-uses this page component across a navigation that only
@@ -191,6 +260,8 @@ describe('entry +page.svelte', () => {
         tournament: {...TOURNAMENT, id: OTHER_TOURNAMENT_ID, type: 'shinjinou'},
         regulations: REGULATIONS,
         formFieldDefs: FORM_FIELD_DEFS,
+        loggedIn: false,
+        loginPath: LOGIN_PATH,
       },
       form: null,
     });

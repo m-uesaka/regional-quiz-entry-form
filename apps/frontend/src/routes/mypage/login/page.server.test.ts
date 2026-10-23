@@ -36,10 +36,12 @@ function fakeLoginFetch(
 function buildActionEvent(
   fetchImpl: typeof fetch,
   formData: FormData,
+  url = 'http://localhost/mypage/login',
 ): Parameters<typeof actions.default>[0] {
   return {
     fetch: fetchImpl,
     request: {formData: async () => formData},
+    url: new URL(url),
   } as Parameters<typeof actions.default>[0];
 }
 
@@ -76,7 +78,51 @@ describe('participant login +page.server load', () => {
   });
 });
 
+describe('participant login +page.server load with redirectTo', () => {
+  it('sends an already logged-in participant back to the entry form', () => {
+    const event = buildLoadEvent({
+      participant: CLAIMS,
+      url: 'http://localhost/mypage/login?redirectTo=%2Ftokyo%2Fsaikyoi%2Fentry',
+    });
+
+    expect(() => load(event)).toThrow(
+      expect.objectContaining({
+        status: 303,
+        location: '/tokyo/saikyoi/entry',
+      } satisfies Partial<Redirect>),
+    );
+  });
+});
+
 describe('participant login +page.server action', () => {
+  // The entry form sends registered participants here to log in first
+  // (#117); this is what takes them back.
+  it('redirects back to the entry form named by redirectTo', async () => {
+    const event = buildActionEvent(
+      fakeLoginFetch(200),
+      credentials(),
+      'http://localhost/mypage/login?redirectTo=%2Ftokyo%2Fsaikyoi%2Fentry',
+    );
+
+    await expect(actions.default(event)).rejects.toMatchObject({
+      status: 303,
+      location: '/tokyo/saikyoi/entry',
+    } satisfies Partial<Redirect>);
+  });
+
+  it('ignores a redirectTo that would leave the site', async () => {
+    const event = buildActionEvent(
+      fakeLoginFetch(200),
+      credentials(),
+      'http://localhost/mypage/login?redirectTo=%2F%2Fevil.example%2Fsaikyoi%2Fentry',
+    );
+
+    await expect(actions.default(event)).rejects.toMatchObject({
+      status: 303,
+      location: '/mypage',
+    } satisfies Partial<Redirect>);
+  });
+
   it('posts the credentials and redirects to mypage', async () => {
     const log = {bodies: [] as unknown[]};
     const event = buildActionEvent(fakeLoginFetch(200, log), credentials());
