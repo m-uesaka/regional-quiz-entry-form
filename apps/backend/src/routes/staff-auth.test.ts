@@ -1,11 +1,20 @@
 import {afterEach, describe, expect, it} from 'bun:test';
 import {staffAuthRoute} from './staff-auth';
-import {hashPassword, UNUSABLE_PASSWORD_HASH} from '../lib/password';
+import {
+  hashPassword,
+  UNUSABLE_PASSWORD_HASH,
+  verifyPassword,
+} from '../lib/password';
 import type {Bindings} from '../types/env';
 import {
   PERMISSIVE_PLATFORM_BINDINGS,
   refusingRateLimiter,
 } from '../test-support/bindings';
+import {
+  collectingExecutionContext,
+  legacyHashPassword,
+  mockAccountFetchWithRehash,
+} from '../test-support/password';
 
 const ENV: Bindings = {
   ...PERMISSIVE_PLATFORM_BINDINGS,
@@ -214,6 +223,87 @@ describe('POST /login', () => {
       error: 'invalid credentials',
     });
     expect(res.headers.get('set-cookie')).toBeNull();
+  });
+
+  describe('rehashing', () => {
+    const originalConsoleError = console.error;
+
+    afterEach(() => {
+      console.error = originalConsoleError;
+    });
+
+    /** Logs in as the mocked staff member inside `ctx`. */
+    async function loginWithContext(
+      password: string,
+      ctx: ExecutionContext,
+    ): Promise<Response> {
+      return staffAuthRoute.request(
+        '/login',
+        {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({email: 'staff@example.com', password}),
+        },
+        ENV,
+        ctx,
+      );
+    }
+
+    it('login rehashes a legacy password and still succeeds', async () => {
+      const legacyHash = await legacyHashPassword('correct-password');
+      const updates = mockAccountFetchWithRehash(regionalStaffRow(legacyHash));
+      const {ctx, settle} = collectingExecutionContext();
+
+      const res = await loginWithContext('correct-password', ctx);
+      await settle();
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('set-cookie') ?? '').toContain('staff_session=');
+      expect(updates.length).toBe(1);
+      const [update] = updates;
+      expect(update.table).toBe('staff_accounts');
+      expect(update.filters.get('id')).toBe(`eq.${STAFF_ID}`);
+      // Conditional on the old hash, so a reset that lands in between is not
+      // overwritten with the old password.
+      expect(update.filters.get('password_hash')).toBe(`eq.${legacyHash}`);
+      expect(
+        await verifyPassword('correct-password', update.passwordHash),
+      ).toEqual({valid: true, needsRehash: false});
+    });
+
+    it('login still succeeds when the rehash fails', async () => {
+      const errors: unknown[][] = [];
+      console.error = (...args: unknown[]) => {
+        errors.push(args);
+      };
+      const updates = mockAccountFetchWithRehash(
+        regionalStaffRow(await legacyHashPassword('correct-password')),
+        {failUpdate: true},
+      );
+      const {ctx, settle} = collectingExecutionContext();
+
+      const res = await loginWithContext('correct-password', ctx);
+      await settle();
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('set-cookie') ?? '').toContain('staff_session=');
+      expect(updates.length).toBe(1);
+      expect(errors.length).toBe(1);
+      expect(errors[0][0]).toBe('failed to rehash a password');
+    });
+
+    it('login does not rewrite a hash already in the current format', async () => {
+      const updates = mockAccountFetchWithRehash(
+        regionalStaffRow(await hashPassword('correct-password')),
+      );
+      const {ctx, settle} = collectingExecutionContext();
+
+      const res = await loginWithContext('correct-password', ctx);
+      await settle();
+
+      expect(res.status).toBe(200);
+      expect(updates).toEqual([]);
+    });
   });
 });
 

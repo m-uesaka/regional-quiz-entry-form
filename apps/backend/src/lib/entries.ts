@@ -15,6 +15,7 @@ import {sendVerificationEmail} from './entry-verification';
 import {FORM_FIELD_DEF_COLUMNS, toFormFieldDef} from './form-field-defs';
 import type {FormFieldDefRow} from './form-field-defs';
 import {hashPassword, verifyPassword} from './password';
+import {rehashPassword} from './password-rehash';
 import {promoteNextWaitlistedEntry} from './waitlist';
 
 type CreateEntryResult =
@@ -435,12 +436,27 @@ async function createEntryAfterCheck(
     // Re-entering under an already-registered email must prove ownership of
     // that account, otherwise anyone who learns a participant's email could
     // attach unauthorized entries to it.
-    const passwordValid = await verifyPassword(
+    const {valid, needsRehash} = await verifyPassword(
       input.password,
       existingParticipant.password_hash,
     );
-    if (!passwordValid) {
+    if (!valid) {
       return {ok: false, status: 401, error: INVALID_PASSWORD};
+    }
+    // The same upgrade the login does (see `routes/participant-auth.ts`):
+    // some participants only ever come back through this form, and their
+    // hash would otherwise never move. Awaited rather than handed to
+    // `waitUntil()` because the address-and-password route already runs all
+    // of this after its response (#117); it never rejects, so the entry
+    // goes ahead whatever happens to it.
+    if (needsRehash) {
+      await rehashPassword(
+        env,
+        'participants',
+        existingParticipant.id,
+        input.password,
+        existingParticipant.password_hash,
+      );
     }
     participantId = existingParticipant.id;
   } else {

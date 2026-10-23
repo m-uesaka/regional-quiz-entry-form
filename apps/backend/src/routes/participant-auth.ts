@@ -8,15 +8,12 @@ import {
 } from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
-import {verifyPassword} from '../lib/password';
+import {DUMMY_PASSWORD_HASH, verifyPassword} from '../lib/password';
+import {rehashPassword} from '../lib/password-rehash';
 import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
 import {PARTICIPANT_SESSION_COOKIE} from '../middleware/participant-auth';
 
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
-// A well-formed but unusable hash, run through `verifyPassword` when no
-// account matches so that a missing email costs the same PBKDF2 work as a
-// wrong password and can't be timed to enumerate participant emails.
-const DUMMY_PASSWORD_HASH = `${'00'.repeat(16)}:${'00'.repeat(32)}`;
 // The attributes the session cookie is issued under, shared with `/logout`
 // so the two can't drift apart: a deletion whose `path` / `secure` /
 // `sameSite` differ from the ones the cookie was set with addresses a
@@ -83,12 +80,30 @@ export const participantAuthRoute = new Hono<Env>()
         return c.json({error: 'internal server error'}, 500);
       }
 
-      const passwordValid = await verifyPassword(
+      // `DUMMY_PASSWORD_HASH` when no account matches, so that a missing
+      // email costs the same PBKDF2 work as a wrong password and can't be
+      // timed to enumerate participant emails.
+      const {valid, needsRehash} = await verifyPassword(
         password,
         participant?.password_hash ?? DUMMY_PASSWORD_HASH,
       );
-      if (!participant || !passwordValid) {
+      if (!participant || !valid) {
         return c.json({error: 'invalid credentials'}, 401);
+      }
+      // The plaintext is in hand only now, so this is the one chance to move
+      // a hash made with older parameters to the current ones without asking
+      // the participant for anything. After the response, and best-effort:
+      // a failure is logged and the next login tries again.
+      if (needsRehash) {
+        c.executionCtx.waitUntil(
+          rehashPassword(
+            c.env,
+            'participants',
+            participant.id,
+            password,
+            participant.password_hash,
+          ),
+        );
       }
 
       // `pwdChangedAt` records which password this session was issued for, so

@@ -4,6 +4,7 @@ import type {Bindings} from '../types/env';
 import {app} from '../index';
 import {ENTRY_NOTICE_SUBJECT} from '../lib/entry-notice';
 import {hashPassword} from '../lib/password';
+import {legacyHashPassword} from '../test-support/password';
 import {
   PERMISSIVE_PLATFORM_BINDINGS,
   refusingRateLimiter,
@@ -34,8 +35,8 @@ const validBody = {
   furigana: 'ヤマダタロウ',
   displayName: '太郎',
   email: 'entrant@example.com',
-  password: 'password123',
-  passwordConfirm: 'password123',
+  password: 'quiz-entry-pass1',
+  passwordConfirm: 'quiz-entry-pass1',
   regulationIds: ['11111111-1111-1111-1111-111111111111'],
   customFieldValues: {},
 };
@@ -246,6 +247,9 @@ function mockSupabase(options: {
         return rows(options.participant ? [options.participant] : []);
       case 'POST participants':
         return rows([{id: NEW_PARTICIPANT_ID}]);
+      // The rehash of a registered participant's legacy hash.
+      case 'PATCH participants':
+        return new Response(null, {status: 204});
       case 'GET entries':
         return rows([]);
       case 'POST entries':
@@ -274,7 +278,7 @@ async function registeredParticipant(
     id: PARTICIPANT_ID,
     email: validBody.email,
     region_id: overrides.regionId ?? REGION_ID,
-    password_hash: await hashPassword(overrides.password ?? 'password123'),
+    password_hash: await hashPassword(overrides.password ?? 'quiz-entry-pass1'),
     password_changed_at: PASSWORD_CHANGED_AT,
   };
 }
@@ -413,6 +417,39 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
 
   // The submitter was told a mail was on its way; a failure on our side
   // after that must not leave them waiting for one that never comes.
+  it('rehashes a legacy password when entering under a registered address', async () => {
+    // Some participants only ever come back through this form, so the
+    // upgrade the login does has to happen here too.
+    const recorded = mockSupabase({
+      participant: {
+        ...(await registeredParticipant()),
+        password_hash: await legacyHashPassword('quiz-entry-pass1'),
+      },
+    });
+
+    await postWithContext(TOURNAMENT_PATH, validBody);
+    await settleBackgroundWork();
+
+    expect(recorded.calls).toContainEqual({
+      table: 'participants',
+      method: 'PATCH',
+    });
+    expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
+  });
+
+  it('does not rewrite a current hash when entering under a registered address', async () => {
+    const recorded = mockSupabase({participant: await registeredParticipant()});
+
+    await postWithContext(TOURNAMENT_PATH, validBody);
+    await settleBackgroundWork();
+
+    expect(recorded.calls).not.toContainEqual({
+      table: 'participants',
+      method: 'PATCH',
+    });
+    expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
+  });
+
   it('mails the owner to try again when the entry fails on our side', async () => {
     const recorded = mockSupabase({
       participant: null,

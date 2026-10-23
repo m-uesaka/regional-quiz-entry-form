@@ -4,6 +4,7 @@ import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
 import {app} from '../index';
+import {isPasswordHashUsable} from '../lib/password';
 
 // Local Supabase stack (`supabase start`), same convention as
 // `routes/regions.test.ts`. Skipped automatically when it isn't reachable,
@@ -309,9 +310,9 @@ describe.skipIf(!(await isDbReachable()))(
       const [row] = await sql`
         select password_hash from staff_accounts where email = ${email}
       `;
-      // Not a `salt:hash` pair of hex halves, so `verifyPassword()` refuses
+      // Not a hash in either format `verifyPassword()` reads, so it refuses
       // every password submitted against it.
-      expect(row.password_hash).not.toContain(':');
+      expect(isPasswordHashUsable(row.password_hash)).toBe(false);
 
       const res = await app.request(
         '/api/auth/staff/login',

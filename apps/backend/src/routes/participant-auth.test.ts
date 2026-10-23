@@ -1,12 +1,17 @@
 import {afterEach, describe, expect, it} from 'bun:test';
 import {verify} from 'hono/jwt';
 import {participantAuthRoute} from './participant-auth';
-import {hashPassword} from '../lib/password';
+import {hashPassword, verifyPassword} from '../lib/password';
 import type {Bindings} from '../types/env';
 import {
   PERMISSIVE_PLATFORM_BINDINGS,
   refusingRateLimiter,
 } from '../test-support/bindings';
+import {
+  collectingExecutionContext,
+  legacyHashPassword,
+  mockAccountFetchWithRehash,
+} from '../test-support/password';
 
 const ENV: Bindings = {
   ...PERMISSIVE_PLATFORM_BINDINGS,
@@ -175,6 +180,119 @@ describe('POST /login', () => {
     // Folded, so that re-spelling the address doesn't hand out a second
     // budget for the same account.
     expect(keys).toEqual(['participant-login:email:shared@example.com']);
+  });
+
+  describe('rehashing', () => {
+    const originalConsoleError = console.error;
+
+    afterEach(() => {
+      console.error = originalConsoleError;
+    });
+
+    /** Logs in as the mocked participant inside `ctx`. */
+    async function loginWithContext(
+      password: string,
+      ctx: ExecutionContext,
+    ): Promise<Response> {
+      return participantAuthRoute.request(
+        '/login',
+        {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({email: 'participant@example.com', password}),
+        },
+        ENV,
+        ctx,
+      );
+    }
+
+    it('login rehashes a legacy password and still succeeds', async () => {
+      const legacyHash = await legacyHashPassword('correct-password');
+      const updates = mockAccountFetchWithRehash({
+        id: PARTICIPANT_ID,
+        password_hash: legacyHash,
+        password_changed_at: '2026-08-25T01:23:45.678+00:00',
+      });
+      const {ctx, settle} = collectingExecutionContext();
+
+      const res = await loginWithContext('correct-password', ctx);
+      await settle();
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('set-cookie') ?? '').toContain(
+        'participant_session=',
+      );
+      expect(updates.length).toBe(1);
+      const [update] = updates;
+      expect(update.table).toBe('participants');
+      expect(update.filters.get('id')).toBe(`eq.${PARTICIPANT_ID}`);
+      // Conditional on the old hash, so a reset that lands in between is not
+      // overwritten with the old password.
+      expect(update.filters.get('password_hash')).toBe(`eq.${legacyHash}`);
+      expect(update.passwordHash.startsWith('pbkdf2-sha256$')).toBe(true);
+      expect(
+        await verifyPassword('correct-password', update.passwordHash),
+      ).toEqual({valid: true, needsRehash: false});
+    });
+
+    it('login still succeeds when the rehash fails', async () => {
+      const errors: unknown[][] = [];
+      console.error = (...args: unknown[]) => {
+        errors.push(args);
+      };
+      const updates = mockAccountFetchWithRehash(
+        {
+          id: PARTICIPANT_ID,
+          password_hash: await legacyHashPassword('correct-password'),
+          password_changed_at: '2026-08-25T01:23:45.678+00:00',
+        },
+        {failUpdate: true},
+      );
+      const {ctx, settle} = collectingExecutionContext();
+
+      const res = await loginWithContext('correct-password', ctx);
+      // Never rejects: an unhandled rejection in `waitUntil()` is what this
+      // is guarding against.
+      await settle();
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('set-cookie') ?? '').toContain(
+        'participant_session=',
+      );
+      expect(updates.length).toBe(1);
+      expect(errors.length).toBe(1);
+      expect(errors[0][0]).toBe('failed to rehash a password');
+    });
+
+    it('login does not rewrite a hash already in the current format', async () => {
+      const updates = mockAccountFetchWithRehash({
+        id: PARTICIPANT_ID,
+        password_hash: await hashPassword('correct-password'),
+        password_changed_at: '2026-08-25T01:23:45.678+00:00',
+      });
+      const {ctx, settle} = collectingExecutionContext();
+
+      const res = await loginWithContext('correct-password', ctx);
+      await settle();
+
+      expect(res.status).toBe(200);
+      expect(updates).toEqual([]);
+    });
+
+    it('login does not rewrite a legacy hash on a wrong password', async () => {
+      const updates = mockAccountFetchWithRehash({
+        id: PARTICIPANT_ID,
+        password_hash: await legacyHashPassword('correct-password'),
+        password_changed_at: '2026-08-25T01:23:45.678+00:00',
+      });
+      const {ctx, settle} = collectingExecutionContext();
+
+      const res = await loginWithContext('wrong-password', ctx);
+      await settle();
+
+      expect(res.status).toBe(401);
+      expect(updates).toEqual([]);
+    });
   });
 });
 

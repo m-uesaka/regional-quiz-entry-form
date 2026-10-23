@@ -13,17 +13,18 @@ import {
 } from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
-import {isPasswordHashUsable, verifyPassword} from '../lib/password';
+import {
+  DUMMY_PASSWORD_HASH,
+  isPasswordHashUsable,
+  verifyPassword,
+} from '../lib/password';
+import {rehashPassword} from '../lib/password-rehash';
 import {internalError} from '../lib/errors';
 import {confirmStaffPasswordReset} from '../lib/staff-password-reset';
 import {STAFF_SESSION_COOKIE} from '../middleware/staff-auth';
 import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
 
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
-// A well-formed but unusable hash, run through `verifyPassword` when no
-// account matches so that a missing email costs the same PBKDF2 work as a
-// wrong password and can't be timed to enumerate staff emails.
-const DUMMY_PASSWORD_HASH = `${'00'.repeat(16)}:${'00'.repeat(32)}`;
 // The attributes the session cookie is issued under, shared with `/logout`
 // so the two can't drift apart: a deletion whose `path` / `secure` /
 // `sameSite` differ from the ones the cookie was set with addresses a
@@ -93,14 +94,27 @@ export const staffAuthRoute = new Hono<Env>()
       // `verifyPassword()` refuses it either way, but it refuses it before
       // doing any PBKDF2 work, which would make "invited, not set up yet"
       // distinguishable from "wrong password" by response time -- the same leak
-      // the dummy hash exists to close for an unknown email.
+      // `DUMMY_PASSWORD_HASH` exists to close for an unknown email.
       const storedHash =
         staff && isPasswordHashUsable(staff.password_hash)
           ? staff.password_hash
           : DUMMY_PASSWORD_HASH;
-      const passwordValid = await verifyPassword(password, storedHash);
-      if (!staff || !passwordValid) {
+      const {valid, needsRehash} = await verifyPassword(password, storedHash);
+      if (!staff || !valid) {
         return c.json({error: 'invalid credentials'}, 401);
+      }
+      // Moves an older hash to the current parameters, best-effort and after
+      // the response: see `routes/participant-auth.ts`.
+      if (needsRehash) {
+        c.executionCtx.waitUntil(
+          rehashPassword(
+            c.env,
+            'staff_accounts',
+            staff.id,
+            password,
+            staff.password_hash,
+          ),
+        );
       }
 
       const claims: StaffClaims = {
