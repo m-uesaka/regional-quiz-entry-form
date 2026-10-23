@@ -54,9 +54,14 @@ const ALGORITHM = 'pbkdf2-sha256';
 const PBKDF2_ITERATIONS = 100_000;
 // What a value in the pre-`$` `salt:hash` format was made with.
 const LEGACY_PBKDF2_ITERATIONS = 100_000;
-// A sanity bound on a stored count, not a policy: a corrupted or hostile
-// value must not be able to make a single login spin for minutes.
-const MAX_STORED_ITERATIONS = 10_000_000;
+// The most a stored count may name: the Workers cap described above.
+// `deriveBits()` throws on the edge for anything more, so a hash claiming a
+// higher count -- written by a local script, a seed, or a future bump that
+// forgot the cap -- would turn every login for that account into an
+// unhandled 500. It is read as unusable instead, the same as any other value
+// this code can't verify, which also keeps a corrupted or hostile count from
+// making a login spin.
+const MAX_STORED_ITERATIONS = 100_000;
 const SALT_BYTES = 16;
 const HASH_BITS = 256;
 const SALT_HEX_LENGTH = SALT_BYTES * 2;

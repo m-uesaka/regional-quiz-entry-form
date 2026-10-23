@@ -13,12 +13,7 @@ import {
 } from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
-import {
-  DUMMY_PASSWORD_HASH,
-  isPasswordHashUsable,
-  verifyPassword,
-} from '../lib/password';
-import {rehashPassword} from '../lib/password-rehash';
+import {verifyAccountPassword} from '../lib/password-rehash';
 import {internalError} from '../lib/errors';
 import {confirmStaffPasswordReset} from '../lib/staff-password-reset';
 import {STAFF_SESSION_COOKIE} from '../middleware/staff-auth';
@@ -90,31 +85,20 @@ export const staffAuthRoute = new Hono<Env>()
       }
 
       // An account created by `POST /api/staff/accounts` whose owner hasn't
-      // followed their invite link yet carries an unusable placeholder hash.
-      // `verifyPassword()` refuses it either way, but it refuses it before
-      // doing any PBKDF2 work, which would make "invited, not set up yet"
-      // distinguishable from "wrong password" by response time -- the same leak
-      // `DUMMY_PASSWORD_HASH` exists to close for an unknown email.
-      const storedHash =
-        staff && isPasswordHashUsable(staff.password_hash)
-          ? staff.password_hash
-          : DUMMY_PASSWORD_HASH;
-      const {valid, needsRehash} = await verifyPassword(password, storedHash);
+      // followed their invite link yet carries an unusable placeholder hash,
+      // which costs the same PBKDF2 work as a wrong password so "invited, not
+      // set up yet" can't be told apart by response time: see
+      // `verifyAccountPassword()`, which also moves an older hash to the
+      // current parameters after the response.
+      const valid = await verifyAccountPassword(
+        c.env,
+        'staff_accounts',
+        staff,
+        password,
+        upgrade => c.executionCtx.waitUntil(upgrade),
+      );
       if (!staff || !valid) {
         return c.json({error: 'invalid credentials'}, 401);
-      }
-      // Moves an older hash to the current parameters, best-effort and after
-      // the response: see `routes/participant-auth.ts`.
-      if (needsRehash) {
-        c.executionCtx.waitUntil(
-          rehashPassword(
-            c.env,
-            'staff_accounts',
-            staff.id,
-            password,
-            staff.password_hash,
-          ),
-        );
       }
 
       const claims: StaffClaims = {

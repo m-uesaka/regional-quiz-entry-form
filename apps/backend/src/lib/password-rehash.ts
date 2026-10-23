@@ -1,6 +1,11 @@
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
-import {hashPassword} from './password';
+import {
+  DUMMY_PASSWORD_HASH,
+  hashPassword,
+  isPasswordHashUsable,
+  verifyPassword,
+} from './password';
 
 /** The tables whose rows carry a `password_hash` column. */
 export type PasswordTable = 'participants' | 'staff_accounts';
@@ -54,4 +59,52 @@ export async function rehashPassword(
       error: e instanceof Error ? e.message : String(e),
     });
   }
+}
+
+/** The columns `verifyAccountPassword()` reads off an account row. */
+export interface PasswordAccount {
+  id: string;
+  password_hash: string;
+}
+
+/**
+ * Checks a password submitted for an account -- at login, or when an entry
+ * re-uses a registered address -- and schedules the hash upgrade a correct
+ * one earns.
+ *
+ * Every place that proves a password goes through here, so none of them can
+ * forget either half:
+ *
+ * - The work is the same whether or not the password could match. A missing
+ *   account, and one whose hash is unusable (a staff invite not followed yet,
+ *   a corrupted value, a count above the Workers cap), are verified against
+ *   `DUMMY_PASSWORD_HASH` rather than refused at once, which would answer
+ *   ~17 ms sooner and so tell an attacker the address is registered.
+ * - A correct password on an older hash hands `rehashPassword()` to `defer`,
+ *   with the hash it was verified against, so the caller decides when it
+ *   runs (after the response, or before carrying on) but not whether.
+ * @param env The Worker bindings.
+ * @param table The table `account` was read from.
+ * @param account The account the address belongs to, or `null` if none.
+ * @param password The submitted password.
+ * @param defer Receives the upgrade, if there is one to run.
+ * @return Whether `account` exists and `password` is its password.
+ */
+export async function verifyAccountPassword(
+  env: Bindings,
+  table: PasswordTable,
+  account: PasswordAccount | null,
+  password: string,
+  defer: (upgrade: Promise<void>) => void,
+): Promise<boolean> {
+  const storedHash =
+    account && isPasswordHashUsable(account.password_hash)
+      ? account.password_hash
+      : DUMMY_PASSWORD_HASH;
+  const {valid, needsRehash} = await verifyPassword(password, storedHash);
+  if (!account || !valid) return false;
+  if (needsRehash) {
+    defer(rehashPassword(env, table, account.id, password, storedHash));
+  }
+  return true;
 }

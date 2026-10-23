@@ -120,6 +120,19 @@ describe('hashPassword / verifyPassword', () => {
     });
   });
 
+  it('reads a count above the Workers cap as unusable rather than throwing', async () => {
+    // Cloudflare's edge throws on PBKDF2 above 100,000 iterations, so such a
+    // hash must be refused before it reaches `deriveBits()`.
+    const [, , salt, digest] = (await hashPassword('a password')).split('$');
+    const stored = `pbkdf2-sha256$100001$${salt}$${digest}`;
+
+    expect(isPasswordHashUsable(stored)).toBe(false);
+    expect(await verifyPassword('a password', stored)).toEqual({
+      valid: false,
+      needsRehash: false,
+    });
+  });
+
   it('verifyPassword rejects a malformed iteration count', async () => {
     const hash = await hashPassword('a password');
     const [, , salt, digest] = hash.split('$');
