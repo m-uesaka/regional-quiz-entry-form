@@ -33,8 +33,8 @@ workers_dev = true
 # workflows always pass `--env`; pass it by hand too.
 [vars]
 # 非機密の設定値のみここに記載し、機密情報は `wrangler secret put` で登録する
-MAIL_FROM_ADDRESS = "entry@entry.regionalquiz.example"
-FRONTEND_URL = "https://entry.regionalquiz.example"
+MAIL_FROM_ADDRESS = "no-reply@mail.regional-quiz-project.app"
+FRONTEND_URL = "https://regional-quiz-project.app"
 # Turnstile の「常に成功する」テスト用シークレット(Cloudflare が公開している
 # 固定値)。ローカル開発と E2E はこれで通す。`[env.*.vars]` には**置かない**:
 # 同名の var があるとデプロイのたびに `wrangler secret put` で登録した本物の
@@ -164,8 +164,10 @@ dead_letter_queue = "regional-quiz-bulk-mail-dev-dlq"
 [env.staging]
 name = "regional-quiz-backend-staging"
 
-# Both hostnames below are still the `regionalquiz.example` placeholder,
-# because no real domain has been registered yet (#101).
+# The domain is `regional-quiz-project.app`: the site is served from
+# `staging.` on staging and from the apex on production, and mail is sent
+# from a `mail.` subdomain of its own (`staging.mail.` on staging) so the
+# sending reputation is kept apart from the site's.
 #
 # `FRONTEND_URL` is the less pressing of the two: `deploy.yml` overrides it
 # with `--var FRONTEND_URL:"https://$FRONTEND_HOST"` whenever the
@@ -179,8 +181,8 @@ name = "regional-quiz-backend-staging"
 # need not be the host the site is served from. Until it is a real, verified
 # domain, every send fails.
 [env.staging.vars]
-MAIL_FROM_ADDRESS = "entry@staging.entry.regionalquiz.example"
-FRONTEND_URL = "https://staging.entry.regionalquiz.example"
+MAIL_FROM_ADDRESS = "no-reply@staging.mail.regional-quiz-project.app"
+FRONTEND_URL = "https://staging.regional-quiz-project.app"
 
 # 10 login attempts a minute from one address. Enough for someone retyping a
 # password they half-remember, far too few to work through a
@@ -260,8 +262,8 @@ name = "regional-quiz-backend"
 
 # Placeholders, and overridden, exactly as in `[env.staging.vars]` above.
 [env.production.vars]
-MAIL_FROM_ADDRESS = "entry@entry.regionalquiz.example"
-FRONTEND_URL = "https://entry.regionalquiz.example"
+MAIL_FROM_ADDRESS = "no-reply@mail.regional-quiz-project.app"
+FRONTEND_URL = "https://regional-quiz-project.app"
 
 # Same policy as staging, on its own namespaces — see the comments there.
 [[env.production.unsafe.bindings]]

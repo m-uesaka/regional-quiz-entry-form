@@ -89,7 +89,7 @@ async function main(args: string[]): Promise<number> {
   if (!email || !frontendUrl) {
     console.error(
       'usage: bun run staff:bootstrap <email> <frontend url>\n' +
-        '  e.g. bun run staff:bootstrap you@example.com https://regional-quiz-frontend-staging.pages.dev',
+        '  e.g. bun run staff:bootstrap you@example.com https://staging.regional-quiz-project.app',
     );
     return 1;
   }

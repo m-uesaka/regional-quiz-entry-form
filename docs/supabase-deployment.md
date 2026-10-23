@@ -152,7 +152,7 @@ Pages 側の値は次のデプロイから反映されるため、登録し直�
 
 初回デプロイ前は Worker がまだ存在しないため、最初の `secret put` で `There doesn't seem to be a Worker called "..."` と聞かれます。**Yes** と答えると空の Worker が作られ、そこにシークレットが登録されます。`MAIL_API_KEY` / `GOOGLE_SHEETS_API_KEY` は未登録でもデプロイ自体は通り、その機能(メール送信・シート取り込み)が実行時に失敗するだけなので、用意できてから登録しても構いません。
 
-`TURNSTILE_SECRET_KEY` は Cloudflare Dashboard の `Turnstile` で widget を作成すると発行される **Secret Key** です(#116)。ウィジェットは環境ごとに 1 つ作り、その **Site Key** を Pages 側の `PUBLIC_TURNSTILE_SITE_KEY`(6.3)に、Secret Key をここに登録します。widget のドメイン設定には、その環境でフォームを表示するホスト名を入れてください。独自ドメインが無い間は Pages の既定ホスト名(例: `regional-quiz-frontend-staging.pages.dev`)を入れ、6.4 でカスタムドメインを割り当てたときに追加します。
+`TURNSTILE_SECRET_KEY` は Cloudflare Dashboard の `Turnstile` で widget を作成すると発行される **Secret Key** です(#116)。ウィジェットは環境ごとに 1 つ作り、その **Site Key** を Pages 側の `PUBLIC_TURNSTILE_SITE_KEY`(6.3)に、Secret Key をここに登録します。widget のドメイン設定には、その環境でフォームを表示するホスト名を入れてください。カスタムドメイン(staging: `staging.regional-quiz-project.app`、production: `regional-quiz-project.app`。6.4)と Pages の既定ホスト名(例: `regional-quiz-frontend-staging.pages.dev`)の両方を入れておきます。カスタムドメインが入っていないと、そのホストのフォームでウィジェットがエラーになります。
 
 > **`[env.*.vars]` に `TURNSTILE_SECRET_KEY` を書かないでください。** 同名の var があるとデプロイのたびにシークレットが平文の var で上書きされます。トップレベルの `[vars]` にはローカル開発用のテスト鍵(Cloudflare が公開している「常に成功する」固定値)が入っていますが、`vars` は環境に継承されないため `--env` 付きのデプロイには影響しません。
 >
@@ -252,10 +252,19 @@ bunx wrangler deploy --env production \
 
 つまり実ドメインの有効化は**設定変更だけ**で済み、リポジトリ側の編集は要りません。
 
+ドメインは Cloudflare Registrar で取得した `regional-quiz-project.app` で、環境ごとに次のように割り当てています。
+
+| 環境 | `FRONTEND_HOST`(Pages のカスタムドメイン) | `MAIL_FROM_ADDRESS` |
+| --- | --- | --- |
+| staging | `staging.regional-quiz-project.app` | `no-reply@staging.mail.regional-quiz-project.app` |
+| production | `regional-quiz-project.app` | `no-reply@mail.regional-quiz-project.app` |
+
 1. ドメインを取得し、Cloudflare のゾーンに追加する
 2. Pages プロジェクト(production / staging)にカスタムドメインを割り当てる(6.3)
 3. GitHub の `staging` / `production` Environment に `FRONTEND_HOST` 変数を登録する(6.5)
-4. デプロイし直す
+4. Turnstile widget にカスタムドメインのホスト名を追加する(6.2)
+5. Resend の `Domains` で送信用ドメイン(上表の `@` 以降)を追加し、表示される SPF / DKIM の DNS レコードを Cloudflare に登録して `Verified` にする。未検証のドメインを From にした送信は Resend に拒否される
+6. デプロイし直す
 
 Pages の `BACKEND_URL`(6.3)はここでは触りません。SSR の転送先は route ではなく Worker 自身のオリジン、つまり workers.dev のままで正しく、`wrangler.toml` の `workers_dev = true` がそれを維持します。ここで `BACKEND_URL` をフロントエンドのホスト名に書き換える必要はありません。
 
@@ -263,7 +272,7 @@ Pages の `BACKEND_URL`(6.3)はここでは触りません。SSR の転送先は
 
 `FRONTEND_URL` を同じ変数から上書きしているのも同じ理由です。これは `src/lib/entry-verification.ts` とパスワード再設定メールがリンクを組み立てる URL で、値がずれても**サイトは正常に見えます**。壊れるのはメール内のリンクだけなので、デプロイ時には誰も気づきません。`--var` は環境の vars を置き換えではなく**マージ**するので、`MAIL_FROM_ADDRESS` は `wrangler.toml` の値のまま、`wrangler secret put` で登録したシークレット(`TURNSTILE_SECRET_KEY` 等)もそのまま引き継がれます。
 
-> `MAIL_FROM_ADDRESS` だけは `apps/backend/wrangler.toml` の `[env.*.vars]` を手で書き換えてください。送信元ドメインはメール事業者側で検証済みのドメインであって、サイトのホスト名とは限らないため、`FRONTEND_HOST` からは導出していません。現状は `regionalquiz.example` のプレースホルダのままです。
+> `MAIL_FROM_ADDRESS` だけは `apps/backend/wrangler.toml` の `[env.*.vars]` を手で書き換えてください。送信元ドメインはメール事業者側で検証済みのドメインであって、サイトのホスト名とは限らないため、`FRONTEND_HOST` からは導出していません。現在は上表の `mail.` サブドメインのアドレスが入っています。
 
 #### 疎通確認
 
@@ -295,7 +304,7 @@ curl -i "https://<frontend-host>/api/healthz"   # => {"ok":true}
 
 | 変数名 | staging | production |
 | --- | --- | --- |
-| `FRONTEND_HOST` | staging のフロントエンドのホスト名(例: `staging.entry.example.jp`) | production のホスト名(例: `entry.example.jp`) |
+| `FRONTEND_HOST` | `staging.regional-quiz-project.app` | `regional-quiz-project.app` |
 
 スキームもパスも付けない**ホスト名のみ**です。`deploy.yml` はこれを使って Worker の `/api/*` route と `FRONTEND_URL` を組み立て、デプロイ後の疎通確認も行います(6.4)。**未設定でもデプロイは成功します**が、その場合 route が付かないため、ブラウザから直接叩く API がすべて 404 になります(ワークフローのログに warning が出ます)。
 
@@ -430,7 +439,8 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 - [ ] ドメインを取得し、Cloudflare のゾーンに追加した(6.4)
 - [ ] Pages プロジェクト(production / staging)にカスタムドメインを割り当てた(6.3 / 6.4)
 - [ ] GitHub の各 Environment に `FRONTEND_HOST` 変数を登録し、`/api/*` が Worker に届くことを確認した(6.4 / 6.5 / #101)
-- [ ] `wrangler.toml` の `[env.*.vars]` の `MAIL_FROM_ADDRESS` をプレースホルダから実ドメインに差し替えた(6.4)
+- [ ] Turnstile widget にカスタムドメインのホスト名を追加した(6.2 / 6.4)
+- [ ] Resend で `MAIL_FROM_ADDRESS` の送信用ドメインを検証した(6.4)
 - [ ] `bunx supabase db push --linked --dry-run` で初回マイグレーション適用の差分を確認した
 - [ ] staging の `deploy-staging` ワークフローが全ステップ成功することを確認した
 - [ ] production への初回デプロイ後、`/api/healthz` とトップページの疎通を確認した
