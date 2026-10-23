@@ -1,4 +1,12 @@
 <script lang="ts">
+  import PageContainer from '$lib/components/layout/PageContainer.svelte';
+  import PageHeader from '$lib/components/layout/PageHeader.svelte';
+  import Button from '$lib/components/ui/atoms/Button.svelte';
+  import Card from '$lib/components/ui/atoms/Card.svelte';
+  import Checkbox from '$lib/components/ui/atoms/Checkbox.svelte';
+  import Input from '$lib/components/ui/atoms/Input.svelte';
+  import Label from '$lib/components/ui/atoms/Label.svelte';
+  import Message from '$lib/components/ui/items/Message.svelte';
   import type {PageProps} from './$types';
 
   const {data, form}: PageProps = $props();
@@ -20,104 +28,146 @@
   }
 </script>
 
-<h1>地域の管理</h1>
+<PageContainer>
+  <PageHeader title="地域の管理" />
 
-<h2>地域を追加</h2>
+  <Card>
+    <h2 class="text-lg font-bold">地域を追加</h2>
 
-{#if createResult?.saved}
-  <p role="status">地域を追加しました</p>
-{/if}
-{#if createResult?.error}
-  <p role="alert">{createResult.error}</p>
-{/if}
+    {#if createResult?.saved}
+      <Message variant="success">
+        <p role="status" class="text-sm text-foreground">地域を追加しました</p>
+      </Message>
+    {/if}
+    {#if createResult?.error}
+      <Message variant="danger">
+        <p role="alert" class="text-sm text-foreground">{createResult.error}</p>
+      </Message>
+    {/if}
 
-<form method="POST" action="?/create">
-  <label>
-    slug
-    <!-- Fixed at creation time: it is one segment of the published entry-form
-         URL, so the row forms below carry no control for it. -->
-    <input
-      name="slug"
-      type="text"
-      required
-      value={createResult?.values.slug ?? ''}
-    />
-  </label>
-  {#if createResult?.fieldErrors.slug}
-    <p role="alert">{createResult.fieldErrors.slug[0]}</p>
-  {/if}
-
-  <label>
-    地域名
-    <input
-      name="name"
-      type="text"
-      required
-      value={createResult?.values.name ?? ''}
-    />
-  </label>
-  {#if createResult?.fieldErrors.name}
-    <p role="alert">{createResult.fieldErrors.name[0]}</p>
-  {/if}
-
-  <label>
-    <input
-      name="allowsDualEntry"
-      type="checkbox"
-      checked={createResult?.values.allowsDualEntry ?? false}
-    />
-    最強位と新人王の両方へのエントリーを認める
-  </label>
-
-  <button type="submit">追加</button>
-</form>
-
-<h2>登録済みの地域</h2>
-
-{#if data.regions.length === 0}
-  <p>まだ地域が登録されていません。</p>
-{:else}
-  <ul>
-    {#each data.regions as region (region.id)}
-      {@const result = updateResult(region.id)}
-      <li>
-        <h3>{region.slug}</h3>
-
-        {#if result?.saved}
-          <p role="status">保存しました</p>
+    <form method="POST" action="?/create" class="flex flex-col gap-4">
+      <div class="flex flex-col gap-1.5">
+        <Label for="region-create-slug">slug</Label>
+        <!-- Fixed at creation time: it is one segment of the published entry-form
+             URL, so the row forms below carry no control for it. -->
+        <Input
+          id="region-create-slug"
+          class="w-full"
+          name="slug"
+          type="text"
+          required
+          isError={Boolean(createResult?.fieldErrors.slug)}
+          value={createResult?.values.slug ?? ''}
+        />
+        {#if createResult?.fieldErrors.slug}
+          <p role="alert" class="text-sm text-destructive">
+            {createResult.fieldErrors.slug[0]}
+          </p>
         {/if}
-        {#if result?.error}
-          <p role="alert">{result.error}</p>
+      </div>
+
+      <div class="flex flex-col gap-1.5">
+        <Label for="region-create-name">地域名</Label>
+        <Input
+          id="region-create-name"
+          class="w-full"
+          name="name"
+          type="text"
+          required
+          isError={Boolean(createResult?.fieldErrors.name)}
+          value={createResult?.values.name ?? ''}
+        />
+        {#if createResult?.fieldErrors.name}
+          <p role="alert" class="text-sm text-destructive">
+            {createResult.fieldErrors.name[0]}
+          </p>
         {/if}
+      </div>
 
-        <form method="POST" action="?/update">
-          <input type="hidden" name="id" value={region.id} />
+      <div class="flex items-center gap-2">
+        <Checkbox
+          id="region-create-dual-entry"
+          name="allowsDualEntry"
+          checked={createResult?.values.allowsDualEntry ?? false}
+        />
+        <Label for="region-create-dual-entry">
+          最強位と新人王の両方へのエントリーを認める
+        </Label>
+      </div>
 
-          <label>
-            地域名
-            <input
-              name="name"
-              type="text"
-              required
-              value={result?.values.name ?? region.name}
-            />
-          </label>
-          {#if result?.fieldErrors.name}
-            <p role="alert">{result.fieldErrors.name[0]}</p>
-          {/if}
+      <div class="flex flex-wrap gap-2">
+        <Button type="submit">追加</Button>
+      </div>
+    </form>
+  </Card>
 
-          <label>
-            <input
-              name="allowsDualEntry"
-              type="checkbox"
-              checked={result?.values.allowsDualEntry ?? region.allowsDualEntry}
-            />
-            最強位と新人王の両方へのエントリーを認める
-          </label>
+  <section class="flex flex-col gap-4">
+    <h2 class="text-lg font-bold">登録済みの地域</h2>
 
-          <button type="submit">保存</button>
-        </form>
-      </li>
-    {/each}
-  </ul>
-{/if}
+    {#if data.regions.length === 0}
+      <p class="text-sm text-muted-foreground">
+        まだ地域が登録されていません。
+      </p>
+    {:else}
+      <ul class="flex flex-col gap-4">
+        {#each data.regions as region (region.id)}
+          {@const result = updateResult(region.id)}
+          <li>
+            <Card class="gap-4">
+              <h3 class="font-mono text-base font-bold">{region.slug}</h3>
+
+              {#if result?.saved}
+                <Message variant="success">
+                  <p role="status" class="text-sm text-foreground">保存しました</p>
+                </Message>
+              {/if}
+              {#if result?.error}
+                <Message variant="danger">
+                  <p role="alert" class="text-sm text-foreground">{result.error}</p>
+                </Message>
+              {/if}
+
+              <form method="POST" action="?/update" class="flex flex-col gap-4">
+                <input type="hidden" name="id" value={region.id} />
+
+                <div class="flex flex-col gap-1.5">
+                  <Label for="region-{region.id}-name">地域名</Label>
+                  <Input
+                    id="region-{region.id}-name"
+                    class="w-full"
+                    name="name"
+                    type="text"
+                    required
+                    isError={Boolean(result?.fieldErrors.name)}
+                    value={result?.values.name ?? region.name}
+                  />
+                  {#if result?.fieldErrors.name}
+                    <p role="alert" class="text-sm text-destructive">
+                      {result.fieldErrors.name[0]}
+                    </p>
+                  {/if}
+                </div>
+
+                <div class="flex items-center gap-2">
+                  <Checkbox
+                    id="region-{region.id}-dual-entry"
+                    name="allowsDualEntry"
+                    checked={result?.values.allowsDualEntry ??
+                      region.allowsDualEntry}
+                  />
+                  <Label for="region-{region.id}-dual-entry">
+                    最強位と新人王の両方へのエントリーを認める
+                  </Label>
+                </div>
+
+                <div class="flex flex-wrap gap-2">
+                  <Button type="submit">保存</Button>
+                </div>
+              </form>
+            </Card>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </section>
+</PageContainer>

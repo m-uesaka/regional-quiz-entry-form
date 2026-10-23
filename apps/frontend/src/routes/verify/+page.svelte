@@ -1,36 +1,65 @@
 <script lang="ts">
+  import PageContainer from '$lib/components/layout/PageContainer.svelte';
+  import PageHeader from '$lib/components/layout/PageHeader.svelte';
+  import {buttonVariants} from '$lib/components/ui/atoms/Button.svelte';
+  import Card from '$lib/components/ui/atoms/Card.svelte';
+  import Message from '$lib/components/ui/items/Message.svelte';
   import type {PageProps} from './$types';
   let {data}: PageProps = $props();
 </script>
 
-<h1>エントリーの確認</h1>
+<PageContainer>
+  <PageHeader title="エントリーの確認" />
 
-{#if data.status === 'confirmed'}
-  <p>エントリーが確定しました。</p>
-  <p>大会当日の詳細は、後日あらためてご連絡します。</p>
-{:else if data.status === 'waitlisted'}
-  <p>定員に達していたため、キャンセル待ちになりました。</p>
-  <!-- The position isn't in this endpoint's response; mypage lists it
-       alongside the entry, so that's where the participant is sent for it. -->
-  <p>キャンセル待ちの順位はマイページから確認できます。</p>
-  <p>空きが出た場合は、順番に繰り上げのうえご連絡します。</p>
-{:else}
-  <p>この確認リンクは無効です。</p>
-  <p>
-    リンクの有効期限(24時間)が切れているか、すでに使用済みの可能性があります。
-  </p>
-  <!-- Which tournament the token belonged to isn't recoverable from an
-       invalid token, so re-entry is guided through mypage rather than a
-       direct link to the entry form. -->
-  <p>
-    すでにエントリーが確定している場合もあるため、まずはマイページにログインしてエントリー状況をご確認ください。エントリーが残っていない場合は、大会のエントリーフォームからあらためてエントリーしてください。
-  </p>
-{/if}
+  {#if data.status === 'confirmed'}
+    <Message variant="success">
+      <div class="flex flex-col gap-1 text-sm">
+        <p class="font-semibold">エントリーが確定しました。</p>
+        <p>大会当日の詳細は、後日あらためてご連絡します。</p>
+      </div>
+    </Message>
+  {:else if data.status === 'waitlisted'}
+    <Message variant="warning">
+      <div class="flex flex-col gap-1 text-sm">
+        <p class="font-semibold">
+          定員に達していたため、キャンセル待ちになりました。
+        </p>
+        <!-- The position isn't in this endpoint's response; mypage lists it
+             alongside the entry, so that's where the participant is sent for it. -->
+        <p>キャンセル待ちの順位はマイページから確認できます。</p>
+        <p>空きが出た場合は、順番に繰り上げのうえご連絡します。</p>
+      </div>
+    </Message>
+  {:else}
+    <Message variant="danger">
+      <div class="flex flex-col gap-1 text-sm">
+        <p class="font-semibold">この確認リンクは無効です。</p>
+        <p>
+          リンクの有効期限(24時間)が切れているか、すでに使用済みの可能性があります。
+        </p>
+        <!-- Which tournament the token belonged to isn't recoverable from an
+             invalid token, so re-entry is guided through mypage rather than a
+             direct link to the entry form. -->
+        <p>
+          すでにエントリーが確定している場合もあるため、まずはマイページにログインしてエントリー状況をご確認ください。エントリーが残っていない場合は、大会のエントリーフォームからあらためてエントリーしてください。
+        </p>
+      </div>
+    </Message>
+  {/if}
 
-<p><a href="/mypage">マイページへ</a></p>
-<!-- Entry creation doesn't start a participant session, so a participant
-     arriving from the confirmation mail is usually logged out and will be
-     sent to /mypage/login first. -->
-<p>
-  マイページの閲覧にはログインが必要です。ログインしていない場合はログイン画面に移動します。
-</p>
+  <Card class="gap-3">
+    <p>
+      <a
+        href="/mypage"
+        class={buttonVariants({variant: 'primary', tone: 'solid', size: 'medium'})}
+        >マイページへ</a
+      >
+    </p>
+    <!-- Entry creation doesn't start a participant session, so a participant
+         arriving from the confirmation mail is usually logged out and will be
+         sent to /mypage/login first. -->
+    <p class="text-sm text-muted-foreground">
+      マイページの閲覧にはログインが必要です。ログインしていない場合はログイン画面に移動します。
+    </p>
+  </Card>
+</PageContainer>

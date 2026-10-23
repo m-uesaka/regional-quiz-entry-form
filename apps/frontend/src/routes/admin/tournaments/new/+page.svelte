@@ -1,5 +1,9 @@
 <script lang="ts">
   import TournamentForm from '$lib/components/TournamentForm.svelte';
+  import PageContainer from '$lib/components/layout/PageContainer.svelte';
+  import PageHeader from '$lib/components/layout/PageHeader.svelte';
+  import Card from '$lib/components/ui/atoms/Card.svelte';
+  import Message from '$lib/components/ui/items/Message.svelte';
   import {emptyTournamentFormValues} from '$lib/tournament-form';
   import type {PageProps} from './$types';
 
@@ -10,10 +14,16 @@
   const values = $derived(form?.values ?? emptyTournamentFormValues());
 </script>
 
-<h1>大会を作成</h1>
+<PageContainer>
+  <PageHeader title="大会を作成" />
 
-{#if form?.error}
-  <p role="alert">{form.error}</p>
-{/if}
+  <Card>
+    {#if form?.error}
+      <Message variant="danger">
+        <p role="alert" class="text-sm text-foreground">{form.error}</p>
+      </Message>
+    {/if}
 
-<TournamentForm regions={data.regions} {values} submitLabel="作成" />
+    <TournamentForm regions={data.regions} {values} submitLabel="作成" />
+  </Card>
+</PageContainer>

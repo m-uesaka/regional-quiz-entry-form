@@ -31,4 +31,27 @@ describe('staff +layout.svelte', () => {
     expect(screen.queryByRole('button', {name: 'ログアウト'})).toBeNull();
     expect(screen.getByText('ページ本文')).toBeInTheDocument();
   });
+
+  it('links general staff to the dashboard', () => {
+    render(Layout, {
+      data: {loggedIn: true, isGeneralStaff: true},
+      children,
+      params: {},
+    });
+
+    expect(screen.getByRole('link', {name: 'ダッシュボード'})).toHaveAttribute(
+      'href',
+      '/staff/dashboard',
+    );
+  });
+
+  it('does not link regional staff to the dashboard, which refuses them', () => {
+    render(Layout, {
+      data: {loggedIn: true, isGeneralStaff: false},
+      children,
+      params: {},
+    });
+
+    expect(screen.queryByRole('link', {name: 'ダッシュボード'})).toBeNull();
+  });
 });

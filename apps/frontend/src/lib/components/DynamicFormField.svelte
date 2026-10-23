@@ -1,6 +1,8 @@
 <script lang="ts">
   import type {FormFieldDefYaml} from '@regional-quiz/shared';
   import {customFieldName} from '$lib/custom-field-name';
+  import Label from '$lib/components/ui/atoms/Label.svelte';
+  import Textarea from '$lib/components/ui/atoms/Textarea.svelte';
 
   interface Props {
     field: FormFieldDefYaml;
@@ -69,33 +71,37 @@
      rejected answer is reported in the same place whatever the field
      type is. -->
 {#snippet errorMessage()}
-  {#if error}<p class="field-error">{error}</p>{/if}
+  {#if error}<p class="text-sm text-destructive">{error}</p>{/if}
 {/snippet}
 
+<!-- The options stay native inputs inside their own `<label>`: a native
+     radio/checkbox is what `bind:group` and the server-rendered `required`
+     rely on, and the wrapping label is what names each option. -->
 {#if field.type === 'textarea'}
-  <div class="form-field">
-    <label for={controlName}>
+  <div class="flex flex-col gap-1.5">
+    <Label for={controlName}>
       {field.label}
-      {#if field.required}<span aria-hidden="true">*</span>{/if}
-    </label>
-    <textarea
+      {#if field.required}<span aria-hidden="true" class="ml-0.5 text-destructive">*</span>{/if}
+    </Label>
+    <Textarea
       id={controlName}
       name={controlName}
       required={field.required}
       bind:value
-    ></textarea>
+    />
     {@render errorMessage()}
   </div>
 {:else if field.type === 'radio'}
-  <fieldset class="form-field">
-    <legend>
+  <fieldset class="flex flex-col gap-2">
+    <legend class="mb-1.5 text-sm/tight font-medium text-foreground">
       {field.label}
-      {#if field.required}<span aria-hidden="true">*</span>{/if}
+      {#if field.required}<span aria-hidden="true" class="ml-0.5 text-destructive">*</span>{/if}
     </legend>
     {#each field.options as option (option)}
-      <label>
+      <label class="flex w-fit cursor-pointer items-center gap-2 text-sm">
         <input
           type="radio"
+          class="size-4 cursor-pointer accent-primary"
           name={controlName}
           value={option}
           required={field.required}
@@ -108,15 +114,16 @@
   </fieldset>
 {:else if field.type === 'checkbox'}
   {#if field.options && field.options.length > 0}
-    <fieldset class="form-field">
-      <legend>
+    <fieldset class="flex flex-col gap-2">
+      <legend class="mb-1.5 text-sm/tight font-medium text-foreground">
         {field.label}
-        {#if field.required}<span aria-hidden="true">*</span>{/if}
+        {#if field.required}<span aria-hidden="true" class="ml-0.5 text-destructive">*</span>{/if}
       </legend>
       {#each field.options as option (option)}
-        <label>
+        <label class="flex w-fit cursor-pointer items-center gap-2 text-sm">
           <input
             type="checkbox"
+            class="size-4 cursor-pointer accent-primary"
             name={controlName}
             value={option}
             required={hydrated && field.required && !hasCheckboxSelection}
@@ -128,10 +135,11 @@
       {@render errorMessage()}
     </fieldset>
   {:else}
-    <div class="form-field">
-      <label>
+    <div class="flex flex-col gap-1.5">
+      <label class="flex w-fit cursor-pointer items-center gap-2 text-sm">
         <input
           type="checkbox"
+          class="size-4 cursor-pointer accent-primary"
           name={controlName}
           value={booleanCheckboxValue}
           required={field.required}
