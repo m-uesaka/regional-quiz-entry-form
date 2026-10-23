@@ -80,3 +80,38 @@ export function fromJstDatetimeLocal(value: string): string | null {
   if (Number.isNaN(instant)) return trimmed;
   return new Date(instant).toISOString();
 }
+
+// Read once: building an `Intl.DateTimeFormat` is far costlier than using
+// one, and the portal formats two instants per tournament.
+const JST_DISPLAY_FORMAT = new Intl.DateTimeFormat('ja-JP', {
+  timeZone: 'Asia/Tokyo',
+  year: 'numeric',
+  month: 'numeric',
+  day: 'numeric',
+  weekday: 'short',
+  hour: 'numeric',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+/**
+ * Formats an instant for people to read, in JST: `2026年11月1日(日) 9:00`.
+ *
+ * Pinned to JST for the same reason as `toJstDatetimeLocal`: the page is
+ * rendered on a Worker whose local time is UTC, for readers in Japan.
+ *
+ * @param iso The instant to show.
+ * @return The formatted text, or an empty string when `iso` is not a
+ *     readable instant.
+ */
+export function formatJstDateTime(iso: string): string {
+  const instant = new Date(iso);
+  if (Number.isNaN(instant.getTime())) return '';
+  const parts = Object.fromEntries(
+    JST_DISPLAY_FORMAT.formatToParts(instant).map(part => [
+      part.type,
+      part.value,
+    ]),
+  );
+  return `${parts.year}年${parts.month}月${parts.day}日(${parts.weekday}) ${parts.hour}:${parts.minute}`;
+}
