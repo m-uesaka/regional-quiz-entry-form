@@ -2,7 +2,13 @@ import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
 import type {EntryInput, TournamentType} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
-import {cancelOwnEntry, createEntry, updateOwnEntry} from './entries';
+import {
+  cancelOwnEntry,
+  checkEntrySubmission,
+  createEntry,
+  createEntryUnauthenticated,
+  updateOwnEntry,
+} from './entries';
 import {hashPassword} from './password';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
 
@@ -394,6 +400,102 @@ describe.skipIf(!(await isDbReachable()))(
 
       expect(result.ok).toBe(false);
       expect(!result.ok && result.status).toBe(401);
+    });
+
+    /**
+     * Runs a submission the way the unauthenticated route does: the
+     * address-independent check, then the rest as background work.
+     */
+    async function enterUnauthenticated(
+      tournamentId: string,
+      input: EntryInput,
+    ): Promise<Awaited<ReturnType<typeof createEntryUnauthenticated>>> {
+      const check = await checkEntrySubmission(env, tournamentId, input);
+      if (!check.ok) {
+        throw new Error(`the submission was refused: ${check.error}`);
+      }
+      return createEntryUnauthenticated(env, check.tournament, input);
+    }
+
+    it('createEntryUnauthenticated notifies by mail instead of failing on a wrong password', async () => {
+      const fixture = await createFixture('unauth-wrong-password');
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      await sql`
+        insert into participants (region_id, email, password_hash)
+        values (${fixture.regionId}, ${email}, ${await hashPassword('the-real-password')})
+      `;
+      mailSendCount = 0;
+
+      const outcome = await enterUnauthenticated(
+        fixture.tournamentId,
+        validInput({
+          email,
+          password: 'a-wrong-password',
+          passwordConfirm: 'a-wrong-password',
+          regulationIds: [fixture.regulationId],
+        }),
+      );
+
+      expect(outcome).toEqual({kind: 'notified', reason: 'password-mismatch'});
+      expect(mailSendCount).toBe(1);
+    });
+
+    it('createEntryUnauthenticated notifies by mail instead of failing for another region', async () => {
+      const fixtureA = await createFixture('unauth-region-a');
+      const fixtureB = await createFixture('unauth-region-b');
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      await sql`
+        insert into participants (region_id, email, password_hash)
+        values (${fixtureA.regionId}, ${email}, ${await hashPassword('password123')})
+      `;
+      mailSendCount = 0;
+
+      const outcome = await enterUnauthenticated(
+        fixtureB.tournamentId,
+        validInput({email, regulationIds: [fixtureB.regulationId]}),
+      );
+
+      expect(outcome).toEqual({kind: 'notified', reason: 'other-region'});
+      expect(mailSendCount).toBe(1);
+    });
+
+    it('createEntryUnauthenticated creates no entry when the password does not match', async () => {
+      const fixture = await createFixture('unauth-no-entry');
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      const [participant] = await sql`
+        insert into participants (region_id, email, password_hash)
+        values (${fixture.regionId}, ${email}, ${await hashPassword('the-real-password')})
+        returning id
+      `;
+
+      await enterUnauthenticated(
+        fixture.tournamentId,
+        validInput({
+          email,
+          password: 'a-wrong-password',
+          passwordConfirm: 'a-wrong-password',
+          regulationIds: [fixture.regulationId],
+        }),
+      );
+
+      const [{count}] = await sql`
+        select count(*)::int as count from entries
+        where participant_id = ${participant.id}
+      `;
+      expect(count).toBe(0);
+    });
+
+    it('createEntryUnauthenticated creates the entry for an unknown address', async () => {
+      const fixture = await createFixture('unauth-success');
+      mailSendCount = 0;
+
+      const outcome = await enterUnauthenticated(
+        fixture.tournamentId,
+        validInput({regulationIds: [fixture.regulationId]}),
+      );
+
+      expect(outcome.kind).toBe('created');
+      expect(mailSendCount).toBe(1);
     });
 
     it('creates a pending_verification entry and sends a verification email', async () => {

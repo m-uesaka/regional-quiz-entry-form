@@ -37,11 +37,10 @@ export interface CapturedMail {
   receivedAt: string;
 }
 
-/** A participant the test created, and the entry they created it with. */
+/** A participant the test created with an entry. */
 export interface EnteredParticipant {
   email: string;
   password: string;
-  entryId: string;
   name: string;
   displayName: string;
 }
@@ -58,6 +57,12 @@ export interface EntryOverrides {
 
 /** The subject `sendVerificationEmail()` sends the confirmation link under. */
 export const VERIFICATION_MAIL_SUBJECT = 'エントリー確認メール';
+
+/**
+ * The subject `sendEntryNoticeEmail()` tells an address's owner, instead of
+ * the submitter, why an anonymous entry wasn't made (#117).
+ */
+export const ENTRY_NOTICE_SUBJECT = 'エントリーを受け付けられませんでした';
 
 const MAIL_WAIT_TIMEOUT_MS = 10_000;
 const MAIL_POLL_INTERVAL_MS = 100;
@@ -114,12 +119,15 @@ export async function submitEntry(
       },
     },
   );
-  expect(response.status(), await response.text()).toBe(201);
-  const entry = (await response.json()) as {id: string};
+  // Answered before the entry is made, and the same whatever the address
+  // (#117): the account and the entry are created after the response, in
+  // `waitUntil()`. The confirmation mail is the last thing that work does,
+  // so waiting for it is what makes the entry safe for the spec to rely on.
+  expect(response.status(), await response.text()).toBe(202);
+  await waitForMail(request, email, VERIFICATION_MAIL_SUBJECT);
   return {
     email,
     password: PARTICIPANT_PASSWORD,
-    entryId: entry.id,
     name,
     displayName,
   };
@@ -145,9 +153,10 @@ export async function readMails(
 /**
  * Waits for a mail to reach the stub.
  *
- * Every send the specs trigger is awaited inside the request that causes
- * it, so this normally succeeds on the first read; the polling is only
- * there so a slow machine doesn't turn into a flaky failure.
+ * Mail is not always sent inside the request that causes it: an anonymous
+ * entry is answered first and its mail sent afterwards, in `waitUntil()`
+ * (#117). So this polls, which also keeps a slow machine from turning into a
+ * flaky failure.
  * @param request The API context to read through.
  * @param to The recipient address to wait for.
  * @param subject The exact subject to wait for. Omit to take whichever

@@ -52,6 +52,11 @@ export interface EntryFormInput {
    * `defaultCustomFieldValues`, which satisfy its required fields.
    */
   customFieldValues?: Record<string, string | string[]>;
+  /**
+   * Whether the participant is logged in, in which case the form has no
+   * address or password fields to fill (#117).
+   */
+  loggedIn?: boolean;
 }
 
 /** A participant the test created by filling the entry form in. */
@@ -176,19 +181,21 @@ export async function fillEntryForm(
     page.getByLabel('掲載名', {exact: true}),
     participant.displayName,
   );
-  await fillField(
-    page.getByLabel('メールアドレス', {exact: true}),
-    participant.email,
-  );
-  // Exact, or this would also match the confirmation field below it.
-  await fillField(
-    page.getByLabel('パスワード', {exact: true}),
-    participant.password,
-  );
-  await fillField(
-    page.getByLabel('パスワード(確認)', {exact: true}),
-    participant.password,
-  );
+  if (!input.loggedIn) {
+    await fillField(
+      page.getByLabel('メールアドレス', {exact: true}),
+      participant.email,
+    );
+    // Exact, or this would also match the confirmation field below it.
+    await fillField(
+      page.getByLabel('パスワード', {exact: true}),
+      participant.password,
+    );
+    await fillField(
+      page.getByLabel('パスワード(確認)', {exact: true}),
+      participant.password,
+    );
+  }
 
   // Every one of them: an entry may claim several conditions, and the
   // specs assert that all of them come back out on the staff screens.
@@ -266,6 +273,10 @@ export async function submitEntryForm(
 
   await page.getByRole('button', {name: 'エントリーする'}).click();
   await expect(page.getByRole('status')).toContainText(participant.email);
+  // The page answers before the entry is made (#117); the confirmation mail
+  // is the last thing the background work does, so once it is in, the
+  // account and the entry exist for whatever the spec does next.
+  await waitForMail(page.request, participant.email, VERIFICATION_MAIL_SUBJECT);
   return participant;
 }
 

@@ -169,7 +169,7 @@ flowchart TB
 | `password_changed_at` | timestamptz | not null, default `now()` | パスワードが最後に変わった時刻(`0011` で追加)。セッション失効の判定に使います |
 | `created_at` | timestamptz | not null, default `now()` | |
 
-- `email` は地域ごとではなく**システム全体で一意**です。そのため、ある参加者が別地域の大会にエントリーしようとすると `createEntry()` が 409(`already registered in another region`)を返します。
+- `email` は地域ごとではなく**システム全体で一意**です。そのため、ある参加者が別地域の大会にエントリーすることはできません。未ログインのエントリーでは、その旨をそのアドレスへメールで伝え(応答は他の場合と同じ `202`。#117)、ログイン中のエントリーでは 409(`already registered in another region`)を返します。
 - Supabase Auth ではなく自前のテーブルでアカウントを管理しています。パスワードのハッシュ化・検証は `apps/backend/src/lib/password.ts`(Web Crypto の PBKDF2)。Cloudflare Workers は Node.js ランタイムではないため、Node 依存のライブラリは使えません。
 - 既存メールアドレスでの再エントリー時は**パスワード照合を必須**にしています。これがないと、メールアドレスを知っている第三者が他人のアカウントにエントリーをぶら下げられてしまいます。
 - `password_changed_at` は**パスワード再設定で既存セッションを切る**ためのものです。参加者セッションはサーバ側に実体を持たない HS256 JWT(有効期間 7 日)なので、パスワードを変えただけでは発行済み Cookie は無効になりません。ログイン時にこの列の値を `pwdChangedAt` クレームとして JWT に載せ、`requireParticipant()` が毎回この列を読み直して**一致しないセッションを 401 で拒否**します。これがないと、Cookie を盗まれた参加者がパスワードを変更しても、攻撃者は最大 7 日間マイページにアクセスし続けられます。

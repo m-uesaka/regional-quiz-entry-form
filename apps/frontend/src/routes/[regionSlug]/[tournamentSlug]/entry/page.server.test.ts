@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest';
 import type {HttpError} from '@sveltejs/kit';
 import type {
   FormFieldDef,
+  ParticipantClaims,
   Regulation,
   StaffClaims,
   Tournament,
@@ -76,7 +77,11 @@ interface FakeApiOptions {
   tournament?: Tournament;
   /** When set, the tournament lookup answers with this status instead. */
   tournamentStatus?: number;
-  /** The `POST .../entries` response, defaulting to a created entry. */
+  /**
+   * The `POST .../entries` (or `.../entries/session`) response, defaulting
+   * to what each answers on success: 202 for an anonymous submission, 201
+   * with the entry for a logged-in one.
+   */
   entryResponse?: {status: number; body: unknown};
   /** The tournament's custom form field definitions. */
   formFieldDefs?: FormFieldDef[];
@@ -110,7 +115,11 @@ function fakeApi(options: FakeApiOptions = {}): typeof fetch {
       options.turnstileTokens?.push(
         new Headers(init?.headers).get('cf-turnstile-response'),
       );
-      const entry = options.entryResponse ?? {status: 201, body: {id: 'entry'}};
+      const entry =
+        options.entryResponse ??
+        (url.endsWith('/entries/session')
+          ? {status: 201, body: {id: 'entry'}}
+          : {status: 202, body: {ok: true}});
       return Response.json(entry.body, {status: entry.status});
     }
     return Response.json(tournament, {status: options.tournamentStatus ?? 200});
@@ -129,7 +138,8 @@ function buildEvent(options: {
       tournamentSlug: options.tournamentSlug ?? 'saikyoi',
     },
     fetch: options.fetch,
-    locals: {staff: options.staff},
+    locals: {staff: options.staff, participant: null},
+    url: new URL('http://localhost/tokyo/saikyoi/entry'),
   } as Parameters<typeof load>[0];
 }
 
@@ -151,7 +161,7 @@ describe('entry +page.server load', () => {
       staff: GENERAL_STAFF,
     });
 
-    await expect(load(event)).resolves.toEqual({
+    await expect(load(event)).resolves.toMatchObject({
       tournament: OUT_OF_PERIOD_TOURNAMENT,
       regulations: REGULATIONS,
       formFieldDefs: FORM_FIELD_DEFS,
@@ -228,6 +238,8 @@ describe('entry +page.server load', () => {
       tournament: OPEN_TOURNAMENT,
       regulations: REGULATIONS,
       formFieldDefs: FORM_FIELD_DEFS,
+      loggedIn: false,
+      loginPath: '/mypage/login?redirectTo=%2Ftokyo%2Fsaikyoi%2Fentry',
     });
   });
 
@@ -279,6 +291,9 @@ function validFormData(
 function buildActionEvent(options: {
   fetch: typeof fetch;
   fields: Record<string, string | string[]>;
+  participant?: ParticipantClaims | null;
+  /** Collects the names of the cookies the action deletes. */
+  deletedCookies?: string[];
 }): Parameters<typeof actions.default>[0] {
   const body = new FormData();
   for (const [key, value] of Object.entries(options.fields)) {
@@ -295,8 +310,138 @@ function buildActionEvent(options: {
       method: 'POST',
       body,
     }),
-  } as Parameters<typeof actions.default>[0];
+    locals: {staff: null, participant: options.participant ?? null},
+    url: new URL('http://localhost/tokyo/saikyoi/entry'),
+    cookies: {
+      delete: (name: string) => {
+        options.deletedCookies?.push(name);
+      },
+    },
+  } as unknown as Parameters<typeof actions.default>[0];
 }
+
+const PARTICIPANT: ParticipantClaims = {
+  sub: '00000000-0000-0000-0000-000000000005',
+  pwdChangedAt: 0,
+};
+
+/** What a form rendered for a logged-in participant submits. */
+function sessionFormData(
+  overrides: Record<string, string | string[]> = {},
+): Record<string, string | string[]> {
+  const fields = validFormData({entryMode: 'session', ...overrides});
+  delete fields.email;
+  delete fields.password;
+  delete fields.passwordConfirm;
+  return fields;
+}
+
+describe('entry +page.server default action for a logged-in participant', () => {
+  // Someone logged in in another tab after this anonymous form was opened.
+  // The address and password typed into it must not be dropped in favour of
+  // whoever that is.
+  it('keeps a form rendered anonymously on the anonymous path even with a session', async () => {
+    const requests: string[] = [];
+
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({requests}),
+        fields: validFormData(),
+        participant: PARTICIPANT,
+      }),
+    );
+
+    expect(result).toEqual({submitted: true, email: 'taro@example.com'});
+    expect(requests).toContain(
+      `/api/tournaments/${OPEN_TOURNAMENT.id}/entries`,
+    );
+    expect(requests.some(url => url.endsWith('/entries/session'))).toBe(false);
+  });
+
+  it('enters under the session without asking for credentials', async () => {
+    const requests: string[] = [];
+
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({requests}),
+        fields: sessionFormData(),
+        participant: PARTICIPANT,
+      }),
+    );
+
+    expect(result).toEqual({submitted: true, loggedIn: true});
+    expect(requests).toContain(
+      `/api/tournaments/${OPEN_TOURNAMENT.id}/entries/session`,
+    );
+  });
+
+  // The session already says who is asking, so the API refuses directly and
+  // the form can say why.
+  it('reports a refusal directly', async () => {
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          entryResponse: {status: 409, body: {error: 'already entered'}},
+        }),
+        fields: sessionFormData(),
+        participant: PARTICIPANT,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 409,
+      data: {error: 'この大会には既にエントリー済みです'},
+    });
+  });
+
+  it('sends a participant whose session lapsed while the form was open to log in', async () => {
+    const requests: string[] = [];
+
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({requests}),
+        fields: sessionFormData(),
+        participant: null,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 401,
+      data: {
+        loginPath: '/mypage/login?redirectTo=%2Ftokyo%2Fsaikyoi%2Fentry',
+      },
+    });
+    expect(requests.some(url => url.includes('/entries'))).toBe(false);
+  });
+
+  // The cookie still reads as valid here, but the API cut it (a password
+  // reset, a deleted participant). Left in place, `/mypage/login` would take
+  // the visitor for logged in and send them straight back to this form.
+  it('offers the login screen and drops the dead cookie when the API refuses the session', async () => {
+    const deletedCookies: string[] = [];
+
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          entryResponse: {status: 401, body: {error: 'unauthorized'}},
+        }),
+        fields: sessionFormData(),
+        participant: PARTICIPANT,
+        deletedCookies,
+      }),
+    );
+
+    expect(deletedCookies).toEqual(['participant_session']);
+    expect(result).toMatchObject({
+      status: 401,
+      data: {
+        error:
+          'ログインの有効期限が切れました。もう一度ログインしてからエントリーしてください',
+        loginPath: '/mypage/login?redirectTo=%2Ftokyo%2Fsaikyoi%2Fentry',
+      },
+    });
+  });
+});
 
 describe('entry +page.server default action', () => {
   it('reports the confirmation mail on success', async () => {
@@ -305,6 +450,22 @@ describe('entry +page.server default action', () => {
     );
 
     expect(result).toEqual({submitted: true, email: 'taro@example.com'});
+  });
+
+  // Answered before anything about the address is known (#117): the entry
+  // may or may not exist, so the result names the address mailed and claims
+  // nothing else.
+  it('posts an anonymous submission to the address-blind endpoint', async () => {
+    const requests: string[] = [];
+
+    await actions.default(
+      buildActionEvent({fetch: fakeApi({requests}), fields: validFormData()}),
+    );
+
+    expect(requests).toContain(
+      `/api/tournaments/${OPEN_TOURNAMENT.id}/entries`,
+    );
+    expect(requests.some(url => url.endsWith('/entries/session'))).toBe(false);
   });
 
   it('rejects a mismatched password confirmation before calling the API', async () => {
@@ -378,12 +539,7 @@ describe('entry +page.server default action', () => {
     [
       409,
       'already registered in another region',
-      'このメールアドレスは別の地域で登録済みです',
-    ],
-    [
-      401,
-      'invalid password',
-      'このメールアドレスは登録済みです。登録時のパスワードを入力してください',
+      'このアカウントは別の地域で登録済みのため、この大会にはエントリーできません',
     ],
     [403, 'entry period closed', 'エントリー期間外です'],
     [

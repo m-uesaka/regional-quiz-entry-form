@@ -1,12 +1,14 @@
 import {fail, redirect} from '@sveltejs/kit';
 import {ParticipantLoginInputSchema} from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
+import {participantLandingPath} from '$lib/server/participant-login';
 import type {Actions, PageServerLoad} from './$types';
 
 /**
  * Renders the login form, unless the visitor already has a session — in
- * which case there is nothing to log in to and `/mypage` is what they were
- * after. `locals.participant` is the same claim set `hooks.server.ts`
+ * which case there is nothing to log in to, and they are sent on to where
+ * they were going: the entry form that sent them here (`redirectTo`), or
+ * `/mypage`. `locals.participant` is the same claim set `hooks.server.ts`
  * verified the session cookie into, so this agrees with what the API would
  * say about the cookie.
  *
@@ -16,13 +18,16 @@ import type {Actions, PageServerLoad} from './$types';
  */
 export const load: PageServerLoad = ({locals, url}) => {
   if (locals.participant) {
-    throw redirect(303, '/mypage');
+    throw redirect(
+      303,
+      participantLandingPath(url.searchParams.get('redirectTo')),
+    );
   }
   return {passwordReset: url.searchParams.get('reset') === 'done'};
 };
 
 export const actions = {
-  default: async ({request, fetch}) => {
+  default: async ({request, fetch, url}) => {
     const formData = await request.formData();
     // Echoed back on failure so only the password has to be retyped. The
     // password itself never travels back.
@@ -66,6 +71,14 @@ export const actions = {
     // The session cookie the API answered with is on this response already:
     // `handleFetch` in `src/hooks.server.ts` moves it into SvelteKit's
     // cookie jar as the call comes back.
-    throw redirect(303, '/mypage');
+    //
+    // `redirectTo` is on the URL the form posted to: it has no `action`, so
+    // it posts back to this page's own URL, query string included. An entry
+    // form sends registered participants here to log in before entering
+    // (#117), and this is what takes them back to it.
+    throw redirect(
+      303,
+      participantLandingPath(url.searchParams.get('redirectTo')),
+    );
   },
 } satisfies Actions;

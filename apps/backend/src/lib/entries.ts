@@ -5,10 +5,12 @@ import {
   isWithinEntryPeriod,
   type EntryEditInput,
   type EntryInput,
+  type EntrySessionInput,
   type EntryStatus,
 } from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
+import {sendEntryNoticeEmail, type EntryNoticeReason} from './entry-notice';
 import {sendVerificationEmail} from './entry-verification';
 import {FORM_FIELD_DEF_COLUMNS, toFormFieldDef} from './form-field-defs';
 import type {FormFieldDefRow} from './form-field-defs';
@@ -18,6 +20,24 @@ import {promoteNextWaitlistedEntry} from './waitlist';
 type CreateEntryResult =
   | {ok: true; entry: {id: string}}
   | {ok: false; status: 400 | 401 | 403 | 409 | 500; error: string};
+
+/**
+ * What the address-independent half of an entry submission concluded: the
+ * tournament it can go on to enter, or why it can't.
+ */
+export type EntrySubmissionCheck =
+  | {ok: true; tournament: EntryTournamentRow}
+  | {ok: false; status: 400 | 403 | 500; error: string};
+
+/**
+ * What an unauthenticated entry submission came to, once it has run in the
+ * background (`createEntryUnauthenticated()`). Never sent to the client,
+ * whose answer is the same whichever of these it was.
+ */
+export type CreateEntryOutcome =
+  | {kind: 'created'; entryId: string}
+  | {kind: 'notified'; reason: EntryNoticeReason}
+  | {kind: 'failed'; error: string};
 
 type UpdateOwnEntryResult =
   {ok: true} | {ok: false; status: 400 | 403 | 404 | 500; error: string};
@@ -31,8 +51,10 @@ interface RegulationRow {
   priority_ends_at: string | null;
 }
 
-interface TournamentRow {
+/** The tournament an entry submission is checked against. */
+export interface EntryTournamentRow {
   id: string;
+  name: string;
   region_id: string;
   entry_opens_at: string;
   entry_closes_at: string;
@@ -59,6 +81,17 @@ const ALREADY_ENTERED_ANOTHER_TOURNAMENT =
  * violation through, so the entry form has something stable to translate.
  */
 const REGULATION_NO_LONGER_AVAILABLE = 'regulation no longer available';
+
+/**
+ * The errors about the address's own account, named once: besides being
+ * answered by the logged-in route, each is what `ENTRY_NOTICE_REASONS` maps
+ * to the mail the unauthenticated route sends instead, so a string spelled
+ * one way here and another way there would silently stop that mail.
+ */
+const INVALID_PASSWORD = 'invalid password';
+const ALREADY_REGISTERED_IN_ANOTHER_REGION =
+  'already registered in another region';
+const ALREADY_ENTERED = 'already entered';
 
 /**
  * The SQLSTATE `check_region_dual_entry()` (migration 0016) raises. The
@@ -248,12 +281,18 @@ async function rollbackEntry(
 }
 
 /**
- * Runs the full entry-creation flow for `POST /tournaments/:tournamentId/entries`:
- * entry-period check, regulation priority-window check, validation of the
- * custom field answers against the tournament's own form definition,
- * participant lookup/creation, password hashing, `entries` row creation
- * (reusing the participant's own cancelled row for this tournament, if any)
- * and dispatch of the verification email.
+ * Runs the full entry-creation flow for an address-and-password submission,
+ * reporting every refusal as it happens: entry-period check, regulation
+ * priority-window check, validation of the custom field answers against the
+ * tournament's own form definition, participant lookup/creation, password
+ * hashing, `entries` row creation (reusing the participant's own cancelled
+ * row for this tournament, if any) and dispatch of the verification email.
+ *
+ * Not what `POST /tournaments/:tournamentId/entries` answers with: reporting
+ * "wrong password" or "registered in another region" to whoever submitted
+ * would tell them whether an address is registered (#117). The route runs
+ * `checkEntrySubmission()` up front and hands the rest to
+ * `createEntryUnauthenticated()` in the background.
  * @param env The Worker bindings.
  * @param tournamentId The tournament being entered.
  * @param input The validated entry form submission.
@@ -263,17 +302,41 @@ export async function createEntry(
   tournamentId: string,
   input: EntryInput,
 ): Promise<CreateEntryResult> {
+  const check = await checkEntrySubmission(env, tournamentId, input);
+  if (!check.ok) {
+    return check;
+  }
+  return createEntryAfterCheck(env, check.tournament, input);
+}
+
+/**
+ * The half of an entry submission that doesn't depend on whose it is: the
+ * tournament exists and is taking entries, the regulations chosen are
+ * allowed right now, and the custom field answers fit the tournament's own
+ * form. Nothing here reads `participants`, so its answer -- and how long it
+ * takes to give it -- says nothing about the address being entered under,
+ * which is what lets the unauthenticated route report these refusals
+ * directly while keeping everything after them to itself (#117).
+ * @param env The Worker bindings.
+ * @param tournamentId The tournament being entered.
+ * @param submission The parts of the submission checked here.
+ */
+export async function checkEntrySubmission(
+  env: Bindings,
+  tournamentId: string,
+  submission: Pick<EntrySessionInput, 'regulationIds' | 'customFieldValues'>,
+): Promise<EntrySubmissionCheck> {
   const db = createDbClient(env);
 
   const {data: tournament, error: tournamentError} = await db
     .from('tournaments')
     .select(
-      'id, region_id, entry_opens_at, entry_closes_at, ' +
+      'id, name, region_id, entry_opens_at, entry_closes_at, ' +
         'regions(allows_dual_entry), ' +
         'regulations(id, priority_starts_at, priority_ends_at)',
     )
     .eq('id', tournamentId)
-    .returns<TournamentRow[]>()
+    .returns<EntryTournamentRow[]>()
     .maybeSingle();
   // A failing select is not the same as an unknown tournament: the embeds
   // read columns added by later migrations, so a stale PostgREST schema
@@ -302,7 +365,9 @@ export async function createEntry(
     priorityStartsAt: regulation.priority_starts_at,
     priorityEndsAt: regulation.priority_ends_at,
   }));
-  if (!isRegulationSelectionAllowed(regulations, input.regulationIds, now)) {
+  if (
+    !isRegulationSelectionAllowed(regulations, submission.regulationIds, now)
+  ) {
     return {
       ok: false,
       status: 403,
@@ -324,11 +389,29 @@ export async function createEntry(
   }
   const customFieldValuesError = findCustomFieldValuesError(
     (fieldDefRows ?? []).map(toFormFieldDef),
-    input.customFieldValues,
+    submission.customFieldValues,
   );
   if (customFieldValuesError) {
     return {ok: false, status: 400, error: customFieldValuesError.message};
   }
+  return {ok: true, tournament};
+}
+
+/**
+ * The address-dependent half of `createEntry()`, for a submission that
+ * already passed `checkEntrySubmission()`: finds or creates the participant
+ * the address belongs to -- proving ownership by password when it already
+ * exists -- and enters them.
+ * @param env The Worker bindings.
+ * @param tournament The checked tournament.
+ * @param input The validated entry form submission.
+ */
+async function createEntryAfterCheck(
+  env: Bindings,
+  tournament: EntryTournamentRow,
+  input: EntryInput,
+): Promise<CreateEntryResult> {
+  const db = createDbClient(env);
 
   const {data: existingParticipant} = await db
     .from('participants')
@@ -343,7 +426,7 @@ export async function createEntry(
     return {
       ok: false,
       status: 409,
-      error: 'already registered in another region',
+      error: ALREADY_REGISTERED_IN_ANOTHER_REGION,
     };
   }
 
@@ -357,7 +440,7 @@ export async function createEntry(
       existingParticipant.password_hash,
     );
     if (!passwordValid) {
-      return {ok: false, status: 401, error: 'invalid password'};
+      return {ok: false, status: 401, error: INVALID_PASSWORD};
     }
     participantId = existingParticipant.id;
   } else {
@@ -380,6 +463,31 @@ export async function createEntry(
     participantId = created.id;
   }
 
+  return enterTournament(env, tournament, participantId, input.email, input);
+}
+
+/**
+ * Enters a participant whose identity is already settled -- by password in
+ * `createEntryAfterCheck()`, or by session in `createEntryForParticipant()`
+ * -- into a checked tournament: reuses their own cancelled entry if there is
+ * one, enforces the region's dual-entry rule, writes the entry and its
+ * regulations and mails the verification link.
+ * @param env The Worker bindings.
+ * @param tournament The checked tournament.
+ * @param participantId The participant being entered.
+ * @param email The participant's address, where the link is sent.
+ * @param input The entry itself.
+ */
+async function enterTournament(
+  env: Bindings,
+  tournament: EntryTournamentRow,
+  participantId: string,
+  email: string,
+  input: EntrySessionInput,
+): Promise<CreateEntryResult> {
+  const db = createDbClient(env);
+  const tournamentId = tournament.id;
+
   // A participant who cancelled may enter the same tournament again with the
   // same credentials. The unique (participant_id, tournament_id) constraint
   // means that has to reuse the cancelled row instead of inserting a second
@@ -395,7 +503,7 @@ export async function createEntry(
     return {ok: false, status: 500, error: existingEntryError.message};
   }
   if (existingEntry && existingEntry.status !== 'cancelled') {
-    return {ok: false, status: 409, error: 'already entered'};
+    return {ok: false, status: 409, error: ALREADY_ENTERED};
   }
 
   // requirements.md only says that regions allowing both 最強位 and 新人王
@@ -501,7 +609,7 @@ export async function createEntry(
   }
 
   try {
-    await sendVerificationEmail(env, entry.id, input.email);
+    await sendVerificationEmail(env, entry.id, email);
   } catch (mailError) {
     // Rolled back because the participant never received a usable
     // verification link, so the entry they can't confirm must not stand in
@@ -516,6 +624,166 @@ export async function createEntry(
     };
   }
   return {ok: true, entry: {id: entry.id}};
+}
+
+/**
+ * The refusals `createEntryAfterCheck()` can end in that are about the
+ * address's own account, mapped to the mail that tells its owner. Each is
+ * something only the owner of the address should learn, so the
+ * unauthenticated route mails it instead of answering with it.
+ */
+const ENTRY_NOTICE_REASONS: Record<string, EntryNoticeReason> = {
+  [INVALID_PASSWORD]: 'password-mismatch',
+  [ALREADY_REGISTERED_IN_ANOTHER_REGION]: 'other-region',
+  [ALREADY_ENTERED]: 'already-entered',
+  [ALREADY_ENTERED_ANOTHER_TOURNAMENT]: 'dual-entry',
+  [REGULATION_NO_LONGER_AVAILABLE]: 'regulation-unavailable',
+};
+
+/**
+ * Enters an address-and-password submission whose answer the client never
+ * sees (#117). The route has already answered -- identically, whatever the
+ * address -- and runs this in `waitUntil()`, so the time it takes is not
+ * visible either.
+ *
+ * - An unregistered address gets an account and the entry, as before.
+ * - A registered address with the matching password gets the entry.
+ * - Anything about the address's own account that would otherwise have
+ *   been an error -- a wrong password, registration in another region, an
+ *   entry already made -- is mailed to that address instead, so only its
+ *   owner learns it. No entry is made.
+ * - A failure on our side is logged; there is no one left to tell.
+ * @param env The Worker bindings.
+ * @param tournament The tournament, already through
+ *     `checkEntrySubmission()`.
+ * @param input The validated entry form submission.
+ */
+export async function createEntryUnauthenticated(
+  env: Bindings,
+  tournament: EntryTournamentRow,
+  input: EntryInput,
+): Promise<CreateEntryOutcome> {
+  // Runs after the response, inside `waitUntil()`, where a throw would
+  // surface as an unhandled rejection with none of the context below. So a
+  // thrown error (a network failure inside the Supabase client, say) is
+  // treated like any other failure on our side.
+  let result: CreateEntryResult;
+  try {
+    result = await createEntryAfterCheck(env, tournament, input);
+  } catch (e) {
+    result = {
+      ok: false,
+      status: 500,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+  if (result.ok) {
+    return {kind: 'created', entryId: result.entry.id};
+  }
+
+  const reason = ENTRY_NOTICE_REASONS[result.error];
+  if (!reason) {
+    // The address itself isn't logged: it is what an attacker would be
+    // probing for, and nothing here needs it to be diagnosed.
+    console.error('failed to create an unauthenticated entry', {
+      tournamentId: tournament.id,
+      status: result.status,
+      error: result.error,
+    });
+    // The submitter was told a mail was on its way, so one is sent even
+    // now, asking them to try again -- unless the mail provider is what
+    // failed, in which case this one fails too and the log above is all
+    // there is.
+    await sendEntryNotice(env, input.email, tournament, 'processing-failed');
+    return {kind: 'failed', error: result.error};
+  }
+  if (!(await sendEntryNotice(env, input.email, tournament, reason))) {
+    return {kind: 'failed', error: 'failed to send the entry notice'};
+  }
+  return {kind: 'notified', reason};
+}
+
+/**
+ * Sends an entry notice, logging rather than throwing a failure: it runs in
+ * the background, with no one left to report to.
+ * @return Whether the notice went out.
+ */
+async function sendEntryNotice(
+  env: Bindings,
+  email: string,
+  tournament: EntryTournamentRow,
+  reason: EntryNoticeReason,
+): Promise<boolean> {
+  try {
+    await sendEntryNoticeEmail(env, email, tournament.name, reason);
+    return true;
+  } catch (mailError) {
+    console.error('failed to send the entry notice', {
+      tournamentId: tournament.id,
+      reason,
+      error: mailError,
+    });
+    return false;
+  }
+}
+
+/** Shape of the participant lookup in `createEntryForParticipant()`. */
+interface SessionParticipantRow {
+  email: string;
+  region_id: string;
+}
+
+/**
+ * Enters a logged-in participant (`POST /tournaments/:tournamentId/entries/
+ * session`). The session has already proved who they are, so there is no
+ * password to check, and every refusal is reported directly: nothing it
+ * says is news to the person it is said to.
+ * @param env The Worker bindings.
+ * @param tournamentId The tournament being entered.
+ * @param participantId The logged-in participant, from the session cookie.
+ * @param input The validated entry form submission, without credentials.
+ */
+export async function createEntryForParticipant(
+  env: Bindings,
+  tournamentId: string,
+  participantId: string,
+  input: EntrySessionInput,
+): Promise<CreateEntryResult> {
+  const check = await checkEntrySubmission(env, tournamentId, input);
+  if (!check.ok) {
+    return check;
+  }
+  const {tournament} = check;
+
+  const db = createDbClient(env);
+  const {data: participant, error} = await db
+    .from('participants')
+    .select('email, region_id')
+    .eq('id', participantId)
+    .returns<SessionParticipantRow[]>()
+    .maybeSingle();
+  if (error) {
+    return {ok: false, status: 500, error: error.message};
+  }
+  if (!participant) {
+    // `requireParticipant()` read this same row a moment ago, so it was
+    // deleted in between; the session no longer names anyone.
+    return {ok: false, status: 401, error: 'unauthorized'};
+  }
+  if (participant.region_id !== tournament.region_id) {
+    return {
+      ok: false,
+      status: 409,
+      error: ALREADY_REGISTERED_IN_ANOTHER_REGION,
+    };
+  }
+  return enterTournament(
+    env,
+    tournament,
+    participantId,
+    participant.email,
+    input,
+  );
 }
 
 /** Shape of the ownership/entry-period lookup in `updateOwnEntry()`. */

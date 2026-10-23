@@ -22,9 +22,20 @@
     /** What the last rejected submission carried back, if there was one. */
     values?: EntryFormValues;
     fieldErrors?: EntryFieldErrors;
+    /**
+     * Whether a participant is logged in. They enter under their session,
+     * so the address and password fields are left out (#117).
+     */
+    loggedIn?: boolean;
   }
 
-  const {formFieldDefs, regulations, values, fieldErrors}: Props = $props();
+  const {
+    formFieldDefs,
+    regulations,
+    values,
+    fieldErrors,
+    loggedIn = false,
+  }: Props = $props();
 
   // The stored definitions carry API-shaped keys (`fieldKey` / `fieldType`);
   // `DynamicFormField` renders the shape the form was authored in.
@@ -132,55 +143,67 @@
     {/if}
   </div>
 
-  <div class="flex flex-col gap-1.5">
-    <Label for="email">メールアドレス</Label>
-    <Input
-      id="email"
-      name="email"
-      type="email"
-      bind:value={email}
-      isError={!!fieldError('email')}
-      required
-    />
-    {#if fieldError('email')}
-      <p class="text-sm text-destructive">{fieldError('email')}</p>
-    {/if}
-  </div>
+  {#if loggedIn}
+    <!-- Tells the action this form was rendered for a session, so a session
+         that lapsed while it was open is sent to log in again rather than
+         told about address and password fields it never showed. -->
+    <input type="hidden" name="entryMode" value="session" />
+    <p class="text-sm text-muted-foreground">
+      ログイン中のアカウントでエントリーします。メールアドレスとパスワードの入力は不要です。
+    </p>
+  {:else}
+    <div class="flex flex-col gap-1.5">
+      <Label for="email">メールアドレス</Label>
+      <Input
+        id="email"
+        name="email"
+        type="email"
+        bind:value={email}
+        isError={!!fieldError('email')}
+        required
+      />
+      {#if fieldError('email')}
+        <p class="text-sm text-destructive">{fieldError('email')}</p>
+      {/if}
+    </div>
 
-  <!-- An email address that has already entered another tournament keeps
-       its existing password; entering it again is how the API recognizes
-       the same participant. -->
-  <div class="flex flex-col gap-1.5">
-    <Label for="password">パスワード</Label>
-    <Input
-      id="password"
-      name="password"
-      type="password"
-      minlength={8}
-      autocomplete="new-password"
-      isError={!!fieldError('password')}
-      required
-    />
-    {#if fieldError('password')}
-      <p class="text-sm text-destructive">{fieldError('password')}</p>
-    {/if}
-  </div>
+    <!-- An address that is already registered is still recognised by its
+         password, but a wrong one isn't reported on this page: the
+         submission is answered the same whatever the address, and the
+         reason goes to its owner by mail (#117). Registered participants
+         are pointed at logging in instead, which leaves these fields out. -->
+    <div class="flex flex-col gap-1.5">
+      <Label for="password">パスワード</Label>
+      <Input
+        id="password"
+        name="password"
+        type="password"
+        minlength={8}
+        autocomplete="new-password"
+        isError={!!fieldError('password')}
+        required
+      />
+      {#if fieldError('password')}
+        <p class="text-sm text-destructive">{fieldError('password')}</p>
+      {/if}
+    </div>
 
-  <div class="flex flex-col gap-1.5">
-    <Label for="passwordConfirm">パスワード(確認)</Label>
-    <Input
-      id="passwordConfirm"
-      name="passwordConfirm"
-      type="password"
-      minlength={8}
-      autocomplete="new-password"
-      isError={!!fieldError('passwordConfirm')}
-      required
-    />
-    {#if fieldError('passwordConfirm')}
-      <p class="text-sm text-destructive">{fieldError('passwordConfirm')}</p>
-    {/if}
-  </div>
+    <div class="flex flex-col gap-1.5">
+      <Label for="passwordConfirm">パスワード(確認)</Label>
+      <Input
+        id="passwordConfirm"
+        name="passwordConfirm"
+        type="password"
+        minlength={8}
+        autocomplete="new-password"
+        isError={!!fieldError('passwordConfirm')}
+        required
+      />
+      {#if fieldError('passwordConfirm')}
+        <p class="text-sm text-destructive">{fieldError('passwordConfirm')}</p>
+      {/if}
+    </div>
+  {/if}
 
   <div class="flex flex-col gap-1.5">
     <RegulationSelector {regulations} bind:value={regulationIds} />
