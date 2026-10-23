@@ -13,6 +13,7 @@ import {
 import {createApiClient, isUnauthorized} from '$lib/api';
 import {participantLoginPath} from '$lib/server/participant-login';
 import {clearParticipantSession} from '$lib/server/participant-session';
+import {redirectToStaffLogin} from '$lib/server/staff-session';
 import {readTurnstileToken, TURNSTILE_TOKEN_FIELD} from '$lib/turnstile';
 import {
   customFieldErrors,
@@ -116,13 +117,18 @@ async function readErrorCode(res: {json(): Promise<unknown>}): Promise<string> {
  * Fetches the tournament named by the route, applying the same "not found"
  * / entry-period rules the page's `load` does. Used by both `load` and the
  * action, which needs the tournament's ID to post the entry.
- * @param params The route parameters.
- * @param fetch SvelteKit's `event.fetch`.
+ * @param event The request's `params` and `fetch`, plus the `cookies` and
+ *     `url` a refused staff session is cleared and redirected with.
  */
-async function fetchTournament(
-  params: RequestEvent['params'],
-  fetch: RequestEvent['fetch'],
-): Promise<Tournament> {
+async function fetchTournament({
+  params,
+  fetch,
+  cookies,
+  url,
+}: Pick<
+  RequestEvent,
+  'params' | 'fetch' | 'cookies' | 'url'
+>): Promise<Tournament> {
   // The RPC client's param type for `tournamentSlug` is the literal union
   // `'saikyoi' | 'shinjinou'` (inferred from the backend's zValidator), not
   // a bare `string`, so a raw route param needs narrowing before it
@@ -140,14 +146,18 @@ async function fetchTournament(
     if (res.status === 404) {
       throw error(404, '大会が見つかりません');
     }
+    // A 401 means the request carried a staff cookie the gate refused: it
+    // expired, or its sessions were revoked. Only staff hold that cookie, so
+    // it is dropped and its holder sent to log in again, rather than told
+    // the period is closed while the dead cookie stays put.
+    if (isUnauthorized(res)) {
+      redirectToStaffLogin(cookies, url);
+    }
     // The backend applies the same entry-period rule this page does
     // (`middleware/entry-period.ts`), and answers before the tournament is
     // readable at all -- so outside the period this is what a visitor with
-    // no staff session, or one covering another region, actually gets. A
-    // stale staff cookie earns a 401 there instead, which on this page is
-    // the same answer: whoever is holding it is not staff any more, and the
-    // period is closed.
-    if (res.status === 403 || isUnauthorized(res)) {
+    // no staff session, or one covering another region, actually gets.
+    if (res.status === 403) {
       throw error(403, 'エントリー期間外です');
     }
     throw error(502, '大会情報の取得に失敗しました');
@@ -198,8 +208,14 @@ async function fetchFormFieldDefs(
   return res.json();
 }
 
-export const load: PageServerLoad = async ({params, fetch, locals, url}) => {
-  const tournament = await fetchTournament(params, fetch);
+export const load: PageServerLoad = async ({
+  params,
+  fetch,
+  locals,
+  url,
+  cookies,
+}) => {
+  const tournament = await fetchTournament({params, fetch, cookies, url});
 
   // Holding *a* staff session is not enough: the requirement grants the
   // out-of-period form to the tournament's own 地域スタッフ and to 統括
@@ -232,7 +248,7 @@ export const load: PageServerLoad = async ({params, fetch, locals, url}) => {
 
 export const actions = {
   default: async ({params, request, fetch, locals, url, cookies}) => {
-    const tournament = await fetchTournament(params, fetch);
+    const tournament = await fetchTournament({params, fetch, cookies, url});
     // The field definitions decide how the submitted body is interpreted,
     // so they're re-read from the API rather than trusted from the client.
     const formFieldDefs = await fetchFormFieldDefs(tournament.id, fetch);

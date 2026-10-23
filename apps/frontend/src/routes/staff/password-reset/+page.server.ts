@@ -84,11 +84,14 @@ export const actions = {
       return fail(502, {error: 'パスワードの設定に失敗しました'});
     }
 
-    // No session to clear on the way out: a staff member arriving from an
-    // invite has none, and the JWT of one who used the link to reset an
-    // existing password stays valid on its signature alone until Task 11-3
-    // gives it something to check against (see the migration's note on
-    // `reset_staff_password`).
+    // The reset moved `staff_accounts.sessions_valid_from` along with the
+    // password (`reset_staff_password()`, migration `0020`), so the account's
+    // sessions are over -- but a staff cookie this browser holds isn't
+    // dropped here, because nothing says it is that account's. The link can
+    // be opened in someone else's browser (a general staff member checking an
+    // invite, say), and their session is still good. A cookie that did
+    // belong to the reset account is dropped the first time the API refuses
+    // it (`redirectToStaffLogin()`), or replaced by the login this sends to.
     redirect(303, '/staff/login?reset=done');
   },
 } satisfies Actions;

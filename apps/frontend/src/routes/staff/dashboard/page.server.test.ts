@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import type {HttpError, Redirect} from '@sveltejs/kit';
+import type {Cookies, HttpError, Redirect} from '@sveltejs/kit';
 import type {
   DashboardTournamentSummary,
   StaffClaims,
@@ -11,6 +11,7 @@ const GENERAL_STAFF: StaffClaims = {
   role: 'general',
   regionId: null,
   tournamentType: null,
+  sessionsValidFrom: 1756085025678,
 };
 
 const REGIONAL_STAFF: StaffClaims = {
@@ -18,6 +19,7 @@ const REGIONAL_STAFF: StaffClaims = {
   role: 'regional',
   regionId: '00000000-0000-0000-0000-000000000003',
   tournamentType: 'saikyoi',
+  sessionsValidFrom: 1756085025678,
 };
 
 const SUMMARIES: DashboardTournamentSummary[] = [
@@ -44,13 +46,28 @@ function fakeFetch(status = 200, body: unknown = SUMMARIES): typeof fetch {
     })) as typeof fetch;
 }
 
+/**
+ * A stand-in for `event.cookies`, recording the names deleted on it: a
+ * session the API refuses is dropped on the way to the login screen.
+ * @param deleted Collects the deleted cookie names.
+ */
+function fakeCookies(deleted: string[] = []): Cookies {
+  return {
+    delete: (name: string) => {
+      deleted.push(name);
+    },
+  } as unknown as Cookies;
+}
+
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
 function buildEvent(options: {
   fetch: typeof fetch;
   staff: StaffClaims | null;
+  deletedCookies?: string[];
 }): Parameters<typeof load>[0] {
   return {
     fetch: options.fetch,
+    cookies: fakeCookies(options.deletedCookies),
     locals: {staff: options.staff},
     url: new URL('http://localhost/staff/dashboard'),
   } as Parameters<typeof load>[0];
@@ -89,12 +106,21 @@ describe('staff dashboard +page.server load', () => {
   });
 
   it('redirects to the login screen when the session expired before the API call', async () => {
-    const event = buildEvent({fetch: fakeFetch(401), staff: GENERAL_STAFF});
+    const deletedCookies: string[] = [];
+    const event = buildEvent({
+      fetch: fakeFetch(401),
+      staff: GENERAL_STAFF,
+      deletedCookies,
+    });
 
     await expect(load(event)).rejects.toMatchObject({
       status: 303,
       location: '/staff/login?redirectTo=%2Fstaff%2Fdashboard',
     } satisfies Partial<Redirect>);
+    // The cookie still verifies here -- the API refused it because the
+    // account's sessions were revoked -- so it is dropped rather than left
+    // to pass for a session on every page that only checks the signature.
+    expect(deletedCookies).toEqual(['staff_session']);
   });
 
   it('throws 403 when the API rejects the session as out of scope', async () => {

@@ -1,4 +1,12 @@
-import {afterAll, afterEach, beforeAll, describe, expect, it} from 'bun:test';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from 'bun:test';
 import {SQL} from 'bun';
 import {sign} from 'hono/jwt';
 import type {TournamentType} from '@regional-quiz/shared';
@@ -12,6 +20,23 @@ import {
   TEST_REGION_ID,
   tournamentAwareFetch,
 } from '../test-support/tournaments';
+import {
+  staffSessionAwareFetch,
+  TEST_SESSIONS_VALID_FROM_MS,
+} from '../test-support/staff-session';
+
+// Every staff guard checks the session against
+// `staff_accounts.sessions_valid_from` before the handler runs; answer that
+// read for the tests that don't stub `fetch` themselves.
+const fetchWithoutSessionStub = globalThis.fetch;
+
+beforeEach(() => {
+  globalThis.fetch = staffSessionAwareFetch(fetchWithoutSessionStub);
+});
+
+afterEach(() => {
+  globalThis.fetch = fetchWithoutSessionStub;
+});
 
 // Local Supabase stack (`supabase start`), same convention as
 // `lib/db-schema.test.ts`. Skipped automatically when it isn't reachable,
@@ -58,6 +83,7 @@ async function generalStaffCookie(): Promise<string> {
       role: 'general',
       regionId: null,
       tournamentType: null,
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     SESSION_SECRET,
@@ -72,6 +98,7 @@ async function regionalStaffCookie(regionId: string): Promise<string> {
       role: 'regional',
       regionId,
       tournamentType: 'saikyoi',
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     SESSION_SECRET,
@@ -171,8 +198,10 @@ function mockFormFieldDefsFetch(
   rows: unknown[],
   tournament: TournamentRow | null = openEntryPeriodTournament(),
 ): void {
-  globalThis.fetch = tournamentAwareFetch(tournament, (() =>
-    Promise.resolve(Response.json(rows))) as unknown as typeof fetch);
+  globalThis.fetch = staffSessionAwareFetch(
+    tournamentAwareFetch(tournament, (() =>
+      Promise.resolve(Response.json(rows))) as unknown as typeof fetch),
+  );
 }
 
 describe('GET /form-definitions/:tournamentId (mocked Supabase)', () => {

@@ -1,4 +1,4 @@
-import {error, fail, redirect} from '@sveltejs/kit';
+import {error, fail} from '@sveltejs/kit';
 import {
   RegulationSyncInputSchema,
   type Regulation,
@@ -10,7 +10,7 @@ import {
   isUntouchedNewRegulationRow,
   toRegulationRow,
 } from '$lib/regulation-rows';
-import {staffLoginPath} from '$lib/server/staff-login';
+import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {RegulationRowValues} from '$lib/types/regulation-form';
 import type {Actions, PageServerLoad} from './$types';
 
@@ -76,7 +76,7 @@ function importRefusal(
 // browser serialized the body in says nothing.
 const ROW_CONTROL_PATTERN = /^regulations\[(\d+)\]\.(\w+)$/;
 
-export const load: PageServerLoad = async ({params, fetch, url}) => {
+export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
   const api = createApiClient(fetch);
   // The regulations endpoint sits behind `requireOpenEntryPeriodOrStaff()`,
   // which answers 404 for an id no tournament has — so a mistyped or stale
@@ -94,7 +94,7 @@ export const load: PageServerLoad = async ({params, fetch, url}) => {
     // The layout guard cannot rule this out: the JWT may expire between
     // `hooks.server.ts` parsing it and these requests reaching the backend.
     if (isUnauthorized(tournamentsRes) || isUnauthorized(regulationsRes)) {
-      redirect(303, staffLoginPath(url));
+      redirectToStaffLogin(cookies, url);
     }
     if (isNotFound(regulationsRes)) {
       error(404, '大会が見つかりません');
@@ -113,7 +113,7 @@ export const load: PageServerLoad = async ({params, fetch, url}) => {
 };
 
 export const actions = {
-  save: async ({params, request, fetch, url}) => {
+  save: async ({params, request, fetch, cookies, url}) => {
     const rows = readRegulationRows(await request.formData());
 
     // The rows are sent as the whole set the tournament should end up with,
@@ -168,7 +168,7 @@ export const actions = {
     });
     if (!res.ok) {
       if (isUnauthorized(res)) {
-        redirect(303, staffLoginPath(url));
+        redirectToStaffLogin(cookies, url);
       }
       // 400 names the regulations that don't belong to this tournament and
       // 409 the ones an entry still points at. Both are written by the API
@@ -205,7 +205,7 @@ export const actions = {
   // them into the form *without saving*: the form itself is the preview, and
   // the staff member presses "保存" once it reads right. That keeps a single
   // write path (the `save` action above) whichever way the rows were filled.
-  import: async ({params, request, fetch, url}) => {
+  import: async ({params, request, fetch, cookies, url}) => {
     const formData = await request.formData();
     const spreadsheetId = String(formData.get('spreadsheetId') ?? '').trim();
     if (spreadsheetId === '') {
@@ -225,7 +225,7 @@ export const actions = {
       }),
     ]);
     if (isUnauthorized(previewRes) || isUnauthorized(storedRes)) {
-      redirect(303, staffLoginPath(url));
+      redirectToStaffLogin(cookies, url);
     }
     if (!previewRes.ok) {
       // Written by the API for the staff member reading this screen (the

@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import type {HttpError, Redirect} from '@sveltejs/kit';
+import type {Cookies, HttpError, Redirect} from '@sveltejs/kit';
 import type {Entry, StaffClaims, Tournament} from '@regional-quiz/shared';
 import {load} from './+page.server';
 
@@ -18,6 +18,7 @@ const GENERAL_STAFF: StaffClaims = {
   role: 'general',
   regionId: null,
   tournamentType: null,
+  sessionsValidFrom: 1756085025678,
 };
 
 const ENTRIES: Entry[] = [
@@ -66,6 +67,19 @@ function fakeFetch(options: {
   }) as typeof fetch;
 }
 
+/**
+ * A stand-in for `event.cookies`, recording the names deleted on it: a
+ * session the API refuses is dropped on the way to the login screen.
+ * @param deleted Collects the deleted cookie names.
+ */
+function fakeCookies(deleted: string[] = []): Cookies {
+  return {
+    delete: (name: string) => {
+      deleted.push(name);
+    },
+  } as unknown as Cookies;
+}
+
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
 function buildEvent(options: {
   fetch: typeof fetch;
@@ -76,6 +90,7 @@ function buildEvent(options: {
   return {
     params: {regionSlug: 'tokyo', tournamentSlug},
     fetch: options.fetch,
+    cookies: fakeCookies(),
     locals: {staff: options.staff},
     url: new URL(`http://localhost/staff/tokyo/${tournamentSlug}/entries`),
   } as Parameters<typeof load>[0];

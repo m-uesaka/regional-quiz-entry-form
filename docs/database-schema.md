@@ -288,10 +288,12 @@ flowchart TB
 | `region_id` | uuid | nullable, FK → `regions.id` | `regional` のときの担当地域 |
 | `tournament_type` | tournament_type | nullable | `regional` のときの担当大会種別 |
 | `created_at` | timestamptz | not null, default `now()` | |
+| `sessions_valid_from` | timestamptz | not null, default `now()` | 発行済みセッションの世代(`0020` で追加)。セッション失効の判定に使います |
 
 - `general`(統括スタッフ)は `region_id` / `tournament_type` が `null` で、全地域・全大会にアクセスできます。
 - `regional`(地域スタッフ)は `(region_id, tournament_type)` の組が担当範囲で、その大会のエントリーしか閲覧できません。この範囲チェックは `apps/backend/src/middleware/staff-auth.ts` が担当します。
 - この 2 パターン以外の行は check 制約 `staff_accounts_scope_matches_role`(`0015`)が拒否します。`regional` なのに `region_id` か `tournament_type` の片方しか無い行は「担当範囲が狭いアカウント」ではなく**壊れた行**で、上記の範囲チェックがすべての大会で落ちるため、そのアカウントはどこにアクセスしても静かに 403 を返し続けます。Zod 側(`StaffAccountCreateInputSchema` の判別共用体)と両方で縛っているのは、Supabase を直接触って行を作る経路が残るためです。
+- `sessions_valid_from` は**発行済みスタッフセッションを切る**ためのものです(Task 11-3)。ログイン時にこの列の値を `sessionsValidFrom` クレームとして JWT に載せ、スタッフ用ミドルウェアが毎リクエストこの列を読み直して**一致しないセッションを 401 で拒否**します。統括スタッフが `POST /api/staff/accounts/:id/revoke-sessions` で進めるほか、`reset_staff_password()` がパスワードと同じ UPDATE 文で進めます。参加者側の `password_changed_at` と同じ仕組みですが、端末紛失・Cookie の漏洩などパスワード変更以外でも切れるようにこの名前にしています。セッションを切るだけなので、パスワードを知っている人の再ログインは止められません(アカウントの無効化は #156)。比較が値の一致である理由も参加者側と同じです。
 - 作成は `POST /api/staff/accounts`(統括スタッフ限定)です。作成時の `password_hash` にはハッシュ形式に合わない固定値が入り、本人が招待メールのリンクでパスワードを設定するまでログインできません。統括スタッフが他人のパスワードを知らずに済ませるための作りです。
 
 ### mail_jobs — 一斉メールの送信ジョブ
@@ -430,7 +432,7 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 スタッフ用のトークンハッシュと、アプリ側で計算済みの PBKDF2 パスワードハッシュを受け取り、対応するスタッフアカウントのパスワードを設定します。`reset_participant_password()` のスタッフ版で、処理順もロック順も同じです(トークン行 → スタッフ行を `for update` → トークン行を読み直し → 更新 → 残りトークンの焼き捨て)。未知 / 使用済み / 期限切れなら SQLSTATE `P0003`。
 
-- `participants.password_changed_at` に相当する打刻はありません。スタッフセッションは署名だけで受け付ける 12 時間の JWT なので、**再設定前に発行された Cookie は最大 12 時間有効なまま**です。ここを塞ぐには列とクレームの追加が要るため Task 11-3 に分けてあり、そのときこの関数は `0011` が `0010` を再定義したのと同じ形で書き直すことになります。
+- `password_hash` と同じ UPDATE 文で `staff_accounts.sessions_valid_from` も `now()` に進めます(`0020` で再定義。`0011` が参加者側の `0010` を再定義したのと同じ形)。これにより、再設定前に発行されたそのアカウントのセッション(盗まれた Cookie を含む)はすべて 401 になります。招待リンクからの初回設定でも同じく進みますが、その時点ではまだログインできないので切れるセッションはありません。
 
 ### tournament_entry_summary()
 
@@ -486,3 +488,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0017_entries_region_dual_entry_trigger.sql` | `check_region_dual_entry()` と `entries` の before insert or update トリガ |
 | `0018_entry_regulations.sql` | `entry_regulations`(複数選択対応)・`entries` の `unique (id, tournament_id)`・既存行の移送と `entries.regulation_id` の削除・`sync_regulations()` の参照先変更 |
 | `0019_mail_jobs.sql` | `mail_jobs` テーブル・`updated_at` トリガ・索引・`record_mail_job_progress()` |
+| `0020_staff_accounts_sessions_valid_from.sql` | `staff_accounts.sessions_valid_from` を追加し、再設定時に打刻(`0015` の `reset_staff_password()` を再定義) |

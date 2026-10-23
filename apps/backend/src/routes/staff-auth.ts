@@ -43,6 +43,7 @@ interface StaffAccountRow {
   role: StaffRole;
   region_id: string | null;
   tournament_type: TournamentType | null;
+  sessions_valid_from: string;
   // The joined `regions` row, null for `general` staff (who have no
   // `region_id`). Only the slug is read: the staff screens are keyed by it.
   regions: {slug: string} | null;
@@ -74,7 +75,8 @@ export const staffAuthRoute = new Hono<Env>()
       const {data: staff, error} = await db
         .from('staff_accounts')
         .select(
-          'id, password_hash, role, region_id, tournament_type, regions(slug)',
+          'id, password_hash, role, region_id, tournament_type, ' +
+            'sessions_valid_from, regions(slug)',
         )
         .eq('email', email)
         .returns<StaffAccountRow[]>()
@@ -106,6 +108,11 @@ export const staffAuthRoute = new Hono<Env>()
         role: staff.role,
         regionId: staff.region_id,
         tournamentType: staff.tournament_type,
+        // Which generation of this account's sessions the new one belongs
+        // to, so that moving `sessions_valid_from` later can cut it (see
+        // `isSessionCurrent()` in `middleware/staff-auth.ts`). Read in the
+        // same query as the password hash, so it costs no extra round trip.
+        sessionsValidFrom: Date.parse(staff.sessions_valid_from),
       };
       const token = await sign(
         {
@@ -163,7 +170,10 @@ export const staffAuthRoute = new Hono<Env>()
     // Same shape as the participant logout, and for the same reasons: no
     // session is required, and dropping the cookie is all a stateless JWT
     // allows. A staff token copied off the machine stays valid for the rest
-    // of its 12 hours; revoking that is Task 11-3.
+    // of its 12 hours unless a general staff member revokes the account's
+    // sessions (`POST /api/staff/accounts/:id/revoke-sessions`), which is
+    // deliberately a separate, explicit act: logging out of one browser
+    // shouldn't log the same person out of every other one.
     deleteCookie(c, STAFF_SESSION_COOKIE, SESSION_COOKIE_OPTIONS);
     return c.json({ok: true});
   });

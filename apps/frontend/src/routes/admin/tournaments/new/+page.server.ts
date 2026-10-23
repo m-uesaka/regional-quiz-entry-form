@@ -4,7 +4,7 @@ import {
   parseTournamentFormValues,
   readTournamentFormValues,
 } from '$lib/tournament-form';
-import {staffLoginPath} from '$lib/server/staff-login';
+import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {TournamentFormValues} from '$lib/types/tournament-form';
 import type {Actions, PageServerLoad} from './$types';
 
@@ -23,11 +23,11 @@ const INVALID_INPUT_MESSAGE = '入力内容を確認してください';
 // Read and written server-side rather than from the browser: `/api/*` is
 // only routed to the backend Worker for requests the frontend makes itself
 // until Task 9-5 lands, so a client-side call would 404 in production.
-export const load: PageServerLoad = async ({fetch, url}) => {
+export const load: PageServerLoad = async ({fetch, cookies, url}) => {
   const res = await createApiClient(fetch).api.regions.$get();
   if (!res.ok) {
     if (isUnauthorized(res)) {
-      redirect(303, staffLoginPath(url));
+      redirectToStaffLogin(cookies, url);
     }
     error(502, '地域の取得に失敗しました');
   }
@@ -35,7 +35,7 @@ export const load: PageServerLoad = async ({fetch, url}) => {
 };
 
 export const actions = {
-  default: async ({request, fetch, url}) => {
+  default: async ({request, fetch, cookies, url}) => {
     const values = readTournamentFormValues(await request.formData());
     const input = parseTournamentFormValues(values);
     if (!input) {
@@ -47,7 +47,7 @@ export const actions = {
     });
     if (!res.ok) {
       if (isUnauthorized(res)) {
-        redirect(303, staffLoginPath(url));
+        redirectToStaffLogin(cookies, url);
       }
       // 400 is what the database refused — a region that no longer exists,
       // say — and the API passes that message through, so it is shown

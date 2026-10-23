@@ -126,7 +126,10 @@ export const participantAuthRoute = new Hono<Env>()
     // Cutting that too needs a server-side generation to check the token
     // against, the way `participants.password_changed_at` already cuts
     // sessions issued before a password reset (see
-    // `middleware/participant-auth.ts`); Task 11-3 is where that lands.
+    // `middleware/participant-auth.ts`), or the way
+    // `staff_accounts.sessions_valid_from` lets a general staff member cut
+    // a staff account's sessions (Task 11-3). Participants have no such
+    // explicit revocation; a password reset is theirs.
     deleteCookie(c, PARTICIPANT_SESSION_COOKIE, SESSION_COOKIE_OPTIONS);
     return c.json({ok: true});
   });
