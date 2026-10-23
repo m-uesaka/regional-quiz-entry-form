@@ -1,6 +1,7 @@
 import {fail, redirect} from '@sveltejs/kit';
 import {StaffPasswordResetConfirmInputSchema} from '@regional-quiz/shared/password-policy';
 import {createApiClient} from '$lib/api';
+import {readSubmittedToken, readUrlToken} from '$lib/url-token';
 import type {Actions, PageServerLoad} from './$types';
 
 // Shown for a token the API refused as well as for a page opened without one:
@@ -21,37 +22,24 @@ const NEEDS_A_NEW_LINK_MESSAGE =
  * offer but an explanation.
  */
 export const load: PageServerLoad = ({url}) => {
-  return {hasToken: readToken(url) !== null};
+  // Handed to the page for its hidden field; see `$lib/url-token.ts` for why
+  // the address bar does not keep it.
+  return {token: readUrlToken(url)};
 };
-
-/**
- * Reads the one-time token out of the page's own URL.
- *
- * A present but empty `?token=` counts as absent, so that `load` and the form
- * action agree on which of the two states a request belongs to: an empty
- * token would otherwise render the password form and then be refused by the
- * schema as if the password were at fault.
- *
- * @param url The URL this page was requested with.
- * @return The token, or `null` when there isn't a usable one.
- */
-function readToken(url: URL): string | null {
-  return url.searchParams.get('token') || null;
-}
 
 export const actions = {
   default: async ({fetch, request, url}) => {
-    // The form posts back to this same URL, so the token is read from the
-    // query here rather than carried in a hidden field where it would end up
-    // in the page source.
-    const token = readToken(url);
+    // From the form's hidden field, or -- for a page whose script never ran
+    // and so never took it out of the address bar -- from the URL the form
+    // posted back to (`$lib/url-token.ts`).
+    const formData = await request.formData();
+    const token = readSubmittedToken(formData, url);
     if (token === null) {
       // Unreachable from the rendered page, which only shows the form when
       // `load` saw a token; a hand-made POST lands here.
       return fail(400, {error: NEEDS_A_NEW_LINK_MESSAGE});
     }
 
-    const formData = await request.formData();
     const newPassword = String(formData.get('newPassword') ?? '');
     if (newPassword !== String(formData.get('newPasswordConfirm') ?? '')) {
       return fail(400, {error: 'パスワードが一致しません'});

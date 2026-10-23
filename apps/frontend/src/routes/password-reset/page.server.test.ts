@@ -88,16 +88,16 @@ function passwordForm(
 
 describe('password reset +page.server load', () => {
   it('asks for a new password when the mailed link carries a token', () => {
-    expect(load(buildLoadEvent(RESET_URL))).toEqual({hasToken: true});
+    expect(load(buildLoadEvent(RESET_URL))).toEqual({token: TOKEN});
   });
 
   it('asks for an email address when there is no token', () => {
-    expect(load(buildLoadEvent(REQUEST_URL))).toEqual({hasToken: false});
+    expect(load(buildLoadEvent(REQUEST_URL))).toEqual({token: null});
   });
 
   it('treats an empty token as no token at all', () => {
     expect(load(buildLoadEvent(`${REQUEST_URL}?token=`))).toEqual({
-      hasToken: false,
+      token: null,
     });
   });
 });
@@ -290,5 +290,32 @@ describe('password reset +page.server action, with a token', () => {
     const event = buildActionEvent(RESET_URL, fakeFetch(500), passwordForm());
 
     await expect(actions.default(event)).resolves.toMatchObject({status: 502});
+  });
+});
+
+describe('password reset +page.server action, token in the form (#120)', () => {
+  it('reads the token from the hidden field once the URL has lost it', async () => {
+    const log: FetchLog = emptyLog();
+    const formData = passwordForm();
+    formData.set('token', TOKEN);
+    const event = buildActionEvent(REQUEST_URL, fakeFetch(200, log), formData);
+
+    await expect(actions.default(event)).rejects.toMatchObject({
+      status: 303,
+      location: '/mypage/login?reset=done',
+    } satisfies Partial<Redirect>);
+    expect(log.bodies).toEqual([{token: TOKEN, newPassword: 'newpassword1'}]);
+  });
+
+  it('prefers the hidden field over the URL', async () => {
+    const log: FetchLog = emptyLog();
+    const formData = passwordForm();
+    formData.set('token', 'from-the-field');
+    const event = buildActionEvent(RESET_URL, fakeFetch(200, log), formData);
+
+    await expect(actions.default(event)).rejects.toMatchObject({status: 303});
+    expect(log.bodies).toEqual([
+      {token: 'from-the-field', newPassword: 'newpassword1'},
+    ]);
   });
 });

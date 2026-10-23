@@ -3,6 +3,7 @@ import {PasswordResetRequestInputSchema} from '@regional-quiz/shared';
 import {PasswordResetConfirmInputSchema} from '@regional-quiz/shared/password-policy';
 import {createApiClient} from '$lib/api';
 import {readTurnstileToken, TURNSTILE_TOKEN_FIELD} from '$lib/turnstile';
+import {readSubmittedToken, readUrlToken} from '$lib/url-token';
 import {clearParticipantSession} from '$lib/server/participant-session';
 import type {Actions, PageServerLoad} from './$types';
 
@@ -21,37 +22,24 @@ const TOO_MANY_REQUESTS_MESSAGE =
  * The mail sent by `POST /api/auth/participant/password-reset/request`
  * links here with the one-time token in the query (see
  * `apps/backend/src/lib/password-reset.ts`), so a token means "choose a new
- * password" and its absence means "mail me a link". The token itself is not
- * returned: the form posts back to this same URL, so the action can read it
- * from the query rather than the page having to carry it in a field.
+ * password" and its absence means "mail me a link". The token is handed to
+ * the page so its form can carry it in a hidden field: the page takes it
+ * out of the address bar once it has rendered (`$lib/url-token.ts`, #120),
+ * after which the form posts to the bare URL.
  */
 export const load: PageServerLoad = ({url}) => {
-  return {hasToken: readToken(url) !== null};
+  return {token: readUrlToken(url)};
 };
-
-/**
- * Reads the reset token out of the page's own URL.
- *
- * A present but empty `?token=` counts as absent, so that `load` and the
- * form action agree on which half of the flow a request belongs to: an empty
- * token would otherwise render the new-password form and then be refused by
- * the schema as if the password were at fault.
- *
- * @param url The URL this page was requested with.
- * @return The token, or `null` when there isn't a usable one.
- */
-function readToken(url: URL): string | null {
-  return url.searchParams.get('token') || null;
-}
 
 export const actions = {
   default: async ({cookies, fetch, request, url}) => {
     const formData = await request.formData();
     const api = createApiClient(fetch);
-    // The two forms this page can render are told apart the same way the
-    // page itself picks which one to show, so a submission is always
-    // answered by the half it came from.
-    const token = readToken(url);
+    // The two forms this page can render are told apart by the token, the
+    // same way the page itself picks which one to show, so a submission is
+    // always answered by the half it came from. Only the new-password form
+    // carries the field.
+    const token = readSubmittedToken(formData, url);
 
     if (token === null) {
       const parsed = PasswordResetRequestInputSchema.safeParse({

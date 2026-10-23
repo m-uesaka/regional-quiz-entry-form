@@ -62,16 +62,16 @@ function passwordForm(
 
 describe('staff password reset +page.server load', () => {
   it('shows the password form when the mailed link carries a token', () => {
-    expect(load(buildLoadEvent(RESET_URL))).toEqual({hasToken: true});
+    expect(load(buildLoadEvent(RESET_URL))).toEqual({token: TOKEN});
   });
 
   it('has nothing to offer when the page is opened without a token', () => {
-    expect(load(buildLoadEvent(NO_TOKEN_URL))).toEqual({hasToken: false});
+    expect(load(buildLoadEvent(NO_TOKEN_URL))).toEqual({token: null});
   });
 
   it('treats an empty token as no token at all', () => {
     expect(load(buildLoadEvent(`${NO_TOKEN_URL}?token=`))).toEqual({
-      hasToken: false,
+      token: null,
     });
   });
 });
@@ -174,5 +174,22 @@ describe('staff password reset +page.server action', () => {
     const event = buildActionEvent(RESET_URL, fakeFetch(500), passwordForm());
 
     await expect(actions.default(event)).resolves.toMatchObject({status: 502});
+  });
+});
+
+describe('staff password reset +page.server action, token in the form (#120)', () => {
+  it('reads the token from the hidden field once the URL has lost it', async () => {
+    const log: FetchLog = {urls: [], bodies: []};
+    const formData = passwordForm();
+    formData.set('token', TOKEN);
+    const event = buildActionEvent(NO_TOKEN_URL, fakeFetch(200, log), formData);
+
+    await expect(actions.default(event)).rejects.toMatchObject({
+      status: 303,
+      location: '/staff/login?reset=done',
+    } satisfies Partial<Redirect>);
+    expect(log.bodies).toEqual([
+      {token: TOKEN, newPassword: 'newstaffpassword1'},
+    ]);
   });
 });
