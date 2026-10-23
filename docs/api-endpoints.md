@@ -151,6 +151,8 @@ if ('yaml' in body) {
 
 ## 2. エンドポイント一覧
 
+「認可」列が「なし」(または「期間中はなし」)で始まる行は、無認証で到達できるルートです。この表は `apps/backend/src/routes-authz.test.ts` の許可リスト(`PUBLIC_ROUTES`)・登録済みのルートと**一致することをテストで確かめています**。ルートを足したら、この表にも行を足してください(理由は [`database-schema.md`](./database-schema.md) 4 章)。
+
 | メソッド | パス | 認可 |
 | --- | --- | --- |
 | GET | `/api/healthz` | なし |
