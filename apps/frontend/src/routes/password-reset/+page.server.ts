@@ -103,7 +103,14 @@ export const actions = {
       newPassword,
     });
     if (!parsed.success) {
-      return fail(400, {error: 'パスワードは8文字以上で入力してください'});
+      // The token was already read as non-empty, so what failed is the
+      // password, and the shared schema's own message says which rule it
+      // broke (too short, too long, or too common).
+      return fail(400, {
+        error:
+          parsed.error.flatten().fieldErrors.newPassword?.[0] ??
+          'パスワードを正しく入力してください',
+      });
     }
 
     const res = await api.api.auth.participant['password-reset'].confirm.$post({

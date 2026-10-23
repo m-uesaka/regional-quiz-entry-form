@@ -6,6 +6,7 @@ export * from './schemas/regulation';
 export * from './schemas/staff';
 export * from './schemas/participant';
 export * from './schemas/auth';
+export * from './schemas/password';
 export * from './schemas/mail';
 export * from './schemas/dashboard';
 export * from './schemas/portal';

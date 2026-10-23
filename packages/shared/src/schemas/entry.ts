@@ -1,4 +1,9 @@
 import {z} from 'zod';
+import {
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  PasswordSchema,
+} from './password';
 import {isWithinEntryPeriod} from '../logic/entry-period';
 import {FormFieldDefSchema} from './form-definition';
 import {TournamentTypeSchema} from './tournament';
@@ -16,12 +21,18 @@ export const EntryInputSchema = z
     email: z
       .string()
       .email({message: 'メールアドレスの形式が正しくありません'}),
-    password: z
-      .string()
-      .min(8, {message: 'パスワードは8文字以上で入力してください'}),
+    password: PasswordSchema,
+    // Only the length rules: the refine below already ties it to `password`,
+    // and repeating the common-password message under both fields would say
+    // the same thing twice.
     passwordConfirm: z
       .string()
-      .min(8, {message: 'パスワードは8文字以上で入力してください'}),
+      .min(PASSWORD_MIN_LENGTH, {
+        message: `パスワードは${PASSWORD_MIN_LENGTH}文字以上で入力してください`,
+      })
+      .max(PASSWORD_MAX_LENGTH, {
+        message: `パスワードは${PASSWORD_MAX_LENGTH}文字以内で入力してください`,
+      }),
     // A participant may meet several of a tournament's conditions at once
     // (requirements.md renders these as checkboxes), so this is a set. At
     // least one has to be met, which is what `min(1)` says.

@@ -193,8 +193,8 @@ describe.skipIf(!(await isDbReachable()))(
         furigana: 'ヤマダタロウ',
         displayName: '太郎',
         email: `entry-${crypto.randomUUID()}@${testEmailDomain}`,
-        password: 'password123',
-        passwordConfirm: 'password123',
+        password: 'quiz-entry-pass1',
+        passwordConfirm: 'quiz-entry-pass1',
         regulationIds: [],
         customFieldValues: {},
         ...overrides,
@@ -366,7 +366,7 @@ describe.skipIf(!(await isDbReachable()))(
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       await sql`
         insert into participants (region_id, email, password_hash)
-        values (${fixtureA.regionId}, ${email}, ${await hashPassword('password123')})
+        values (${fixtureA.regionId}, ${email}, ${await hashPassword('quiz-entry-pass1')})
       `;
 
       const result = await createEntry(
@@ -446,7 +446,7 @@ describe.skipIf(!(await isDbReachable()))(
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       await sql`
         insert into participants (region_id, email, password_hash)
-        values (${fixtureA.regionId}, ${email}, ${await hashPassword('password123')})
+        values (${fixtureA.regionId}, ${email}, ${await hashPassword('quiz-entry-pass1')})
       `;
       mailSendCount = 0;
 

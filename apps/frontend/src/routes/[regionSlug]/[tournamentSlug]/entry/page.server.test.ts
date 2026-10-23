@@ -276,8 +276,8 @@ function validFormData(
     furigana: 'ヤマダタロウ',
     displayName: '太郎',
     email: 'taro@example.com',
-    password: 'password123',
-    passwordConfirm: 'password123',
+    password: 'quiz-entry-pass1',
+    passwordConfirm: 'quiz-entry-pass1',
     regulationIds: [REGULATIONS[0].id],
     freeText: '',
     'custom.agree_rules': 'on',
@@ -481,6 +481,32 @@ describe('entry +page.server default action', () => {
     expect(result).toMatchObject({
       status: 400,
       data: {fieldErrors: {passwordConfirm: ['パスワードが一致しません']}},
+    });
+  });
+
+  it('refuses a common password under the password field before calling the API', async () => {
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          entryResponse: {status: 500, body: {error: 'must not be reached'}},
+        }),
+        // Matched case-insensitively against the shared list.
+        fields: validFormData({
+          password: 'Password123',
+          passwordConfirm: 'Password123',
+        }),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 400,
+      data: {
+        fieldErrors: {
+          password: [
+            'よく使われているパスワードのため使用できません。別のパスワードを入力してください',
+          ],
+        },
+      },
     });
   });
 

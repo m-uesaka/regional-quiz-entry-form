@@ -14,8 +14,8 @@ describe('EntryInputSchema', () => {
       furigana: 'ヤマダタロウ',
       displayName: '太郎',
       email: 'taro@example.com',
-      password: 'password1',
-      passwordConfirm: 'password2',
+      password: 'quiz-pass-one',
+      passwordConfirm: 'quiz-pass-two',
       regulationIds: ['00000000-0000-0000-0000-000000000000'],
       customFieldValues: {},
     });
@@ -58,8 +58,8 @@ describe('EntryInputSchema', () => {
       furigana: 'ヤマダタロウ',
       displayName: '太郎',
       email: 'taro@example.com',
-      password: 'password1',
-      passwordConfirm: 'password1',
+      password: 'quiz-pass-one',
+      passwordConfirm: 'quiz-pass-one',
       regulationIds: ['00000000-0000-0000-0000-000000000000'],
       customFieldValues: {},
     });
@@ -86,8 +86,8 @@ describe('EntryEditInputSchema', () => {
     const result = EntryEditInputSchema.safeParse({
       ...BASE_EDIT,
       email: 'taro@example.com',
-      password: 'password1',
-      passwordConfirm: 'password1',
+      password: 'quiz-pass-one',
+      passwordConfirm: 'quiz-pass-one',
       regulationIds: ['00000000-0000-0000-0000-000000000000'],
     });
 
