@@ -8,7 +8,7 @@
 <PageContainer>
   <PageHeader
     title="地域クイズ最強位・新人王 エントリー"
-    description="エントリーは、各地域のスタッフから案内されるエントリーフォームの URL から行ってください。"
+    description="エントリーは、エントリーポータルにある各地域のエントリーフォームから行ってください。"
   />
 
   <div class="grid gap-4 sm:grid-cols-2">
@@ -16,15 +16,23 @@
       <div class="flex flex-col gap-1">
         <h2 class="text-lg font-bold">参加者の方</h2>
         <p class="text-sm text-muted-foreground">
-          エントリー内容の確認・編集・キャンセルはこちらから。
+          エントリーはエントリーポータルから。エントリー内容の確認・編集・キャンセルはマイページから。
         </p>
       </div>
-      <a
-        href="/mypage"
-        class={buttonVariants({variant: 'primary', tone: 'solid', size: 'medium'})}
-      >
-        マイページ
-      </a>
+      <div class="flex flex-col gap-2">
+        <a
+          href="/portal"
+          class={buttonVariants({variant: 'primary', tone: 'solid', size: 'medium'})}
+        >
+          エントリーポータル
+        </a>
+        <a
+          href="/mypage"
+          class={buttonVariants({variant: 'secondary', tone: 'solid', size: 'medium'})}
+        >
+          マイページ
+        </a>
+      </div>
     </Card>
 
     <Card class="justify-between gap-4">
