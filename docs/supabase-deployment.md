@@ -351,6 +351,122 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 
 #### プランとドメイン数
 
+送信ドメインを環境ごとに分けているのは、staging での試験送信がバウンスや迷惑メール報告を招いても、production の送信ドメインの評判に影響させないためです。Resend の Free プランでも検証できるドメインは 3 つまでなので(2026-10 時点の公式料金表)、上の表のとおり 2 ドメインを Free プランのまま検証できます。
+
+- 送信数の上限(Free プランは 1 日 100 通・月 3,000 通)はアカウント単位なので、同じアカウントで 2 ドメインを検証すると両環境で共有になる。一斉メールなどで足りなくなる場合は Pro 以上のプランにする
+- プランの条件は変わることがあるので、ドメインを登録する前に https://resend.com/pricing で、ドメイン数と送信数の上限を確認する
+
+#### 設定手順
+
+`wrangler.toml` に `routes` は書きません。Wrangler は route のゾーンをデプロイ時に Cloudflare アカウントへ問い合わせるため、アカウントが持たないゾーンを書くと `wrangler deploy` 自体が落ち、振り分けではなく**パイプラインが壊れます**。代わりに `.github/workflows/deploy.yml` が、その環境の `FRONTEND_HOST` 変数が設定されているときだけ route を付けてデプロイします。
+
+```bash
+bunx wrangler deploy --env production \
+  --route "$FRONTEND_HOST/api/*" \
+  --var "FRONTEND_URL:https://$FRONTEND_HOST"
+```
+
+つまり実ドメインの有効化は**設定変更だけ**で済み、リポジトリ側の編集は要りません。
+
+ドメインは Cloudflare Registrar で取得した `regional-quiz-project.app` で、環境ごとに次のように割り当てています。
+
+| 環境 | `FRONTEND_HOST`(Pages のカスタムドメイン) | `MAIL_FROM_ADDRESS` |
+| --- | --- | --- |
+| staging | `staging.regional-quiz-project.app` | `no-reply@staging.mail.regional-quiz-project.app` |
+| production | `regional-quiz-project.app` | `no-reply@mail.regional-quiz-project.app` |
+
+1. ドメインを取得し、Cloudflare のゾーンに追加する
+2. Pages プロジェクト(production / staging)にカスタムドメインを割り当てる(6.3)
+3. GitHub の `staging` / `production` Environment に `FRONTEND_HOST` 変数を登録する(6.5)
+4. Turnstile widget にカスタムドメインのホスト名を追加する(6.2)
+5. Resend で送信用ドメイン(上表の `@` 以降)を検証し、`MAIL_API_KEY` を登録する(6.6)
+6. デプロイし直す
+
+Pages の `BACKEND_URL`(6.3)はここでは触りません。SSR の転送先は route ではなく Worker 自身のオリジン、つまり workers.dev のままで正しく、`wrangler.toml` の `workers_dev = true` がそれを維持します。ここで `BACKEND_URL` をフロントエンドのホスト名に書き換える必要はありません。
+
+`FRONTEND_HOST` にはスキームもパスも付けず、**ホスト名だけ**を入れます(例: `entry.example.jp` / `staging.entry.example.jp`)。route のパターンと Pages のカスタムドメインは同一ホストでなければ意味がない(そのホストを Pages が持っているからこそ Workers route が優先される)ため、両者を別々の設定にせず 1 つの変数から導出しています。
+
+`FRONTEND_URL` を同じ変数から上書きしているのも同じ理由です。これは `src/lib/entry-verification.ts` とパスワード再設定メールがリンクを組み立てる URL で、値がずれても**サイトは正常に見えます**。壊れるのはメール内のリンクだけなので、デプロイ時には誰も気づきません。`--var` は環境の vars を置き換えではなく**マージ**するので、`MAIL_FROM_ADDRESS` は `wrangler.toml` の値のまま、`wrangler secret put` で登録したシークレット(`TURNSTILE_SECRET_KEY` 等)もそのまま引き継がれます。
+
+> `MAIL_FROM_ADDRESS` だけは `apps/backend/wrangler.toml` の `[env.*.vars]` を手で書き換えてください。送信元ドメインはメール事業者側で検証済みのドメインであって、サイトのホスト名とは限らないため、`FRONTEND_HOST` からは導出していません。現在は上表の `mail.` サブドメインのアドレスが入っています。
+
+#### 疎通確認
+
+`deploy.yml` の最後のステップ `Smoke test the /api/* route` が、`FRONTEND_HOST` が設定されている環境で `https://$FRONTEND_HOST/api/healthz` を叩き、`{"ok":true}` が返らなければデプロイを失敗させます(route の伝播待ちのため最大 5 回リトライ)。Worker は `basePath('/api')` を張っているので、このパスはバックエンドにしか存在せず、200 が返ればそれ自体が route の効いている証拠になります。
+
+手で確かめる場合も同じです。
+
+```bash
+curl -i "https://<frontend-host>/api/healthz"   # => {"ok":true}
+```
+
+> `routes` を手で `wrangler.toml` に書き足す場合は、必ず `[env.*]` の**直下**に置いてください。`[env.*.vars]` の下に置くと `routes` という名前の var として解釈され、警告もエラーも出ないまま route 無しでデプロイされます(#100 で実際に踏みました)。
+
+### 6.5 GitHub Actions 側
+
+リポジトリの `Settings > Environments` に `staging` と `production` の2つの Environment を作成し、それぞれに以下の Secrets を登録します。production 環境には **Required reviewers** を設定し、本番デプロイ前に人手のレビューを挟むことを推奨します(`deploy-production.yml` は最初のステップの前で承認待ちになります)。
+
+| Secret 名 | staging | production |
+| --- | --- | --- |
+| `SUPABASE_ACCESS_TOKEN` | staging プロジェクトだけにスコープを絞ったトークン | production プロジェクトだけにスコープを絞ったトークン |
+| `SUPABASE_PROJECT_ID` | staging プロジェクトの project ref | production プロジェクトの project ref |
+| `SUPABASE_DB_PASSWORD` | staging プロジェクト作成時の DB パスワード | production プロジェクトの DB パスワード |
+| `CLOUDFLARE_API_TOKEN` | 下記の権限を持つ Custom Token | 同左 |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare アカウント ID(`Workers & Pages` の右側に表示) | 同左 |
+
+`SUPABASE_DB_PASSWORD` は `supabase link` / `supabase db push --linked` が DB へ接続するのに使います。未登録だと CI は対話プロンプトを出せずに失敗します。
+
+同じ Environment に、機密でない **Variables** も 1 つ登録します(`Settings > Environments > <環境> > Environment variables`。Secrets ではなく Variables 側です)。
+
+| 変数名 | staging | production |
+| --- | --- | --- |
+| `FRONTEND_HOST` | `staging.regional-quiz-project.app` | `regional-quiz-project.app` |
+
+スキームもパスも付けない**ホスト名のみ**です。`deploy.yml` はこれを使って Worker の `/api/*` route と `FRONTEND_URL` を組み立て、デプロイ後の疎通確認も行います(6.4)。**未設定でもデプロイは成功します**が、その場合 route が付かないため、ブラウザから直接叩く API がすべて 404 になります(ワークフローのログに warning が出ます)。
+
+#### `SUPABASE_ACCESS_TOKEN` の発行
+
+Supabase の Personal Access Token は、プロジェクトと機能ごとにスコープを絞って発行できます(2026-10 に GA)。アカウント全体に効く「Create legacy token」は使わず、**環境ごとに対象プロジェクト 1 つに絞ったトークン**を発行してください。こうしておくと、staging のトークンが漏れても production には届きません。
+
+- 対象: その環境のプロジェクトだけ
+- 権限: projects = read、database = read-write、**API keys(`api_gateway_keys_read`)= read**。`supabase link` はプロジェクトの API キー情報を読むため、最後の権限が無いと `Missing required permission(s): api_gateway_keys_read` で失敗します。auth / storage などは不要です
+- 有効期限: 最長 1 年。期限日を記録しておく
+
+スコープ付きトークンは作成後に権限を変更できません。権限が足りなかった場合は作り直して Secret を上書きし、デプロイが通ってから古いトークンを削除します。
+
+#### `CLOUDFLARE_API_TOKEN` の発行
+
+`My Profile > API Tokens > Create Token > Custom token` で作成します(テンプレートの「Edit Cloudflare Workers」は Pages の権限が無く、不要な権限を含むので使いません)。値は作成直後の画面に一度だけ表示されます。控え損ねたら一覧の「…」から **Roll** で再発行します。
+
+| 区分 | 権限 | レベル |
+| --- | --- | --- |
+| Account | Workers Scripts | Edit |
+| Account | Cloudflare Pages | Edit |
+| Account | Queues | Edit |
+| Account | Account Settings | Read |
+| User | Memberships | Read |
+| User | User Details | Read |
+
+- Account Resources は対象アカウント 1 つに限定する
+- Zone の権限(`Workers Routes: Edit`)は `FRONTEND_HOST` を登録して `/api/*` の route を付けるとき(6.4)に必要になる。その時点でトークンを作り直す
+- GitHub のランナーは IP が固定されないので、Client IP Address Filtering は設定しない
+
+Cloudflare のトークンは Worker 単位では絞れないため、staging と production が同じアカウントにある限り、トークンを環境ごとに分けても分離の効果は小さいです。厳密に分けるならアカウント自体を分けます。
+
+### 6.6 メール送信(Resend)
+
+参加者へのエントリー確認・パスワード再設定・繰り上げ当選の連絡、スタッフの招待、一斉メールは、すべて Resend(`apps/backend/src/lib/mailer.ts`)から送ります。関係する値は次の 3 つです。
+
+| 名前 | 置き場所 | staging | production |
+| --- | --- | --- | --- |
+| `MAIL_FROM_ADDRESS` | `wrangler.toml` の `[env.*.vars]` | `no-reply@staging.mail.regional-quiz-project.app` | `no-reply@mail.regional-quiz-project.app` |
+| `MAIL_API_KEY` | Worker のシークレット(6.2) | staging 用のキー | production 用のキー |
+| `FRONTEND_URL` | `deploy.yml` が `FRONTEND_HOST` から設定する(6.4) | `https://staging.regional-quiz-project.app` | `https://regional-quiz-project.app` |
+
+`MAIL_FROM_ADDRESS` のドメインが Resend で検証済みでないと、送信はすべて拒否されます。メール本文のリンクは `FRONTEND_URL` から組み立てます。
+
+#### プランとドメイン数
+
 送信ドメインを環境ごとに分けているのは、staging での試験送信がバウンスや迷惑メール報告を招いても、production の送信ドメインの評判に影響させないためです。ただし Resend の Free プランは、検証できるドメインが 1 つに制限されています(2026-10 時点の想定。送信数も 1 日 100 通・月 3,000 通まで。最新の条件は https://resend.com/pricing で確認する)。そのため、次のどちらかにします。
 
 - **Pro 以上のプランにする(推奨)**: 上の表のまま、ドメインを 2 つ検証する
