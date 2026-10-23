@@ -1,15 +1,13 @@
 import {render, screen} from '@testing-library/svelte';
-import {afterEach, describe, expect, it} from 'vitest';
+import {describe, expect, it} from 'vitest';
 import Page from './+page.svelte';
 import type {ActionData} from './$types';
-
-const TOKEN = 'b3f1c0de';
 
 function renderPage(options: {hasToken?: boolean; form?: ActionData} = {}) {
   return render(Page, {
     props: {
       params: {},
-      data: {token: options.hasToken ? TOKEN : null},
+      data: {hasToken: options.hasToken ?? false},
       form: options.form ?? null,
     },
   });
@@ -43,7 +41,10 @@ describe('password reset +page.svelte', () => {
   });
 
   it('shows the error the action came back with', () => {
-    renderPage({hasToken: true, form: {error: 'パスワードが一致しません'}});
+    renderPage({
+      hasToken: true,
+      form: {error: 'パスワードが一致しません', tokenRejected: false},
+    });
 
     expect(screen.getByRole('alert')).toHaveTextContent(
       'パスワードが一致しません',
@@ -58,28 +59,25 @@ describe('password reset +page.svelte', () => {
     ).toHaveAttribute('href', '/mypage/login');
   });
 
-  describe('the token in the URL (#120)', () => {
-    afterEach(() => {
-      history.replaceState(null, '', '/');
+  // The token stays in an httpOnly cookie (`$lib/server/reset-token.ts`):
+  // nothing in the page carries it (#120).
+  it('puts no token in the form', () => {
+    const {container} = renderPage({hasToken: true});
+
+    expect(container.querySelector('input[name="token"]')).toBeNull();
+  });
+
+  it('offers the request form again once the API has refused the token', () => {
+    renderPage({
+      hasToken: true,
+      form: {
+        error:
+          'このリンクは無効か、有効期限が切れています。もう一度パスワード再設定をやり直してください',
+        tokenRejected: true,
+      },
     });
 
-    it('the token is removed from the URL after it is read', () => {
-      history.replaceState(null, '', `/password-reset?token=${TOKEN}&x=1`);
-
-      renderPage({hasToken: true});
-
-      expect(window.location.pathname).toBe('/password-reset');
-      expect(window.location.search).toBe('?x=1');
-    });
-
-    it('carries the token in the form instead', () => {
-      const {container} = renderPage({hasToken: true});
-
-      const field = container.querySelector<HTMLInputElement>(
-        'form input[name="token"]',
-      );
-      expect(field?.type).toBe('hidden');
-      expect(field?.value).toBe(TOKEN);
-    });
+    expect(screen.getByLabelText('メールアドレス')).toBeInTheDocument();
+    expect(screen.queryByLabelText('新しいパスワード')).not.toBeInTheDocument();
   });
 });

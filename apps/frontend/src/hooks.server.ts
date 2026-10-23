@@ -30,7 +30,7 @@ export const handle: Handle = async ({event, resolve}) => {
     sessionSecret,
   );
   const response = await resolve(event);
-  applySecurityHeaders(response.headers, event.url);
+  applySecurityHeaders(response.headers, event.url, event.request.method);
   return response;
 };
 

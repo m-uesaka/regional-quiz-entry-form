@@ -18,6 +18,10 @@ const PRIVATE_PATH_PREFIXES: readonly string[] = [
 /**
  * Pages a mailed link opens with a one-time token in the query string
  * (`?token=...`): the entry confirmation and the two password reset screens.
+ * Each answers that request with a redirect to a URL without the token
+ * (`/verify` after consuming it, the reset screens after moving it into a
+ * cookie: `$lib/server/reset-token.ts`), so these headers are on that
+ * redirect.
  * `/staff/password-reset` is also covered by `/staff` above, but is listed
  * here for the referrer policy, which `/staff` alone does not get.
  */
@@ -55,8 +59,13 @@ const TOKEN_PAGE_REFERRER_POLICY = 'same-origin';
  *
  * @param headers The response's headers, changed in place.
  * @param url The URL the page was requested with.
+ * @param method The request's method.
  */
-export function applySecurityHeaders(headers: Headers, url: URL): void {
+export function applySecurityHeaders(
+  headers: Headers,
+  url: URL,
+  method: string,
+): void {
   const {pathname} = url;
   headers.set('x-content-type-options', 'nosniff');
 
@@ -70,7 +79,16 @@ export function applySecurityHeaders(headers: Headers, url: URL): void {
 
   // A token page is no-store as well: the token is spent once used, and a
   // copy of the page in a cache would be the one place it outlived that.
-  if (matchesAnyPrefix(pathname, PRIVATE_PATH_PREFIXES) || carriesToken) {
+  //
+  // So is the answer to any form submission, on whichever page: it is
+  // rendered from what was just typed in, which on the public entry form is
+  // the participant's name and address -- echoed back by a refusal, or
+  // confirmed by the success screen. Only a page's GET is left cacheable.
+  if (
+    matchesAnyPrefix(pathname, PRIVATE_PATH_PREFIXES) ||
+    carriesToken ||
+    method !== 'GET'
+  ) {
     headers.set('cache-control', 'private, no-store');
   }
 }

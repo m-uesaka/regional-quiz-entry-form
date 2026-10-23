@@ -5,6 +5,28 @@ import {actions, load} from './+page.server';
 const TOKEN = 'c0ffee01';
 const RESET_URL = `http://localhost/staff/password-reset?token=${TOKEN}`;
 const NO_TOKEN_URL = 'http://localhost/staff/password-reset';
+const TOKEN_COOKIE = 'staff_password_reset_token';
+
+/** A cookie jar standing in for `event.cookies`. */
+function fakeCookies(initial: Record<string, string> = {}): {
+  cookies: Cookies;
+  jar: Map<string, string>;
+  setOptions: Map<string, unknown>;
+} {
+  const jar = new Map(Object.entries(initial));
+  const setOptions = new Map<string, unknown>();
+  const cookies = {
+    get: (name: string) => jar.get(name),
+    set: (name: string, value: string, options: unknown) => {
+      jar.set(name, value);
+      setOptions.set(name, options);
+    },
+    delete: (name: string) => {
+      jar.delete(name);
+    },
+  } as unknown as Cookies;
+  return {cookies, jar, setOptions};
+}
 
 interface FetchLog {
   urls: string[];
@@ -27,25 +49,23 @@ function fakeFetch(
 }
 
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
-function buildLoadEvent(url: string): Parameters<typeof load>[0] {
-  return {url: new URL(url)} as Parameters<typeof load>[0];
+function buildLoadEvent(
+  url: string,
+  cookies: Cookies = fakeCookies().cookies,
+): Parameters<typeof load>[0] {
+  return {url: new URL(url), cookies} as Parameters<typeof load>[0];
 }
 
 /** Builds the partial `RequestEvent` the form action needs. */
 function buildActionEvent(
-  url: string,
   fetchImpl: typeof fetch,
   formData: FormData,
-  deletedCookies: string[] = [],
+  cookies: Cookies = fakeCookies({[TOKEN_COOKIE]: TOKEN}).cookies,
 ): Parameters<typeof actions.default>[0] {
   return {
-    url: new URL(url),
+    url: new URL(NO_TOKEN_URL),
     fetch: fetchImpl,
-    cookies: {
-      delete: (name: string) => {
-        deletedCookies.push(name);
-      },
-    } as unknown as Cookies,
+    cookies,
     request: {formData: async () => formData},
   } as Parameters<typeof actions.default>[0];
 }
@@ -61,30 +81,60 @@ function passwordForm(
 }
 
 describe('staff password reset +page.server load', () => {
-  it('shows the password form when the mailed link carries a token', () => {
-    expect(load(buildLoadEvent(RESET_URL))).toEqual({token: TOKEN});
+  // The token is moved out of the URL into an httpOnly cookie on arrival, so
+  // it stays out of the history, a later `Referer` and the page (#120).
+  it('moves a mailed token into a cookie and redirects to the bare URL', () => {
+    const {cookies, jar, setOptions} = fakeCookies();
+
+    expect(() => load(buildLoadEvent(RESET_URL, cookies))).toThrow(
+      expect.objectContaining({
+        status: 303,
+        location: '/staff/password-reset',
+      }) as Error,
+    );
+    expect(jar.get(TOKEN_COOKIE)).toBe(TOKEN);
+    expect(setOptions.get(TOKEN_COOKIE)).toMatchObject({
+      path: '/staff/password-reset',
+      httpOnly: true,
+      sameSite: 'lax',
+    });
+  });
+
+  // A reload, or a tab the browser restores, comes back without the query:
+  // the link is still good, so the form must still be there.
+  it('shows the password form while the cookie holds a token', () => {
+    const {cookies} = fakeCookies({[TOKEN_COOKIE]: TOKEN});
+
+    expect(load(buildLoadEvent(NO_TOKEN_URL, cookies))).toEqual({
+      hasToken: true,
+    });
   });
 
   it('has nothing to offer when the page is opened without a token', () => {
-    expect(load(buildLoadEvent(NO_TOKEN_URL))).toEqual({token: null});
+    expect(load(buildLoadEvent(NO_TOKEN_URL))).toEqual({hasToken: false});
   });
 
   it('treats an empty token as no token at all', () => {
-    expect(load(buildLoadEvent(`${NO_TOKEN_URL}?token=`))).toEqual({
-      token: null,
-    });
+    const {cookies, jar} = fakeCookies();
+
+    expect(() =>
+      load(buildLoadEvent(`${NO_TOKEN_URL}?token=`, cookies)),
+    ).toThrow(expect.objectContaining({status: 303}) as Error);
+    expect(jar.has(TOKEN_COOKIE)).toBe(false);
   });
 });
 
 describe('staff password reset +page.server action', () => {
   it('sets the password and sends the staff member to the login screen', async () => {
     const log: FetchLog = {urls: [], bodies: []};
-    const deletedCookies: string[] = [];
+    const {cookies, jar} = fakeCookies({
+      [TOKEN_COOKIE]: TOKEN,
+      staff_session: 'someone-elses-session',
+    });
     const event = buildActionEvent(
-      RESET_URL,
       fakeFetch(200, log),
       passwordForm(),
-      deletedCookies,
+      cookies,
     );
 
     await expect(actions.default(event)).rejects.toMatchObject({
@@ -95,18 +145,19 @@ describe('staff password reset +page.server action', () => {
     expect(log.bodies).toEqual([
       {token: TOKEN, newPassword: 'newstaffpassword1'},
     ]);
-    // The browser's staff cookie may belong to another account than the one
-    // just reset (the link opened in someone else's browser), so it is left
-    // for the API to refuse rather than dropped here.
-    expect(deletedCookies).toEqual([]);
+    // The spent token goes. The browser's staff cookie may belong to another
+    // account than the one just reset (the link opened in someone else's
+    // browser), so it is left for the API to refuse rather than dropped here.
+    expect(jar.has(TOKEN_COOKIE)).toBe(false);
+    expect(jar.get('staff_session')).toBe('someone-elses-session');
   });
 
   it('fails with 400 without calling the API when there is no token', async () => {
     const log: FetchLog = {urls: [], bodies: []};
     const event = buildActionEvent(
-      NO_TOKEN_URL,
       fakeFetch(200, log),
       passwordForm(),
+      fakeCookies().cookies,
     );
 
     await expect(actions.default(event)).resolves.toMatchObject({status: 400});
@@ -116,7 +167,6 @@ describe('staff password reset +page.server action', () => {
   it('fails with 400 without calling the API when the two passwords differ', async () => {
     const log: FetchLog = {urls: [], bodies: []};
     const event = buildActionEvent(
-      RESET_URL,
       fakeFetch(200, log),
       passwordForm('newstaffpassword1', 'newstaffpassword2'),
     );
@@ -131,7 +181,6 @@ describe('staff password reset +page.server action', () => {
   it('names the rule a too-common password broke, without calling the API', async () => {
     const log: FetchLog = {urls: [], bodies: []};
     const event = buildActionEvent(
-      RESET_URL,
       fakeFetch(200, log),
       passwordForm('qwertyuiop'),
     );
@@ -148,48 +197,30 @@ describe('staff password reset +page.server action', () => {
 
   it('fails with 400 without calling the API when the password is too short', async () => {
     const log: FetchLog = {urls: [], bodies: []};
-    const event = buildActionEvent(
-      RESET_URL,
-      fakeFetch(200, log),
-      passwordForm('short'),
-    );
+    const event = buildActionEvent(fakeFetch(200, log), passwordForm('short'));
 
     await expect(actions.default(event)).resolves.toMatchObject({status: 400});
     expect(log.urls).toEqual([]);
   });
 
-  it('points at the general staff when the link is no longer usable', async () => {
-    const event = buildActionEvent(RESET_URL, fakeFetch(400), passwordForm());
+  it('points at the general staff and drops the token when the link is no longer usable', async () => {
+    const {cookies, jar} = fakeCookies({[TOKEN_COOKIE]: TOKEN});
+    const event = buildActionEvent(fakeFetch(400), passwordForm(), cookies);
 
     await expect(actions.default(event)).resolves.toMatchObject({
       status: 400,
       data: {
         error:
           'このリンクは無効か、有効期限が切れています。管理スタッフにリンクの再発行を依頼してください',
+        tokenRejected: true,
       },
     });
+    expect(jar.has(TOKEN_COOKIE)).toBe(false);
   });
 
   it('fails with 502 when the confirm request fails', async () => {
-    const event = buildActionEvent(RESET_URL, fakeFetch(500), passwordForm());
+    const event = buildActionEvent(fakeFetch(500), passwordForm());
 
     await expect(actions.default(event)).resolves.toMatchObject({status: 502});
-  });
-});
-
-describe('staff password reset +page.server action, token in the form (#120)', () => {
-  it('reads the token from the hidden field once the URL has lost it', async () => {
-    const log: FetchLog = {urls: [], bodies: []};
-    const formData = passwordForm();
-    formData.set('token', TOKEN);
-    const event = buildActionEvent(NO_TOKEN_URL, fakeFetch(200, log), formData);
-
-    await expect(actions.default(event)).rejects.toMatchObject({
-      status: 303,
-      location: '/staff/login?reset=done',
-    } satisfies Partial<Redirect>);
-    expect(log.bodies).toEqual([
-      {token: TOKEN, newPassword: 'newstaffpassword1'},
-    ]);
   });
 });

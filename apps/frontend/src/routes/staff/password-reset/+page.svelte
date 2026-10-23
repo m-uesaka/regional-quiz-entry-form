@@ -1,5 +1,4 @@
 <script lang="ts">
-  import {onMount} from 'svelte';
   import {enhance} from '$app/forms';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
@@ -9,16 +8,9 @@
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import Link from '$lib/components/ui/atoms/Link.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
-  import {removeTokenFromLocation, TOKEN_PARAM} from '$lib/url-token';
   import type {PageProps} from './$types';
 
   let {data, form}: PageProps = $props();
-
-  // The mailed link's token has done its job once this page is on screen:
-  // the form below carries it from here on. Taking it out of the address bar
-  // keeps it out of the history, out of a later `Referer`, and off the
-  // screen (#120).
-  onMount(removeTokenFromLocation);
 </script>
 
 <PageContainer size="narrow">
@@ -30,19 +22,17 @@
     </Message>
   {/if}
 
-  {#if data.token}
+  <!-- The token itself never reaches the page: `load` keeps it in an
+       httpOnly cookie (`$lib/server/reset-token.ts`), which the action reads.
+       Once the API has refused it, there is no form left to offer. -->
+  {#if data.hasToken && !form?.tokenRejected}
     <Card>
       <div class="flex flex-col gap-4">
         <p class="text-sm text-muted-foreground">
           スタッフアカウントで使用するパスワードを入力してください。
         </p>
 
-        <!-- The token rides in a hidden field because the address bar no
-             longer has it once the page has mounted (`$lib/url-token.ts`).
-             No `action`: without JavaScript the URL still carries it, and
-             posting back to that URL is the fallback the action reads. -->
         <form method="POST" use:enhance class="flex flex-col gap-4">
-          <input type="hidden" name={TOKEN_PARAM} value={data.token} />
           <div class="flex flex-col gap-1.5">
             <Label for="newPassword">パスワード</Label>
             <Input

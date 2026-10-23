@@ -1,9 +1,7 @@
 import {render, screen} from '@testing-library/svelte';
-import {afterEach, describe, expect, it} from 'vitest';
+import {describe, expect, it} from 'vitest';
 import Page from './+page.svelte';
 import type {ActionData} from './$types';
-
-const TOKEN = 'b3f1c0de';
 
 function renderPage(options: {hasToken?: boolean; form?: ActionData} = {}) {
   render(Page, {
@@ -12,7 +10,7 @@ function renderPage(options: {hasToken?: boolean; form?: ActionData} = {}) {
       data: {
         loggedIn: false,
         isGeneralStaff: false,
-        token: (options.hasToken ?? true) ? TOKEN : null,
+        hasToken: options.hasToken ?? true,
       },
       form: options.form ?? null,
     },
@@ -27,38 +25,33 @@ describe('staff password reset +page.svelte', () => {
     expect(screen.getByLabelText('パスワード(確認用)')).toBeInTheDocument();
   });
 
-  it('posts to its own URL with the token in a hidden field', () => {
+  // The token stays in an httpOnly cookie (`$lib/server/reset-token.ts`):
+  // nothing in the page carries it (#120).
+  it('posts to its own URL with no token in the form', () => {
     const {container} = render(Page, {
       props: {
         params: {},
-        data: {loggedIn: false, isGeneralStaff: false, token: TOKEN},
+        data: {loggedIn: false, isGeneralStaff: false, hasToken: true},
         form: null,
       },
     });
 
     const form = container.querySelector('form');
     expect(form?.getAttribute('method')).toBe('POST');
-    // Posting back to the page's own URL is the fallback for a browser that
-    // never ran the script taking the token out of it.
     expect(form?.hasAttribute('action')).toBe(false);
-    const field = form?.querySelector<HTMLInputElement>('input[name="token"]');
-    expect(field?.type).toBe('hidden');
-    expect(field?.value).toBe(TOKEN);
+    expect(form?.querySelector('input[name="token"]')).toBeNull();
   });
 
-  describe('the token in the URL (#120)', () => {
-    afterEach(() => {
-      history.replaceState(null, '', '/');
+  it('stops offering the form once the API has refused the token', () => {
+    renderPage({
+      form: {
+        error:
+          'このリンクは無効か、有効期限が切れています。管理スタッフにリンクの再発行を依頼してください',
+        tokenRejected: true,
+      },
     });
 
-    it('the token is removed from the URL after it is read', () => {
-      history.replaceState(null, '', `/staff/password-reset?token=${TOKEN}`);
-
-      renderPage();
-
-      expect(window.location.pathname).toBe('/staff/password-reset');
-      expect(window.location.search).toBe('');
-    });
+    expect(screen.queryByLabelText('パスワード')).not.toBeInTheDocument();
   });
 
   it('explains where to get a link instead of a form when there is no token', () => {
@@ -71,7 +64,9 @@ describe('staff password reset +page.svelte', () => {
   });
 
   it('shows the error the action came back with', () => {
-    renderPage({form: {error: 'パスワードが一致しません'}});
+    renderPage({
+      form: {error: 'パスワードが一致しません', tokenRejected: false},
+    });
 
     expect(screen.getByRole('alert')).toHaveTextContent(
       'パスワードが一致しません',

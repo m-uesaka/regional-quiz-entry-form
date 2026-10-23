@@ -11,10 +11,11 @@ vi.mock('$env/dynamic/private', () => ({env: {}}));
  * Runs `handle` for `path` the way SvelteKit would, with a `resolve` that
  * answers a bare page, and returns the response it produced.
  */
-async function respond(path: string): Promise<Response> {
+async function respond(path: string, method = 'GET'): Promise<Response> {
   const url = new URL(path, 'https://entry.example');
   const event = {
     url,
+    request: new Request(url, {method}),
     cookies: {get: () => undefined},
     locals: {},
     platform: undefined,
@@ -88,6 +89,20 @@ describe('handle: security headers (#120)', () => {
     expect(res.headers.get('referrer-policy')).toBe(
       'strict-origin-when-cross-origin',
     );
+    expect(res.headers.get('cache-control')).toBeNull();
+  });
+
+  // A form submission's answer is rendered from what was just typed in --
+  // on the public entry form, the participant's name and address.
+  it('the answer to a form submission is marked no-store on any page', async () => {
+    const res = await respond('/tokyo/saikyoi/entry', 'POST');
+
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+  });
+
+  it('the entry form itself stays cacheable', async () => {
+    const res = await respond('/tokyo/saikyoi/entry');
+
     expect(res.headers.get('cache-control')).toBeNull();
   });
 });

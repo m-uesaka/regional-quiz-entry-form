@@ -5,6 +5,7 @@ import {actions, load} from './+page.server';
 const TOKEN = 'b3f1c0de';
 const RESET_URL = `http://localhost/password-reset?token=${TOKEN}`;
 const REQUEST_URL = 'http://localhost/password-reset';
+const TOKEN_COOKIE = 'password_reset_token';
 
 interface FetchLog {
   urls: string[];
@@ -31,33 +32,58 @@ function fakeFetch(status = 200, log: FetchLog = emptyLog()): typeof fetch {
   }) as typeof fetch;
 }
 
-/** Builds the partial `RequestEvent` `load` needs, cast for test use. */
-function buildLoadEvent(url: string): Parameters<typeof load>[0] {
-  return {url: new URL(url)} as Parameters<typeof load>[0];
-}
-
 /**
- * Builds a stand-in for `event.cookies` that records the names deleted on
- * it, which is how a refused session is cleared.
+ * Builds a stand-in for `event.cookies`: a jar the page reads its token
+ * from, recording the names deleted on it (which is how a spent token and a
+ * refused session are cleared).
  * @param deleted The array every `delete()` call appends its name to.
+ * @param jar The cookies the request carries; `set()` writes into it.
+ * @param setOptions Records the options each `set()` was called with.
  */
-function fakeCookies(deleted: string[]): Cookies {
+function fakeCookies(
+  deleted: string[] = [],
+  jar = new Map<string, string>(),
+  setOptions = new Map<string, unknown>(),
+): Cookies {
   return {
-    delete: (name: string) => deleted.push(name),
+    get: (name: string) => jar.get(name),
+    set: (name: string, value: string, options: unknown) => {
+      jar.set(name, value);
+      setOptions.set(name, options);
+    },
+    delete: (name: string) => {
+      deleted.push(name);
+      jar.delete(name);
+    },
   } as unknown as Cookies;
 }
 
-/** Builds the partial `RequestEvent` the form action needs. */
+/** Builds the partial `RequestEvent` `load` needs, cast for test use. */
+function buildLoadEvent(
+  url: string,
+  cookies: Cookies = fakeCookies(),
+): Parameters<typeof load>[0] {
+  return {url: new URL(url), cookies} as Parameters<typeof load>[0];
+}
+
+/**
+ * Builds the partial `RequestEvent` the form action needs. `RESET_URL`
+ * stands for "the page was opened from the mailed link": the action then
+ * finds `TOKEN` in the cookie `load` moved it into, and posts to the bare
+ * URL.
+ */
 function buildActionEvent(
   url: string,
   fetchImpl: typeof fetch,
   formData: FormData,
   deleted: string[] = [],
 ): Parameters<typeof actions.default>[0] {
+  const jar = new Map<string, string>();
+  if (url === RESET_URL) jar.set(TOKEN_COOKIE, TOKEN);
   return {
-    url: new URL(url),
+    url: new URL(url === RESET_URL ? REQUEST_URL : url),
     fetch: fetchImpl,
-    cookies: fakeCookies(deleted),
+    cookies: fakeCookies(deleted, jar),
     request: {formData: async () => formData},
   } as Parameters<typeof actions.default>[0];
 }
@@ -87,18 +113,50 @@ function passwordForm(
 }
 
 describe('password reset +page.server load', () => {
-  it('asks for a new password when the mailed link carries a token', () => {
-    expect(load(buildLoadEvent(RESET_URL))).toEqual({token: TOKEN});
+  // The token is moved out of the URL into an httpOnly cookie on arrival, so
+  // it stays out of the history, a later `Referer` and the page (#120).
+  it('moves a mailed token into a cookie and redirects to the bare URL', () => {
+    const jar = new Map<string, string>();
+    const setOptions = new Map<string, unknown>();
+
+    expect(() =>
+      load(buildLoadEvent(RESET_URL, fakeCookies([], jar, setOptions))),
+    ).toThrow(
+      expect.objectContaining({
+        status: 303,
+        location: '/password-reset',
+      }) as Error,
+    );
+    expect(jar.get(TOKEN_COOKIE)).toBe(TOKEN);
+    expect(setOptions.get(TOKEN_COOKIE)).toMatchObject({
+      path: '/password-reset',
+      httpOnly: true,
+      sameSite: 'lax',
+      maxAge: 3600,
+    });
+  });
+
+  // A reload, or a tab the browser restores, comes back without the query:
+  // the link is still good, so the form must still be there.
+  it('asks for a new password while the cookie holds a token', () => {
+    const jar = new Map([[TOKEN_COOKIE, TOKEN]]);
+
+    expect(load(buildLoadEvent(REQUEST_URL, fakeCookies([], jar)))).toEqual({
+      hasToken: true,
+    });
   });
 
   it('asks for an email address when there is no token', () => {
-    expect(load(buildLoadEvent(REQUEST_URL))).toEqual({token: null});
+    expect(load(buildLoadEvent(REQUEST_URL))).toEqual({hasToken: false});
   });
 
   it('treats an empty token as no token at all', () => {
-    expect(load(buildLoadEvent(`${REQUEST_URL}?token=`))).toEqual({
-      token: null,
-    });
+    const jar = new Map<string, string>();
+
+    expect(() =>
+      load(buildLoadEvent(`${REQUEST_URL}?token=`, fakeCookies([], jar))),
+    ).toThrow(expect.objectContaining({status: 303}) as Error);
+    expect(jar.has(TOKEN_COOKIE)).toBe(false);
   });
 });
 
@@ -221,8 +279,9 @@ describe('password reset +page.server action, with a token', () => {
       location: '/mypage/login?reset=done',
     } satisfies Partial<Redirect>);
     // The reset cut this browser's own session too, so the cookie has to go
-    // or the login page would bounce the participant on to `/mypage`.
-    expect(deleted).toEqual(['participant_session']);
+    // or the login page would bounce the participant on to `/mypage`. The
+    // spent token goes with it.
+    expect(deleted).toEqual(['participant_session', TOKEN_COOKIE]);
     expect(log.urls[0]).toContain(
       '/api/auth/participant/password-reset/confirm',
     );
@@ -274,48 +333,30 @@ describe('password reset +page.server action, with a token', () => {
     expect(log.urls).toEqual([]);
   });
 
-  it('tells the participant to start over when the link is no longer usable', async () => {
-    const event = buildActionEvent(RESET_URL, fakeFetch(400), passwordForm());
+  it('tells the participant to start over and drops the token when the link is no longer usable', async () => {
+    const deleted: string[] = [];
+    const event = buildActionEvent(
+      RESET_URL,
+      fakeFetch(400),
+      passwordForm(),
+      deleted,
+    );
 
     await expect(actions.default(event)).resolves.toMatchObject({
       status: 400,
       data: {
         error:
           'このリンクは無効か、有効期限が切れています。もう一度パスワード再設定をやり直してください',
+        tokenRejected: true,
       },
     });
+    // So the page offers the "mail me a link" form again.
+    expect(deleted).toEqual([TOKEN_COOKIE]);
   });
 
   it('fails with 502 when the reset request fails', async () => {
     const event = buildActionEvent(RESET_URL, fakeFetch(500), passwordForm());
 
     await expect(actions.default(event)).resolves.toMatchObject({status: 502});
-  });
-});
-
-describe('password reset +page.server action, token in the form (#120)', () => {
-  it('reads the token from the hidden field once the URL has lost it', async () => {
-    const log: FetchLog = emptyLog();
-    const formData = passwordForm();
-    formData.set('token', TOKEN);
-    const event = buildActionEvent(REQUEST_URL, fakeFetch(200, log), formData);
-
-    await expect(actions.default(event)).rejects.toMatchObject({
-      status: 303,
-      location: '/mypage/login?reset=done',
-    } satisfies Partial<Redirect>);
-    expect(log.bodies).toEqual([{token: TOKEN, newPassword: 'newpassword1'}]);
-  });
-
-  it('prefers the hidden field over the URL', async () => {
-    const log: FetchLog = emptyLog();
-    const formData = passwordForm();
-    formData.set('token', 'from-the-field');
-    const event = buildActionEvent(RESET_URL, fakeFetch(200, log), formData);
-
-    await expect(actions.default(event)).rejects.toMatchObject({status: 303});
-    expect(log.bodies).toEqual([
-      {token: 'from-the-field', newPassword: 'newpassword1'},
-    ]);
   });
 });
