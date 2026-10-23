@@ -10,6 +10,7 @@
   import Card from '$lib/components/ui/atoms/Card.svelte';
   import Chip from '$lib/components/ui/atoms/Chip.svelte';
   import Link from '$lib/components/ui/atoms/Link.svelte';
+  import {ENTRY_STATUS_CHIP_VARIANT} from '$lib/entry-status';
   import type {PageProps} from './$types';
 
   let {data, params}: PageProps = $props();
@@ -89,13 +90,7 @@
       <dd class="mb-3 sm:mb-0 sm:py-1.5">
         <Chip
           tone="soft"
-          variant={data.entry.status === 'confirmed'
-            ? 'success'
-            : data.entry.status === 'waitlisted'
-              ? 'warning'
-              : data.entry.status === 'cancelled'
-                ? 'secondary'
-                : 'primary'}
+          variant={ENTRY_STATUS_CHIP_VARIANT[data.entry.status]}
         >
           {ENTRY_STATUS_LABELS[data.entry.status]}
           {#if data.entry.status === 'waitlisted'}

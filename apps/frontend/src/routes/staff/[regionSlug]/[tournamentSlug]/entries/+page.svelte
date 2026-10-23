@@ -4,6 +4,7 @@
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
   import {buttonVariants} from '$lib/components/ui/atoms/Button.svelte';
+  import {ENTRY_STATUS_CHIP_VARIANT} from '$lib/entry-status';
   import Chip from '$lib/components/ui/atoms/Chip.svelte';
   import Link from '$lib/components/ui/atoms/Link.svelte';
   import Table from '$lib/components/ui/atoms/Table.svelte';
@@ -71,13 +72,7 @@
             <TableData size="small">
               <Chip
                 tone="soft"
-                variant={entry.status === 'confirmed'
-                  ? 'success'
-                  : entry.status === 'waitlisted'
-                    ? 'warning'
-                    : entry.status === 'cancelled'
-                      ? 'secondary'
-                      : 'primary'}
+                variant={ENTRY_STATUS_CHIP_VARIANT[entry.status]}
                 class="whitespace-nowrap"
               >
                 {ENTRY_STATUS_LABELS[entry.status]}
