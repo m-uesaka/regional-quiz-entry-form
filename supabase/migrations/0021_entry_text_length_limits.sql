@@ -35,6 +35,12 @@ as $$
   ) as element;
 $$;
 
+-- 他の関数と同じく service_role からしか呼べないようにする。check 制約から
+-- 呼ばれる関数は挿入するロールの権限で実行されるので、entries に書く
+-- service_role には実行権限が要る。
+revoke all on function custom_field_values_length(jsonb) from public;
+grant execute on function custom_field_values_length(jsonb) to service_role;
+
 alter table entries
   add constraint entries_text_lengths check (
     char_length(name) <= 100
