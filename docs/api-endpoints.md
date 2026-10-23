@@ -204,13 +204,15 @@ if ('yaml' in body) {
 
 スタッフのログイン。成功時に `staff_session` Cookie を発行します。
 
-- リクエスト: `StaffLoginInputSchema` — `{email: string(email), password: string(min 1)}`
+- リクエスト: `StaffLoginInputSchema` — `{email: string(email), password: string(min 1, max 1024)}`(ログインには下記のパスワードポリシーを**適用しません**。ポリシー導入前に設定したパスワードでもログインできる必要があるためです。上限も新規設定時の 256 文字より緩い 1024 文字(`LOGIN_PASSWORD_MAX_LENGTH`)にしています。256 文字の上限ができる前は上限が無かったためで、上限自体は PBKDF2 の計算量を守るために残しています)
 - `200`: `StaffLoginResponseSchema` — `{"ok": true, "role": "regional" | "general", "regionSlug": string | null, "tournamentType": "saikyoi" | "shinjinou" | null}`
 - `401`: `{"error": "invalid credentials"}`
 - `429`: `{"error": "too many requests"}`(`Retry-After: 60`。1 章「レート制限と Turnstile」を参照)
 - `500`: `{"error": "internal server error"}`
 
-該当アカウントが存在しない場合もダミーのハッシュに対して PBKDF2 を実行してから 401 を返します。これにより「メールアドレスが存在しない」場合と「パスワードが違う」場合の応答時間が揃い、タイミング差からのアカウント列挙を防ぎます。
+該当アカウントが存在しない場合もダミーのハッシュ(`lib/password.ts` の `DUMMY_PASSWORD_HASH`。現行の反復回数で作った形式なので、新規ハッシュと同じコストがかかります)に対して PBKDF2 を実行してから 401 を返します。これにより「メールアドレスが存在しない」場合と「パスワードが違う」場合の応答時間が揃い、タイミング差からのアカウント列挙を防ぎます。
+
+ログインに成功したとき、保存されているハッシュが旧形式・旧パラメータ(`verifyPassword()` の `needsRehash`)なら、**その場で現行パラメータのハッシュに書き換えます**。平文が手元にあるのは照合が通ったこの瞬間だけなので、利用者に何も求めずに移行を進められます。書き換えは `waitUntil()` で応答の後に行い、失敗してもログは残してログイン自体は成功させます(次回のログインで再試行されます)。`password_hash` が照合時の値のままである行だけを更新するので、その間に再設定されたパスワードを古いもので上書きすることはありません。`password_changed_at` は動かしません(パスワードは変わっていないので、セッションを切る理由がないためです)。仕組みの詳細は [`database-schema.md`](./database-schema.md#participants--参加者アカウント) を参照してください。
 
 `regionSlug` / `tournamentType` は `regional` スタッフの担当範囲で、`general` スタッフでは両方 `null` です。スタッフ画面は `/staff/{regionSlug}/{tournamentType}/entries` のように**スラッグ**で引くため、JWT クレームが持つ `regionId` ではなく `regions` を join したスラッグを返しています。ログイン画面(`/staff/login`)はこれを見て、`general` を `/staff/dashboard` へ、`regional` を担当大会のエントリー一覧へリダイレクトします。
 
@@ -218,7 +220,7 @@ if ('yaml' in body) {
 
 スタッフが招待メール(`POST /api/staff/accounts`)またはリンク再発行(`POST /api/staff/accounts/:id/password-reset`)で受け取ったトークンを使い、自分のパスワードを設定します。
 
-- リクエスト: `StaffPasswordResetConfirmInputSchema` — `{token: string(min 1), newPassword: string(min 8)}`
+- リクエスト: `StaffPasswordResetConfirmInputSchema` — `{token: string(min 1), newPassword: PasswordSchema}`(`PasswordSchema` は `packages/shared/src/password-policy.ts`。8 文字以上 256 文字以内で、よく使われるパスワードの一覧(約 3,300 件、大文字小文字を区別しない)に載っていないこと。記号必須などの文字種の強制はしません。よく使われるパスワードの一覧は約 30 KB あるため、ブラウザのバンドルに入らないようパッケージの `index.ts` からは export せず、サーバー側のコードだけが `@regional-quiz/shared/password-policy` から import します)
 - `200`: `{"ok": true}`
 - `400`: `{"error": "invalid or expired token"}`(未知・使用済み・期限切れのトークン)
 - `500`: `{"error": "internal server error"}`
@@ -235,7 +237,7 @@ if ('yaml' in body) {
 
 - リクエスト: `ParticipantLoginInputSchema` — `{email, password}`
 - `200`: `{"ok": true}`
-- `401` / `429` / `500`: スタッフ側と同じ(ダミーハッシュによる時間平準化も同様)
+- `401` / `429` / `500`: スタッフ側と同じ(ダミーハッシュによる時間平準化、ログイン成功時の再ハッシュも同様)。`password` の上限 1024 文字もスタッフ側と同じです
 
 発行する JWT には `sub` / `exp` に加えて `pwdChangedAt`(このログインで照合したパスワードの `password_changed_at`)を載せます。追加のクエリは不要で、パスワードハッシュと同じ SELECT で取得しています。
 
@@ -258,7 +260,7 @@ if ('yaml' in body) {
 
 トークンと新しいパスワードを受け取り、パスワードを再設定します。
 
-- リクエスト: `PasswordResetConfirmInputSchema` — `{token: string(min 1), newPassword: string(min 8)}`
+- リクエスト: `PasswordResetConfirmInputSchema` — `{token: string(min 1), newPassword: PasswordSchema}`(エントリー時のパスワードと同じポリシー。スタッフ側の説明を参照)
 - `200`: `{"ok": true}`
 - `400`: `{"error": "invalid or expired token"}`(未知・使用済み・期限切れのトークン)
 - `500`: `{"error": "internal server error"}`
@@ -412,6 +414,7 @@ if ('yaml' in body) {
 | 登録済み + パスワード一致 | エントリーを作成 | 確認メール |
 | 登録済み + パスワード不一致 | 作らない | 「登録済みのパスワードでログインしてからエントリーしてください」 |
 | 別地域で登録済み | 作らない | 「別の地域で登録済み」 |
+| 未登録 + よく使われるパスワード | 作らない | 「よく使われているパスワードのため登録できませんでした」 |
 | 同じ大会にエントリー済み | 作らない | 「既にエントリー済み」 |
 | 同一地域の別大会にエントリー済み(重複不可の地域) | 作らない | 「どちらか一方にのみエントリーできます」 |
 | フォームを開いている間にレギュレーションが削除された | 作らない | 「レギュレーションが変更された」 |
@@ -427,8 +430,10 @@ if ('yaml' in body) {
   | `furigana` | string(min 1) | ふりがな |
   | `displayName` | string(min 1) | 公開リスト掲載名 |
   | `email` | string(email) | アカウントのメールアドレス |
-  | `password` | string(min 8) | |
-  | `passwordConfirm` | string(min 8) | `password` と一致必須 |
+  | `password` | `PasswordLengthSchema`(8〜256 文字) | `packages/shared/src/schemas/password.ts` |
+  | `passwordConfirm` | `PasswordLengthSchema` | `password` と一致必須 |
+
+  `password` には**長さの制限しかかけません**。この欄は新規の参加者がパスワードを決める欄であると同時に、登録済みの参加者が既存のパスワードを示す欄でもあり、ポリシー導入前によく使われるパスワードを設定した参加者を締め出さないためです。よく使われるパスワードの拒否(`PasswordSchema`)は、アドレスが未登録だと分かった時点でバックエンドが行い、ほかのアドレス依存の理由と同じくメールで伝えます。
   | `regulationIds` | string(uuid)[] (min 1) | 選択したレギュレーション。複数該当し得るので配列(issue #112) |
   | `freeText` | string(任意) | |
   | `customFieldValues` | `Record<string, string \| string[]>` | 追加フォーム項目の回答 |

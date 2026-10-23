@@ -332,7 +332,7 @@ describe.skipIf(!(await isDbReachable()))(
       `;
       const [participant] = await sql`
         insert into participants (region_id, email, password_hash)
-        values (${region.region_id}, ${email}, ${await hashPassword('password123')})
+        values (${region.region_id}, ${email}, ${await hashPassword('quiz-entry-pass1')})
         returning id
       `;
       const [entry] = await sql`

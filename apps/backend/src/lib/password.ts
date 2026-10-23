@@ -1,9 +1,76 @@
+// Password hashing: PBKDF2-HMAC-SHA256 with a 128-bit random salt and a
+// 256-bit output, via Web Crypto.
+//
+// Stored format: `pbkdf2-sha256$<iterations>$<saltHex>$<hashHex>`. Every hash
+// carries its own algorithm and iteration count, so the parameters new hashes
+// are made with can change without locking anyone out: an existing hash is
+// still verified with the count it was made with, and `verifyPassword()` then
+// reports `needsRehash` so the login that just proved the password can
+// rewrite it with the current parameters (see `lib/password-rehash.ts`).
+// Values without a `$` are the format this one replaced, `<saltHex>:<hashHex>`
+// at 100,000 iterations, and are read as exactly that.
+//
+// Why the count is still 100,000, below OWASP's 600,000 for PBKDF2-SHA256:
+// Cloudflare Workers refuses more. Measured on 2026-10-23 with a throwaway
+// Worker calling `crypto.subtle.deriveBits()` (PBKDF2, SHA-256, 256 bits):
+//
+// - On Cloudflare's edge (`wrangler dev --remote`, compatibility date
+//   2026-08-01): 100,000 iterations succeed; 100,001 and 600,000 both throw
+//   `NotSupportedError: Pbkdf2 failed: iteration counts above 100000 are not
+//   supported (requested 100001).`
+// - In local workerd (`wrangler dev --local`, workerd 1.20250718 and
+//   1.20260820) there is no cap at all: 600,000 succeeds. The limit lives in
+//   the runtime's `LimitEnforcer` (`DEFAULT_MAX_PBKDF2_ITERATIONS` in
+//   cloudflare/workerd `src/workerd/io/limit-enforcer.h`), which standalone
+//   workerd overrides to "no limit". Neither local dev nor Bun's tests can
+//   catch a count above the cap -- it only fails once deployed, and then on
+//   every login and every new account -- so do not raise
+//   `PBKDF2_ITERATIONS` past 100,000 while this runs on Workers.
+//
+// Cost at 100,000 iterations: about 17 ms per hash on the edge (ten
+// derivations in one request took ~170 ms more than ten 1-iteration ones),
+// about 18-19 ms in local workerd, for a 20-character password; a
+// 256-character one adds ~1 ms (input length only matters for the first HMAC
+// key setup). Login and entry creation each pay this once.
+//
+// Ways past the cap, each of which only needs a new `ALGORITHM` branch here
+// (old hashes keep verifying and are rehashed on the next login):
+//
+// - scrypt through `node:crypto` (`nodejs_compat`): workerd implements it
+//   natively, capped at N*r*p <= 2^20 (`DEFAULT_MAX_SCRYPT_COST`), which
+//   admits OWASP's N=2^17, r=8, p=1. Memory-hard, so it is the stronger
+//   choice; it needs the compatibility flag and a measurement of its own.
+// - A pure-JS PBKDF2 (or an Argon2/scrypt WASM build) is not subject to the
+//   cap, but is a dependency to vet and runs slower per iteration than the
+//   native one, so a given CPU budget buys less work. (Chaining several
+//   `deriveBits()` calls is not an option: the result is not PBKDF2, and
+//   each call restarts the HMAC chain.)
+// - Hashing outside the Worker (a Supabase function, a separate service)
+//   moves the cost but adds a network hop and a secret to every login.
+
+const ALGORITHM = 'pbkdf2-sha256';
+// What new hashes are made with. Raising it is safe for existing accounts
+// (see above), but read the Workers cap first.
 const PBKDF2_ITERATIONS = 100_000;
+// What a value in the pre-`$` `salt:hash` format was made with.
+const LEGACY_PBKDF2_ITERATIONS = 100_000;
+// The most a stored count may name: the Workers cap described above.
+// `deriveBits()` throws on the edge for anything more, so a hash claiming a
+// higher count -- written by a local script, a seed, or a future bump that
+// forgot the cap -- would turn every login for that account into an
+// unhandled 500. It is read as unusable instead, the same as any other value
+// this code can't verify, which also keeps a corrupted or hostile count from
+// making a login spin.
+const MAX_STORED_ITERATIONS = 100_000;
 const SALT_BYTES = 16;
 const HASH_BITS = 256;
 const SALT_HEX_LENGTH = SALT_BYTES * 2;
 const HASH_HEX_LENGTH = (HASH_BITS / 8) * 2;
 const HEX_PATTERN = /^[0-9a-f]+$/i;
+// A positive decimal integer with no sign, leading zero, exponent or
+// fraction -- the only spelling `hashPassword()` writes, so anything else in
+// the column is corruption rather than a value to coax into a number.
+const ITERATIONS_PATTERN = /^[1-9][0-9]*$/;
 
 function toHex(bytes: ArrayBuffer): string {
   return Array.from(new Uint8Array(bytes), byte =>
@@ -22,6 +89,7 @@ function fromHex(hex: string): Uint8Array<ArrayBuffer> {
 async function deriveBits(
   password: string,
   salt: Uint8Array<ArrayBuffer>,
+  iterations: number,
 ): Promise<ArrayBuffer> {
   const key = await crypto.subtle.importKey(
     'raw',
@@ -31,7 +99,7 @@ async function deriveBits(
     ['deriveBits'],
   );
   return crypto.subtle.deriveBits(
-    {name: 'PBKDF2', salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256'},
+    {name: 'PBKDF2', salt, iterations, hash: 'SHA-256'},
     key,
     HASH_BITS,
   );
@@ -48,10 +116,18 @@ function timingSafeEqualHex(a: string, b: string): boolean {
   return diff === 0;
 }
 
+function formatStoredHash(
+  iterations: number,
+  saltHex: string,
+  hashHex: string,
+): string {
+  return `${ALGORITHM}$${iterations}$${saltHex}$${hashHex}`;
+}
+
 export async function hashPassword(password: string): Promise<string> {
   const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));
-  const bits = await deriveBits(password, salt);
-  return `${toHex(salt.buffer)}:${toHex(bits)}`;
+  const bits = await deriveBits(password, salt, PBKDF2_ITERATIONS);
+  return formatStoredHash(PBKDF2_ITERATIONS, toHex(salt.buffer), toHex(bits));
 }
 
 /**
@@ -67,23 +143,68 @@ export async function hashPassword(password: string): Promise<string> {
 export const UNUSABLE_PASSWORD_HASH = 'invalid';
 
 /**
- * Splits a stored hash into its salt and hash halves, or null if `stored` is
- * not in the format `hashPassword()` produces.
+ * A well-formed hash no password matches, for a login to verify against when
+ * no account matches the address, so that an unknown address costs the same
+ * PBKDF2 work as a wrong password and can't be timed to enumerate accounts.
+ *
+ * Built from the current parameters rather than spelled out, so it costs
+ * what a freshly hashed password costs whenever `PBKDF2_ITERATIONS` moves.
+ * (Accounts still on an older, cheaper hash are distinguishable by time
+ * until their next login rehashes them; that window closes on its own.)
+ * An all-zero output is not one PBKDF2 can be expected to produce.
+ */
+export const DUMMY_PASSWORD_HASH = formatStoredHash(
+  PBKDF2_ITERATIONS,
+  '00'.repeat(SALT_BYTES),
+  '00'.repeat(HASH_BITS / 8),
+);
+
+interface ParsedHash {
+  iterations: number;
+  saltHex: string;
+  hashHex: string;
+  /** Written in the pre-`$` `salt:hash` format. */
+  legacy: boolean;
+}
+
+function isSaltAndHash(saltHex: string, hashHex: string): boolean {
+  return (
+    saltHex.length === SALT_HEX_LENGTH &&
+    hashHex.length === HASH_HEX_LENGTH &&
+    HEX_PATTERN.test(saltHex) &&
+    HEX_PATTERN.test(hashHex)
+  );
+}
+
+/**
+ * Reads a stored hash in either format, or null if `stored` is not one
+ * `hashPassword()` produces (or once produced). An unknown algorithm is null
+ * too: verifying it as PBKDF2 would only ever fail, and doing so quietly
+ * would hide a value this code doesn't understand.
  * @param stored The value of the account's `password_hash` column.
  */
-function parseStoredHash(stored: string): {salt: string; hash: string} | null {
-  const parts = stored.split(':');
-  if (parts.length !== 2) return null;
-  const [saltHex, hashHex] = parts;
-  if (
-    saltHex.length !== SALT_HEX_LENGTH ||
-    hashHex.length !== HASH_HEX_LENGTH ||
-    !HEX_PATTERN.test(saltHex) ||
-    !HEX_PATTERN.test(hashHex)
-  ) {
-    return null;
+function parseStoredHash(stored: string): ParsedHash | null {
+  if (!stored.includes('$')) {
+    const parts = stored.split(':');
+    if (parts.length !== 2) return null;
+    const [saltHex, hashHex] = parts;
+    if (!isSaltAndHash(saltHex, hashHex)) return null;
+    return {
+      iterations: LEGACY_PBKDF2_ITERATIONS,
+      saltHex,
+      hashHex,
+      legacy: true,
+    };
   }
-  return {salt: saltHex, hash: hashHex};
+  const parts = stored.split('$');
+  if (parts.length !== 4) return null;
+  const [algorithm, iterationsText, saltHex, hashHex] = parts;
+  if (algorithm !== ALGORITHM) return null;
+  if (!ITERATIONS_PATTERN.test(iterationsText)) return null;
+  const iterations = Number(iterationsText);
+  if (iterations > MAX_STORED_ITERATIONS) return null;
+  if (!isSaltAndHash(saltHex, hashHex)) return null;
+  return {iterations, saltHex, hashHex, legacy: false};
 }
 
 /**
@@ -100,12 +221,40 @@ export function isPasswordHashUsable(stored: string): boolean {
   return parseStoredHash(stored) !== null;
 }
 
+/** What `verifyPassword()` found. */
+export interface PasswordVerification {
+  valid: boolean;
+  /**
+   * The password matched a hash made with older parameters (or in the older
+   * format) than `hashPassword()` now uses, and the caller -- who holds the
+   * plaintext only at this moment -- should store a fresh hash of it. Never
+   * true when `valid` is false.
+   */
+  needsRehash: boolean;
+}
+
+/**
+ * Checks `password` against a stored hash in either format.
+ * @param password The submitted password.
+ * @param stored The value of the account's `password_hash` column.
+ */
 export async function verifyPassword(
   password: string,
   stored: string,
-): Promise<boolean> {
+): Promise<PasswordVerification> {
   const parsed = parseStoredHash(stored);
-  if (!parsed) return false;
-  const bits = await deriveBits(password, fromHex(parsed.salt));
-  return timingSafeEqualHex(toHex(bits), parsed.hash);
+  if (!parsed) return {valid: false, needsRehash: false};
+  const bits = await deriveBits(
+    password,
+    fromHex(parsed.saltHex),
+    parsed.iterations,
+  );
+  // Lowercased because `toHex()` writes lowercase and the stored value is
+  // accepted in either case.
+  const valid = timingSafeEqualHex(toHex(bits), parsed.hashHex.toLowerCase());
+  return {
+    valid,
+    needsRehash:
+      valid && (parsed.legacy || parsed.iterations < PBKDF2_ITERATIONS),
+  };
 }

@@ -14,8 +14,8 @@ describe('EntryInputSchema', () => {
       furigana: 'ヤマダタロウ',
       displayName: '太郎',
       email: 'taro@example.com',
-      password: 'password1',
-      passwordConfirm: 'password2',
+      password: 'quiz-pass-one',
+      passwordConfirm: 'quiz-pass-two',
       regulationIds: ['00000000-0000-0000-0000-000000000000'],
       customFieldValues: {},
     });
@@ -58,8 +58,28 @@ describe('EntryInputSchema', () => {
       furigana: 'ヤマダタロウ',
       displayName: '太郎',
       email: 'taro@example.com',
-      password: 'password1',
-      passwordConfirm: 'password1',
+      password: 'quiz-pass-one',
+      passwordConfirm: 'quiz-pass-one',
+      regulationIds: ['00000000-0000-0000-0000-000000000000'],
+      customFieldValues: {},
+    });
+
+    expect(result.success).toBe(true);
+  });
+});
+
+describe('EntryInputSchema password', () => {
+  // The same field is how a returning participant proves an existing
+  // password, which may predate the common-password rule; the backend
+  // applies that rule only to a new address.
+  it('accepts a common password', () => {
+    const result = EntryInputSchema.safeParse({
+      name: '山田太郎',
+      furigana: 'やまだたろう',
+      displayName: '太郎',
+      email: 'taro@example.com',
+      password: 'password123',
+      passwordConfirm: 'password123',
       regulationIds: ['00000000-0000-0000-0000-000000000000'],
       customFieldValues: {},
     });
@@ -86,8 +106,8 @@ describe('EntryEditInputSchema', () => {
     const result = EntryEditInputSchema.safeParse({
       ...BASE_EDIT,
       email: 'taro@example.com',
-      password: 'password1',
-      passwordConfirm: 'password1',
+      password: 'quiz-pass-one',
+      passwordConfirm: 'quiz-pass-one',
       regulationIds: ['00000000-0000-0000-0000-000000000000'],
     });
 

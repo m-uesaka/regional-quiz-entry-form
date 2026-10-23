@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {PasswordLengthSchema} from './password';
 import {isWithinEntryPeriod} from '../logic/entry-period';
 import {FormFieldDefSchema} from './form-definition';
 import {TournamentTypeSchema} from './tournament';
@@ -16,12 +17,13 @@ export const EntryInputSchema = z
     email: z
       .string()
       .email({message: 'メールアドレスの形式が正しくありません'}),
-    password: z
-      .string()
-      .min(8, {message: 'パスワードは8文字以上で入力してください'}),
-    passwordConfirm: z
-      .string()
-      .min(8, {message: 'パスワードは8文字以上で入力してください'}),
+    // Length only: the same field is how a returning participant proves the
+    // password they already have, which may predate the common-password
+    // rule. The backend applies that rule when the address turns out to be
+    // new (`createEntryAfterCheck()`), and mails the refusal like every other
+    // answer that depends on the address (#117).
+    password: PasswordLengthSchema,
+    passwordConfirm: PasswordLengthSchema,
     // A participant may meet several of a tournament's conditions at once
     // (requirements.md renders these as checkboxes), so this is a set. At
     // least one has to be met, which is what `min(1)` says.

@@ -4,26 +4,22 @@ import {sign} from 'hono/jwt';
 import {deleteCookie, setCookie} from 'hono/cookie';
 import {
   StaffLoginInputSchema,
-  StaffPasswordResetConfirmInputSchema,
   type StaffClaims,
   type StaffLoginInput,
   type StaffLoginResponse,
   type StaffRole,
   type TournamentType,
 } from '@regional-quiz/shared';
+import {StaffPasswordResetConfirmInputSchema} from '@regional-quiz/shared/password-policy';
 import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
-import {isPasswordHashUsable, verifyPassword} from '../lib/password';
+import {verifyAccountPassword} from '../lib/password-rehash';
 import {internalError} from '../lib/errors';
 import {confirmStaffPasswordReset} from '../lib/staff-password-reset';
 import {STAFF_SESSION_COOKIE} from '../middleware/staff-auth';
 import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
 
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
-// A well-formed but unusable hash, run through `verifyPassword` when no
-// account matches so that a missing email costs the same PBKDF2 work as a
-// wrong password and can't be timed to enumerate staff emails.
-const DUMMY_PASSWORD_HASH = `${'00'.repeat(16)}:${'00'.repeat(32)}`;
 // The attributes the session cookie is issued under, shared with `/logout`
 // so the two can't drift apart: a deletion whose `path` / `secure` /
 // `sameSite` differ from the ones the cookie was set with addresses a
@@ -91,17 +87,19 @@ export const staffAuthRoute = new Hono<Env>()
       }
 
       // An account created by `POST /api/staff/accounts` whose owner hasn't
-      // followed their invite link yet carries an unusable placeholder hash.
-      // `verifyPassword()` refuses it either way, but it refuses it before
-      // doing any PBKDF2 work, which would make "invited, not set up yet"
-      // distinguishable from "wrong password" by response time -- the same leak
-      // the dummy hash exists to close for an unknown email.
-      const storedHash =
-        staff && isPasswordHashUsable(staff.password_hash)
-          ? staff.password_hash
-          : DUMMY_PASSWORD_HASH;
-      const passwordValid = await verifyPassword(password, storedHash);
-      if (!staff || !passwordValid) {
+      // followed their invite link yet carries an unusable placeholder hash,
+      // which costs the same PBKDF2 work as a wrong password so "invited, not
+      // set up yet" can't be told apart by response time: see
+      // `verifyAccountPassword()`, which also moves an older hash to the
+      // current parameters after the response.
+      const valid = await verifyAccountPassword(
+        c.env,
+        'staff_accounts',
+        staff,
+        password,
+        upgrade => c.executionCtx.waitUntil(upgrade),
+      );
+      if (!staff || !valid) {
         return c.json({error: 'invalid credentials'}, 401);
       }
 

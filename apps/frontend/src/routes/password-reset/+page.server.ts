@@ -1,8 +1,6 @@
 import {fail, redirect} from '@sveltejs/kit';
-import {
-  PasswordResetConfirmInputSchema,
-  PasswordResetRequestInputSchema,
-} from '@regional-quiz/shared';
+import {PasswordResetRequestInputSchema} from '@regional-quiz/shared';
+import {PasswordResetConfirmInputSchema} from '@regional-quiz/shared/password-policy';
 import {createApiClient} from '$lib/api';
 import {readTurnstileToken, TURNSTILE_TOKEN_FIELD} from '$lib/turnstile';
 import {clearParticipantSession} from '$lib/server/participant-session';
@@ -103,7 +101,14 @@ export const actions = {
       newPassword,
     });
     if (!parsed.success) {
-      return fail(400, {error: 'パスワードは8文字以上で入力してください'});
+      // The token was already read as non-empty, so what failed is the
+      // password, and the shared schema's own message says which rule it
+      // broke (too short, too long, or too common).
+      return fail(400, {
+        error:
+          parsed.error.flatten().fieldErrors.newPassword?.[0] ??
+          'パスワードを正しく入力してください',
+      });
     }
 
     const res = await api.api.auth.participant['password-reset'].confirm.$post({

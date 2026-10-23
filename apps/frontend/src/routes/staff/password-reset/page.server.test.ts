@@ -128,6 +128,24 @@ describe('staff password reset +page.server action', () => {
     expect(log.urls).toEqual([]);
   });
 
+  it('names the rule a too-common password broke, without calling the API', async () => {
+    const log: FetchLog = {urls: [], bodies: []};
+    const event = buildActionEvent(
+      RESET_URL,
+      fakeFetch(200, log),
+      passwordForm('qwertyuiop'),
+    );
+
+    await expect(actions.default(event)).resolves.toMatchObject({
+      status: 400,
+      data: {
+        error:
+          'よく使われているパスワードのため使用できません。別のパスワードを入力してください',
+      },
+    });
+    expect(log.urls).toEqual([]);
+  });
+
   it('fails with 400 without calling the API when the password is too short', async () => {
     const log: FetchLog = {urls: [], bodies: []};
     const event = buildActionEvent(

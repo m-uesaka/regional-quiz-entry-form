@@ -177,12 +177,12 @@ describe.skipIf(!(await isDbReachable()))(
 
       expect(result).toEqual({ok: true});
       const passwordHash = await readPasswordHash(participant.id);
-      expect(await verifyPassword('brand-new-password', passwordHash)).toBe(
-        true,
-      );
-      expect(await verifyPassword('original-password', passwordHash)).toBe(
-        false,
-      );
+      expect(
+        (await verifyPassword('brand-new-password', passwordHash)).valid,
+      ).toBe(true);
+      expect(
+        (await verifyPassword('original-password', passwordHash)).valid,
+      ).toBe(false);
       const [tokenRow] = await sql`
         select used_at from password_reset_tokens
         where participant_id = ${participant.id}
@@ -261,8 +261,12 @@ describe.skipIf(!(await isDbReachable()))(
       });
       // The second attempt left the password from the first one in place.
       const passwordHash = await readPasswordHash(participant.id);
-      expect(await verifyPassword('first-password', passwordHash)).toBe(true);
-      expect(await verifyPassword('second-password', passwordHash)).toBe(false);
+      expect((await verifyPassword('first-password', passwordHash)).valid).toBe(
+        true,
+      );
+      expect(
+        (await verifyPassword('second-password', passwordHash)).valid,
+      ).toBe(false);
     });
 
     it('confirmPasswordReset rejects an expired token', async () => {
@@ -282,10 +286,12 @@ describe.skipIf(!(await isDbReachable()))(
         error: 'invalid or expired token',
       });
       expect(
-        await verifyPassword(
-          'original-password',
-          await readPasswordHash(participant.id),
-        ),
+        (
+          await verifyPassword(
+            'original-password',
+            await readPasswordHash(participant.id),
+          )
+        ).valid,
       ).toBe(true);
     });
 
@@ -335,16 +341,20 @@ describe.skipIf(!(await isDbReachable()))(
       const passwordHash = await readPasswordHash(participant.id);
       const winnerIsFirst = results[0].ok;
       expect(
-        await verifyPassword(
-          winnerIsFirst ? 'first-password' : 'second-password',
-          passwordHash,
-        ),
+        (
+          await verifyPassword(
+            winnerIsFirst ? 'first-password' : 'second-password',
+            passwordHash,
+          )
+        ).valid,
       ).toBe(true);
       expect(
-        await verifyPassword(
-          winnerIsFirst ? 'second-password' : 'first-password',
-          passwordHash,
-        ),
+        (
+          await verifyPassword(
+            winnerIsFirst ? 'second-password' : 'first-password',
+            passwordHash,
+          )
+        ).valid,
       ).toBe(false);
 
       // Both links are spent either way.

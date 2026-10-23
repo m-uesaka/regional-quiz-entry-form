@@ -165,12 +165,14 @@ flowchart TB
 | `id` | uuid | PK | |
 | `region_id` | uuid | not null, FK → `regions.id` | 所属地域 |
 | `email` | text | not null, **unique(全体)** | ログイン ID |
-| `password_hash` | text | not null | PBKDF2-SHA256 ハッシュ。`{16バイトのソルト}:{32バイトのハッシュ}` を hex 化してコロンで連結した形式(10万回反復) |
+| `password_hash` | text | not null | PBKDF2-SHA256 ハッシュ。`pbkdf2-sha256$<反復回数>$<16バイトのソルトの hex>$<32バイトのハッシュの hex>` の形式(現行 10 万回)。`$` を含まない `{ソルト}:{ハッシュ}` は旧形式(10 万回)として読み、次のログインで新形式に書き換わります |
 | `password_changed_at` | timestamptz | not null, default `now()` | パスワードが最後に変わった時刻(`0011` で追加)。セッション失効の判定に使います |
 | `created_at` | timestamptz | not null, default `now()` | |
 
 - `email` は地域ごとではなく**システム全体で一意**です。そのため、ある参加者が別地域の大会にエントリーすることはできません。未ログインのエントリーでは、その旨をそのアドレスへメールで伝え(応答は他の場合と同じ `202`。#117)、ログイン中のエントリーでは 409(`already registered in another region`)を返します。
 - Supabase Auth ではなく自前のテーブルでアカウントを管理しています。パスワードのハッシュ化・検証は `apps/backend/src/lib/password.ts`(Web Crypto の PBKDF2)。Cloudflare Workers は Node.js ランタイムではないため、Node 依存のライブラリは使えません。
+- `password_hash` は**アルゴリズムと反復回数を自分の中に持っています**。新しいハッシュを作るパラメータを変えても、既存のハッシュは保存時の回数で検証できるので誰もログインできなくなりません。照合が通ったときに古いパラメータ(または旧形式)だったものは、ログイン(参加者・スタッフ)と未ログインでのエントリーの照合時に、その場で現行パラメータで作り直されます(`lib/password-rehash.ts` の `verifyAccountPassword()`。パスワードを照合する箇所はすべてこれを通ります)。保存された反復回数が Workers の上限(10 万回)を超えるハッシュは、本番で例外になるため使えない値として扱い、ログインは 401 になります。この書き換えは `password_hash` が照合時の値のままである行だけを対象にし、`password_changed_at` は動かしません。
+- 反復回数が OWASP の推奨(PBKDF2-SHA256 で 60 万回)を下回る **10 万回に留まっているのは、Cloudflare Workers の本番ランタイムが 100,000 回を超える PBKDF2 を `NotSupportedError` で拒否するため**です(2026-10-23 に `wrangler dev --remote` で 100,001 回・600,000 回が拒否されることを確認)。ローカルの `wrangler dev --local` / workerd ではこの上限がかからず、Bun のテストでも検出できないので、デプロイして初めて全ログインが失敗する形で表面化します。上限を越えるための選択肢(`nodejs_compat` 経由の scrypt など)と計測値は `lib/password.ts` 冒頭のコメントにまとめています。
 - 既存メールアドレスでの再エントリー時は**パスワード照合を必須**にしています。これがないと、メールアドレスを知っている第三者が他人のアカウントにエントリーをぶら下げられてしまいます。
 - `password_changed_at` は**パスワード再設定で既存セッションを切る**ためのものです。参加者セッションはサーバ側に実体を持たない HS256 JWT(有効期間 7 日)なので、パスワードを変えただけでは発行済み Cookie は無効になりません。ログイン時にこの列の値を `pwdChangedAt` クレームとして JWT に載せ、`requireParticipant()` が毎回この列を読み直して**一致しないセッションを 401 で拒否**します。これがないと、Cookie を盗まれた参加者がパスワードを変更しても、攻撃者は最大 7 日間マイページにアクセスし続けられます。
 - 比較対象が**どちらも同じ列の読み取り値**である(「発行時刻より後か」ではない)のは意図的です。JWT の `iat` と突き合わせる形だと、Worker と Postgres の時計が数百ミリ秒ずれているだけで、登録直後・再設定直後のログインが自分のセッションで 401 になり得ます。
@@ -281,7 +283,7 @@ flowchart TB
 | --- | --- | --- | --- |
 | `id` | uuid | PK | |
 | `email` | text | not null, unique | |
-| `password_hash` | text | not null | participants と同じ PBKDF2 形式 |
+| `password_hash` | text | not null | participants と同じ PBKDF2 形式(旧形式の読み取りとログイン時の書き換えも同じ) |
 | `role` | staff_role | not null | `regional` / `general` |
 | `region_id` | uuid | nullable, FK → `regions.id` | `regional` のときの担当地域 |
 | `tournament_type` | tournament_type | nullable | `regional` のときの担当大会種別 |

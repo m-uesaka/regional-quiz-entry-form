@@ -290,8 +290,8 @@ function validFormData(
     furigana: 'ヤマダタロウ',
     displayName: '太郎',
     email: 'taro@example.com',
-    password: 'password123',
-    passwordConfirm: 'password123',
+    password: 'quiz-entry-pass1',
+    passwordConfirm: 'quiz-entry-pass1',
     regulationIds: [REGULATIONS[0].id],
     freeText: '',
     'custom.agree_rules': 'on',
@@ -496,6 +496,24 @@ describe('entry +page.server default action', () => {
       status: 400,
       data: {fieldErrors: {passwordConfirm: ['パスワードが一致しません']}},
     });
+  });
+
+  // The same field is how a returning participant proves an existing
+  // password, which may predate the common-password rule, so the form lets
+  // one through and the backend refuses it only for a new address -- by
+  // mail, like every other answer that depends on the address (#117).
+  it('passes a common password on to the API', async () => {
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi(),
+        fields: validFormData({
+          password: 'Password123',
+          passwordConfirm: 'Password123',
+        }),
+      }),
+    );
+
+    expect(result).toEqual({submitted: true, email: 'taro@example.com'});
   });
 
   it('does not read the regulations while handling a submission', async () => {

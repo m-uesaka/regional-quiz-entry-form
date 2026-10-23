@@ -8,13 +8,15 @@ import {
   type EntrySessionInput,
   type EntryStatus,
 } from '@regional-quiz/shared';
+import {isCommonPassword} from '@regional-quiz/shared/password-policy';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import {sendEntryNoticeEmail, type EntryNoticeReason} from './entry-notice';
 import {sendVerificationEmail} from './entry-verification';
 import {FORM_FIELD_DEF_COLUMNS, toFormFieldDef} from './form-field-defs';
 import type {FormFieldDefRow} from './form-field-defs';
-import {hashPassword, verifyPassword} from './password';
+import {hashPassword} from './password';
+import {verifyAccountPassword} from './password-rehash';
 import {promoteNextWaitlistedEntry} from './waitlist';
 
 type CreateEntryResult =
@@ -92,6 +94,7 @@ const INVALID_PASSWORD = 'invalid password';
 const ALREADY_REGISTERED_IN_ANOTHER_REGION =
   'already registered in another region';
 const ALREADY_ENTERED = 'already entered';
+const COMMON_PASSWORD = 'password too common';
 
 /**
  * The SQLSTATE `check_region_dual_entry()` (migration 0016) raises. The
@@ -435,15 +438,37 @@ async function createEntryAfterCheck(
     // Re-entering under an already-registered email must prove ownership of
     // that account, otherwise anyone who learns a participant's email could
     // attach unauthorized entries to it.
-    const passwordValid = await verifyPassword(
+    //
+    // A correct password on an older hash is upgraded the same way the login
+    // does it (`verifyAccountPassword()`): some participants only ever come
+    // back through this form, and their hash would otherwise never move.
+    // Awaited rather than handed to `waitUntil()` because the
+    // address-and-password route already runs all of this after its
+    // response (#117); it never rejects, so the entry goes ahead whatever
+    // happens to it.
+    let upgrade: Promise<void> | undefined;
+    const valid = await verifyAccountPassword(
+      env,
+      'participants',
+      existingParticipant,
       input.password,
-      existingParticipant.password_hash,
+      pending => {
+        upgrade = pending;
+      },
     );
-    if (!passwordValid) {
+    if (!valid) {
       return {ok: false, status: 401, error: INVALID_PASSWORD};
     }
+    await upgrade;
     participantId = existingParticipant.id;
   } else {
+    // A new account is held to the rules for setting a password. The form's
+    // own schema can't apply them (the same field is how a returning
+    // participant proves an older password), and doing it here keeps the
+    // refusal behind the address like every other answer that depends on it.
+    if (isCommonPassword(input.password)) {
+      return {ok: false, status: 400, error: COMMON_PASSWORD};
+    }
     const {data: created, error} = await db
       .from('participants')
       .insert({
@@ -636,6 +661,7 @@ const ENTRY_NOTICE_REASONS: Record<string, EntryNoticeReason> = {
   [INVALID_PASSWORD]: 'password-mismatch',
   [ALREADY_REGISTERED_IN_ANOTHER_REGION]: 'other-region',
   [ALREADY_ENTERED]: 'already-entered',
+  [COMMON_PASSWORD]: 'common-password',
   [ALREADY_ENTERED_ANOTHER_TOURNAMENT]: 'dual-entry',
   [REGULATION_NO_LONGER_AVAILABLE]: 'regulation-unavailable',
 };
