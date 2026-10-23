@@ -2,16 +2,19 @@ import type {Bindings} from '../types/env';
 import {createMailSender} from './mailer';
 
 /**
- * Why an unauthenticated entry submission was not entered, when the reason
- * concerns the address's own account. Only the owner of the address hears
- * it, by mail (#117).
+ * Why an unauthenticated entry submission was not entered. Only the owner
+ * of the address hears it, by mail (#117): all but the last concern the
+ * address's own account, and `processing-failed` is a failure on our side
+ * that the submitter would otherwise never learn of, having been told a
+ * mail was on its way.
  */
 export type EntryNoticeReason =
   | 'password-mismatch'
   | 'other-region'
   | 'already-entered'
   | 'dual-entry'
-  | 'regulation-unavailable';
+  | 'regulation-unavailable'
+  | 'processing-failed';
 
 /** The subject every entry notice is sent under. */
 export const ENTRY_NOTICE_SUBJECT = 'エントリーを受け付けられませんでした';
@@ -65,6 +68,11 @@ function reasonParagraphs(
       return [
         'エントリーフォームを開いている間に、選択したレギュレーションが変更されました。',
         'お手数ですが、エントリーフォームを開き直して、もう一度エントリーしてください。',
+      ];
+    case 'processing-failed':
+      return [
+        'エントリーの処理中にエラーが発生したため、エントリーを完了できませんでした。',
+        'お手数ですが、時間をおいて、もう一度エントリーしてください。',
       ];
   }
 }

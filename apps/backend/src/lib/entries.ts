@@ -83,6 +83,17 @@ const ALREADY_ENTERED_ANOTHER_TOURNAMENT =
 const REGULATION_NO_LONGER_AVAILABLE = 'regulation no longer available';
 
 /**
+ * The errors about the address's own account, named once: besides being
+ * answered by the logged-in route, each is what `ENTRY_NOTICE_REASONS` maps
+ * to the mail the unauthenticated route sends instead, so a string spelled
+ * one way here and another way there would silently stop that mail.
+ */
+const INVALID_PASSWORD = 'invalid password';
+const ALREADY_REGISTERED_IN_ANOTHER_REGION =
+  'already registered in another region';
+const ALREADY_ENTERED = 'already entered';
+
+/**
  * The SQLSTATE `check_region_dual_entry()` (migration 0016) raises. The
  * trigger only fires for a submission that slipped through the check below
  * while a concurrent one was being inserted, so it is a race, not a bug in
@@ -415,7 +426,7 @@ async function createEntryAfterCheck(
     return {
       ok: false,
       status: 409,
-      error: 'already registered in another region',
+      error: ALREADY_REGISTERED_IN_ANOTHER_REGION,
     };
   }
 
@@ -429,7 +440,7 @@ async function createEntryAfterCheck(
       existingParticipant.password_hash,
     );
     if (!passwordValid) {
-      return {ok: false, status: 401, error: 'invalid password'};
+      return {ok: false, status: 401, error: INVALID_PASSWORD};
     }
     participantId = existingParticipant.id;
   } else {
@@ -492,7 +503,7 @@ async function enterTournament(
     return {ok: false, status: 500, error: existingEntryError.message};
   }
   if (existingEntry && existingEntry.status !== 'cancelled') {
-    return {ok: false, status: 409, error: 'already entered'};
+    return {ok: false, status: 409, error: ALREADY_ENTERED};
   }
 
   // requirements.md only says that regions allowing both 最強位 and 新人王
@@ -622,9 +633,9 @@ async function enterTournament(
  * unauthenticated route mails it instead of answering with it.
  */
 const ENTRY_NOTICE_REASONS: Record<string, EntryNoticeReason> = {
-  'invalid password': 'password-mismatch',
-  'already registered in another region': 'other-region',
-  'already entered': 'already-entered',
+  [INVALID_PASSWORD]: 'password-mismatch',
+  [ALREADY_REGISTERED_IN_ANOTHER_REGION]: 'other-region',
+  [ALREADY_ENTERED]: 'already-entered',
   [ALREADY_ENTERED_ANOTHER_TOURNAMENT]: 'dual-entry',
   [REGULATION_NO_LONGER_AVAILABLE]: 'regulation-unavailable',
 };
@@ -652,7 +663,20 @@ export async function createEntryUnauthenticated(
   tournament: EntryTournamentRow,
   input: EntryInput,
 ): Promise<CreateEntryOutcome> {
-  const result = await createEntryAfterCheck(env, tournament, input);
+  // Runs after the response, inside `waitUntil()`, where a throw would
+  // surface as an unhandled rejection with none of the context below. So a
+  // thrown error (a network failure inside the Supabase client, say) is
+  // treated like any other failure on our side.
+  let result: CreateEntryResult;
+  try {
+    result = await createEntryAfterCheck(env, tournament, input);
+  } catch (e) {
+    result = {
+      ok: false,
+      status: 500,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
   if (result.ok) {
     return {kind: 'created', entryId: result.entry.id};
   }
@@ -666,19 +690,41 @@ export async function createEntryUnauthenticated(
       status: result.status,
       error: result.error,
     });
+    // The submitter was told a mail was on its way, so one is sent even
+    // now, asking them to try again -- unless the mail provider is what
+    // failed, in which case this one fails too and the log above is all
+    // there is.
+    await sendEntryNotice(env, input.email, tournament, 'processing-failed');
     return {kind: 'failed', error: result.error};
   }
+  if (!(await sendEntryNotice(env, input.email, tournament, reason))) {
+    return {kind: 'failed', error: 'failed to send the entry notice'};
+  }
+  return {kind: 'notified', reason};
+}
+
+/**
+ * Sends an entry notice, logging rather than throwing a failure: it runs in
+ * the background, with no one left to report to.
+ * @return Whether the notice went out.
+ */
+async function sendEntryNotice(
+  env: Bindings,
+  email: string,
+  tournament: EntryTournamentRow,
+  reason: EntryNoticeReason,
+): Promise<boolean> {
   try {
-    await sendEntryNoticeEmail(env, input.email, tournament.name, reason);
+    await sendEntryNoticeEmail(env, email, tournament.name, reason);
+    return true;
   } catch (mailError) {
     console.error('failed to send the entry notice', {
       tournamentId: tournament.id,
       reason,
       error: mailError,
     });
-    return {kind: 'failed', error: 'failed to send the entry notice'};
+    return false;
   }
-  return {kind: 'notified', reason};
 }
 
 /** Shape of the participant lookup in `createEntryForParticipant()`. */
@@ -728,7 +774,7 @@ export async function createEntryForParticipant(
     return {
       ok: false,
       status: 409,
-      error: 'already registered in another region',
+      error: ALREADY_REGISTERED_IN_ANOTHER_REGION,
     };
   }
   return enterTournament(

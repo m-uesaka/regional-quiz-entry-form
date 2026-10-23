@@ -208,6 +208,8 @@ interface MockSupabase {
 function mockSupabase(options: {
   tournament?: Record<string, unknown>;
   participant: Record<string, unknown> | null;
+  /** Makes storing the verification token fail, so no link can be sent. */
+  failVerificationToken?: boolean;
 }): MockSupabase {
   const recorded: MockSupabase = {calls: [], mails: []};
   const tournament = options.tournament ?? tournamentRow();
@@ -248,9 +250,15 @@ function mockSupabase(options: {
         return rows([]);
       case 'POST entries':
         return rows([{id: ENTRY_ID}]);
+      case 'POST email_verification_tokens':
+        return options.failVerificationToken
+          ? Response.json({message: 'boom'}, {status: 500})
+          : new Response(null, {status: 201});
+      // The last two are the rollback after a failed verification mail.
       case 'DELETE entry_regulations':
       case 'POST entry_regulations':
-      case 'POST email_verification_tokens':
+      case 'DELETE email_verification_tokens':
+      case 'DELETE entries':
         return new Response(null, {status: 201});
     }
     throw new Error(`unexpected Supabase call: ${method} ${url.pathname}`);
@@ -401,6 +409,29 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
       to: validBody.email,
       subject: 'エントリー確認メール',
     });
+  });
+
+  // The submitter was told a mail was on its way; a failure on our side
+  // after that must not leave them waiting for one that never comes.
+  it('mails the owner to try again when the entry fails on our side', async () => {
+    const recorded = mockSupabase({
+      participant: null,
+      failVerificationToken: true,
+    });
+
+    const res = await observable(
+      await postWithContext(TOURNAMENT_PATH, validBody),
+    );
+    await settleBackgroundWork();
+
+    expect(res).toEqual({status: 202, body: JSON.stringify({ok: true})});
+    expect(recorded.calls).toContainEqual({table: 'entries', method: 'DELETE'});
+    expect(recorded.mails).toHaveLength(1);
+    expect(recorded.mails[0]).toMatchObject({
+      to: validBody.email,
+      subject: ENTRY_NOTICE_SUBJECT,
+    });
+    expect(recorded.mails[0].html).toContain('もう一度エントリーしてください');
   });
 
   // These refusals don't depend on the address, so reporting them leaks
