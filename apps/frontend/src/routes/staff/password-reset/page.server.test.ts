@@ -95,9 +95,10 @@ describe('staff password reset +page.server action', () => {
     expect(log.bodies).toEqual([
       {token: TOKEN, newPassword: 'newstaffpassword1'},
     ]);
-    // The reset ended every session of the account, this browser's included,
-    // so a cookie it still holds is dropped rather than left looking live.
-    expect(deletedCookies).toEqual(['staff_session']);
+    // The browser's staff cookie may belong to another account than the one
+    // just reset (the link opened in someone else's browser), so it is left
+    // for the API to refuse rather than dropped here.
+    expect(deletedCookies).toEqual([]);
   });
 
   it('fails with 400 without calling the API when there is no token', async () => {

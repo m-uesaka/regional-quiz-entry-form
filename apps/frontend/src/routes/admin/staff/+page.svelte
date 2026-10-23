@@ -37,6 +37,21 @@
   }
 
   /**
+   * Asks before a revocation goes out, since it can't be undone and, on the
+   * caller's own row, logs this very screen out along with every other
+   * device. Cancelling keeps the form from submitting.
+   * @param event The revoke form's submit event.
+   * @param email The account the form is for.
+   * @param isSelf Whether that account is the caller's own.
+   */
+  function confirmRevoke(event: SubmitEvent, email: string, isSelf: boolean) {
+    const message = isSelf
+      ? 'あなた自身のセッションを無効化します。この画面を含むすべての端末からログアウトします。よろしいですか?'
+      : `${email} のセッションを無効化します。よろしいですか?`;
+    if (!confirm(message)) event.preventDefault();
+  }
+
+  /**
    * How an account's scope reads in the list. A `general` account covers
    * every region, so it has none to name.
    * @param account The account being listed.
@@ -215,8 +230,13 @@
                 </form>
 
                 <!-- Ends every session the account has open, e.g. on a lost
-                     device. The password stays as it is. -->
-                <form method="POST" action="?/revoke">
+                     device. The password stays as it is, so whoever knows it
+                     can log straight back in: this doesn't lock anyone out. -->
+                <form
+                  method="POST"
+                  action="?/revoke"
+                  onsubmit={event => confirmRevoke(event, account.email, isSelf)}
+                >
                   <input type="hidden" name="id" value={account.id} />
                   <Button type="submit" variant="danger" tone="ghost" size="small">
                     セッションを無効化
@@ -226,7 +246,7 @@
               <p class="text-xs text-muted-foreground">
                 {isSelf
                   ? 'セッションを無効化すると、この画面を含むすべての端末からログアウトします。'
-                  : 'セッションを無効化すると、このアカウントはすべての端末でログアウトされます。パスワードは変わりません。'}
+                  : 'セッションを無効化すると、このアカウントはすべての端末でログアウトされます。パスワードは変わらないため、パスワードを知っていれば再びログインできます。'}
               </p>
             </Card>
           </li>

@@ -1,6 +1,6 @@
 import type {ComponentProps} from 'svelte';
-import {render, screen, within} from '@testing-library/svelte';
-import {describe, expect, it} from 'vitest';
+import {fireEvent, render, screen, within} from '@testing-library/svelte';
+import {afterEach, describe, expect, it, vi} from 'vitest';
 import type {Region, StaffAccount, StaffClaims} from '@regional-quiz/shared';
 import Page from './+page.svelte';
 
@@ -196,5 +196,53 @@ describe('admin staff +page.svelte', () => {
     expect(
       within(rowOf(REGIONAL.email)).queryByText(/この画面を含む/),
     ).toBeNull();
+  });
+  describe('confirming a revocation', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    /** Submits the revoke form of `email`'s row; whether it went through. */
+    async function submitRevoke(email: string): Promise<boolean> {
+      const form = within(rowOf(email))
+        .getByRole('button', {name: 'セッションを無効化'})
+        .closest('form') as HTMLFormElement;
+      // `fireEvent` answers whether the event was left un-cancelled.
+      return fireEvent.submit(form);
+    }
+
+    it('names the account and submits once confirmed', async () => {
+      const confirm = vi.fn(() => true);
+      vi.stubGlobal('confirm', confirm);
+      renderPage([REGIONAL, GENERAL]);
+
+      expect(await submitRevoke(REGIONAL.email)).toBe(true);
+      expect(confirm).toHaveBeenCalledWith(
+        expect.stringContaining(REGIONAL.email),
+      );
+    });
+
+    it('does not submit when cancelled', async () => {
+      vi.stubGlobal(
+        'confirm',
+        vi.fn(() => false),
+      );
+      renderPage([REGIONAL, GENERAL]);
+
+      expect(await submitRevoke(REGIONAL.email)).toBe(false);
+    });
+
+    it("warns on the caller's own row that this screen logs out too", async () => {
+      const confirm = vi.fn(() => false);
+      vi.stubGlobal('confirm', confirm);
+      const self: StaffAccount = {...GENERAL, id: STAFF.sub};
+      renderPage([self, REGIONAL]);
+
+      await submitRevoke(self.email);
+
+      expect(confirm).toHaveBeenCalledWith(
+        expect.stringContaining('この画面を含むすべての端末からログアウト'),
+      );
+    });
   });
 });

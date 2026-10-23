@@ -1,7 +1,6 @@
 import {fail, redirect} from '@sveltejs/kit';
 import {StaffPasswordResetConfirmInputSchema} from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
-import {clearStaffSession} from '$lib/server/staff-session';
 import type {Actions, PageServerLoad} from './$types';
 
 // Shown for a token the API refused as well as for a page opened without one:
@@ -41,7 +40,7 @@ function readToken(url: URL): string | null {
 }
 
 export const actions = {
-  default: async ({fetch, request, cookies, url}) => {
+  default: async ({fetch, request, url}) => {
     // The form posts back to this same URL, so the token is read from the
     // query here rather than carried in a hidden field where it would end up
     // in the page source.
@@ -79,12 +78,13 @@ export const actions = {
     }
 
     // The reset moved `staff_accounts.sessions_valid_from` along with the
-    // password (`reset_staff_password()`, migration `0020`), so any staff
-    // session this browser holds is now refused by the API. It still
-    // verifies here, though, and left in place it would have the login
-    // screen offer a logout to someone who is no longer logged in. A staff
-    // member arriving from an invite has no cookie, which makes this a no-op.
-    clearStaffSession(cookies, url);
+    // password (`reset_staff_password()`, migration `0020`), so the account's
+    // sessions are over -- but a staff cookie this browser holds isn't
+    // dropped here, because nothing says it is that account's. The link can
+    // be opened in someone else's browser (a general staff member checking an
+    // invite, say), and their session is still good. A cookie that did
+    // belong to the reset account is dropped the first time the API refuses
+    // it (`redirectToStaffLogin()`), or replaced by the login this sends to.
     redirect(303, '/staff/login?reset=done');
   },
 } satisfies Actions;
