@@ -48,9 +48,11 @@
         success: ['text-success'],
         default: ['text-primary'],
       },
-      defaultVariants: {
-        variant: 'default',
-      },
+    },
+    // Local change to the upstream component, which nested this inside
+    // `variants`, where cva reads it as a variant named `defaultVariants`.
+    defaultVariants: {
+      variant: 'default',
     },
   });
 

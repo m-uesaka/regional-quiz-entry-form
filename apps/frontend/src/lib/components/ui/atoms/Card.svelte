@@ -19,8 +19,9 @@
   import type { Snippet } from 'svelte';
   import type { ClassValue } from 'svelte/elements';
   import { cva, type VariantProps } from 'class-variance-authority';
+  import { twMerge } from 'tailwind-merge';
 
-  export const cardVariants = cva('flex flex-col gap-6 p-6 border border-border rounded-lg shadow-xs');
+  export const cardVariants = cva('flex flex-col gap-6 p-6 bg-surface border border-border rounded-lg shadow-xs');
 
   export type CardVariants = VariantProps<typeof cardVariants>;
 
@@ -34,7 +35,10 @@
 <script lang="ts">
   let { class: className, children }: CardProps = $props();
 
-  let cardVariantsClass = $derived(cardVariants({ class: className }));
+  // Local change to the upstream component: cva only concatenates the
+  // caller's `class`, so `gap-4` would sit next to the base `gap-6` and lose.
+  // `twMerge` lets the caller's utility replace the conflicting base one.
+  let cardVariantsClass = $derived(twMerge(cardVariants({ class: className })));
 </script>
 
 <div class={cardVariantsClass} data-rabee-ui="card">

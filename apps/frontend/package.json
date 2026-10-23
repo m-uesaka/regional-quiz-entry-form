@@ -21,7 +21,8 @@
 		"@regional-quiz/shared": "workspace:*",
 		"class-variance-authority": "0.7.1",
 		"hono": "^4.6.0",
-		"set-cookie-parser": "^3.1.2"
+		"set-cookie-parser": "^3.1.2",
+		"tailwind-merge": "3.7.0"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-cloudflare": "^7.2.8",

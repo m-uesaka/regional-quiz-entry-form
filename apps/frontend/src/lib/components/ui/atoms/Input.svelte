@@ -126,6 +126,16 @@
     }
   });
 
+  // Local change to the upstream component, which always rendered
+  // `padding-left: undefinedpx; ...`: only override Tailwind's padding when
+  // there is start/end content to make room for.
+  let inputPaddingStyle = $derived(
+    [
+      inputLeftPadding !== undefined ? `padding-left: ${inputLeftPadding}px` : '',
+      inputRightPadding !== undefined ? `padding-right: ${inputRightPadding}px` : '',
+    ].filter(Boolean).join('; ') || undefined,
+  );
+
   let inputVariantClass = $derived(inputVariants({
     type: inputAttributes.type,
     disabled: inputAttributes.disabled,
@@ -153,7 +163,7 @@
     </div>
   {/if}
 
-  <input class={inputVariantClass} {...inputAttributes} bind:value bind:this={inputElement} style="padding-left: {inputLeftPadding}px; padding-right: {inputRightPadding}px" />
+  <input class={inputVariantClass} {...inputAttributes} bind:value bind:this={inputElement} style={inputPaddingStyle} />
 
   {#if endContent}
     <div class={endContentVariantClass} bind:this={endContentElement}>
