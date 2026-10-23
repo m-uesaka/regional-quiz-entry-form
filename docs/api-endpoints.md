@@ -188,12 +188,16 @@ if ('yaml' in body) {
 
 ## 2. エンドポイント一覧
 
+「認可」列が「なし」(または「期間中はなし」)で始まる行は、無認証で到達できるルートです。この表は登録済みのルート、および `apps/backend/src/routes-authz.test.ts` の認可方針(`ROUTE_POLICIES`)と**一致することをテストで確かめています**(「なし」→ 公開、「期間中はなし」→ 期間ゲート、「統括スタッフ」「スタッフ(担当範囲)」「参加者」→ それぞれのガード)。ルートを足したら、この表にも行を足してください(理由は [`database-schema.md`](./database-schema.md) 4 章)。
+
 | メソッド | パス | 認可 |
 | --- | --- | --- |
 | GET | `/api/healthz` | なし |
 | POST | `/api/auth/staff/login` | なし(レート制限) |
 | POST | `/api/auth/staff/password-reset/confirm` | なし(トークン) |
+| POST | `/api/auth/staff/logout` | なし(Cookie を消すだけ) |
 | POST | `/api/auth/participant/login` | なし(レート制限) |
+| POST | `/api/auth/participant/logout` | なし(Cookie を消すだけ) |
 | POST | `/api/auth/participant/password-reset/request` | なし(レート制限 + Turnstile) |
 | POST | `/api/auth/participant/password-reset/confirm` | なし(トークン) |
 | GET | `/api/regions` | 統括スタッフ |
@@ -228,6 +232,7 @@ if ('yaml' in body) {
 | GET | `/api/mypage/entries/:entryId` | 参加者(本人) |
 | PATCH | `/api/mypage/entries/:entryId` | 参加者(本人) |
 | DELETE | `/api/mypage/entries/:entryId` | 参加者(本人) |
+| GET | `/api/portal/tournaments` | なし |
 
 ## 3. ヘルスチェック
 
