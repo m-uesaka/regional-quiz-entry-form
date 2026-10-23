@@ -12,8 +12,8 @@ compatibility_date = "2026-08-01"
 # workflows always pass `--env`; pass it by hand too.
 [vars]
 # 非機密の設定値のみここに記載し、機密情報は `wrangler secret put` で登録する
-MAIL_FROM_ADDRESS = "entry@entry.regionalquiz.example"
-FRONTEND_URL = "https://entry.regionalquiz.example"
+MAIL_FROM_ADDRESS = "no-reply@mail.regional-quiz-project.app"
+FRONTEND_URL = "https://regional-quiz-project.app"
 # Turnstile の「常に成功する」テスト用シークレット(Cloudflare が公開している
 # 固定値)。ローカル開発と E2E はこれで通す。`[env.*.vars]` には**置かない**:
 # 同名の var があるとデプロイのたびに `wrangler secret put` で登録した本物の
@@ -126,22 +126,22 @@ dead_letter_queue = "regional-quiz-bulk-mail-dev-dlq"
 # Workers route wins over the Pages project serving the same hostname, so
 # `/api/*` reaches Hono while every other path stays with Pages.
 #
-# It is commented out because `regionalquiz.example` is a placeholder, and a
-# `zone_name` the Cloudflare account doesn't hold fails `wrangler deploy`
-# outright — that would break the pipeline rather than the routing. Uncomment
-# it with the real hostname once the domain exists, and leave it where it is:
-# `routes` belongs directly under `[env.staging]`, not below the
+# `zone_name` is the zone the hostname lives in, and it has to be one the
+# Cloudflare account holds or `wrangler deploy` fails outright. Leave `routes`
+# where it is: it belongs directly under `[env.staging]`, not below the
 # `[env.staging.vars]` header, where TOML would read it as a var named
-# `routes`. Tracked as #101; see `docs/supabase-deployment.md` §6.4.
+# `routes`. The route only receives traffic once the hostname has a proxied
+# DNS record, which assigning it to the Pages project as a custom domain
+# creates; see `docs/supabase-deployment.md` §6.4.
 [env.staging]
 name = "regional-quiz-backend-staging"
-# routes = [
-#   {pattern = "staging.entry.regionalquiz.example/api/*", zone_name = "regionalquiz.example"},
-# ]
+routes = [
+  {pattern = "staging.regional-quiz-project.app/api/*", zone_name = "regional-quiz-project.app"},
+]
 
 [env.staging.vars]
-MAIL_FROM_ADDRESS = "entry@staging.entry.regionalquiz.example"
-FRONTEND_URL = "https://staging.entry.regionalquiz.example"
+MAIL_FROM_ADDRESS = "no-reply@staging.mail.regional-quiz-project.app"
+FRONTEND_URL = "https://staging.regional-quiz-project.app"
 
 # 10 login attempts a minute from one address. Enough for someone retyping a
 # password they half-remember, far too few to work through a
@@ -216,13 +216,13 @@ dead_letter_queue = "regional-quiz-bulk-mail-staging-dlq"
 # `routes` carries the same caveats as `env.staging`'s above.
 [env.production]
 name = "regional-quiz-backend"
-# routes = [
-#   {pattern = "entry.regionalquiz.example/api/*", zone_name = "regionalquiz.example"},
-# ]
+routes = [
+  {pattern = "regional-quiz-project.app/api/*", zone_name = "regional-quiz-project.app"},
+]
 
 [env.production.vars]
-MAIL_FROM_ADDRESS = "entry@entry.regionalquiz.example"
-FRONTEND_URL = "https://entry.regionalquiz.example"
+MAIL_FROM_ADDRESS = "no-reply@mail.regional-quiz-project.app"
+FRONTEND_URL = "https://regional-quiz-project.app"
 
 # Same policy as staging, on its own namespaces — see the comments there.
 [[env.production.unsafe.bindings]]
