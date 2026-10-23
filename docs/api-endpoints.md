@@ -156,7 +156,9 @@ if ('yaml' in body) {
 | GET | `/api/healthz` | なし |
 | POST | `/api/auth/staff/login` | なし(レート制限) |
 | POST | `/api/auth/staff/password-reset/confirm` | なし(トークン) |
+| POST | `/api/auth/staff/logout` | なし(Cookie を消すだけ) |
 | POST | `/api/auth/participant/login` | なし(レート制限) |
+| POST | `/api/auth/participant/logout` | なし(Cookie を消すだけ) |
 | POST | `/api/auth/participant/password-reset/request` | なし(レート制限 + Turnstile) |
 | POST | `/api/auth/participant/password-reset/confirm` | なし(トークン) |
 | GET | `/api/regions` | 統括スタッフ |
@@ -191,6 +193,7 @@ if ('yaml' in body) {
 | GET | `/api/mypage/entries/:entryId` | 参加者(本人) |
 | PATCH | `/api/mypage/entries/:entryId` | 参加者(本人) |
 | DELETE | `/api/mypage/entries/:entryId` | 参加者(本人) |
+| GET | `/api/portal/tournaments` | なし |
 
 ## 3. ヘルスチェック
 
