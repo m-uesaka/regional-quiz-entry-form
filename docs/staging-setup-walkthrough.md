@@ -1,6 +1,6 @@
 # staging 環境の構築ウォークスルー
 
-2026-10-22 に staging(dev 環境)を初めて構築し、`deploy-staging` を最後まで通したときの流れをまとめたものです。各コマンドの背景や細かい注意点は [`supabase-deployment.md`](./supabase-deployment.md)(以下「手順書」)にあり、このドキュメントは**どの順に何をすればよいか**を一本道で追えるようにしています。production を構築するときも、`staging` を `production` に読み替えれば同じ順で進められます。
+2026-10-22 に staging(dev 環境)を初めて構築し、`deploy-staging` を最後まで通したときの流れと、2026-10-23 にカスタムドメイン `staging.regional-quiz-project.app` を割り当てたときの流れをまとめたものです。各コマンドの背景や細かい注意点は [`supabase-deployment.md`](./supabase-deployment.md)(以下「手順書」)にあり、このドキュメントは**どの順に何をすればよいか**を一本道で追えるようにしています。production を構築するときも、`staging` を `production` に読み替えれば同じ順で進められます。
 
 ## 全体像
 
@@ -13,7 +13,10 @@ flowchart LR
   C --> D[db push<br/>マイグレーション適用]
   D --> E[wrangler deploy<br/>Worker]
   E --> F[wrangler pages deploy<br/>Pages]
+  F --> G[smoke test<br/>/api/healthz]
 ```
+
+最後の smoke test は、Environment 変数 `FRONTEND_HOST` が設定されているときだけ実行されます(手順 9)。
 
 ワークフロー自体は機密値を配布しません。各値は、**それを読む主体のところへ一度だけ手で登録**します。
 
@@ -24,6 +27,7 @@ flowchart LR
 | `SUPABASE_URL` / `SUPABASE_SECRET_KEY` / `SESSION_SECRET` / `MAIL_API_KEY` / `GOOGLE_SHEETS_API_KEY` | Worker(実行時) | `wrangler secret put --env staging` | 3 |
 | `TURNSTILE_SECRET_KEY` | Worker(実行時) | `wrangler secret put --env staging` | 4 |
 | `BACKEND_URL` / `SESSION_SECRET` / `PUBLIC_TURNSTILE_SITE_KEY` | Pages(実行時) | Pages プロジェクトの Production 環境の変数 | 6 |
+| `FRONTEND_HOST`(機密ではない) | CI(`--route` / `--var FRONTEND_URL` と smoke test) | GitHub Environment `staging` の **Variables** | 9 |
 
 `SUPABASE_URL` / `SUPABASE_SECRET_KEY` を GitHub の Secrets に入れても Worker には届きません(ワークフローが参照しないため)。今回は最初にそこへ登録してしまい、後から Worker 側に入れ直しました。
 
@@ -79,7 +83,7 @@ bunx wrangler secret put GOOGLE_SHEETS_API_KEY --env staging   # 用意できて
 
 1. Dashboard の **Turnstile** → **Add widget**
    - Widget name: `regional-quiz-staging`
-   - Hostname: `regional-quiz-frontend-staging.pages.dev`(独自ドメインが無い間は Pages の既定ホスト名)
+   - Hostname: `regional-quiz-frontend-staging.pages.dev`(Pages の既定ホスト名)。カスタムドメインを割り当てたら、そのホスト名も追加する(手順 9)
    - Widget Mode: Managed / Pre-clearance: No
 2. **Secret Key** を Worker に登録する: `bunx wrangler secret put TURNSTILE_SECRET_KEY --env staging`
 3. **Site Key** は手順 6 で使うので控えておく
@@ -170,14 +174,47 @@ gh run watch <run id> --exit-status
    bunx wrangler secret list --env staging     # GOOGLE_SHEETS_API_KEY が並べば OK
    ```
 
-画面からの取り込みは、Worker の route ができるまで(#101)一部しか staging で試せません。
+画面からの取り込みは、Worker の route ができるまで(#101、手順 9)一部しか staging で試せませんでした。
 
-| 機能 | 呼び方 | staging で今使えるか |
+| 機能 | 呼び方 | route が無い間に使えたか |
 | --- | --- | --- |
 | レギュレーションの取り込み(`/admin/tournaments/[id]/regulations`) | SSR(`+page.server.ts`)から呼ぶ | 使える |
-| フォーム定義の取り込み(`SheetImportPanel`) | ブラウザから `createApiClient()` で直接 `/api/*` を呼ぶ | 使えない(404) |
+| フォーム定義の取り込み(`SheetImportPanel`) | ブラウザから `createApiClient()` で直接 `/api/*` を呼ぶ | 使えない(404)。手順 9 の後はカスタムドメインから使える |
 
 取り込み API は統括スタッフのログインが必要です。Worker 経由でも確認する場合は、[`google-sheets-integration.md`](./google-sheets-integration.md) 9 章の curl 例の接続先を staging の Worker オリジンに変更し、有効な `staff_session` Cookie を付けて呼び出します。手順 4 はキー単体で Google Sheets にアクセスできることの確認であり、Worker へのキーの登録や取り込み API の疎通を確認するものではありません。
+
+### 9. カスタムドメインを割り当てる(2026-10-23)
+
+ドメイン `regional-quiz-project.app` は Cloudflare Registrar で取得したので、同じアカウントに同名のゾーンが最初からあります。staging には次の名前を割り当てました(手順書 6.4)。
+
+| 用途 | 値 |
+| --- | --- |
+| フロントエンド(`FRONTEND_HOST`) | `staging.regional-quiz-project.app` |
+| Worker route | `staging.regional-quiz-project.app/api/*`(`deploy.yml` が `FRONTEND_HOST` から組み立てる) |
+| `FRONTEND_URL` | `https://staging.regional-quiz-project.app`(同上。`wrangler.toml` の値は手動デプロイ用) |
+| `MAIL_FROM_ADDRESS` | `no-reply@staging.mail.regional-quiz-project.app`(`wrangler.toml` の `[env.staging.vars]`) |
+
+route は `wrangler.toml` には書かず、`deploy.yml` が `FRONTEND_HOST` から `--route` を付けます(#138)。リポジトリ側で編集したのは `MAIL_FROM_ADDRESS` と手動デプロイ用の `FRONTEND_URL` だけです(#148)。
+
+1. **Pages プロジェクトにカスタムドメインを追加する。** Dashboard の `Workers & Pages` → **`regional-quiz-frontend-staging`(Pages のアイコンのもの)** → `Custom domains` → `Set up a custom domain` で `staging.regional-quiz-project.app` を追加し、`Active` になるまで待つ。同じアカウントのゾーンなので、CNAME(`staging` → `regional-quiz-frontend-staging.pages.dev`、プロキシ有効)は自動で作られる
+   - **Pages ではなく Worker に割り当てないよう注意する。** 今回は最初、ドメインが Pages 以外(`Hello World!` を返すもの)に紐づいていた(「つまずいた点」参照)
+   - 確認: `DNS > Records` の `staging` が **CNAME** になっていること。種類が `Worker` なら、Worker に割り当てられている
+2. **`CLOUDFLARE_API_TOKEN` に route を作る権限を加える。** 手順 2 のトークンには `Zone` → `Workers Routes` → `Edit` が無いので、権限を足したトークンを作り直して登録し直す。Zone Resources には `regional-quiz-project.app` を含める
+   ```bash
+   gh secret set CLOUDFLARE_API_TOKEN --env staging
+   gh secret list --env staging     # CLOUDFLARE_API_TOKEN の更新日時が変わったことを確認する
+   ```
+   既存のトークンの権限を編集した場合は、値が変わらないので登録し直す必要はない。新しく作り直した場合は、登録し直さないと古いトークンが使われ続ける
+3. **`FRONTEND_HOST` を登録する。** Secrets ではなく Variables に、スキームもパスも付けずにホスト名だけを入れる
+   ```bash
+   gh variable set FRONTEND_HOST --env staging --body "staging.regional-quiz-project.app"
+   gh variable list --env staging
+   ```
+4. **Turnstile の widget にホスト名を追加する。** 手順 4 の widget の `Hostname Management` に `staging.regional-quiz-project.app` を追加する。追加しないと、カスタムドメイン上のエントリーフォームとパスワード再設定フォームでウィジェットがエラーになる
+5. **Resend で送信ドメインを検証する。** `Domains` に `staging.mail.regional-quiz-project.app` を追加し、表示される SPF / DKIM の DNS レコードを Cloudflare に登録して `Verified` にする。未検証のドメインを From にした送信は Resend に拒否される
+6. **デプロイする。** `gh workflow run deploy-staging.yml --ref develop`。最後の `Smoke test the /api/* route` が `https://staging.regional-quiz-project.app/api/healthz` を確認し、`{"ok":true}` が返らなければ失敗する
+
+`BACKEND_URL`(手順 6)は workers.dev のまま変えません。SSR の転送先は route ではなく Worker 自身のオリジンで、`wrangler.toml` の `workers_dev = true` が route を付けた後も workers.dev を残します(手順書 6.3)。
 
 ## つまずいた点
 
@@ -231,6 +268,25 @@ bunx wrangler pages deployment list --project-name regional-quiz-frontend-stagin
 bunx wrangler pages deployment tail <deployment id> --project-name regional-quiz-frontend-staging
 ```
 
+### カスタムドメインの割り当て(手順 9)
+
+カスタムドメインの割り当ては、3 回つまずいた後に通りました。
+
+| 回 | 失敗した箇所 | エラー・症状 | 原因と対処 |
+| --- | --- | --- | --- |
+| 1 | Deploy the backend Worker | `A request to the Cloudflare API (/accounts/***/workers/scripts/regional-quiz-backend-staging/routes) failed. No access to the specified resource.` | `CLOUDFLARE_API_TOKEN` に Zone の `Workers Routes: Edit` が無かった。権限を加えたつもりでも同じエラーになった → トークンを作り直して `gh secret set` で登録し直した(手順 9-2) |
+| 2 | Smoke test the /api/* route | `curl: (6) Could not resolve host: staging.regional-quiz-project.app`(5 回とも) | Pages のカスタムドメインがまだ有効になっておらず、DNS レコードが存在しなかった。Cloudflare の権威サーバーに直接問い合わせても応答が無かった(`dig staging.regional-quiz-project.app @bill.ns.cloudflare.com`) → Pages 側で `Active` になるのを待った |
+| 3 | (デプロイ後の確認) | `/api/healthz` は `{"ok":true}` を返すのに、`/` や `/staff/login` が `text/plain` で `Hello World!` を返す。`*.pages.dev` は正常 | ドメインが Pages プロジェクトではなく、別のもの(`Hello World!` はテンプレートのままの Worker の応答)に紐づいていたと考えられる(`/api/*` は route が優先されるので正常に見える)→ Pages プロジェクト `regional-quiz-frontend-staging` の `Custom domains` に割り当て直した(手順 9-1) |
+
+- 1 回目の失敗では、Worker のコードのアップロードは済んでいましたが、route の作成と Pages のデプロイは実行されていませんでした。route が無いだけで、それまでと同じ状態のまま動き続けます
+- 2 回目の後は、DNS の準備ができれば、再デプロイしなくても route が効きました。ワークフローの実行結果は失敗のまま残るので、記録を緑にしたければ再実行します
+- 手元の環境は、存在しないと分かったホスト名を最大 30 分(ゾーンの SOA の negative TTL)キャッシュします。DNS が直った後もしばらく `Could not resolve host` になることがあるので、公開リゾルバで確かめ、curl でアドレスを固定して確認しました
+
+  ```bash
+  dig +short staging.regional-quiz-project.app @1.1.1.1
+  curl -i --resolve staging.regional-quiz-project.app:443:<上で得たアドレス> https://staging.regional-quiz-project.app/api/healthz
+  ```
+
 ## デプロイ後の確認
 
 | 確認内容 | 期待する結果 |
@@ -240,14 +296,17 @@ bunx wrangler pages deployment tail <deployment id> --project-name regional-quiz
 | `https://regional-quiz-frontend-staging.pages.dev/`、`/staff/login` | 200 |
 | `https://regional-quiz-frontend-staging.pages.dev/<存在しない地域>/saikyoi/entry` | 404(500 にならなければ、SSR → Worker → Supabase が疎通している)。大会種別は `saikyoi` / `shinjinou` のどちらかに固定し、地域だけを存在しないものにする。大会種別まで不正だと、フロントエンドが API を呼ぶ前に 404 を返すため疎通確認にならない |
 | `/password-reset` の HTML に埋め込まれた `__sveltekit_…` の `env` | `{"PUBLIC_TURNSTILE_SITE_KEY": "..."}`。`{}` なら Pages の公開変数が届いておらず、Turnstile のウィジェットが表示されない |
-| `https://regional-quiz-frontend-staging.pages.dev/api/healthz` | 404。Worker route が未設定のための想定どおりの挙動(#101) |
+| `https://regional-quiz-frontend-staging.pages.dev/api/healthz` | 404。route はカスタムドメインにしか当たらないので、手順 9 の後も 404 のまま(想定どおり) |
+| `https://staging.regional-quiz-project.app/api/healthz` | `{"ok":true}`(手順 9 の後)。404 なら route が当たっていない |
+| `https://staging.regional-quiz-project.app/`、`/staff/login` | 200 で SvelteKit の HTML。`text/plain` の `Hello World!` なら、ドメインが Pages ではなく Worker に割り当てられている |
+| `https://staging.regional-quiz-project.app/<存在しない地域>/saikyoi/entry` | 404 の HTML |
 
 上から順に確認すると、どこで途切れているかを切り分けられます(Worker 単体 → Worker から DB → Pages から Worker → Pages の公開変数)。
 
 ## この時点での制限と残作業
 
-- **独自ドメインと Worker の route(#101)**: これが済むまで、ブラウザから直接 `/api/*` を呼ぶ処理(CSV ダウンロード、フォーム定義のシート取り込みなど、クライアント側の `createApiClient()`)は 404 になる。メール内のリンクも、仮のドメインの `FRONTEND_URL` のまま
-- **メール送信**: `MAIL_API_KEY` の登録と、Resend での送信ドメインの認証が必要。ドメインが決まるまでは送れない
+- ~~**独自ドメインと Worker の route(#101)**~~: 2026-10-23 に手順 9 で解消した。利用者にはカスタムドメイン(`https://staging.regional-quiz-project.app`)を案内する。`*.pages.dev` からは、ブラウザから直接 `/api/*` を呼ぶ処理が引き続き 404 になる
+- **メール送信**: `MAIL_API_KEY` の登録と、Resend での `staging.mail.regional-quiz-project.app` の検証が必要(手順 9-5)
 - **`GOOGLE_SHEETS_API_KEY`**: 未登録ならシートの取り込みが失敗する。Google Cloud Console で Sheets API だけに制限したキーを作る
 - **最初の統括スタッフ**: まだ作っていない。スタッフを招待する API は統括スタッフ限定なので、最初の 1 人だけは `bun run staff:bootstrap` が出す SQL を SQL Editor で実行して作る(手順書 8.1)。この方法はメールを送らないので、`MAIL_API_KEY` が無い今の staging でも使える。2 人目以降を `/admin/staff` から招待するには、メール送信が必要
 - **後片付け**: 権限が足りなかった古い Supabase トークンの削除と、GitHub の `staging` Environment に残っている使われない `SUPABASE_URL` / `SUPABASE_SECRET_KEY` の削除。Dashboard で Pages の変数を誤って Worker(`regional-quiz-backend-staging`)の Settings に登録していた場合は、その削除も
@@ -260,6 +319,7 @@ bunx wrangler pages deployment tail <deployment id> --project-name regional-quiz
 - Worker の名前は `regional-quiz-backend`(`apps/backend/wrangler.toml` の `[env.production]` で接尾辞なしに戻している)。手順 6 の `BACKEND_URL` やデプロイ後の確認は `https://regional-quiz-backend.<アカウントのサブドメイン>.workers.dev` にする。単純に置換した `regional-quiz-backend-production` は存在しない
 - 手順 7 の手動デプロイは `gh workflow run deploy-production.yml --ref main` にする。`deploy-production` は `main` 以外から起動したジョブをスキップするため、`--ref develop` のままでは何もデプロイされない
 - `production` Environment に Required reviewers を設定する(手順書 6.5)
+- 手順 9 のカスタムドメインは `regional-quiz-project.app`(apex)。Pages プロジェクト `regional-quiz-frontend` に割り当て、`FRONTEND_HOST=regional-quiz-project.app` を `production` Environment の Variables に登録する。送信ドメインは `mail.regional-quiz-project.app`。production の `CLOUDFLARE_API_TOKEN` にも、最初から Zone の `Workers Routes: Edit` を含めておく
 - 最初の統括スタッフは production でも手順書 8.1 で作る。スクリプトに渡す URL を production のフロントエンドにし、SQL は **production プロジェクトの** SQL Editor で実行する
 - `deploy-production` も `db push --dry-run` の結果をログに残すが、承認の前には確認できない。Environment の承認はジョブ全体の開始を止めるため、dry-run も承認後に実行され、その直後に同じジョブがマイグレーションを適用する。承認する前に差分を確認するには、デプロイ対象のコミット(`main`)をチェックアウトし、production にリンクしたローカル環境で dry-run を別に行う(手順書 5 章)。終わったら、リンク先を staging に戻すのを忘れない
 
