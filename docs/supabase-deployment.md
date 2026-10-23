@@ -509,10 +509,10 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 
 | 症状 | 原因 |
 | --- | --- |
-| Resend の `Logs` に記録が無く、Worker が 401 / 403 を返す | `MAIL_API_KEY` の貼り間違い、またはキーの対象ドメインが `MAIL_FROM_ADDRESS` と違う |
-| Worker が 403 を返し、ドメインが未検証というエラーが出る | 手順 2 の DNS レコードが、まだ `Verified` になっていない |
+| Resend の `Logs` に記録が無く、Worker のログに `Failed to send mail: 401` が出る | `MAIL_API_KEY` の貼り間違い(Resend が API キーを拒否している) |
+| Resend の `Logs` に記録が無く、Worker のログに `Failed to send mail: 403` が出る | キーの権限か送信元ドメインの問題。Worker は Resend のエラー本文を残さないので、原因は Resend 側で確かめる。`Domains` で `MAIL_FROM_ADDRESS` のドメインが `Verified` になっているか(手順 2 の DNS レコード)、`API Keys` でキーが `Sending access` かつ対象ドメインが `MAIL_FROM_ADDRESS` のドメインと一致しているかを確認する |
 | `Logs` では `Delivered` なのに受信箱に無い | 迷惑メールフォルダに入っている。手順 3 の DMARC で改善することがある |
-| 招待するとアカウントは作られるが、`500 {"error": "account created but ..."}` になる | 送信に失敗している。上の 2 行を確認したうえで、`/admin/staff` の一覧から「パスワード設定メールを再送」を押す(もう一度招待すると 409 になる) |
+| 招待するとアカウントは作られるが、`500 {"error": "account created but ..."}` になる | 送信に失敗している(Resend が 401 / 403 を返しても、招待 API・再送 API の応答は常に 500 になる。Resend の応答コードは Worker のログ `failed to send the staff password setup mail`(招待時)/ `failed to send the staff password reset mail`(再送時)に続く `Failed to send mail: <status>` で確認する)。上の 2 行を確認したうえで、`/admin/staff` の一覧から「パスワード設定メールを再送」を押す(もう一度招待すると 409 になる) |
 
 #### 一斉メールの送信ペース
 
