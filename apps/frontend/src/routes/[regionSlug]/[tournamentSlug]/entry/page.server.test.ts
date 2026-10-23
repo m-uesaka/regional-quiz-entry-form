@@ -292,6 +292,8 @@ function buildActionEvent(options: {
   fetch: typeof fetch;
   fields: Record<string, string | string[]>;
   participant?: ParticipantClaims | null;
+  /** Collects the names of the cookies the action deletes. */
+  deletedCookies?: string[];
 }): Parameters<typeof actions.default>[0] {
   const body = new FormData();
   for (const [key, value] of Object.entries(options.fields)) {
@@ -310,7 +312,12 @@ function buildActionEvent(options: {
     }),
     locals: {staff: null, participant: options.participant ?? null},
     url: new URL('http://localhost/tokyo/saikyoi/entry'),
-  } as Parameters<typeof actions.default>[0];
+    cookies: {
+      delete: (name: string) => {
+        options.deletedCookies?.push(name);
+      },
+    },
+  } as unknown as Parameters<typeof actions.default>[0];
 }
 
 const PARTICIPANT: ParticipantClaims = {
@@ -330,6 +337,27 @@ function sessionFormData(
 }
 
 describe('entry +page.server default action for a logged-in participant', () => {
+  // Someone logged in in another tab after this anonymous form was opened.
+  // The address and password typed into it must not be dropped in favour of
+  // whoever that is.
+  it('keeps a form rendered anonymously on the anonymous path even with a session', async () => {
+    const requests: string[] = [];
+
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({requests}),
+        fields: validFormData(),
+        participant: PARTICIPANT,
+      }),
+    );
+
+    expect(result).toEqual({submitted: true, email: 'taro@example.com'});
+    expect(requests).toContain(
+      `/api/tournaments/${OPEN_TOURNAMENT.id}/entries`,
+    );
+    expect(requests.some(url => url.endsWith('/entries/session'))).toBe(false);
+  });
+
   it('enters under the session without asking for credentials', async () => {
     const requests: string[] = [];
 
@@ -386,7 +414,12 @@ describe('entry +page.server default action for a logged-in participant', () => 
     expect(requests.some(url => url.includes('/entries'))).toBe(false);
   });
 
-  it('offers the login screen when the API finds the session has lapsed', async () => {
+  // The cookie still reads as valid here, but the API cut it (a password
+  // reset, a deleted participant). Left in place, `/mypage/login` would take
+  // the visitor for logged in and send them straight back to this form.
+  it('offers the login screen and drops the dead cookie when the API refuses the session', async () => {
+    const deletedCookies: string[] = [];
+
     const result = await actions.default(
       buildActionEvent({
         fetch: fakeApi({
@@ -394,9 +427,11 @@ describe('entry +page.server default action for a logged-in participant', () => 
         }),
         fields: sessionFormData(),
         participant: PARTICIPANT,
+        deletedCookies,
       }),
     );
 
+    expect(deletedCookies).toEqual(['participant_session']);
     expect(result).toMatchObject({
       status: 401,
       data: {

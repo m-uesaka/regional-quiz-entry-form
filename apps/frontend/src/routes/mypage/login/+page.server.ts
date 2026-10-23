@@ -1,7 +1,7 @@
 import {fail, redirect} from '@sveltejs/kit';
 import {ParticipantLoginInputSchema} from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
-import {participantLandingPath} from '$lib/participant-login';
+import {participantLandingPath} from '$lib/server/participant-login';
 import type {Actions, PageServerLoad} from './$types';
 
 /**

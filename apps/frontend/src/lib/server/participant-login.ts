@@ -1,5 +1,4 @@
-/** The participant login screen. */
-export const PARTICIPANT_LOGIN_PATH = '/mypage/login';
+import {PARTICIPANT_LOGIN_PATH} from './participant-session';
 
 /** Where a participant lands after logging in, when nothing says otherwise. */
 export const PARTICIPANT_HOME_PATH = '/mypage';
