@@ -8,6 +8,9 @@ import tailwindcss from '@tailwindcss/vite';
 // `BACKEND_URL` isn't set so that `bun run dev:frontend` works out of the box.
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8787';
 
+// Where Cloudflare Turnstile serves its script and challenge frame from.
+const TURNSTILE_ORIGIN = 'https://challenges.cloudflare.com';
+
 // The SSR build runs on Cloudflare Pages (workerd), not Node, so it resolves
 // packages the way Wrangler does for `apps/backend` rather than with Vite's
 // Node-first defaults. Under the `node` condition `yaml` (via
@@ -37,6 +40,38 @@ export default defineConfig(({command, mode}) => {
             filename.split(/[/\\]/).includes('node_modules') ? undefined : true,
         },
         adapter: adapter(),
+        csp: {
+          // Content-Security-Policy (#120). `auto` gives every
+          // server-rendered page a fresh nonce, which SvelteKit adds to
+          // `script-src` and puts on the inline script it renders to start
+          // the app, so no `'unsafe-inline'` is needed for scripts; a
+          // prerendered page would get hashes instead.
+          mode: 'auto',
+          directives: {
+            'default-src': ['self'],
+            // Cloudflare Turnstile (`$lib/components/Turnstile.svelte`)
+            // loads its script from this host and renders the challenge in
+            // a frame served from the same one.
+            'script-src': ['self', TURNSTILE_ORIGIN],
+            'frame-src': [TURNSTILE_ORIGIN],
+            // Style attributes (`Input.svelte`, `app.html`) and the
+            // `<style>` elements transitions inject cannot carry a nonce.
+            // A nonce or hash next to `'unsafe-inline'` would also make the
+            // browser ignore it, which SvelteKit avoids by adding none here
+            // once `'unsafe-inline'` is listed.
+            'style-src': ['self', 'unsafe-inline'],
+            'img-src': ['self', 'data:'],
+            'font-src': ['self'],
+            // The browser's own `/api/*` calls are same-origin (the Workers
+            // route in production, the dev proxy under `vite dev`), and so
+            // is `vite dev`'s HMR socket.
+            'connect-src': ['self'],
+            'object-src': ['none'],
+            'base-uri': ['self'],
+            'form-action': ['self'],
+            'frame-ancestors': ['none'],
+          },
+        },
       }),
     ],
     ssr:
