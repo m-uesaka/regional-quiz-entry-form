@@ -17,6 +17,41 @@ import {internalError} from '../lib/errors';
 import {rowToTournament, type TournamentRow} from '../lib/tournaments';
 
 const TournamentIdParamSchema = z.object({id: z.string().uuid()});
+
+/**
+ * The constraint violations a tournament write can run into that the staff
+ * UI can act on, keyed by SQLSTATE, each with the Japanese message shown
+ * above the form.
+ *
+ * Postgres's own messages name tables, columns and constraints, so they are
+ * never passed through (#122): a violation listed here is answered with its
+ * own wording, and anything else is an internal error.
+ */
+const TOURNAMENT_CONSTRAINT_MESSAGES: Readonly<Record<string, string>> = {
+  // unique_violation: `unique (region_id, type)`.
+  '23505': 'この地域には同じ種別の大会がすでにあります',
+  // foreign_key_violation: `region_id` names no region.
+  '23503': '指定された地域が存在しません',
+};
+
+/**
+ * The response body and status for a failed tournament insert or update.
+ * @param context What was being attempted, for the log line.
+ * @param error The error supabase-js returned.
+ */
+function tournamentWriteError(
+  context: string,
+  error: {code?: string},
+): {body: {error: string}; status: 400 | 500} {
+  const message =
+    error.code === undefined
+      ? undefined
+      : TOURNAMENT_CONSTRAINT_MESSAGES[error.code];
+  if (message !== undefined) {
+    return {body: {error: message}, status: 400};
+  }
+  return {body: internalError(context, error), status: 500};
+}
 const TournamentBySlugParamSchema = z.object({
   regionSlug: z.string(),
   tournamentSlug: TournamentTypeSchema,
@@ -83,7 +118,11 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         .select()
         .single();
       if (error) {
-        return c.json({error: error.message}, 400);
+        const {body, status} = tournamentWriteError(
+          'failed to create the tournament',
+          error,
+        );
+        return c.json(body, status);
       }
       return c.json(rowToTournament(data as TournamentRow), 201);
     },
@@ -104,12 +143,15 @@ export const tournamentsRoute = new Hono<StaffEnv>()
       if (error) {
         // PGRST116: `.single()` found no matching row to update. Its
         // message is about the query shape, so it's replaced with the same
-        // wording the reads above use for a missing tournament; a 400 is a
-        // constraint the staff UI can act on, so that message stays.
+        // wording the reads above use for a missing tournament.
         if (error.code === 'PGRST116') {
           return c.json({error: 'tournament not found'}, 404);
         }
-        return c.json({error: error.message}, 400);
+        const {body, status} = tournamentWriteError(
+          'failed to update the tournament',
+          error,
+        );
+        return c.json(body, status);
       }
       return c.json(rowToTournament(data as TournamentRow));
     },
