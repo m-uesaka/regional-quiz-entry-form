@@ -291,7 +291,7 @@ flowchart TB
 - `general`(統括スタッフ)は `region_id` / `tournament_type` が `null` で、全地域・全大会にアクセスできます。
 - `regional`(地域スタッフ)は `(region_id, tournament_type)` の組が担当範囲で、その大会のエントリーしか閲覧できません。この範囲チェックは `apps/backend/src/middleware/staff-auth.ts` が担当します。
 - この 2 パターン以外の行は check 制約 `staff_accounts_scope_matches_role`(`0015`)が拒否します。`regional` なのに `region_id` か `tournament_type` の片方しか無い行は「担当範囲が狭いアカウント」ではなく**壊れた行**で、上記の範囲チェックがすべての大会で落ちるため、そのアカウントはどこにアクセスしても静かに 403 を返し続けます。Zod 側(`StaffAccountCreateInputSchema` の判別共用体)と両方で縛っているのは、Supabase を直接触って行を作る経路が残るためです。
-- `sessions_valid_from` は**発行済みスタッフセッションを切る**ためのものです(Task 11-3)。ログイン時にこの列の値を `sessionsValidFrom` クレームとして JWT に載せ、スタッフ用ミドルウェアが毎リクエストこの列を読み直して**一致しないセッションを 401 で拒否**します。統括スタッフが `POST /api/staff/accounts/:id/revoke-sessions` で進めるほか、`reset_staff_password()` がパスワードと同じ UPDATE 文で進めます。参加者側の `password_changed_at` と同じ仕組みですが、退任・端末紛失などパスワード変更以外でも切れるようにこの名前にしています。比較が値の一致である理由も参加者側と同じです。
+- `sessions_valid_from` は**発行済みスタッフセッションを切る**ためのものです(Task 11-3)。ログイン時にこの列の値を `sessionsValidFrom` クレームとして JWT に載せ、スタッフ用ミドルウェアが毎リクエストこの列を読み直して**一致しないセッションを 401 で拒否**します。統括スタッフが `POST /api/staff/accounts/:id/revoke-sessions` で進めるほか、`reset_staff_password()` がパスワードと同じ UPDATE 文で進めます。参加者側の `password_changed_at` と同じ仕組みですが、端末紛失・Cookie の漏洩などパスワード変更以外でも切れるようにこの名前にしています。セッションを切るだけなので、パスワードを知っている人の再ログインは止められません(アカウントの無効化は #156)。比較が値の一致である理由も参加者側と同じです。
 - 作成は `POST /api/staff/accounts`(統括スタッフ限定)です。作成時の `password_hash` にはハッシュ形式に合わない固定値が入り、本人が招待メールのリンクでパスワードを設定するまでログインできません。統括スタッフが他人のパスワードを知らずに済ませるための作りです。
 
 ### mail_jobs — 一斉メールの送信ジョブ

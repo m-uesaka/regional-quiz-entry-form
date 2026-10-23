@@ -47,7 +47,7 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 どちらのセッションも、署名の検証に加えて**リクエストごとに DB 参照が 1 回入ります**(セッションの失効)。
 
 - **参加者**: `pwdChangedAt` はログイン時点の `participants.password_changed_at`(エポックミリ秒)で、`requireParticipant()` が毎リクエストその列を読み直し、**値が動いていたら 401** にします。パスワード再設定でこの列が更新されるため、再設定前に発行された Cookie(盗まれたものを含む)はその時点で使えなくなります。ステートレスな JWT のままだと、パスワードを変えても攻撃者のアクセスが最大 7 日間続いてしまいます。
-- **スタッフ**(Task 11-3): `sessionsValidFrom` はログイン時点の `staff_accounts.sessions_valid_from`(エポックミリ秒)で、スタッフ用のミドルウェアすべて(`requireGeneralStaff()` / `requireStaffForTournament()` / `requireStaffForEntry()`、期間外の `requireOpenEntryPeriodOrStaff()`)が毎リクエストその列を読み直し、**値が動いていたら 401** にします。この列は統括スタッフの明示的な無効化(`POST /api/staff/accounts/:id/revoke-sessions`、12 章)とパスワード再設定(`reset_staff_password()`)で進みます。スタッフの Cookie は参加者全員の氏名・ふりがな・メールアドレスに届くので、漏れたときに 12 時間止められないことの影響は参加者セッションより大きく、列名を `password_changed_at` にしていないのは退任・端末紛失などパスワード変更以外でも切れるようにするためです。
+- **スタッフ**(Task 11-3): `sessionsValidFrom` はログイン時点の `staff_accounts.sessions_valid_from`(エポックミリ秒)で、スタッフ用のミドルウェアすべて(`requireGeneralStaff()` / `requireStaffForTournament()` / `requireStaffForEntry()`、期間外の `requireOpenEntryPeriodOrStaff()`)が毎リクエストその列を読み直し、**値が動いていたら 401** にします。この列は統括スタッフの明示的な無効化(`POST /api/staff/accounts/:id/revoke-sessions`、12 章)とパスワード再設定(`reset_staff_password()`)で進みます。スタッフの Cookie は参加者全員の氏名・ふりがな・メールアドレスに届くので、漏れたときに 12 時間止められないことの影響は参加者セッションより大きく、列名を `password_changed_at` にしていないのは端末紛失・Cookie の漏洩などパスワード変更以外でも切れるようにするためです。ただし切れるのはセッションだけで、**パスワードを知っている人の再ログインは止められません**(アカウントの無効化は #156)。
 
 どちらも、**列を読めなかったときは 401 ではなく 500** を返します。セッション自体は正しいかもしれず、DB 障害でログイン画面に追い返すべきではないためです。行が消えている(アカウント削除)場合は失効と同じく 401 です。`sessionsValidFrom` を持たない古いスタッフ Cookie(Task 11-3 以前に発行されたもの)はクレームの形の検証で落ち、未ログインと同じ扱いになります。
 
@@ -59,9 +59,11 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 
 | ミドルウェア | 条件 | 失敗時 |
 | --- | --- | --- |
-| `requireGeneralStaff()` | 有効な `staff_session` かつ `role === 'general'`。加えて `sessionsValidFrom` が `staff_accounts.sessions_valid_from` と一致すること(`role` の判定が先で、`regional` は DB を読まずに 403) | 401 / 403 / 500 |
+| `requireGeneralStaff()` | 有効で失効していない `staff_session` かつ `role === 'general'` | 401 / 403 / 500 |
 | `requireStaffForTournament()` | 有効で失効していない `staff_session`。`general` なら無条件通過、`regional` なら `:tournamentId` の大会が担当範囲(`region_id` と `type` が両方一致)であること | 401 / 403 / 500 |
 | `requireStaffForEntry()` | 同上。ただし `:entryId` から `tournament_id` を辿って範囲を判定する | 401 / 403 / 500 |
+
+スタッフ用の3つは同じ関数(`authenticateStaff()`)で Cookie を読み、失効の確認(`staff_accounts` の読み取り)と範囲の確認(`regional` の場合の大会・エントリーの読み取り)を**並行して**行います。どちらも問題があるときは**失効の 401 が優先**です。失効したセッションは担当範囲にかかわらず死んでいるので、スタッフ画面がログイン画面へ戻せるようにするためです。
 | `requireParticipant()` | 有効な `participant_session`。加えて `pwdChangedAt` クレームが `participants.password_changed_at` と一致すること(パスワード再設定でセッションが切れる) | 401 / 500 |
 | `requireOpenEntryPeriodOrStaff()` | エントリー期間中なら**誰でも通過**。期間外は担当スタッフ(`general`、または `region_id` と `type` が一致する `regional`)のみ | 401 / 403 / 404 / 500 |
 
@@ -79,9 +81,12 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 
 1. リクエストが指す大会を引く(`:tournamentId` から直接、または `:regionSlug` の地域を経由して)。見つからなければ **404** `{"error": "tournament not found"}`
 2. `isWithinEntryPeriod()`(`packages/shared`)が真なら、セッションを見ずに通過
-3. 期間外なら `staff_session` を読み、**担当スタッフでなければ 403** `{"error": "entry period closed"}`
-4. ただし `staff_session` が**付いているのに検証できなかった**場合(期限切れ・改竄)は 403 ではなく **401** `{"error": "staff session expired"}`。セッションが切れただけのスタッフをログイン画面に戻すためで、セッションを最初から持たない訪問者(403)と区別する必要があるのはこの一点です
-5. 担当スタッフであれば、最後にセッションの失効を確かめる(`staff_accounts.sessions_valid_from`)。失効していれば 4 と同じ **401** `{"error": "staff session expired"}`、列を読めなければ **500**。3 までの拒否は失効の有無で変わらないので、DB を読むのはここだけです
+3. 期間外なら `staff_session` を読む。`staff_session` が**付いているのに検証できなかった**場合(期限切れ・改竄)は **401** `{"error": "staff session expired"}`。セッションが切れただけのスタッフをログイン画面に戻すためで、セッションを最初から持たない訪問者(4 の 403)と区別する必要があるのはこの点です
+4. セッションが無ければ **403** `{"error": "entry period closed"}`
+5. セッションの失効を確かめる(`staff_accounts.sessions_valid_from`)。失効していれば 3 と同じ **401** `{"error": "staff session expired"}`、列を読めなければ **500**
+6. 担当スタッフでなければ **403** `{"error": "entry period closed"}`
+
+失効の確認を範囲の確認より先にしているのは、スタッフ用ミドルウェアと同じ理由です。失効したセッションは対象の大会にかかわらず死んでいるので、他地域のフォームを開いた場合でも 403 ではなく 401 で返し、ログイン画面に戻します。
 
 「スタッフであること」では足りない点が要点です。担当外の地域スタッフには、他地域の未公開フォームを読む理由がありません。範囲の規則は `packages/shared/src/logic/staff-scope.ts` の `canPreviewTournament()` にあり、バックエンドの `isInScope()` とフロントエンドのエントリーページ `load` が**同じ関数**を使います。
 
@@ -222,7 +227,7 @@ if ('yaml' in body) {
 
 トークンは参加者用の `password_reset_tokens` ではなく `staff_password_reset_tokens` に入ります(`participant_id` が not null の FK なので相乗りできません)。検証・パスワード更新・残りリンクの焼き捨ては DB 関数 `reset_staff_password()` が 1 トランザクションで行い、参加者側と同じくスタッフ行を先にロックしてからトークン行を読み直します(`supabase/migrations/0015_staff_accounts_scope_and_password_reset.sql`)。
 
-パスワードの更新と同じ UPDATE 文で `staff_accounts.sessions_valid_from` も進めるため(`0020_staff_accounts_sessions_valid_from.sql` が `reset_staff_password()` を再定義)、**再設定前に発行されたそのアカウントのセッションはすべて 401 になります**。参加者側の `password_changed_at` と同じ役割です。フロントエンドの設定画面(`/staff/password-reset`)は、そのブラウザが持っていたスタッフ Cookie も消してからログイン画面へ送ります。
+パスワードの更新と同じ UPDATE 文で `staff_accounts.sessions_valid_from` も進めるため(`0020_staff_accounts_sessions_valid_from.sql` が `reset_staff_password()` を再定義)、**再設定前に発行されたそのアカウントのセッションはすべて 401 になります**。参加者側の `password_changed_at` と同じ役割です。フロントエンドの設定画面(`/staff/password-reset`)は、そのブラウザのスタッフ Cookie を**消しません**。リンクは別のアカウントでログイン中のブラウザで開かれることもあり、その Cookie が再設定したアカウントのものとは限らないためです。再設定したアカウントの Cookie だった場合は、次に API に 401 で拒否されたときに消えます。
 
 ### `POST /api/auth/participant/login`
 
@@ -772,7 +777,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 ### `POST /api/staff/accounts/:id/revoke-sessions`
 
-そのアカウントの**発行済みセッションをすべて無効化**します(Task 11-3)。`staff_accounts.sessions_valid_from` を現在時刻に進めるだけで、スタッフ用ミドルウェアは各セッションの `sessionsValidFrom` クレームとこの列を毎リクエスト突き合わせるため、それ以前に発行された Cookie は**次のリクエストから 401** になります。端末の紛失や Cookie の漏洩、退任に使います。
+そのアカウントの**発行済みセッションをすべて無効化**します(Task 11-3)。`staff_accounts.sessions_valid_from` を現在時刻に進めるだけで、スタッフ用ミドルウェアは各セッションの `sessionsValidFrom` クレームとこの列を毎リクエスト突き合わせるため、それ以前に発行された Cookie は**次のリクエストから 401** になります。端末の紛失や Cookie の漏洩など、**Cookie だけが手元を離れた**場合に使います。
 
 - パス: `id` は UUID
 - `200`: `{"ok": true}`
@@ -781,7 +786,9 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 - `401` / `403`(`regional` スタッフは不可)
 - `500`: `{"error": "internal server error"}`
 
-**パスワードは変えません。** 本人はそのまま再ログインできます。パスワードごと止めたい場合は `password-reset` でリンクを再発行してください(設定時にもセッションは切れます)。
+**パスワードは変えません。** パスワードを知っていれば誰でもそのまま再ログインできるので、**退任者やパスワードごと漏れた相手を締め出す手段にはなりません**。`password-reset` でリンクを再発行してもそのリンクは本人のアドレスに届くため、退任者本人は止められません。アカウントを使えなくする機能は #156 で扱います。
+
+管理画面(`/admin/staff`)のボタンは、押すと確認ダイアログを出してから送信します。
 
 **自分自身のアカウントも対象にできます。** 端末を失くしたスタッフが手元の別の端末から押せるようにするためです。その場合、このリクエスト自体は 200 で通りますが、呼び出し元のセッションも同じアカウントのものなので次のリクエストからは 401 になります。管理画面(`/admin/staff`)はこのケースを見分け、Cookie を消してそのままログイン画面へ送ります。
 
