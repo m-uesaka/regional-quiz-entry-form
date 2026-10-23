@@ -91,6 +91,34 @@ describe('origin check (#120)', () => {
     expect(res.status).toBe(403);
   });
 
+  // A frontend reached under another address -- `127.0.0.1` beside
+  // `localhost` in development, a Pages preview -- sends that address as
+  // `Origin`, so it is trusted only once it is listed.
+  it('an origin listed in CSRF_TRUSTED_ORIGINS is allowed', async () => {
+    const env = {
+      ...ENV,
+      CSRF_TRUSTED_ORIGINS: 'http://127.0.0.1:5173, https://preview.example/',
+    };
+
+    for (const origin of ['http://127.0.0.1:5173', 'https://preview.example']) {
+      expect((await postLogout({origin}, env)).status, origin).toBe(200);
+    }
+    expect((await postLogout({origin: FOREIGN_ORIGIN}, env)).status).toBe(403);
+  });
+
+  it('an unlisted second address of the frontend is refused', async () => {
+    const res = await postLogout({origin: 'http://127.0.0.1:5173'});
+
+    expect(res.status).toBe(403);
+  });
+
+  it('an entry of CSRF_TRUSTED_ORIGINS that is not a URL is ignored', async () => {
+    const env = {...ENV, CSRF_TRUSTED_ORIGINS: 'not a url,'};
+
+    expect((await postLogout({origin: FRONTEND_URL}, env)).status).toBe(200);
+    expect((await postLogout({origin: 'null'}, env)).status).toBe(403);
+  });
+
   it('a request the browser marks same-origin is allowed', async () => {
     // The browser's own `/api/*` calls go through the route on the frontend
     // host, so the browser marks them same-origin.

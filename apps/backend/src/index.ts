@@ -52,7 +52,10 @@ app.use('*', secureHeaders());
 //   - SSR calls from `load`s and actions are forwarded by the frontend's
 //     `handleFetch`, and SvelteKit's server-side `fetch` puts the page's own
 //     origin -- which is `FRONTEND_URL` -- in `Origin` before it sends them.
-app.use('*', csrf({origin: (origin, c) => isFrontendOrigin(origin, c.env)}));
+//     A frontend reached under another address (`127.0.0.1` in local dev, a
+//     Pages preview) sends that address instead, so it has to be listed in
+//     `CSRF_TRUSTED_ORIGINS`.
+app.use('*', csrf({origin: (origin, c) => trustedOrigins(c.env).has(origin)}));
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- only read via `typeof routes` below for the Hono RPC AppType export.
 const routes = app
@@ -82,25 +85,40 @@ const routes = app
 
 export type AppType = typeof routes;
 
+/** The last `trustedOrigins()` answer, and the bindings it was read from. */
+let trustedOriginsCache:
+  {key: string; origins: ReadonlySet<string>} | undefined;
+
 /**
- * Whether a request's `Origin` is the frontend this Worker serves.
+ * The origins the CSRF check lets a form-like request come from:
+ * `FRONTEND_URL` and whatever `CSRF_TRUSTED_ORIGINS` adds.
  *
- * Compared as an origin rather than as the raw binding, so a `FRONTEND_URL`
- * written with a trailing slash or a path still matches the
- * `scheme://host[:port]` a browser sends.
+ * Each is reduced to its origin, so a value written with a trailing slash or
+ * a path still matches the `scheme://host[:port]` a browser sends. One that
+ * is not a URL at all is left out rather than thrown on: a misconfigured
+ * binding refuses form posts instead of letting every origin through.
  *
- * @param origin The request's `Origin` header.
+ * Parsed once and kept while the bindings say the same thing -- they are
+ * fixed for an isolate's lifetime, so in practice that is once per isolate.
  * @param env The Worker's bindings.
- * @return `false` as well when `FRONTEND_URL` is not a URL at all: a
- *     misconfigured binding refuses form posts rather than letting every
- *     origin through.
  */
-function isFrontendOrigin(origin: string, env: Bindings): boolean {
-  try {
-    return origin === new URL(env.FRONTEND_URL).origin;
-  } catch {
-    return false;
+function trustedOrigins(env: Bindings): ReadonlySet<string> {
+  const key = `${env.FRONTEND_URL}\n${env.CSRF_TRUSTED_ORIGINS ?? ''}`;
+  if (trustedOriginsCache?.key !== key) {
+    const origins = new Set<string>();
+    for (const value of [
+      env.FRONTEND_URL,
+      ...(env.CSRF_TRUSTED_ORIGINS ?? '').split(','),
+    ]) {
+      try {
+        origins.add(new URL(value.trim()).origin);
+      } catch {
+        // Not a URL; see above.
+      }
+    }
+    trustedOriginsCache = {key, origins};
   }
+  return trustedOriginsCache.origins;
 }
 
 // The Worker's entry points. `fetch` answers the HTTP API as before;
