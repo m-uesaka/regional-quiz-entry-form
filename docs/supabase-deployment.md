@@ -516,7 +516,7 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 
 #### 一斉メールの送信ペース
 
-一斉メールは最大 5 通/秒で送ります(`apps/backend/src/lib/bulk-mail.ts` の `MAIL_BATCH_SIZE = 5` / `MAIL_BATCH_INTERVAL_MS = 1000`)。Resend の API の既定のレート制限はこれより低い(2026-10 時点の想定で 2 リクエスト/秒。チームの設定画面で確認する)ため、一斉メールを送ると 429 が返ることがあります。429 を受けた宛先は `Retry-After` に従って再試行されるので、取りこぼしはしませんが、送信は遅くなり、再試行を使い切ると失敗として計上されます。production で使う前に、staging で数十件の一斉メールを送り、失敗件数が 0 になることを確かめてください。
+一斉メールは `sendPacedMail()`(`apps/backend/src/lib/bulk-mail.ts`)の 1 回の呼び出しにつき最大 5 通/秒に抑えて送ります(`MAIL_BATCH_SIZE = 5` / `MAIL_BATCH_INTERVAL_MS = 1000`)。Resend の API のレート制限はチーム全体で共有されます。既定値は公式ドキュメントの Usage Limits(https://resend.com/docs/api-reference/rate-limit)では 10 リクエスト/秒とされていますが、変更されることがあるため、現在の値は Resend のダッシュボードとドキュメントで確認してください。上記の送信ペースは `sendPacedMail()` の呼び出し単位の制御にすぎないため、同じ Resend チームを使う staging と production の送信や、一斉メールと同時に送られる確認メール・パスワード再設定メールなどの合計が上限を超えると 429 が返ります。429 を受けた宛先は `Retry-After`(なければ指数バックオフ)に従って最大 3 回まで再試行され、それでも送れなければキューに戻されて 30 秒後に再配信されます(配信は最初の 1 回を含めて最大 4 回。`MAIL_QUEUE_MAX_ATTEMPTS`)。どちらの再試行にも上限があるため、制限の超過が続くと、使い切った宛先は送られないまま失敗として計上されます。production で使う前に、staging で数十件の一斉メールを送り、失敗件数が 0 になることを確かめてください。
 
 ## 7. CI/CD パイプライン
 
