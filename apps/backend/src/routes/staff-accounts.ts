@@ -188,10 +188,11 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
   // guards in `middleware/staff-auth.ts` compare each session's
   // `sessionsValidFrom` claim against this column on every request, so
   // moving it makes every cookie issued before refuse with 401 from the next
-  // request on. This is the only way to cut a staff JWT short -- for a
-  // cookie copied off a lost laptop, or the sessions of someone stepping
-  // down -- and it doesn't touch the password, so the owner can log straight
-  // back in.
+  // request on. This is the only way to cut a staff JWT short, e.g. for a
+  // cookie copied off a lost laptop. It doesn't touch the password, so
+  // anyone who knows it can log straight back in: it doesn't lock out
+  // someone stepping down, or a password that leaked along with the cookie
+  // (disabling an account is #156).
   //
   // The caller may name their own account. That is deliberate (a staff
   // member who lost a device can cut its session themselves), and it ends

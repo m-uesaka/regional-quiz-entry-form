@@ -114,6 +114,24 @@ describe('requireOpenEntryPeriodOrStaff (refusals)', () => {
     });
   });
 
+  // Out of scope as well as revoked: the session is dead whichever form it
+  // is aimed at, and a 403 would leave its holder on 「エントリー期間外です」
+  // with no way back to the login form.
+  it("refuses a revoked session with 401 on another region's form too", async () => {
+    globalThis.fetch = staffSessionAwareFetch(
+      originalFetch,
+      '2026-08-25T02:00:00.000Z',
+    );
+
+    const res = await gatedApp(closedEntryPeriodTournament()).request(
+      '/',
+      {headers: {cookie: await regionalStaffCookie(OTHER_REGION_ID)}},
+      env,
+    );
+
+    expect(res.status).toBe(401);
+  });
+
   it('answers 500, not 401, when the session cannot be checked', async () => {
     const originalConsoleError = console.error;
     console.error = () => {};

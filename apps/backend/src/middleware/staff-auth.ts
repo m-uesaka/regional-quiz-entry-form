@@ -120,22 +120,11 @@ export async function isSessionCurrent(
 }
 
 /**
- * `staff` if it is still current, or the response to refuse the request
- * with: 500 when that couldn't be checked, 401 when it is no longer current.
+ * What a guard decides about a session once its signature has verified,
+ * apart from whether it is still current: let it through, refuse it as out
+ * of scope, or give up because the scope couldn't be read.
  */
-async function currentOrRefusal(
-  c: Context<StaffEnv>,
-  staff: StaffClaims,
-): Promise<StaffClaims | Response> {
-  const check = await isSessionCurrent(c.env, staff);
-  if (!check.ok) {
-    return c.json({error: 'internal server error'}, 500);
-  }
-  if (!check.current) {
-    return c.json({error: 'unauthorized'}, 401);
-  }
-  return staff;
-}
+type Authorization = 'allowed' | 'forbidden' | 'error';
 
 /**
  * The verified, still-current claims of the caller's staff session, or the
@@ -144,9 +133,22 @@ async function currentOrRefusal(
  * Shared by the guards below so that none of them can forget the revocation
  * check: a guard that verified only the signature would be the one door a
  * revoked cookie still opens.
+ *
+ * The revocation read and `authorize` run concurrently, since neither needs
+ * the other's answer, but the revocation decides first: a dead session is
+ * 401 whatever its scope, so the staff screens send its holder to log in
+ * again rather than stranding them on 「権限がありません」.
+ * @param c The request's context.
+ * @param authorize What the guard requires of the session on top of being
+ *     current, e.g. its role or that a tournament is in its scope.
+ * @return The claims, or a 401 (no session, or a dead one), 403 (out of
+ *     scope) or 500 (something couldn't be read).
  */
 async function authenticateStaff(
   c: Context<StaffEnv>,
+  authorize: (
+    staff: StaffClaims,
+  ) => Authorization | Promise<Authorization> = () => 'allowed',
 ): Promise<StaffClaims | Response> {
   const staff = await readStaffClaims(
     getCookie(c, STAFF_SESSION_COOKIE),
@@ -155,25 +157,30 @@ async function authenticateStaff(
   if (!staff) {
     return c.json({error: 'unauthorized'}, 401);
   }
-  return currentOrRefusal(c, staff);
+  const [check, authorization] = await Promise.all([
+    isSessionCurrent(c.env, staff),
+    authorize(staff),
+  ]);
+  if (!check.ok) {
+    return c.json({error: 'internal server error'}, 500);
+  }
+  if (!check.current) {
+    return c.json({error: 'unauthorized'}, 401);
+  }
+  if (authorization === 'error') {
+    return c.json({error: 'internal server error'}, 500);
+  }
+  if (authorization === 'forbidden') {
+    return c.json({error: 'forbidden'}, 403);
+  }
+  return staff;
 }
 
 export function requireGeneralStaff() {
   return createMiddleware<StaffEnv>(async (c, next) => {
-    const claims = await readStaffClaims(
-      getCookie(c, STAFF_SESSION_COOKIE),
-      c.env.SESSION_SECRET,
+    const staff = await authenticateStaff(c, staff =>
+      staff.role === 'general' ? 'allowed' : 'forbidden',
     );
-    if (!claims) {
-      return c.json({error: 'unauthorized'}, 401);
-    }
-    // The role is checked before the revocation read: a regional session is
-    // refused here whether or not it is still current, so the database has
-    // nothing to add to the answer and the refusal stays free.
-    if (claims.role !== 'general') {
-      return c.json({error: 'forbidden'}, 403);
-    }
-    const staff = await currentOrRefusal(c, claims);
     if (staff instanceof Response) return staff;
     c.set('staff', staff);
     await next();
@@ -207,27 +214,18 @@ export function isInScope(
 
 export function requireStaffForTournament() {
   return createMiddleware<StaffEnv>(async (c, next) => {
-    const staff = await authenticateStaff(c);
-    if (staff instanceof Response) return staff;
-
-    if (staff.role !== 'general') {
-      const db = createDbClient(c.env);
-      const {data: tournament, error} = await db
+    const staff = await authenticateStaff(c, async staff => {
+      if (staff.role === 'general') return 'allowed';
+      const {data: tournament, error} = await createDbClient(c.env)
         .from('tournaments')
         .select('region_id, type')
         .eq('id', c.req.param('tournamentId'))
         .returns<TournamentScopeRow[]>()
         .maybeSingle();
-
-      if (error) {
-        return c.json({error: 'internal server error'}, 500);
-      }
-
-      if (!isInScope(staff, tournament)) {
-        return c.json({error: 'forbidden'}, 403);
-      }
-    }
-
+      if (error) return 'error';
+      return isInScope(staff, tournament) ? 'allowed' : 'forbidden';
+    });
+    if (staff instanceof Response) return staff;
     c.set('staff', staff);
     await next();
   });
@@ -245,27 +243,20 @@ interface EntryScopeRow {
  */
 export function requireStaffForEntry() {
   return createMiddleware<StaffEnv>(async (c, next) => {
-    const staff = await authenticateStaff(c);
-    if (staff instanceof Response) return staff;
-
-    if (staff.role !== 'general') {
-      const db = createDbClient(c.env);
-      const {data: entry, error} = await db
+    const staff = await authenticateStaff(c, async staff => {
+      if (staff.role === 'general') return 'allowed';
+      const {data: entry, error} = await createDbClient(c.env)
         .from('entries')
         .select('tournaments(region_id, type)')
         .eq('id', c.req.param('entryId'))
         .returns<EntryScopeRow[]>()
         .maybeSingle();
-
-      if (error) {
-        return c.json({error: 'internal server error'}, 500);
-      }
-
-      if (!isInScope(staff, entry?.tournaments ?? null)) {
-        return c.json({error: 'forbidden'}, 403);
-      }
-    }
-
+      if (error) return 'error';
+      return isInScope(staff, entry?.tournaments ?? null)
+        ? 'allowed'
+        : 'forbidden';
+    });
+    if (staff instanceof Response) return staff;
     c.set('staff', staff);
     await next();
   });

@@ -245,6 +245,63 @@ describe('requireStaffForTournament', () => {
     expect(res.status).toBe(401);
   });
 
+  it('answers a revoked out-of-scope session with 401, not 403', async () => {
+    mockTournamentFetch(
+      {region_id: 'other-region', type: 'saikyoi'},
+      REVOKED_AT,
+    );
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'regional',
+      regionId: REGION_ID,
+      tournamentType: 'saikyoi',
+    });
+
+    const res = await app.request(
+      '/tournaments/t1/x',
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(401);
+  });
+
+  it('reads the session and the scope concurrently', async () => {
+    // Neither read waits for the other: both are in flight before either
+    // answers.
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const respond = staffSessionAwareFetch((() =>
+      Promise.resolve(
+        Response.json([{region_id: REGION_ID, type: 'saikyoi'}]),
+      )) as unknown as typeof fetch);
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return respond(input, init);
+    }) as unknown as typeof fetch;
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'regional',
+      regionId: REGION_ID,
+      tournamentType: 'saikyoi',
+    });
+
+    const res = await app.request(
+      '/tournaments/t1/x',
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(200);
+    expect(maxInFlight).toBe(2);
+  });
+
   it('rejects a revoked general staff session too', async () => {
     // General staff skip the tournament lookup, but not the session check.
     mockTournamentFetch(null, REVOKED_AT);
@@ -597,14 +654,7 @@ describe('requireGeneralStaff', () => {
     expect(res.status).toBe(401);
   });
 
-  it('refuses regional staff without reading the session', async () => {
-    // The 403 doesn't depend on whether the session is current, so the
-    // guard answers it before spending a database read on it.
-    let reads = 0;
-    globalThis.fetch = (() => {
-      reads += 1;
-      return Promise.resolve(Response.json([]));
-    }) as unknown as typeof fetch;
+  it('refuses regional staff with 403', async () => {
     const token = await tokenFor({
       sub: STAFF_ID,
       role: 'regional',
@@ -615,6 +665,21 @@ describe('requireGeneralStaff', () => {
     const res = await app.request('/x', {headers: cookieHeader(token)}, ENV);
 
     expect(res.status).toBe(403);
-    expect(reads).toBe(0);
+  });
+
+  it('answers a revoked regional session with 401, not 403', async () => {
+    // The role alone would refuse it, but a dead session is answered as one
+    // so the staff screens send its holder back to the login form.
+    globalThis.fetch = staffSessionAwareFetch(originalFetch, REVOKED_AT);
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'regional',
+      regionId: REGION_ID,
+      tournamentType: 'saikyoi',
+    });
+
+    const res = await app.request('/x', {headers: cookieHeader(token)}, ENV);
+
+    expect(res.status).toBe(401);
   });
 });

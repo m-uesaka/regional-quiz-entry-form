@@ -240,7 +240,12 @@ describe('POST /staff/accounts/:id/revoke-sessions (mocked Supabase)', () => {
   });
 
   it('POST /staff/accounts/:id/revoke-sessions returns 403 for regional staff', async () => {
-    const accounts = new Map([[TARGET_STAFF_ID, TEST_SESSIONS_VALID_FROM]]);
+    // The caller's own row is there too, so its session reads as current
+    // and the role is what refuses it.
+    const accounts = new Map([
+      [TARGET_STAFF_ID, TEST_SESSIONS_VALID_FROM],
+      ['88888888-8888-8888-8888-888888888888', TEST_SESSIONS_VALID_FROM],
+    ]);
     const {requests} = fakeStaffAccounts(accounts);
 
     const res = await revokeSessions(
