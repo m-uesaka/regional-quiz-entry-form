@@ -263,7 +263,7 @@ bunx wrangler deploy --env production \
 2. Pages プロジェクト(production / staging)にカスタムドメインを割り当てる(6.3)
 3. GitHub の `staging` / `production` Environment に `FRONTEND_HOST` 変数を登録する(6.5)
 4. Turnstile widget にカスタムドメインのホスト名を追加する(6.2)
-5. Resend の `Domains` で送信用ドメイン(上表の `@` 以降)を追加し、表示される SPF / DKIM の DNS レコードを Cloudflare に登録して `Verified` にする。未検証のドメインを From にした送信は Resend に拒否される
+5. Resend で送信用ドメイン(上表の `@` 以降)を検証し、`MAIL_API_KEY` を登録する(6.6)
 6. デプロイし直す
 
 Pages の `BACKEND_URL`(6.3)はここでは触りません。SSR の転送先は route ではなく Worker 自身のオリジン、つまり workers.dev のままで正しく、`wrangler.toml` の `workers_dev = true` がそれを維持します。ここで `BACKEND_URL` をフロントエンドのホスト名に書き換える必要はありません。
@@ -336,6 +336,71 @@ Supabase の Personal Access Token は、プロジェクトと機能ごとにス
 - GitHub のランナーは IP が固定されないので、Client IP Address Filtering は設定しない
 
 Cloudflare のトークンは Worker 単位では絞れないため、staging と production が同じアカウントにある限り、トークンを環境ごとに分けても分離の効果は小さいです。厳密に分けるならアカウント自体を分けます。
+
+### 6.6 メール送信(Resend)
+
+参加者へのエントリー確認・パスワード再設定・繰り上げ当選の連絡、スタッフの招待、一斉メールは、すべて Resend(`apps/backend/src/lib/mailer.ts`)から送ります。関係する値は次の 3 つです。
+
+| 名前 | 置き場所 | staging | production |
+| --- | --- | --- | --- |
+| `MAIL_FROM_ADDRESS` | `wrangler.toml` の `[env.*.vars]` | `no-reply@staging.mail.regional-quiz-project.app` | `no-reply@mail.regional-quiz-project.app` |
+| `MAIL_API_KEY` | Worker のシークレット(6.2) | staging 用のキー | production 用のキー |
+| `FRONTEND_URL` | `deploy.yml` が `FRONTEND_HOST` から設定する(6.4) | `https://staging.regional-quiz-project.app` | `https://regional-quiz-project.app` |
+
+`MAIL_FROM_ADDRESS` のドメインが Resend で検証済みでないと、送信はすべて拒否されます。メール本文のリンクは `FRONTEND_URL` から組み立てます。
+
+#### プランとドメイン数
+
+送信ドメインを環境ごとに分けているのは、staging での試験送信がバウンスや迷惑メール報告を招いても、production の送信ドメインの評判に影響させないためです。Resend の Free プランでも検証できるドメインは 3 つまでなので(2026-10 時点の公式料金表)、上の表のとおり 2 ドメインを Free プランのまま検証できます。
+
+- 送信数の上限(Free プランは 1 日 100 通・月 3,000 通)はアカウント単位なので、同じアカウントで 2 ドメインを検証すると両環境で共有になる。一斉メールなどで足りなくなる場合は Pro 以上のプランにする
+- プランの条件は変わることがあるので、ドメインを登録する前に https://resend.com/pricing で、ドメイン数と送信数の上限を確認する
+
+#### 設定手順
+
+以下は staging の例です。production では、ドメイン・キー名・`--env` を読み替えます。
+
+1. **ドメインを追加する。** Resend の `Domains` → `Add Domain` を開く
+   - Name: `staging.mail.regional-quiz-project.app`
+   - Region: `Tokyo (ap-northeast-1)`
+2. **DNS レコードを登録する。** 表示されたレコード(通常は DKIM の TXT `resend._domainkey.staging.mail`、バウンス用の MX `send.staging.mail`、SPF の TXT `send.staging.mail`)を、Cloudflare の `regional-quiz-project.app` ゾーンの `DNS > Records` に、表示どおりの名前・値・Priority で登録する。Resend の画面に Cloudflare との自動連携(Auto configure)が出ていれば、それを使ってもよい。TXT と MX はプロキシの対象外なので、プロキシの設定は不要。登録したら `Verify DNS Records` を押し、`Verified` になるのを待つ
+3. **DMARC を追加する(推奨。環境で共通)。** Gmail などは DMARC の有無を見るため、ゾーンに 1 件だけ追加する
+
+   | 種類 | 名前 | 内容 |
+   | --- | --- | --- |
+   | TXT | `_dmarc` | `v=DMARC1; p=none;` |
+
+4. **API キーを作る。** `API Keys` → `Create API Key` を開き、Permission を **Sending access** に、Domain を手順 1 のドメインに限定して作る(Name の例: `regional-quiz-staging`)。キー(`re_...`)は作成直後の画面にしか表示されない
+5. **Worker に登録する。** 登録した時点で反映されるので、再デプロイは要らない
+
+   ```bash
+   cd apps/backend
+   bunx wrangler secret put MAIL_API_KEY --env staging
+   bunx wrangler secret list --env staging     # MAIL_API_KEY が並べば OK
+   ```
+
+#### 送信の確認
+
+スタッフ用のパスワード再設定の申込フォームはありません。参加者用の `/password-reset` は、アカウントの無いアドレス宛てには何も送りません(メールアドレスの列挙を防ぐため)。そのため、最初の確認には**スタッフの招待**を使います。
+
+1. 統括スタッフ(8.1)でログインし、`/admin/staff` から自分が受け取れる別のアドレスを招待する
+2. 次を確かめる
+   - メールが届く(迷惑メールフォルダも確認する)
+   - 差出人が `MAIL_FROM_ADDRESS` になっている
+   - 本文のリンクが `https://<FRONTEND_HOST>/staff/password-reset?token=...` で、開くとパスワード設定画面が表示される
+   - メールのソースで SPF / DKIM / DMARC が `PASS` になっている
+3. 届かないときは、Resend の `Logs` で送信履歴を確認し、送信されていなければ `bunx wrangler tail --env staging` を実行した状態で、`/admin/staff` の一覧から手順 1 のアカウントの「パスワード設定メールを再送」を押して、Worker のエラーを確認する。送信に失敗してもアカウントは作成済みなので、同じアドレスを**もう一度招待しても 409 になるだけで、メールの送信までは進まない**
+
+| 症状 | 原因 |
+| --- | --- |
+| Resend の `Logs` に記録が無く、Worker のログに `Failed to send mail: 401` が出る | `MAIL_API_KEY` の貼り間違い(Resend が API キーを拒否している) |
+| Resend の `Logs` に記録が無く、Worker のログに `Failed to send mail: 403` が出る | キーの権限か送信元ドメインの問題。Worker は Resend のエラー本文を残さないので、原因は Resend 側で確かめる。`Domains` で `MAIL_FROM_ADDRESS` のドメインが `Verified` になっているか(手順 2 の DNS レコード)、`API Keys` でキーが `Sending access` かつ対象ドメインが `MAIL_FROM_ADDRESS` のドメインと一致しているかを確認する |
+| `Logs` では `Delivered` なのに受信箱に無い | 迷惑メールフォルダに入っている。手順 3 の DMARC で改善することがある |
+| 招待するとアカウントは作られるが、`500 {"error": "account created but ..."}` になる | 送信に失敗している(Resend が 401 / 403 を返しても、招待 API・再送 API の応答は常に 500 になる。Resend の応答コードは Worker のログ `failed to send the staff password setup mail`(招待時)/ `failed to send the staff password reset mail`(再送時)に続く `Failed to send mail: <status>` で確認する)。上の 2 行を確認したうえで、`/admin/staff` の一覧から「パスワード設定メールを再送」を押す(もう一度招待すると 409 になる) |
+
+#### 一斉メールの送信ペース
+
+一斉メールは `sendPacedMail()`(`apps/backend/src/lib/bulk-mail.ts`)の 1 回の呼び出しにつき最大 5 通/秒に抑えて送ります(`MAIL_BATCH_SIZE = 5` / `MAIL_BATCH_INTERVAL_MS = 1000`)。Resend の API のレート制限はチーム全体で共有されます。既定値は公式ドキュメントの Usage Limits(https://resend.com/docs/api-reference/rate-limit)では 10 リクエスト/秒とされていますが、変更されることがあるため、現在の値は Resend のダッシュボードとドキュメントで確認してください。上記の送信ペースは `sendPacedMail()` の呼び出し単位の制御にすぎないため、同じ Resend チームを使う staging と production の送信や、一斉メールと同時に送られる確認メール・パスワード再設定メールなどの合計が上限を超えると 429 が返ります。429 を受けた宛先は `Retry-After`(なければ指数バックオフ)に従って最大 3 回まで再試行され、それでも送れなければキューに戻されて 30 秒後に再配信されます(配信は最初の 1 回を含めて最大 4 回。`MAIL_QUEUE_MAX_ATTEMPTS`)。どちらの再試行にも上限があるため、制限の超過が続くと、使い切った宛先は送られないまま失敗として計上されます。production で使う前に、staging で数十件の一斉メールを送り、失敗件数が 0 になることを確かめてください。
 
 ## 7. CI/CD パイプライン
 
@@ -440,7 +505,8 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 - [ ] Pages プロジェクト(production / staging)にカスタムドメインを割り当てた(6.3 / 6.4)
 - [ ] GitHub の各 Environment に `FRONTEND_HOST` 変数を登録し、`/api/*` が Worker に届くことを確認した(6.4 / 6.5 / #101)
 - [ ] Turnstile widget にカスタムドメインのホスト名を追加した(6.2 / 6.4)
-- [ ] Resend で `MAIL_FROM_ADDRESS` の送信用ドメインを検証した(6.4)
+- [ ] Resend で `MAIL_FROM_ADDRESS` の送信用ドメインを検証し、DMARC を追加した(6.6)
+- [ ] 送信ドメインに限定した Resend の API キーを `MAIL_API_KEY` として Worker に登録し、スタッフの招待メールが届くことを確認した(6.6)
 - [ ] `bunx supabase db push --linked --dry-run` で初回マイグレーション適用の差分を確認した
 - [ ] staging の `deploy-staging` ワークフローが全ステップ成功することを確認した
 - [ ] production への初回デプロイ後、`/api/healthz` とトップページの疎通を確認した
@@ -456,4 +522,6 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 - Supabase CLI コマンドリファレンス: https://supabase.com/docs/reference/cli
 - Wrangler Environments: https://developers.cloudflare.com/workers/wrangler/environments/
 - Wrangler Secrets: https://developers.cloudflare.com/workers/configuration/secrets/
+- Resend Domains: https://resend.com/docs/dashboard/domains/introduction
+- Resend の料金・制限: https://resend.com/pricing
 - Cloudflare Pages デプロイ(Wrangler 経由): https://developers.cloudflare.com/pages/how-to/use-direct-upload-with-continuous-integration/
