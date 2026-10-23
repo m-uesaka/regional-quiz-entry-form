@@ -23,4 +23,22 @@ describe('list +page.svelte', () => {
     );
     expect(screen.getByText('参加者A')).toBeInTheDocument();
   });
+
+  it('says so when there are no entries yet, instead of a blank page', () => {
+    render(Page, {
+      props: {
+        params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
+        data: {entries: []},
+        form: null,
+      },
+    });
+
+    expect(
+      screen.getByRole('heading', {level: 1, name: 'エントリーリスト'}),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('まだエントリーはありません。'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('list')).toBeNull();
+  });
 });

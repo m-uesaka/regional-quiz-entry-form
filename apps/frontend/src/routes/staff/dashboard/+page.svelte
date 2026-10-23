@@ -3,6 +3,13 @@
     TOURNAMENT_TYPE_LABELS,
     calculateFillRate,
   } from '@regional-quiz/shared';
+  import PageContainer from '$lib/components/layout/PageContainer.svelte';
+  import PageHeader from '$lib/components/layout/PageHeader.svelte';
+  import Card from '$lib/components/ui/atoms/Card.svelte';
+  import Link from '$lib/components/ui/atoms/Link.svelte';
+  import Table from '$lib/components/ui/atoms/Table.svelte';
+  import TableData from '$lib/components/ui/atoms/TableData.svelte';
+  import TableHead from '$lib/components/ui/atoms/TableHead.svelte';
   import type {PageProps} from './$types';
 
   let {data}: PageProps = $props();
@@ -43,52 +50,72 @@
   }
 </script>
 
-<h1>全地域エントリー状況</h1>
+<PageContainer size="wide">
+  <PageHeader title="全地域エントリー状況" />
 
-<p>
-  確定 {totals.confirmed} 件 / キャンセル待ち {totals.waitlisted} 件 / メール確認待ち
-  {totals.pendingVerification} 件
-</p>
+  <Card>
+    <p class="text-sm">
+      確定 {totals.confirmed} 件 / キャンセル待ち {totals.waitlisted} 件 / メール確認待ち
+      {totals.pendingVerification} 件
+    </p>
+  </Card>
 
-{#if data.summaries.length === 0}
-  <p>大会がまだ登録されていません。</p>
-{:else}
-  <table>
-    <thead>
-      <tr>
-        <th>地域</th>
-        <th>大会</th>
-        <th>確定</th>
-        <th>定員</th>
-        <th>充足率</th>
-        <th>キャンセル待ち</th>
-        <th>メール確認待ち</th>
-        <th>操作</th>
-      </tr>
-    </thead>
-    <tbody>
-      {#each data.summaries as summary (summary.tournamentId)}
-        <tr>
-          <td>{summary.regionName}</td>
-          <td>
-            {summary.tournamentName}
-            ({TOURNAMENT_TYPE_LABELS[summary.tournamentType]})
-          </td>
-          <td>{summary.confirmedCount}</td>
-          <td>{summary.capacity ?? '制限なし'}</td>
-          <td>{fillRateLabel(summary.confirmedCount, summary.capacity)}</td>
-          <td>{summary.waitlistedCount}</td>
-          <td>{summary.pendingVerificationCount}</td>
-          <td>
-            <a
-              href={entriesHref(summary.regionSlug, summary.tournamentType)}
-              aria-label="{summary.regionName} {summary.tournamentName}のエントリー一覧"
-            >
-              エントリー一覧
-            </a>
-          </td>
-        </tr>
-      {/each}
-    </tbody>
-  </table>
-{/if}
+  {#if data.summaries.length === 0}
+    <Card>
+      <p class="text-sm text-muted-foreground">大会がまだ登録されていません。</p>
+    </Card>
+  {:else}
+    <div class="overflow-x-auto rounded-lg border border-border shadow-xs">
+      <Table class="w-full">
+        <thead>
+          <tr class="border-b border-border">
+            <TableHead size="small">地域</TableHead>
+            <TableHead size="small">大会</TableHead>
+            <TableHead size="small">確定</TableHead>
+            <TableHead size="small">定員</TableHead>
+            <TableHead size="small">充足率</TableHead>
+            <TableHead size="small">キャンセル待ち</TableHead>
+            <TableHead size="small">メール確認待ち</TableHead>
+            <TableHead size="small">操作</TableHead>
+          </tr>
+        </thead>
+        <tbody>
+          {#each data.summaries as summary (summary.tournamentId)}
+            <tr class="border-b border-border last:border-b-0">
+              <TableData size="small" class="whitespace-nowrap">
+                {summary.regionName}
+              </TableData>
+              <TableData size="small">
+                {summary.tournamentName}
+                ({TOURNAMENT_TYPE_LABELS[summary.tournamentType]})
+              </TableData>
+              <TableData size="small" class="tabular-nums">
+                {summary.confirmedCount}
+              </TableData>
+              <TableData size="small" class="tabular-nums">
+                {summary.capacity ?? '制限なし'}
+              </TableData>
+              <TableData size="small" class="tabular-nums">
+                {fillRateLabel(summary.confirmedCount, summary.capacity)}
+              </TableData>
+              <TableData size="small" class="tabular-nums">
+                {summary.waitlistedCount}
+              </TableData>
+              <TableData size="small" class="tabular-nums">
+                {summary.pendingVerificationCount}
+              </TableData>
+              <TableData size="small" class="whitespace-nowrap">
+                <Link
+                  href={entriesHref(summary.regionSlug, summary.tournamentType)}
+                  aria-label="{summary.regionName} {summary.tournamentName}のエントリー一覧"
+                >
+                  エントリー一覧
+                </Link>
+              </TableData>
+            </tr>
+          {/each}
+        </tbody>
+      </Table>
+    </div>
+  {/if}
+</PageContainer>

@@ -1,5 +1,11 @@
 <script lang="ts">
   import type {Region} from '@regional-quiz/shared';
+  import NativeSelect from '$lib/components/form/NativeSelect.svelte';
+  import Button from '$lib/components/ui/atoms/Button.svelte';
+  import Input from '$lib/components/ui/atoms/Input.svelte';
+  import Label from '$lib/components/ui/atoms/Label.svelte';
+  import Link from '$lib/components/ui/atoms/Link.svelte';
+  import Message from '$lib/components/ui/items/Message.svelte';
   import {datetimeLocalStep} from '$lib/jst-datetime';
   import type {TournamentFormValues} from '$lib/types/tournament-form';
 
@@ -24,68 +30,97 @@
      only routed to the backend Worker for requests the frontend makes
      itself, so a client-side write would 404 in production until Task 9-5
      lands. See the note in this page's `+page.server.ts`. -->
-<form class="tournament-form" method="POST" {action}>
-  <label>
-    地域
+<form class="flex flex-col gap-4" method="POST" {action}>
+  <div class="flex flex-col gap-1.5">
+    <Label for="tournament-region">地域</Label>
     <!-- A select rather than a UUID typed by hand: the id is not something
          anyone can check by eye, and a mistyped one files the tournament
          under a region nobody notices until its entry-form URL is wrong. -->
-    <select name="regionId" value={values.regionId} required>
+    <NativeSelect
+      id="tournament-region"
+      name="regionId"
+      value={values.regionId}
+      required
+    >
       <option value="" disabled>選択してください</option>
       {#each regions as region (region.id)}
         <option value={region.id}>{region.name}</option>
       {/each}
-    </select>
-  </label>
+    </NativeSelect>
+  </div>
 
   {#if regions.length === 0}
-    <p class="tournament-form-error" role="alert">
-      地域が登録されていません。先に<a href="/admin/regions">地域の管理</a>
-      から追加してください。
-    </p>
+    <Message variant="danger">
+      <p class="text-sm text-foreground" role="alert">
+        地域が登録されていません。先に<Link href="/admin/regions">地域の管理</Link>
+        から追加してください。
+      </p>
+    </Message>
   {/if}
 
-  <label>
-    種別
-    <select name="type" value={values.type}>
+  <div class="flex flex-col gap-1.5">
+    <Label for="tournament-type">種別</Label>
+    <NativeSelect id="tournament-type" name="type" value={values.type}>
       <option value="saikyoi">最強位</option>
       <option value="shinjinou">新人王</option>
-    </select>
-  </label>
+    </NativeSelect>
+  </div>
 
-  <label>
-    大会名
-    <input type="text" name="name" value={values.name} required />
-  </label>
+  <div class="flex flex-col gap-1.5">
+    <Label for="tournament-name">大会名</Label>
+    <Input
+      id="tournament-name"
+      class="w-full"
+      type="text"
+      name="name"
+      value={values.name}
+      required
+    />
+  </div>
 
-  <label>
-    定員(空欄で無制限)
-    <input type="number" name="capacity" min="1" value={values.capacity} />
-  </label>
+  <div class="flex flex-col gap-1.5">
+    <Label for="tournament-capacity">定員(空欄で無制限)</Label>
+    <Input
+      id="tournament-capacity"
+      class="w-full sm:w-48"
+      type="number"
+      name="capacity"
+      min="1"
+      value={values.capacity}
+    />
+  </div>
 
   <!-- The step only drops to a second for a stored instant that falls
        mid-minute, which the default minute step would refuse outright. -->
-  <label>
-    エントリー開始日時 (JST)
-    <input
-      type="datetime-local"
-      name="entryOpensAt"
-      step={datetimeLocalStep(values.entryOpensAt)}
-      value={values.entryOpensAt}
-      required
-    />
-  </label>
+  <div class="grid gap-4 sm:grid-cols-2">
+    <div class="flex flex-col gap-1.5">
+      <Label for="tournament-entry-opens-at">エントリー開始日時 (JST)</Label>
+      <Input
+        id="tournament-entry-opens-at"
+        class="w-full"
+        type="datetime-local"
+        name="entryOpensAt"
+        step={datetimeLocalStep(values.entryOpensAt)}
+        value={values.entryOpensAt}
+        required
+      />
+    </div>
 
-  <label>
-    エントリー終了日時 (JST)
-    <input
-      type="datetime-local"
-      name="entryClosesAt"
-      step={datetimeLocalStep(values.entryClosesAt)}
-      value={values.entryClosesAt}
-      required
-    />
-  </label>
+    <div class="flex flex-col gap-1.5">
+      <Label for="tournament-entry-closes-at">エントリー終了日時 (JST)</Label>
+      <Input
+        id="tournament-entry-closes-at"
+        class="w-full"
+        type="datetime-local"
+        name="entryClosesAt"
+        step={datetimeLocalStep(values.entryClosesAt)}
+        value={values.entryClosesAt}
+        required
+      />
+    </div>
+  </div>
 
-  <button type="submit">{submitLabel}</button>
+  <div class="flex flex-wrap gap-2">
+    <Button type="submit">{submitLabel}</Button>
+  </div>
 </form>

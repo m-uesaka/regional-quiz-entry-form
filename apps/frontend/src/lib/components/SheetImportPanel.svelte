@@ -4,6 +4,11 @@
     type TournamentType,
   } from '@regional-quiz/shared';
   import {createApiClient} from '$lib/api';
+  import Button from '$lib/components/ui/atoms/Button.svelte';
+  import Card from '$lib/components/ui/atoms/Card.svelte';
+  import Input from '$lib/components/ui/atoms/Input.svelte';
+  import Label from '$lib/components/ui/atoms/Label.svelte';
+  import Message from '$lib/components/ui/items/Message.svelte';
 
   interface Props {
     tournamentId: string;
@@ -90,44 +95,63 @@
   }
 </script>
 
-<section class="sheet-import-panel">
-  <h2>スプレッドシート取り込み</h2>
+<section>
+  <Card class="gap-4">
+    <div class="flex flex-col gap-1">
+      <h2 class="text-lg font-bold">スプレッドシート取り込み</h2>
 
-  <p class="sheet-import-target">
-    取り込み先: {TOURNAMENT_TYPE_LABELS[tournamentType]} ({tournamentType})
-  </p>
+      <p class="text-sm text-muted-foreground">
+        取り込み先: {TOURNAMENT_TYPE_LABELS[tournamentType]} ({tournamentType})
+      </p>
+    </div>
 
-  <form onsubmit={handlePreview}>
-    <label>
-      スプレッドシートID
-      <input
-        type="text"
-        bind:value={spreadsheetId}
-        placeholder="スプレッドシートID"
-        required
-      />
-    </label>
-    <button type="submit" disabled={previewing}>YAMLプレビュー</button>
-  </form>
+    <form onsubmit={handlePreview} class="flex flex-col gap-4">
+      <div class="flex flex-col gap-1.5">
+        <Label for="sheet-import-spreadsheet-id">スプレッドシートID</Label>
+        <Input
+          id="sheet-import-spreadsheet-id"
+          class="w-full"
+          type="text"
+          bind:value={spreadsheetId}
+          placeholder="スプレッドシートID"
+          required
+        />
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <Button type="submit" variant="secondary" disabled={previewing}>
+          YAMLプレビュー
+        </Button>
+      </div>
+    </form>
 
-  {#if previewError}
-    <p class="sheet-import-error" role="alert">{previewError}</p>
-  {/if}
-
-  {#if previewYaml !== null}
-    <pre>{previewYaml}</pre>
-    <button
-      type="button"
-      onclick={handleSave}
-      disabled={saveStatus === 'saving'}
-    >
-      保存
-    </button>
-
-    {#if saveStatus === 'saved'}
-      <p class="sheet-import-success">保存しました</p>
-    {:else if saveStatus === 'error' && saveError}
-      <p class="sheet-import-error" role="alert">{saveError}</p>
+    {#if previewError}
+      <Message variant="danger">
+        <p class="text-sm text-foreground" role="alert">{previewError}</p>
+      </Message>
     {/if}
-  {/if}
+
+    {#if previewYaml !== null}
+      <pre
+        class="max-h-96 overflow-auto rounded-md border border-border bg-subtle p-4 font-mono text-xs leading-relaxed">{previewYaml}</pre>
+      <div class="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          onclick={handleSave}
+          disabled={saveStatus === 'saving'}
+        >
+          保存
+        </Button>
+      </div>
+
+      {#if saveStatus === 'saved'}
+        <Message variant="success">
+          <p class="text-sm text-foreground">保存しました</p>
+        </Message>
+      {:else if saveStatus === 'error' && saveError}
+        <Message variant="danger">
+          <p class="text-sm text-foreground" role="alert">{saveError}</p>
+        </Message>
+      {/if}
+    {/if}
+  </Card>
 </section>

@@ -52,19 +52,25 @@
   });
 </script>
 
-<fieldset class="regulation-selector">
-  <legend>レギュレーションを選択してください(複数選択可)</legend>
+<!-- Native checkboxes inside their own `<label>`: the label (badge
+     included) is what names each one, and a native box is what `bind:group`
+     and the post-hydration `required` act on. -->
+<fieldset class="flex flex-col gap-2">
+  <legend class="mb-1.5 text-sm/tight font-medium text-foreground">
+    レギュレーションを選択してください(複数選択可)
+  </legend>
   {#if hasPriorityWindow}
-    <p class="regulation-priority-notice">
+    <p class="text-sm text-muted-foreground">
       現在は優先期間中です。優先対象のレギュレーションを1つ以上選択してください
     </p>
   {/if}
   {#each ordered as regulation (regulation.id)}
-    <label>
+    <label class="flex w-fit cursor-pointer flex-wrap items-center gap-2 text-sm">
       <!-- `value` is the option this checkbox stands for; `bind:group` is
            what carries the chosen set back out. -->
       <input
         type="checkbox"
+        class="size-4 cursor-pointer accent-primary"
         name="regulationIds"
         value={regulation.id}
         required={hydrated && value.length === 0}
@@ -72,12 +78,15 @@
       />
       {regulation.label}
       {#if priorityIds.has(regulation.id) && hasPriorityWindow}
-        <span class="regulation-priority-badge">優先対象</span>
+        <span
+          class="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-1 text-xs/none font-semibold text-primary"
+          >優先対象</span
+        >
       {/if}
     </label>
   {/each}
   {#if !selectionAllowed && value.length > 0}
-    <p class="field-error">
+    <p class="text-sm text-destructive">
       現在は優先期間中のため、優先対象のレギュレーションを1つ以上選択してください
     </p>
   {/if}

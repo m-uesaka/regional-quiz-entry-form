@@ -2,6 +2,7 @@ import {defineConfig} from 'vitest/config';
 import {defaultServerConditions, loadEnv} from 'vite';
 import adapter from '@sveltejs/adapter-cloudflare';
 import {sveltekit} from '@sveltejs/kit/vite';
+import tailwindcss from '@tailwindcss/vite';
 
 // The address `wrangler dev` serves `apps/backend` on by default, used when
 // `BACKEND_URL` isn't set so that `bun run dev:frontend` works out of the box.
@@ -28,6 +29,7 @@ export default defineConfig(({command, mode}) => {
 
   return {
     plugins: [
+      tailwindcss(),
       sveltekit({
         compilerOptions: {
           // Force runes mode for the project, except for libraries. Can be removed in svelte 6.

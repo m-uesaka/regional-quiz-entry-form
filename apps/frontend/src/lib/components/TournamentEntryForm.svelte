@@ -10,6 +10,10 @@
   import {customFieldName} from '$lib/custom-field-name';
   import RegulationSelector from '$lib/components/RegulationSelector.svelte';
   import Turnstile from '$lib/components/Turnstile.svelte';
+  import Button from '$lib/components/ui/atoms/Button.svelte';
+  import Input from '$lib/components/ui/atoms/Input.svelte';
+  import Label from '$lib/components/ui/atoms/Label.svelte';
+  import Textarea from '$lib/components/ui/atoms/Textarea.svelte';
   import type {EntryFieldErrors, EntryFormValues} from '$lib/types/entry-form';
 
   interface Props {
@@ -78,6 +82,7 @@
      whatever it was actually refused for. See `Turnstile.svelte`. -->
 <form
   method="POST"
+  class="flex flex-col gap-4"
   use:enhance={() => {
     return async ({update}) => {
       await update();
@@ -85,78 +90,104 @@
     };
   }}
 >
-  <div class="form-field">
-    <label for="name">氏名</label>
-    <input id="name" name="name" bind:value={name} required />
-    {#if fieldError('name')}<p class="field-error">{fieldError('name')}</p>{/if}
-  </div>
-
-  <div class="form-field">
-    <label for="furigana">ふりがな</label>
-    <input id="furigana" name="furigana" bind:value={furigana} required />
-    {#if fieldError('furigana')}
-      <p class="field-error">{fieldError('furigana')}</p>
+  <div class="flex flex-col gap-1.5">
+    <Label for="name">氏名</Label>
+    <Input
+      id="name"
+      name="name"
+      bind:value={name}
+      isError={!!fieldError('name')}
+      required
+    />
+    {#if fieldError('name')}
+      <p class="text-sm text-destructive">{fieldError('name')}</p>
     {/if}
   </div>
 
-  <div class="form-field">
-    <label for="displayName">掲載名</label>
-    <input
+  <div class="flex flex-col gap-1.5">
+    <Label for="furigana">ふりがな</Label>
+    <Input
+      id="furigana"
+      name="furigana"
+      bind:value={furigana}
+      isError={!!fieldError('furigana')}
+      required
+    />
+    {#if fieldError('furigana')}
+      <p class="text-sm text-destructive">{fieldError('furigana')}</p>
+    {/if}
+  </div>
+
+  <div class="flex flex-col gap-1.5">
+    <Label for="displayName">掲載名</Label>
+    <Input
       id="displayName"
       name="displayName"
       bind:value={displayName}
+      isError={!!fieldError('displayName')}
       required
     />
     {#if fieldError('displayName')}
-      <p class="field-error">{fieldError('displayName')}</p>
+      <p class="text-sm text-destructive">{fieldError('displayName')}</p>
     {/if}
   </div>
 
-  <div class="form-field">
-    <label for="email">メールアドレス</label>
-    <input id="email" name="email" type="email" bind:value={email} required />
+  <div class="flex flex-col gap-1.5">
+    <Label for="email">メールアドレス</Label>
+    <Input
+      id="email"
+      name="email"
+      type="email"
+      bind:value={email}
+      isError={!!fieldError('email')}
+      required
+    />
     {#if fieldError('email')}
-      <p class="field-error">{fieldError('email')}</p>
+      <p class="text-sm text-destructive">{fieldError('email')}</p>
     {/if}
   </div>
 
   <!-- An email address that has already entered another tournament keeps
        its existing password; entering it again is how the API recognizes
        the same participant. -->
-  <div class="form-field">
-    <label for="password">パスワード</label>
-    <input
+  <div class="flex flex-col gap-1.5">
+    <Label for="password">パスワード</Label>
+    <Input
       id="password"
       name="password"
       type="password"
-      minlength="8"
+      minlength={8}
       autocomplete="new-password"
+      isError={!!fieldError('password')}
       required
     />
     {#if fieldError('password')}
-      <p class="field-error">{fieldError('password')}</p>
+      <p class="text-sm text-destructive">{fieldError('password')}</p>
     {/if}
   </div>
 
-  <div class="form-field">
-    <label for="passwordConfirm">パスワード(確認)</label>
-    <input
+  <div class="flex flex-col gap-1.5">
+    <Label for="passwordConfirm">パスワード(確認)</Label>
+    <Input
       id="passwordConfirm"
       name="passwordConfirm"
       type="password"
-      minlength="8"
+      minlength={8}
       autocomplete="new-password"
+      isError={!!fieldError('passwordConfirm')}
       required
     />
     {#if fieldError('passwordConfirm')}
-      <p class="field-error">{fieldError('passwordConfirm')}</p>
+      <p class="text-sm text-destructive">{fieldError('passwordConfirm')}</p>
     {/if}
   </div>
 
-  <RegulationSelector {regulations} bind:value={regulationIds} />
-  {#if fieldError('regulationIds')}
-    <p class="field-error">{fieldError('regulationIds')}</p>
-  {/if}
+  <div class="flex flex-col gap-1.5">
+    <RegulationSelector {regulations} bind:value={regulationIds} />
+    {#if fieldError('regulationIds')}
+      <p class="text-sm text-destructive">{fieldError('regulationIds')}</p>
+    {/if}
+  </div>
 
   {#each fields as field (field.key)}
     <!-- Keyed by the control's namespaced name, the same key the action
@@ -168,9 +199,9 @@
     />
   {/each}
 
-  <div class="form-field">
-    <label for="freeText">自由記述</label>
-    <textarea id="freeText" name="freeText" bind:value={freeText}></textarea>
+  <div class="flex flex-col gap-1.5">
+    <Label for="freeText">自由記述</Label>
+    <Textarea id="freeText" name="freeText" bind:value={freeText} />
   </div>
 
   <!-- The widget drops a hidden `cf-turnstile-response` control into this
@@ -179,5 +210,9 @@
        the two forms behind a challenge as well as a rate limit (#116). -->
   <Turnstile bind:this={turnstile} />
 
-  <button type="submit">エントリーする</button>
+  <div class="flex flex-wrap gap-2 pt-2">
+    <Button type="submit" variant="primary" tone="solid" size="large">
+      エントリーする
+    </Button>
+  </div>
 </form>
