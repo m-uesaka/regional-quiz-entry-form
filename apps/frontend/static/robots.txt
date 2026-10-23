@@ -1,3 +1,9 @@
-# allow crawling everything by default
 User-agent: *
-Disallow:
+# 公開エントリーリストと各大会のフォームはクロールされてよい。
+# 以下はログインが要るか、ワンタイムトークン付き URL を踏むページなので除く。
+# (/staff は /staff/password-reset も含む)
+Disallow: /mypage
+Disallow: /staff
+Disallow: /admin
+Disallow: /verify
+Disallow: /password-reset
