@@ -57,7 +57,7 @@ describe('staff entry detail +page.svelte', () => {
           tournamentSlug: 'saikyoi',
           entryId: ENTRY.id,
         },
-        data: {loggedIn: true, entry: ENTRY},
+        data: {loggedIn: true, isGeneralStaff: false, entry: ENTRY},
         form: null,
       },
     });
@@ -80,7 +80,7 @@ describe('staff entry detail +page.svelte', () => {
           tournamentSlug: 'saikyoi',
           entryId: ENTRY.id,
         },
-        data: {loggedIn: true, entry: ENTRY},
+        data: {loggedIn: true, isGeneralStaff: false, entry: ENTRY},
         form: null,
       },
     });
@@ -97,7 +97,7 @@ describe('staff entry detail +page.svelte', () => {
           tournamentSlug: 'saikyoi',
           entryId: ENTRY.id,
         },
-        data: {loggedIn: true, entry: ENTRY},
+        data: {loggedIn: true, isGeneralStaff: false, entry: ENTRY},
         form: null,
       },
     });
@@ -116,7 +116,7 @@ describe('staff entry detail +page.svelte', () => {
           tournamentSlug: 'saikyoi',
           entryId: ENTRY.id,
         },
-        data: {loggedIn: true, entry: ENTRY},
+        data: {loggedIn: true, isGeneralStaff: false, entry: ENTRY},
         form: null,
       },
     });
@@ -139,6 +139,7 @@ describe('staff entry detail +page.svelte', () => {
         },
         data: {
           loggedIn: true,
+          isGeneralStaff: false,
           entry: {
             ...ENTRY,
             regulationIds: [
@@ -163,7 +164,7 @@ describe('staff entry detail +page.svelte', () => {
           tournamentSlug: 'saikyoi',
           entryId: ENTRY.id,
         },
-        data: {loggedIn: true, entry: ENTRY},
+        data: {loggedIn: true, isGeneralStaff: false, entry: ENTRY},
         form: null,
       },
     });

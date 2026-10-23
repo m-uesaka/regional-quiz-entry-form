@@ -49,7 +49,12 @@ describe('staff entries +page.svelte', () => {
     render(Page, {
       props: {
         params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
-        data: {loggedIn: true, tournament: TOURNAMENT, entries: ENTRIES},
+        data: {
+          loggedIn: true,
+          isGeneralStaff: false,
+          tournament: TOURNAMENT,
+          entries: ENTRIES,
+        },
         form: null,
       },
     });
@@ -65,7 +70,12 @@ describe('staff entries +page.svelte', () => {
     render(Page, {
       props: {
         params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
-        data: {loggedIn: true, tournament: TOURNAMENT, entries: ENTRIES},
+        data: {
+          loggedIn: true,
+          isGeneralStaff: false,
+          tournament: TOURNAMENT,
+          entries: ENTRIES,
+        },
         form: null,
       },
     });
@@ -82,7 +92,12 @@ describe('staff entries +page.svelte', () => {
     render(Page, {
       props: {
         params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
-        data: {loggedIn: true, tournament: TOURNAMENT, entries: ENTRIES},
+        data: {
+          loggedIn: true,
+          isGeneralStaff: false,
+          tournament: TOURNAMENT,
+          entries: ENTRIES,
+        },
         form: null,
       },
     });
@@ -96,7 +111,12 @@ describe('staff entries +page.svelte', () => {
     render(Page, {
       props: {
         params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
-        data: {loggedIn: true, tournament: TOURNAMENT, entries: ENTRIES},
+        data: {
+          loggedIn: true,
+          isGeneralStaff: false,
+          tournament: TOURNAMENT,
+          entries: ENTRIES,
+        },
         form: null,
       },
     });

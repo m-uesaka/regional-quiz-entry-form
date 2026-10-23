@@ -7,7 +7,11 @@ function renderPage(options: {hasToken?: boolean; form?: ActionData} = {}) {
   render(Page, {
     props: {
       params: {},
-      data: {loggedIn: false, hasToken: options.hasToken ?? true},
+      data: {
+        loggedIn: false,
+        isGeneralStaff: false,
+        hasToken: options.hasToken ?? true,
+      },
       form: options.form ?? null,
     },
   });
@@ -23,7 +27,11 @@ describe('staff password reset +page.svelte', () => {
 
   it('posts to its own URL so the token query parameter survives', () => {
     const {container} = render(Page, {
-      props: {params: {}, data: {loggedIn: false, hasToken: true}, form: null},
+      props: {
+        params: {},
+        data: {loggedIn: false, isGeneralStaff: false, hasToken: true},
+        form: null,
+      },
     });
 
     const form = container.querySelector('form');

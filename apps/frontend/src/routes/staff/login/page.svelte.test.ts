@@ -8,7 +8,11 @@ function renderPage(
   passwordSet = false,
 ) {
   render(Page, {
-    props: {params: {}, data: {loggedIn: false, passwordSet}, form},
+    props: {
+      params: {},
+      data: {loggedIn: false, isGeneralStaff: false, passwordSet},
+      form,
+    },
   });
 }
 
@@ -25,7 +29,7 @@ describe('staff login +page.svelte', () => {
     const {container} = render(Page, {
       props: {
         params: {},
-        data: {loggedIn: false, passwordSet: false},
+        data: {loggedIn: false, isGeneralStaff: false, passwordSet: false},
         form: null,
       },
     });
