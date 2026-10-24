@@ -396,7 +396,12 @@ describe('POST /staff/tournaments/:tournamentId/mail', () => {
   });
 
   it('allows general staff for any tournament', async () => {
-    mockFetch({entries: [[entryRow('taro@example.com')]]});
+    // A tournament outside any regional scope: general staff aren't scoped,
+    // but the guard still reads the row to hand it to the handler (#123).
+    mockFetch({
+      tournament: [{region_id: OTHER_REGION_ID, type: 'shinjinou'}],
+      entries: [[entryRow('taro@example.com')]],
+    });
     const cookie = await generalStaffCookie();
 
     const res = await postMail(cookie);

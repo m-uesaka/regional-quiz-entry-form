@@ -114,14 +114,20 @@ const FORM_FIELD_DEF_ROWS = [
   },
 ];
 
+/** What `requireStaffForTournament()`'s tournament read finds. */
+const TOURNAMENT_PAGE = [{region_id: REGION_ID, type: 'saikyoi'}];
+
 /**
  * Mocks the sequence of `fetch` calls Supabase's REST client makes,
  * returning each `responses` entry's body in order (one per call). A
  * scope-checked request under `requireStaffForTournament()` /
  * `requireStaffForEntry()` makes one call for the scope lookup followed by
- * one for the route handler's own query; general staff skip the scope
- * lookup and only trigger the second. The single-entry detail route makes
- * one further call after that to fetch the tournament's form field defs.
+ * one for the route handler's own query. `requireStaffForTournament()`
+ * reads the tournament for general staff too (it hands the row to the
+ * handler, #123), so those requests start with `TOURNAMENT_PAGE` as well;
+ * `requireStaffForEntry()` skips its lookup for them. The single-entry
+ * detail route makes one further call after that to fetch the tournament's
+ * form field defs.
  */
 function mockSequentialFetch(responses: unknown[]): void {
   let callIndex = 0;
@@ -196,6 +202,7 @@ describe('GET /staff/tournaments/:id/entries (mocked Supabase)', () => {
       name: `参加者${index}`,
     }));
     mockSequentialFetch([
+      TOURNAMENT_PAGE,
       firstPage,
       [{...FULL_ENTRY_ROW, name: '参加者500'}],
       [],
@@ -228,7 +235,7 @@ describe('GET /staff/tournaments/:id/entries (mocked Supabase)', () => {
   });
 
   it('allows general staff for any tournament', async () => {
-    mockSequentialFetch([[FULL_ENTRY_ROW]]);
+    mockSequentialFetch([TOURNAMENT_PAGE, [FULL_ENTRY_ROW]]);
     const cookie = await generalStaffCookie();
 
     const res = await app.request(
@@ -300,7 +307,7 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
   });
 
   it('returns a header-only CSV when the tournament has no entries', async () => {
-    mockSequentialFetch([[], FORM_FIELD_DEF_ROWS]);
+    mockSequentialFetch([TOURNAMENT_PAGE, [], FORM_FIELD_DEF_ROWS]);
     const cookie = await generalStaffCookie();
 
     const res = await app.request(
@@ -324,6 +331,7 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
       name: `参加者${index}`,
     }));
     mockSequentialFetch([
+      TOURNAMENT_PAGE,
       firstPage,
       [{...CSV_ENTRY_ROW, name: '参加者500'}],
       [],
@@ -350,6 +358,7 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
     // every response, so the first batch is short without the entries being
     // exhausted. Ending the export there would drop the rest.
     mockSequentialFetch([
+      TOURNAMENT_PAGE,
       [
         {...CSV_ENTRY_ROW, name: '参加者0'},
         {...CSV_ENTRY_ROW, name: '参加者1'},

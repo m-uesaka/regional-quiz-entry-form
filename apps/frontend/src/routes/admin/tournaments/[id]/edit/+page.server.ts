@@ -1,4 +1,5 @@
 import {error, fail} from '@sveltejs/kit';
+import {TournamentSchema} from '@regional-quiz/shared';
 import {createApiClient, isUnauthorized} from '$lib/api';
 import {
   parseTournamentFormValues,
@@ -31,28 +32,34 @@ const INVALID_INPUT_MESSAGE = '入力内容を確認してください';
 // the backend Worker for requests the frontend makes itself until Task 9-5
 // lands, so a client-side call would 404 in production.
 export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
-  const api = createApiClient(fetch);
-  const [tournamentsRes, regionsRes] = await Promise.all([
-    api.api.tournaments.$get(),
-    api.api.regions.$get(),
-  ]);
-  if (!tournamentsRes.ok || !regionsRes.ok) {
-    if (isUnauthorized(tournamentsRes) || isUnauthorized(regionsRes)) {
-      redirectToStaffLogin(cookies, url);
-    }
-    error(502, '大会情報の取得に失敗しました');
-  }
-
-  // `GET /api/tournaments/:id` doesn't exist (only list + create + update),
-  // so the tournament being edited is picked out of the full list.
-  const tournament = (await tournamentsRes.json()).find(
-    t => t.id === params.id,
-  );
-  if (!tournament) {
+  // An id that isn't a UUID names no tournament, and is answered here
+  // rather than sent on to come back as the API's 400 -- which would then be
+  // indistinguishable from any other request the API refused.
+  if (!TournamentSchema.shape.id.safeParse(params.id).success) {
     error(404, '大会が見つかりません');
   }
 
-  return {tournament, regions: await regionsRes.json()};
+  const api = createApiClient(fetch);
+  // Only the tournament being edited, not the whole list to `find` it in
+  // (#123).
+  const [tournamentRes, regionsRes] = await Promise.all([
+    api.api.tournaments[':id'].$get({param: {id: params.id}}),
+    api.api.regions.$get(),
+  ]);
+  if (isUnauthorized(tournamentRes) || isUnauthorized(regionsRes)) {
+    redirectToStaffLogin(cookies, url);
+  }
+  if (tournamentRes.status === 404) {
+    error(404, '大会が見つかりません');
+  }
+  if (!tournamentRes.ok || !regionsRes.ok) {
+    error(502, '大会情報の取得に失敗しました');
+  }
+
+  return {
+    tournament: await tournamentRes.json(),
+    regions: await regionsRes.json(),
+  };
 };
 
 export const actions = {

@@ -5,6 +5,7 @@ import {
 } from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
+import {internalError} from './errors';
 
 /** Shape of a `tournaments` row as returned by Supabase (snake_case). */
 export interface TournamentRow {
@@ -49,6 +50,19 @@ export class TournamentLookupError extends Error {
 }
 
 /**
+ * Logs a failed tournament read and returns the body to answer it with.
+ *
+ * Shared by every caller of the lookups below, so the log line is the same
+ * whichever route or guard hit the outage, and a `TournamentLookupError` is
+ * unwrapped to the Supabase error it carries.
+ * @param e What the lookup threw.
+ */
+export function tournamentLookupFailure(e: unknown): {error: string} {
+  const cause = e instanceof TournamentLookupError ? e.cause : e;
+  return internalError('failed to read the tournament', cause);
+}
+
+/**
  * Reads one tournament by its primary key.
  * @param env The Worker bindings.
  * @param tournamentId The tournament's UUID.
@@ -74,6 +88,13 @@ export async function fetchTournamentById(
 /**
  * Reads one tournament by the pair the public URLs name it with: its
  * region's slug and its own type.
+ *
+ * One round trip (#123): almost every page's `load` starts here, so the
+ * old two-step read -- the region's id from `regions`, then the tournament
+ * -- cost every screen an extra round trip. `regions!inner` makes the embed
+ * an inner join, so a missing region comes back as no row at all, the same
+ * answer as a missing tournament. The embed selects no columns (`()`): it is
+ * only there to filter on, so the row comes back as a plain `TournamentRow`.
  * @param env The Worker bindings.
  * @param regionSlug The region's slug.
  * @param tournamentSlug The tournament's type.
@@ -86,21 +107,10 @@ export async function fetchTournamentBySlug(
   tournamentSlug: string,
 ): Promise<TournamentRow | null> {
   const db = createDbClient(env);
-  const {data: region, error: regionError} = await db
-    .from('regions')
-    .select('id')
-    .eq('slug', regionSlug)
-    .maybeSingle();
-  if (regionError) {
-    throw new TournamentLookupError(regionError);
-  }
-  if (!region) {
-    return null;
-  }
   const {data, error} = await db
     .from('tournaments')
-    .select(TOURNAMENT_COLUMNS)
-    .eq('region_id', region.id)
+    .select(`${TOURNAMENT_COLUMNS}, regions!inner()`)
+    .eq('regions.slug', regionSlug)
     .eq('type', tournamentSlug)
     .returns<TournamentRow[]>()
     .maybeSingle();

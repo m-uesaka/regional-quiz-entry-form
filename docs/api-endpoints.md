@@ -60,12 +60,12 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 | ミドルウェア | 条件 | 失敗時 |
 | --- | --- | --- |
 | `requireGeneralStaff()` | 有効で失効していない `staff_session` かつ `role === 'general'` | 401 / 403 / 500 |
-| `requireStaffForTournament()` | 有効で失効していない `staff_session`。`general` なら無条件通過、`regional` なら `:tournamentId` の大会が担当範囲(`region_id` と `type` が両方一致)であること | 401 / 403 / 500 |
+| `requireStaffForTournament()` | 有効で失効していない `staff_session`。`general` なら無条件通過、`regional` なら `:tournamentId` の大会が担当範囲(`region_id` と `type` が両方一致)であること。統括スタッフでも大会は読み、存在しなければ 404 | 401 / 403 / 404 / 500 |
 | `requireStaffForEntry()` | 同上。ただし `:entryId` から `tournament_id` を辿って範囲を判定する | 401 / 403 / 500 |
-
-スタッフ用の3つは同じ関数(`authenticateStaff()`)で Cookie を読み、失効の確認(`staff_accounts` の読み取り)と範囲の確認(`regional` の場合の大会・エントリーの読み取り)を**並行して**行います。どちらも問題があるときは**失効の 401 が優先**です。失効したセッションは担当範囲にかかわらず死んでいるので、スタッフ画面がログイン画面へ戻せるようにするためです。
 | `requireParticipant()` | 有効な `participant_session`。加えて `pwdChangedAt` クレームが `participants.password_changed_at` と一致すること(パスワード再設定でセッションが切れる) | 401 / 500 |
 | `requireOpenEntryPeriodOrStaff()` | エントリー期間中なら**誰でも通過**。期間外は担当スタッフ(`general`、または `region_id` と `type` が一致する `regional`)のみ | 401 / 403 / 404 / 500 |
+
+スタッフ用の3つは同じ関数(`authenticateStaff()`)で Cookie を読み、失効の確認(`staff_accounts` の読み取り)と範囲の確認(大会・エントリーの読み取り。`requireStaffForEntry()` は `regional` の場合のみ)を**並行して**行います。どちらも問題があるときは**失効の 401 が優先**です。失効したセッションは担当範囲にかかわらず死んでいるので、スタッフ画面がログイン画面へ戻せるようにするためです。`requireStaffForTournament()` は `general` を含む**全ロールで** `tournaments` 行を1回読み、通過したら `c.set('tournament', ...)` でハンドラへ渡します(#123。ハンドラは同じ大会を読み直さない)。大会が存在しない場合、`general` には 404 `{"error": "tournament not found"}` を返し、`regional` には担当外と同じ 403 を返します(存在の有無で応答を変えると、担当外の id が存在するかを探れてしまうため)。
 
 #### `requireOpenEntryPeriodOrStaff()`(エントリー期間外アクセス制御)
 
@@ -79,7 +79,7 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 
 判定は次の順です。
 
-1. リクエストが指す大会を引く(`:tournamentId` から直接、または `:regionSlug` の地域を経由して)。見つからなければ **404** `{"error": "tournament not found"}`
+1. リクエストが指す大会を引く(`:tournamentId` から直接、または `:regionSlug` / `:tournamentSlug` から `regions!inner()` で絞った1回のクエリで)。見つからなければ **404** `{"error": "tournament not found"}`
 2. `isWithinEntryPeriod()`(`packages/shared`)が真なら、セッションを見ずに通過
 3. 期間外なら `staff_session` を読む。`staff_session` が**付いているのに検証できなかった**場合(期限切れ・改竄)は **401** `{"error": "staff session expired"}`。セッションが切れただけのスタッフをログイン画面に戻すためで、セッションを最初から持たない訪問者(4 の 403)と区別する必要があるのはこの点です
 4. セッションが無ければ **403** `{"error": "entry period closed"}`
@@ -204,6 +204,7 @@ if ('yaml' in body) {
 | POST | `/api/regions` | 統括スタッフ |
 | PATCH | `/api/regions/:id` | 統括スタッフ |
 | GET | `/api/tournaments` | 統括スタッフ |
+| GET | `/api/tournaments/:id` | 統括スタッフ |
 | POST | `/api/tournaments` | 統括スタッフ |
 | PATCH | `/api/tournaments/:id` | 統括スタッフ |
 | GET | `/api/tournaments/:regionSlug/:tournamentSlug` | 期間中はなし / 期間外は担当スタッフ |
@@ -372,6 +373,18 @@ if ('yaml' in body) {
 - `200`: `Tournament[]`
 - `500`: `{"error": <Supabase のメッセージ>}`
 
+### `GET /api/tournaments/:id`
+
+大会を1件返します。大会編集画面用(以前は全件を取ってきてクライアント側で `find` していました、#123)。
+
+- パス: `id` は UUID
+- `200`: `Tournament`
+- `400`: `id` が UUID でない
+- `404`: `{"error": "tournament not found"}`
+- `500`: `{"error": "internal server error"}`
+
+1セグメントのパスなので、2セグメントの `GET /api/tournaments/:regionSlug/:tournamentSlug` や `/:tournamentId/...` 系のルートとは衝突しません。
+
 ### `POST /api/tournaments`
 
 - リクエスト: `TournamentSchema.omit({id: true})` — `{regionId, type, name, capacity, entryOpensAt, entryClosesAt}`
@@ -401,7 +414,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 
 ### `GET /api/tournaments/:regionSlug/:tournamentSlug`
 
-エントリー期間中は公開、期間外は担当スタッフのみ(`requireOpenEntryPeriodOrStaff()`、§1「認可ミドルウェア」)。地域スラッグと大会種別スラッグの組から大会を1件引きます。`regions` を slug で引いてから `tournaments` を `(region_id, type)` で引く2段階のクエリで、これはミドルウェアが行い、ハンドラはその結果を返すだけです。
+エントリー期間中は公開、期間外は担当スタッフのみ(`requireOpenEntryPeriodOrStaff()`、§1「認可ミドルウェア」)。地域スラッグと大会種別スラッグの組から大会を1件引きます。`tournaments` に列を返さない空の埋め込み `regions!inner()` を付け、`regions.slug` と `type` で絞る**1回のクエリ**です(#123。以前は `regions` → `tournaments` の2段階でした)。内部結合なので地域が無い場合も「該当行なし」になります。クエリはミドルウェアが行い、ハンドラはその結果を返すだけです。
 
 - パス: `tournamentSlug` は `'saikyoi' | 'shinjinou'`
 - `200`: `Tournament`
@@ -648,7 +661,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 ## 10. スタッフ向けエントリー閲覧・一斉メール送信
 
-`routes/staff-entries.ts` と `routes/staff-mail.ts`。`requireStaffForTournament()` / `requireStaffForEntry()` により、地域スタッフは担当大会のエントリーしか見られず、担当外の大会にはメールも送れません。統括スタッフは全大会が対象です。
+`routes/staff-entries.ts` と `routes/staff-mail.ts`。`requireStaffForTournament()` / `requireStaffForEntry()` により、地域スタッフは担当大会のエントリーしか見られず、担当外の大会にはメールも送れません。統括スタッフは全大会が対象です。`:tournamentId` の大会が存在しない場合、統括スタッフには `404` `{"error": "tournament not found"}`、地域スタッフには `403` を返します(§1「認可ミドルウェア」)。
 
 ### `GET /api/staff/tournaments/:tournamentId/entries`
 

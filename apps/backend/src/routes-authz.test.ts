@@ -89,6 +89,7 @@ const ROUTE_POLICIES: Readonly<Record<string, Policy>> = {
   'POST /api/regions': {access: 'general-staff'},
   'PATCH /api/regions/:id': {access: 'general-staff'},
   'GET /api/tournaments': {access: 'general-staff'},
+  'GET /api/tournaments/:id': {access: 'general-staff'},
   'POST /api/tournaments': {access: 'general-staff'},
   'PATCH /api/tournaments/:id': {access: 'general-staff'},
   'GET /api/tournaments/:regionSlug/:tournamentSlug': {access: 'entry-period'},
@@ -274,9 +275,18 @@ const CLOSED_TOURNAMENT = {
   entry_closes_at: '2020-01-31T00:00:00.000Z',
 };
 
+/** The columns `lib/tournaments.ts` selects, as they appear in the URL. */
+const TOURNAMENT_SELECT =
+  'id,region_id,type,name,capacity,entry_opens_at,entry_closes_at';
+
 /** A read a guard makes on its way to refusing, and what it is answered. */
 interface GuardRead {
-  kind: 'staff-session' | 'participant-session' | 'scope' | 'tournament';
+  kind:
+    | 'staff-session'
+    | 'participant-session'
+    | 'scope'
+    | 'tournament-by-id'
+    | 'tournament-by-slug';
   body: unknown;
 }
 
@@ -302,23 +312,32 @@ function classifyRead(url: URL): GuardRead | null {
       body: [{password_changed_at: PASSWORD_CHANGED_AT}],
     };
   }
-  if (table === 'tournaments' && select === 'region_id,type') {
-    return {
-      kind: 'scope',
-      body: [{region_id: STUB_REGION_ID, type: 'saikyoi'}],
-    };
-  }
   if (table === 'entries' && select === 'tournaments(region_id,type)') {
     return {
       kind: 'scope',
       body: [{tournaments: {region_id: STUB_REGION_ID, type: 'saikyoi'}}],
     };
   }
-  if (table === 'tournaments' && select.includes('entry_opens_at')) {
-    return {kind: 'tournament', body: [CLOSED_TOURNAMENT]};
-  }
-  if (table === 'regions' && select === 'id') {
-    return {kind: 'tournament', body: [{id: STUB_REGION_ID}]};
+  // The two tournament lookups of `lib/tournaments.ts`, matched on their
+  // exact select and filters so that any other read of `tournaments` -- a
+  // handler's, with its own columns or conditions -- is still caught.
+  // `fetchTournamentById()` is both the entry-period gate's by-id read and
+  // `requireStaffForTournament()`'s scope read (it reads the whole row to
+  // hand it to the handler, #123).
+  if (table === 'tournaments') {
+    const filters = [...url.searchParams.keys()]
+      .filter(key => key !== 'select')
+      .sort()
+      .join(',');
+    if (select === TOURNAMENT_SELECT && filters === 'id') {
+      return {kind: 'tournament-by-id', body: [CLOSED_TOURNAMENT]};
+    }
+    if (
+      select === `${TOURNAMENT_SELECT},regions!inner()` &&
+      filters === 'regions.slug,type'
+    ) {
+      return {kind: 'tournament-by-slug', body: [CLOSED_TOURNAMENT]};
+    }
   }
   return null;
 }
@@ -451,7 +470,9 @@ const PROBES: Readonly<Record<Exclude<Policy['access'], 'public'>, Probe[]>> = {
       session: 'regional-staff-out-of-scope',
       status: 403,
       error: FORBIDDEN,
-      allowedReads: ['staff-session', 'scope'],
+      // 'tournament-by-id' is `requireStaffForTournament()`'s scope read,
+      // 'scope' `requireStaffForEntry()`'s.
+      allowedReads: ['staff-session', 'scope', 'tournament-by-id'],
     },
   ],
   participant: [
@@ -470,19 +491,19 @@ const PROBES: Readonly<Record<Exclude<Policy['access'], 'public'>, Probe[]>> = {
       session: 'none',
       status: 403,
       error: ENTRY_PERIOD_CLOSED,
-      allowedReads: ['tournament'],
+      allowedReads: ['tournament-by-id', 'tournament-by-slug'],
     },
     {
       session: 'participant',
       status: 403,
       error: ENTRY_PERIOD_CLOSED,
-      allowedReads: ['tournament'],
+      allowedReads: ['tournament-by-id', 'tournament-by-slug'],
     },
     {
       session: 'regional-staff-out-of-scope',
       status: 403,
       error: ENTRY_PERIOD_CLOSED,
-      allowedReads: ['tournament', 'staff-session'],
+      allowedReads: ['tournament-by-id', 'tournament-by-slug', 'staff-session'],
     },
   ],
 };

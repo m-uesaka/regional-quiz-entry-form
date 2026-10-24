@@ -10,6 +10,11 @@ import {
 } from '@regional-quiz/shared';
 import type {Bindings, StaffEnv} from '../types/env';
 import {createDbClient} from '../lib/db';
+import {
+  fetchTournamentById,
+  tournamentLookupFailure,
+  type TournamentRow,
+} from '../lib/tournaments';
 
 export const STAFF_SESSION_COOKIE = 'staff_session';
 
@@ -121,10 +126,22 @@ export async function isSessionCurrent(
 
 /**
  * What a guard decides about a session once its signature has verified,
- * apart from whether it is still current: let it through, refuse it as out
- * of scope, or give up because the scope couldn't be read.
+ * apart from whether it is still current: let it through (with whatever it
+ * read on the way, for the handler), refuse it as out of scope or as aimed
+ * at nothing, or give up because the scope couldn't be read.
  */
-type Authorization = 'allowed' | 'forbidden' | 'error';
+type Authorization<T> =
+  | {decision: 'allowed'; scope: T}
+  | {decision: 'forbidden' | 'not-found' | 'error'};
+
+/** `Authorization` for a guard that reads nothing to decide. */
+const ALLOWED: Authorization<undefined> = {
+  decision: 'allowed',
+  scope: undefined,
+};
+const FORBIDDEN: Authorization<never> = {decision: 'forbidden'};
+const NOT_FOUND: Authorization<never> = {decision: 'not-found'};
+const AUTHORIZATION_ERROR: Authorization<never> = {decision: 'error'};
 
 /**
  * The verified, still-current claims of the caller's staff session, or the
@@ -140,16 +157,19 @@ type Authorization = 'allowed' | 'forbidden' | 'error';
  * again rather than stranding them on 「権限がありません」.
  * @param c The request's context.
  * @param authorize What the guard requires of the session on top of being
- *     current, e.g. its role or that a tournament is in its scope.
- * @return The claims, or a 401 (no session, or a dead one), 403 (out of
- *     scope) or 500 (something couldn't be read).
+ *     current, e.g. its role or that a tournament is in its scope. Whatever
+ *     it read to decide comes back as `scope`, so a guard can hand it to
+ *     the handler without reading it twice.
+ * @return The claims and the scope, or a 401 (no session, or a dead one),
+ *     403 (out of scope), 404 (nothing to be in scope of) or 500 (something
+ *     couldn't be read).
  */
-async function authenticateStaff(
+async function authenticateStaff<T>(
   c: Context<StaffEnv>,
   authorize: (
     staff: StaffClaims,
-  ) => Authorization | Promise<Authorization> = () => 'allowed',
-): Promise<StaffClaims | Response> {
+  ) => Authorization<T> | Promise<Authorization<T>>,
+): Promise<{staff: StaffClaims; scope: T} | Response> {
   const staff = await readStaffClaims(
     getCookie(c, STAFF_SESSION_COOKIE),
     c.env.SESSION_SECRET,
@@ -167,22 +187,25 @@ async function authenticateStaff(
   if (!check.current) {
     return c.json({error: 'unauthorized'}, 401);
   }
-  if (authorization === 'error') {
-    return c.json({error: 'internal server error'}, 500);
+  switch (authorization.decision) {
+    case 'error':
+      return c.json({error: 'internal server error'}, 500);
+    case 'forbidden':
+      return c.json({error: 'forbidden'}, 403);
+    case 'not-found':
+      return c.json({error: 'tournament not found'}, 404);
+    case 'allowed':
+      return {staff, scope: authorization.scope};
   }
-  if (authorization === 'forbidden') {
-    return c.json({error: 'forbidden'}, 403);
-  }
-  return staff;
 }
 
 export function requireGeneralStaff() {
   return createMiddleware<StaffEnv>(async (c, next) => {
-    const staff = await authenticateStaff(c, staff =>
-      staff.role === 'general' ? 'allowed' : 'forbidden',
+    const auth = await authenticateStaff(c, staff =>
+      staff.role === 'general' ? ALLOWED : FORBIDDEN,
     );
-    if (staff instanceof Response) return staff;
-    c.set('staff', staff);
+    if (auth instanceof Response) return auth;
+    c.set('staff', auth.staff);
     await next();
   });
 }
@@ -212,21 +235,48 @@ export function isInScope(
   );
 }
 
+/**
+ * Lets through staff whose scope covers the `:tournamentId` in the path.
+ *
+ * The tournament is read for every role, 統括スタッフ included, and left on
+ * the context as `tournament`, so a handler that needs it doesn't fetch it a
+ * second time -- and can't see a different version of it than the one the
+ * check passed (#123). It is still one read per request: general staff only
+ * skip the scope comparison, not the row.
+ *
+ * A tournament that doesn't exist is a 404 for general staff, who may see
+ * any tournament and so learn nothing from it, but stays a 403 for regional
+ * staff, for whom it is indistinguishable from another region's: telling
+ * the two apart would let them probe which ids exist.
+ */
 export function requireStaffForTournament() {
   return createMiddleware<StaffEnv>(async (c, next) => {
-    const staff = await authenticateStaff(c, async staff => {
-      if (staff.role === 'general') return 'allowed';
-      const {data: tournament, error} = await createDbClient(c.env)
-        .from('tournaments')
-        .select('region_id, type')
-        .eq('id', c.req.param('tournamentId'))
-        .returns<TournamentScopeRow[]>()
-        .maybeSingle();
-      if (error) return 'error';
-      return isInScope(staff, tournament) ? 'allowed' : 'forbidden';
-    });
-    if (staff instanceof Response) return staff;
-    c.set('staff', staff);
+    const auth = await authenticateStaff(
+      c,
+      async (staff): Promise<Authorization<TournamentRow>> => {
+        let tournament: TournamentRow | null;
+        try {
+          tournament = await fetchTournamentById(
+            c.env,
+            c.req.param('tournamentId') ?? '',
+          );
+        } catch (e: unknown) {
+          tournamentLookupFailure(e);
+          return AUTHORIZATION_ERROR;
+        }
+        if (staff.role === 'general') {
+          return tournament
+            ? {decision: 'allowed', scope: tournament}
+            : NOT_FOUND;
+        }
+        return tournament && isInScope(staff, tournament)
+          ? {decision: 'allowed', scope: tournament}
+          : FORBIDDEN;
+      },
+    );
+    if (auth instanceof Response) return auth;
+    c.set('staff', auth.staff);
+    c.set('tournament', auth.scope);
     await next();
   });
 }
@@ -243,21 +293,19 @@ interface EntryScopeRow {
  */
 export function requireStaffForEntry() {
   return createMiddleware<StaffEnv>(async (c, next) => {
-    const staff = await authenticateStaff(c, async staff => {
-      if (staff.role === 'general') return 'allowed';
+    const auth = await authenticateStaff(c, async staff => {
+      if (staff.role === 'general') return ALLOWED;
       const {data: entry, error} = await createDbClient(c.env)
         .from('entries')
         .select('tournaments(region_id, type)')
         .eq('id', c.req.param('entryId'))
         .returns<EntryScopeRow[]>()
         .maybeSingle();
-      if (error) return 'error';
-      return isInScope(staff, entry?.tournaments ?? null)
-        ? 'allowed'
-        : 'forbidden';
+      if (error) return AUTHORIZATION_ERROR;
+      return isInScope(staff, entry?.tournaments ?? null) ? ALLOWED : FORBIDDEN;
     });
-    if (staff instanceof Response) return staff;
-    c.set('staff', staff);
+    if (auth instanceof Response) return auth;
+    c.set('staff', auth.staff);
     await next();
   });
 }
