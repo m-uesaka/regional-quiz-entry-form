@@ -19,9 +19,13 @@ async function isDbReachable(): Promise<boolean> {
   }
 }
 
+// Probed once for the whole file rather than per `describe`, so a run without
+// a database pays for one failed connection instead of one per block.
+const dbReachable = await isDbReachable();
+
 // Requires a running local Supabase instance (`supabase start`); skipped
 // automatically when one isn't reachable, e.g. in CI.
-describe.skipIf(!(await isDbReachable()))(
+describe.skipIf(!dbReachable)(
   'entries table (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);
@@ -87,7 +91,7 @@ describe.skipIf(!(await isDbReachable()))(
 // The default is what the dual-entry rule in `lib/entries.ts` falls back to
 // for every region that predates the column, so it is pinned down here
 // rather than left to the migration being read correctly.
-describe.skipIf(!(await isDbReachable()))(
+describe.skipIf(!dbReachable)(
   'regions table (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);
@@ -120,7 +124,7 @@ describe.skipIf(!(await isDbReachable()))(
 // `createEntry()` checks the rule before inserting, so what is exercised here
 // is the window that check leaves open: an insert that arrives as if a
 // concurrent submission had already taken the region's other seat.
-describe.skipIf(!(await isDbReachable()))(
+describe.skipIf(!dbReachable)(
   'check_region_dual_entry() (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);
@@ -276,7 +280,7 @@ describe.skipIf(!(await isDbReachable()))(
 // is pure SQL living in `supabase/migrations/`, so the aggregation it does
 // for the general-staff dashboard can only be checked against a real
 // Postgres.
-describe.skipIf(!(await isDbReachable()))(
+describe.skipIf(!dbReachable)(
   'tournament_entry_summary() (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);
@@ -426,7 +430,7 @@ describe.skipIf(!(await isDbReachable()))(
 // every tournament, so the account 403s silently instead of failing where it
 // was created — and rows can still be written straight through Supabase,
 // where `StaffAccountCreateInputSchema` isn't in the way.
-describe.skipIf(!(await isDbReachable()))(
+describe.skipIf(!dbReachable)(
   'staff_accounts scope constraint (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);
@@ -522,7 +526,7 @@ describe.skipIf(!(await isDbReachable()))(
 // The half-open priority window is ruled out in the Zod schema as well, but
 // setting regulations straight through SQL stays a supported operation, so
 // the constraint has to hold on its own.
-describe.skipIf(!(await isDbReachable()))(
+describe.skipIf(!dbReachable)(
   'regulations table (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);
@@ -617,7 +621,7 @@ describe.skipIf(!(await isDbReachable()))(
 // multiple selection, `entries.regulation_id` was tied to
 // `regulations (id, tournament_id)`, and dropping that guarantee in the
 // migration would have let an entry claim another tournament's regulation.
-describe.skipIf(!(await isDbReachable()))(
+describe.skipIf(!dbReachable)(
   'entry_regulations table (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);
@@ -781,7 +785,7 @@ describe.skipIf(!(await isDbReachable()))(
 // The database's copy of the entry length limits (migration 0021). The Zod
 // schemas in `packages/shared` are what the API enforces; this check is the
 // backstop for rows written with plain SQL.
-describe.skipIf(!(await isDbReachable()))(
+describe.skipIf(!dbReachable)(
   'entries_text_lengths (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);
@@ -831,8 +835,9 @@ describe.skipIf(!(await isDbReachable()))(
      * Inserts `entry` and returns the SQLSTATE it was refused with, if any.
      * @param entry The columns to insert.
      * @param customFieldValues The `custom_field_values` to insert with it.
-     *     Passed as JSON text and cast in SQL, so the column gets an object
-     *     rather than a JSON string.
+     *     Bound as the object itself: Bun's SQL JSON-encodes a bound string
+     *     once more under `::jsonb`, so passing `JSON.stringify()` output
+     *     would store a JSON string rather than an object.
      */
     async function insertError(
       entry: Record<string, unknown>,
@@ -846,7 +851,7 @@ describe.skipIf(!(await isDbReachable()))(
           ) values (
             ${entry.participant_id}, ${entry.tournament_id}, ${entry.name},
             ${entry.furigana}, ${entry.display_name}, ${entry.free_text ?? null},
-            ${JSON.stringify(customFieldValues)}::jsonb
+            ${customFieldValues}::jsonb
           )
         `;
         return undefined;
@@ -904,3 +909,68 @@ describe.skipIf(!(await isDbReachable()))(
     });
   },
 );
+
+// The indexes added in migration 0022 (and the regulations one from 0014
+// that 0022 deliberately doesn't repeat). Checked by leading column rather
+// than by name, since what matters is whether `where <column> = ?` can use
+// one.
+describe.skipIf(!dbReachable)('indexes (local Supabase integration)', () => {
+  const sql = new SQL(DB_URL);
+
+  afterAll(async () => {
+    await sql.close();
+  });
+
+  /**
+   * Lists the indexes on a table whose leading column is the given one.
+   *
+   * Partial indexes are left out because they only serve queries that
+   * repeat their predicate, and invalid or not-yet-ready ones (a failed
+   * `create index concurrently`) because the planner won't use them.
+   * @param table The table to inspect.
+   * @param column The column the index has to lead with.
+   * @return The names of the matching indexes.
+   */
+  async function indexesLeadingWith(
+    table: string,
+    column: string,
+  ): Promise<string[]> {
+    // `indkey` is an `int2vector`, which is subscripted from 0.
+    const rows = await sql`
+        select i.indexrelid::regclass::text as name
+          from pg_index i
+          join pg_attribute a
+            on a.attrelid = i.indrelid and a.attnum = i.indkey[0]
+          where i.indrelid = ${table}::regclass
+            and a.attname = ${column}
+            and i.indpred is null
+            and i.indisvalid
+            and i.indisready
+      `;
+    return rows.map((row: {name: string}) => row.name);
+  }
+
+  it('email_verification_tokens has an index on entry_id', async () => {
+    const indexes = await indexesLeadingWith(
+      'email_verification_tokens',
+      'entry_id',
+    );
+    expect(indexes.length).toBeGreaterThan(0);
+  });
+
+  it('participants has an index on region_id', async () => {
+    const indexes = await indexesLeadingWith('participants', 'region_id');
+    expect(indexes.length).toBeGreaterThan(0);
+  });
+
+  it('staff_accounts has an index on region_id', async () => {
+    const indexes = await indexesLeadingWith('staff_accounts', 'region_id');
+    expect(indexes.length).toBeGreaterThan(0);
+  });
+
+  it('regulations has exactly one index usable for a tournament_id lookup (no duplicate)', async () => {
+    expect(await indexesLeadingWith('regulations', 'tournament_id')).toEqual([
+      'regulations_tournament_id_display_order_idx',
+    ]);
+  });
+});
