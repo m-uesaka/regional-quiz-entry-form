@@ -16,7 +16,7 @@ import {
   recordMailJobProgress,
 } from '../lib/mail-jobs';
 import {internalError} from '../lib/errors';
-import {sanitizeMailHtml} from '../lib/mail-html';
+import {hasVisibleText, sanitizeMailHtml} from '../lib/mail-html';
 
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 const MailJobParamSchema = TournamentIdParamSchema.extend({
@@ -49,7 +49,7 @@ export const staffMailRoute = new Hono<StaffEnv>()
       // account must not be able to mail every participant arbitrary HTML
       // from the verified sending domain (#122).
       const bodyHtml = sanitizeMailHtml(body);
-      if (bodyHtml.trim() === '') {
+      if (!hasVisibleText(bodyHtml)) {
         return c.json({error: 'mail body is empty after sanitizing'}, 400);
       }
 

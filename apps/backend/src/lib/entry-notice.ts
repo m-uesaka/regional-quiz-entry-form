@@ -1,4 +1,5 @@
 import type {Bindings} from '../types/env';
+import {escapeHtml} from './html';
 import {createMailSender} from './mailer';
 
 /**
@@ -19,19 +20,6 @@ export type EntryNoticeReason =
 
 /** The subject every entry notice is sent under. */
 export const ENTRY_NOTICE_SUBJECT = 'エントリーを受け付けられませんでした';
-
-/**
- * Escapes text for an HTML body. The tournament name is set by staff, not
- * by whoever submitted the form, but it is still text, not markup.
- */
-function escapeHtml(text: string): string {
-  return text
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
 
 /**
  * The paragraphs that explain each reason. Written for the owner of the

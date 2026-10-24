@@ -721,7 +721,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 | `statusFilter` | | `EntryStatus`(`pending_verification` / `confirmed` / `waitlisted` / `cancelled`)。指定するとそのステータスのエントリーだけに絞り込みます |
 
 - `202`: `StaffMailResult` = `{"jobId": string, "accepted": number}`
-- `400`: ボディが `StaffMailInputSchema` に合わない、または許可タグに絞った結果 `body` が空になった(`{"error": "mail body is empty after sanitizing"}`)
+- `400`: ボディが `StaffMailInputSchema` に合わない、または許可タグに絞った結果 `body` に読める文字が残らなかった(空タグと空白だけになった場合を含む。`{"error": "mail body is empty after sanitizing"}`)
 - `401` / `403` / `500`
 
 **`statusFilter` を省略した場合、`cancelled` 以外の全エントリー**が対象です。キャンセルした人に案内を送り続けないためで、キャンセル者に送るには `statusFilter: "cancelled"` を明示する必要があります。

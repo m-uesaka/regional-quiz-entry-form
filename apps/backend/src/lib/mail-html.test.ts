@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'bun:test';
-import {sanitizeMailHtml} from './mail-html';
+import {hasVisibleText, sanitizeMailHtml} from './mail-html';
 
 describe('sanitizeMailHtml', () => {
   it('sanitizeMailHtml strips a script tag', () => {
@@ -80,5 +80,48 @@ describe('sanitizeMailHtml', () => {
     expect(sanitizeMailHtml('<p title="a>b" onclick="x()">本文</p>')).toBe(
       '<p>本文</p>',
     );
+  });
+
+  it('drops only the tag of a self-closing svg, keeping the rest of the body', () => {
+    expect(
+      sanitizeMailHtml('<p><svg viewBox="0 0 1 1"/>集合時間</p><p>以上</p>'),
+    ).toBe('<p>集合時間</p><p>以上</p>');
+  });
+
+  it('still drops the content of an svg that is not self-closing', () => {
+    expect(sanitizeMailHtml('<svg><text>x</text></svg><p>本文</p>')).toBe(
+      '<p>本文</p>',
+    );
+  });
+
+  it('keeps a < that never closes as text', () => {
+    expect(sanitizeMailHtml('A<B の場合')).toBe('A&lt;B の場合');
+    expect(sanitizeMailHtml('<a title="x>本文')).toBe('&lt;a title="x&gt;本文');
+  });
+
+  // Each of these used to send a regular expression back over the rest of
+  // the body from every `<`, which on a 20 000-character body ran to
+  // hundreds of millions of steps.
+  it('handles a body of unclosed markup in linear time', () => {
+    for (const unit of ['<!', '<?', '<a"', "<a'", '<a "x', '<!--', '<a']) {
+      const html = unit.repeat(Math.ceil(20000 / unit.length)) + '>';
+      const started = performance.now();
+
+      sanitizeMailHtml(html);
+
+      expect(performance.now() - started, unit).toBeLessThan(200);
+    }
+  });
+});
+
+describe('hasVisibleText', () => {
+  it('is false for nothing but empty tags and whitespace', () => {
+    expect(hasVisibleText('<p></p>\n<p>&nbsp;<br></p>')).toBe(false);
+  });
+
+  it('is true once any text is left', () => {
+    expect(
+      hasVisibleText('<p><a href="https://example.com/">詳細</a></p>'),
+    ).toBe(true);
   });
 });

@@ -316,6 +316,19 @@ describe('POST /staff/tournaments/:tournamentId/mail', () => {
     expect(queue.sent).toEqual([]);
   });
 
+  it('returns 400 for a body left with nothing but empty tags', async () => {
+    mockFetch({tournament: IN_SCOPE_TOURNAMENT});
+    const cookie = await regionalStaffCookie();
+
+    const res = await postMail(cookie, {
+      ...MAIL_INPUT,
+      body: '<p><img src="https://example.com/a.png"></p><p>&nbsp;</p>',
+    });
+
+    expect(res.status).toBe(400);
+    expect(queue.sent).toEqual([]);
+  });
+
   it('no longer refuses a list over 80 recipients', async () => {
     const recipientCount = 250;
     mockFetch({
