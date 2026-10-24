@@ -1,9 +1,13 @@
 <script lang="ts">
-  import {ENTRY_STATUS_LABELS} from '@regional-quiz/shared';
+  import {ENTRY_STATUS_LABELS, EntryStatusSchema} from '@regional-quiz/shared';
   import Download from '@lucide/svelte/icons/download';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
-  import {buttonVariants} from '$lib/components/ui/atoms/Button.svelte';
+  import Pager from '$lib/components/Pager.svelte';
+  import NativeSelect from '$lib/components/form/NativeSelect.svelte';
+  import Button, {buttonVariants} from '$lib/components/ui/atoms/Button.svelte';
+  import Label from '$lib/components/ui/atoms/Label.svelte';
+  import {pageQuery} from '$lib/pagination';
   import {ENTRY_STATUS_CHIP_VARIANT} from '$lib/entry-status';
   import Chip from '$lib/components/ui/atoms/Chip.svelte';
   import Link from '$lib/components/ui/atoms/Link.svelte';
@@ -21,6 +25,14 @@
   const csvHref = $derived(
     `/api/staff/tournaments/${data.tournament.id}/entries.csv`,
   );
+
+  // Paging keeps the status filter; changing the filter (the form below)
+  // starts again from the first page, since it carries no offset.
+  const hrefFor = (offset: number) =>
+    pageQuery(
+      new URLSearchParams(data.status ? {status: data.status} : {}),
+      offset,
+    );
 </script>
 
 <PageContainer size="wide">
@@ -43,6 +55,23 @@
     レッドシートでは表示されませんが、Numbers やプログラムで読み込むと文字列として残るた
     め、他システムへの取り込みには使えません。
   </p>
+
+  <!-- A plain GET form, so the filter lands in the URL like the pager's
+    offset does and works without JavaScript. -->
+  <form method="GET" class="flex flex-wrap items-end gap-2">
+    <div class="flex flex-col gap-1">
+      <Label for="status-filter">ステータス</Label>
+      <NativeSelect id="status-filter" name="status" value={data.status ?? ''}>
+        <option value="">すべて</option>
+        {#each EntryStatusSchema.options as status (status)}
+          <option value={status}>{ENTRY_STATUS_LABELS[status]}</option>
+        {/each}
+      </NativeSelect>
+    </div>
+    <Button type="submit" variant="secondary" tone="solid" size="medium">
+      絞り込む
+    </Button>
+  </form>
 
   <div class="overflow-x-auto rounded-lg border border-border shadow-xs">
     <Table class="w-full">
@@ -91,4 +120,14 @@
       </tbody>
     </Table>
   </div>
+  {#if data.entries.length === 0}
+    <p class="text-sm text-muted-foreground">該当するエントリーはありません。</p>
+  {/if}
+
+  <Pager
+    total={data.total}
+    limit={data.limit}
+    offset={data.offset}
+    {hrefFor}
+  />
 </PageContainer>

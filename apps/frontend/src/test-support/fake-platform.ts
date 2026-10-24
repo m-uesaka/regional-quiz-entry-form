@@ -25,6 +25,10 @@ export function fakePlatform(options: {failDelete?: boolean} = {}) {
   return {platform, stored, settled: () => Promise.all(pending)};
 }
 
-/** The cache key the public list of tokyo / saikyoi lives under. */
+/**
+ * The cache key of the public list of tokyo / saikyoi's version: the key a
+ * drop deletes, and so the one the tests check (see
+ * `$lib/server/entry-list-cache`).
+ */
 export const TOKYO_SAIKYOI_LIST_KEY =
-  'http://localhost/__cache/entry-list/tokyo/saikyoi';
+  'http://localhost/__cache/entry-list/tokyo/saikyoi/version';

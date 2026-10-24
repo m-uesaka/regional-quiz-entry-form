@@ -68,9 +68,11 @@ export interface Bindings {
 export interface Variables {
   requestId: string;
   // Set by `requireOpenEntryPeriodOrStaff()` (`middleware/entry-period.ts`)
-  // with the row it had to read anyway, so the handler behind it doesn't
-  // fetch the same tournament a second time. Optional because most routes
-  // never run that middleware.
+  // and `requireStaffForTournament()` (`middleware/staff-auth.ts`) with the
+  // row they had to read anyway, so the handler behind them doesn't fetch
+  // the same tournament a second time. Both set it on every path that
+  // reaches the handler, for every role; it is optional only because most
+  // routes run neither middleware.
   tournament?: TournamentRow;
   // Also set by `requireOpenEntryPeriodOrStaff()`, and only on the path it
   // took because the entry period has closed and the caller proved they are

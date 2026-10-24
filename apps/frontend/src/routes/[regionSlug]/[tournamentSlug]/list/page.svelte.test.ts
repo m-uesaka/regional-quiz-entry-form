@@ -13,7 +13,7 @@ describe('list +page.svelte', () => {
     render(Page, {
       props: {
         params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
-        data: {entries: ENTRIES},
+        data: {entries: ENTRIES, total: 2, limit: 100, offset: 0},
         form: null,
       },
     });
@@ -28,7 +28,7 @@ describe('list +page.svelte', () => {
     render(Page, {
       props: {
         params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
-        data: {entries: []},
+        data: {entries: [], total: 0, limit: 100, offset: 0},
         form: null,
       },
     });
@@ -40,5 +40,65 @@ describe('list +page.svelte', () => {
       screen.getByText('まだエントリーはありません。'),
     ).toBeInTheDocument();
     expect(screen.queryByRole('list')).toBeNull();
+  });
+
+  it('the pager renders the total count and disables the previous link on the first page', () => {
+    render(Page, {
+      props: {
+        params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
+        data: {entries: ENTRIES, total: 250, limit: 100, offset: 0},
+        form: null,
+      },
+    });
+
+    expect(screen.getByText('250 件中 1〜100 件')).toBeInTheDocument();
+    expect(screen.getByRole('link', {name: '前へ'})).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    const next = screen.getByRole('link', {name: '次へ'});
+    expect(next).not.toHaveAttribute('aria-disabled');
+    expect(next).toHaveAttribute('href', '?offset=100');
+  });
+
+  it('disables the next link on the last page', () => {
+    render(Page, {
+      props: {
+        params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
+        data: {entries: ENTRIES, total: 250, limit: 100, offset: 200},
+        form: null,
+      },
+    });
+
+    expect(screen.getByText('250 件中 201〜250 件')).toBeInTheDocument();
+    expect(screen.getByRole('link', {name: '次へ'})).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    expect(screen.getByRole('link', {name: '前へ'})).toHaveAttribute(
+      'href',
+      '?offset=100',
+    );
+  });
+
+  it('on a stale page past the last row, says so and leads back to the last real page', () => {
+    render(Page, {
+      props: {
+        params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
+        data: {entries: [], total: 250, limit: 100, offset: 1000},
+        form: null,
+      },
+    });
+
+    expect(
+      screen.getByText('このページにはエントリーがありません。'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('list')).toBeNull();
+    expect(screen.getByText('250 件')).toBeInTheDocument();
+    // Straight to the last page (201–250), not one empty page back.
+    expect(screen.getByRole('link', {name: '前へ'})).toHaveAttribute(
+      'href',
+      '?offset=200',
+    );
   });
 });

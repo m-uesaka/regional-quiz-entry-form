@@ -31,7 +31,8 @@ interface ApiCall {
  * Builds a fake `fetch` answering the regions and tournaments APIs.
  * @param options.status The status to answer a PATCH with.
  * @param options.error The `{error}` message to answer a refusal with.
- * @param options.tournaments What the tournament list should hold.
+ * @param options.tournaments The tournaments `GET /api/tournaments/:id` can
+ *     find.
  * @param options.calls Collects the recorded requests.
  */
 function fakeFetch(
@@ -54,11 +55,15 @@ function fakeFetch(
           : (JSON.parse(String(init.body)) as unknown),
     });
     if (method === 'GET') {
-      return jsonResponse(
-        url.includes('/regions')
-          ? [TOKYO]
-          : (options.tournaments ?? [TOURNAMENT]),
+      if (url.includes('/regions')) {
+        return jsonResponse([TOKYO]);
+      }
+      const tournament = (options.tournaments ?? [TOURNAMENT]).find(
+        t => url === `/api/tournaments/${t.id}`,
       );
+      return tournament
+        ? jsonResponse(tournament)
+        : jsonResponse({error: 'tournament not found'}, 404);
     }
     const status = options.status ?? 200;
     return status >= 400
@@ -129,6 +134,40 @@ describe('admin tournament edit +page.server load', () => {
       tournament: TOURNAMENT,
       regions: [TOKYO],
     });
+  });
+
+  // Not the whole list to `find` the one being edited in (#123).
+  it('load fetches only the tournament it needs', async () => {
+    const calls: ApiCall[] = [];
+
+    await load(buildLoadEvent(fakeFetch({calls})));
+
+    expect(calls.map(call => `${call.method} ${call.url}`).sort()).toEqual([
+      'GET /api/regions',
+      `GET /api/tournaments/${TOURNAMENT.id}`,
+    ]);
+  });
+
+  it('reports an id that is not a UUID as not found, without asking the API', async () => {
+    const calls: ApiCall[] = [];
+    const event = {
+      ...buildLoadEvent(fakeFetch({calls})),
+      params: {id: 'not-a-uuid'},
+    } as Parameters<typeof load>[0];
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 404,
+    } satisfies Partial<HttpError>);
+    expect(calls).toEqual([]);
+  });
+
+  it('does not mistake another refusal of the API for a missing tournament', async () => {
+    const failing = (async () =>
+      jsonResponse({error: 'nope'}, 400)) as unknown as typeof fetch;
+
+    await expect(load(buildLoadEvent(failing))).rejects.toMatchObject({
+      status: 502,
+    } satisfies Partial<HttpError>);
   });
 
   it('reports an id that names no tournament as not found', async () => {
