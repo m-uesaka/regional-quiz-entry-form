@@ -161,6 +161,106 @@ describe('tournaments routes (request validation)', () => {
 // The by-slug read is public only while the entry period is open; outside
 // it, it belongs to the tournament's own staff (`middleware/entry-period.ts`).
 // Mocked rather than run against Supabase so these hold in CI too.
+// Postgres's messages name tables, columns and constraints, so the route
+// answers with its own wording instead (#122). PostgREST is stubbed, so
+// these run without a database.
+describe('tournaments routes (database errors)', () => {
+  const fixedRegionId = '00000000-0000-0000-0000-000000000000';
+  const tournamentId = '11111111-1111-1111-1111-111111111111';
+  const createBody = {
+    regionId: fixedRegionId,
+    type: 'saikyoi',
+    name: 'テスト大会',
+    capacity: null,
+    entryOpensAt: '2026-01-01T00:00:00+09:00',
+    entryClosesAt: '2026-01-31T00:00:00+09:00',
+  };
+
+  /**
+   * Answers every PostgREST write with `error`, as it would a refused
+   * statement.
+   * @param status The HTTP status PostgREST answers with.
+   * @param error The PostgREST error body.
+   */
+  function stubPostgrestError(
+    status: number,
+    error: Record<string, unknown>,
+  ): void {
+    globalThis.fetch = staffSessionAwareFetch((async () =>
+      Response.json(error, {status})) as unknown as typeof fetch);
+  }
+
+  async function request(method: 'POST' | 'PATCH'): Promise<Response> {
+    return app.request(
+      method === 'POST'
+        ? '/api/tournaments'
+        : `/api/tournaments/${tournamentId}`,
+      {
+        method,
+        headers: {
+          cookie: await generalStaffCookie(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(createBody),
+      },
+      env,
+    );
+  }
+
+  it('POST /tournaments does not leak the raw database message on a constraint violation', async () => {
+    stubPostgrestError(409, {
+      code: '23505',
+      message:
+        'duplicate key value violates unique constraint "tournaments_region_id_type_key"',
+      details: 'Key (region_id, type)=(…, saikyoi) already exists.',
+      hint: null,
+    });
+
+    const res = await request('POST');
+    const text = await res.text();
+
+    expect(res.status).toBe(400);
+    expect(JSON.parse(text)).toEqual({
+      error: 'この地域には同じ種別の大会がすでにあります',
+    });
+    expect(text).not.toContain('tournaments_region_id_type_key');
+  });
+
+  it('PATCH /tournaments/:id reports a region that does not exist in Japanese', async () => {
+    stubPostgrestError(409, {
+      code: '23503',
+      message:
+        'insert or update on table "tournaments" violates foreign key constraint "tournaments_region_id_fkey"',
+      details: null,
+      hint: null,
+    });
+
+    const res = await request('PATCH');
+
+    expect(res.status).toBe(400);
+    expect((await res.json()) as unknown).toEqual({
+      error: '指定された地域が存在しません',
+    });
+  });
+
+  it('answers any other database error with a generic 500', async () => {
+    stubPostgrestError(400, {
+      code: '23514',
+      message:
+        'new row for relation "tournaments" violates check constraint "x"',
+      details: null,
+      hint: null,
+    });
+
+    const res = await request('POST');
+
+    expect(res.status).toBe(500);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'internal server error',
+    });
+  });
+});
+
 describe('GET /tournaments/:regionSlug/:tournamentSlug (entry period)', () => {
   const originalFetch = globalThis.fetch;
   const path = '/api/tournaments/some-region/saikyoi';

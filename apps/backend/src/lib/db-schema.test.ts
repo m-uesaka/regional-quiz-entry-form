@@ -777,3 +777,130 @@ describe.skipIf(!(await isDbReachable()))(
     });
   },
 );
+
+// The database's copy of the entry length limits (migration 0021). The Zod
+// schemas in `packages/shared` are what the API enforces; this check is the
+// backstop for rows written with plain SQL.
+describe.skipIf(!(await isDbReachable()))(
+  'entries_text_lengths (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const testEmail = 'db-schema-length-test@example.com';
+    const testRegionSlug = 'db-schema-length-test-region';
+
+    async function cleanup() {
+      await sql`delete from entries where participant_id in (
+        select id from participants where email = ${testEmail}
+      )`;
+      await sql`delete from participants where email = ${testEmail}`;
+      await sql`delete from tournaments where region_id in (
+        select id from regions where slug = ${testRegionSlug}
+      )`;
+      await sql`delete from regions where slug = ${testRegionSlug}`;
+    }
+
+    /** Seeds a tournament and a participant, and returns a valid entry. */
+    async function seedEntry() {
+      const [region] = await sql`
+        insert into regions (slug, name) values (${testRegionSlug}, 'テスト地域')
+        returning id
+      `;
+      const [tournament] = await sql`
+        insert into tournaments (
+          region_id, type, name, entry_opens_at, entry_closes_at
+        ) values (
+          ${region.id}, 'saikyoi', 'テスト大会', now(), now()
+        )
+        returning id
+      `;
+      const [participant] = await sql`
+        insert into participants (region_id, email, password_hash)
+        values (${region.id}, ${testEmail}, 'hash')
+        returning id
+      `;
+      return {
+        participant_id: participant.id as string,
+        tournament_id: tournament.id as string,
+        name: '山田太郎',
+        furigana: 'やまだたろう',
+        display_name: '太郎',
+      };
+    }
+
+    /**
+     * Inserts `entry` and returns the SQLSTATE it was refused with, if any.
+     * @param entry The columns to insert.
+     * @param customFieldValues The `custom_field_values` to insert with it.
+     *     Passed as JSON text and cast in SQL, so the column gets an object
+     *     rather than a JSON string.
+     */
+    async function insertError(
+      entry: Record<string, unknown>,
+      customFieldValues: Record<string, string | string[]> = {},
+    ): Promise<string | undefined> {
+      try {
+        await sql`
+          insert into entries (
+            participant_id, tournament_id, name, furigana, display_name,
+            free_text, custom_field_values
+          ) values (
+            ${entry.participant_id}, ${entry.tournament_id}, ${entry.name},
+            ${entry.furigana}, ${entry.display_name}, ${entry.free_text ?? null},
+            ${JSON.stringify(customFieldValues)}::jsonb
+          )
+        `;
+        return undefined;
+      } catch (error) {
+        return (error as {errno?: string}).errno;
+      }
+    }
+
+    beforeEach(cleanup);
+
+    afterAll(async () => {
+      await cleanup();
+      await sql.close();
+    });
+
+    it('accepts values at the maximum lengths', async () => {
+      const entry = await seedEntry();
+
+      const errno = await insertError(
+        {
+          ...entry,
+          display_name: 'あ'.repeat(100),
+          free_text: 'あ'.repeat(2000),
+        },
+        {
+          note: 'あ'.repeat(2000),
+          allergies: Array.from({length: 4}, () => 'あ'.repeat(2000)),
+        },
+      );
+
+      expect(errno).toBeUndefined();
+    });
+
+    it('entries rejects an over-long display_name', async () => {
+      const entry = await seedEntry();
+
+      const errno = await insertError({
+        ...entry,
+        display_name: 'あ'.repeat(101),
+      });
+
+      // check_violation
+      expect(errno).toBe('23514');
+    });
+
+    it('entries rejects custom field answers over the combined maximum', async () => {
+      const entry = await seedEntry();
+
+      const errno = await insertError(entry, {
+        note: 'あ'.repeat(2000),
+        allergies: Array.from({length: 5}, () => 'あ'.repeat(1601)),
+      });
+
+      expect(errno).toBe('23514');
+    });
+  },
+);

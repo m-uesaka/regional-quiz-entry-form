@@ -4,6 +4,39 @@ import type {FormFieldDef} from '../schemas/form-definition';
 export type CustomFieldValues = Record<string, string | string[]>;
 
 /**
+ * The longest a single custom field answer may be: a `textarea` answer, or
+ * one element of a `checkbox` answer. Without a bound one request could
+ * store megabytes, which the staff list and the CSV export then carry in
+ * full (#122).
+ */
+export const CUSTOM_FIELD_VALUE_MAX_LENGTH = 2_000;
+
+/**
+ * The longest all of an entry's custom field answers may be together, as
+ * counted by `customFieldValuesLength()`. Checked on top of the per-answer
+ * bound because a form may have any number of textarea fields, and a
+ * checkbox answer may repeat an option any number of times.
+ */
+export const CUSTOM_FIELD_VALUES_TOTAL_MAX_LENGTH = 10_000;
+
+/**
+ * The combined length of every answer string in `values`, each element of
+ * a list answer counted separately. Keys are not counted: an answer under a
+ * key the tournament doesn't define is refused on its own
+ * (`findCustomFieldValuesErrors()`).
+ * @param values The submitted answers.
+ */
+export function customFieldValuesLength(values: CustomFieldValues): number {
+  let length = 0;
+  for (const value of Object.values(values)) {
+    for (const element of Array.isArray(value) ? value : [value]) {
+      length += element.length;
+    }
+  }
+  return length;
+}
+
+/**
  * The options a submitted value selects, normalized to a list so every field
  * type can be checked the same way. A `checkbox` answer is already a list
  * (a boolean checkbox stores `[fieldKey]` when checked); a `radio` /
@@ -34,17 +67,20 @@ export function isBooleanCheckbox(fieldDef: FormFieldDef): boolean {
 export const BOOLEAN_CHECKBOX_LABELS = {checked: 'はい', unchecked: 'いいえ'};
 
 /**
- * Why a submitted custom field answer was rejected. Only `required` is
- * something the rendered form lets a participant produce (by submitting
- * before the client bundle has taken the form over, or with JS off — see
- * #95); the rest describe a body the form could never have sent.
+ * Why a submitted custom field answer was rejected. Only `required` and
+ * `too-long` are something the rendered form lets a participant produce
+ * (`required` by submitting before the client bundle has taken the form
+ * over, or with JS off — see #95; `too-long` by pasting past a `maxlength`
+ * the browser didn't enforce); the rest describe a body the form could
+ * never have sent.
  */
 export type CustomFieldValuesErrorReason =
   | 'unknown-field'
   | 'expects-list'
   | 'expects-single'
   | 'required'
-  | 'unknown-option';
+  | 'unknown-option'
+  | 'too-long';
 
 /** The wording each reason is reported to an API client with. */
 const REASON_MESSAGES: Record<CustomFieldValuesErrorReason, string> = {
@@ -53,6 +89,7 @@ const REASON_MESSAGES: Record<CustomFieldValuesErrorReason, string> = {
   'expects-single': 'custom field expects a single value',
   required: 'custom field is required',
   'unknown-option': 'custom field has an unknown option',
+  'too-long': 'custom field answer is too long',
 };
 
 /** A rejected custom field answer: which field, and why. */
@@ -112,6 +149,9 @@ function findFieldError(
   }
 
   const selected = selectedOptions(value);
+  if (selected.some(option => option.length > CUSTOM_FIELD_VALUE_MAX_LENGTH)) {
+    return rejection('too-long', fieldDef.fieldKey);
+  }
   if (fieldDef.required && selected.length === 0) {
     return rejection('required', fieldDef.fieldKey);
   }

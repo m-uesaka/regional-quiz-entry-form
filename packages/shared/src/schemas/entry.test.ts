@@ -1,5 +1,11 @@
 import {describe, expect, it} from 'bun:test';
 import {
+  CUSTOM_FIELD_VALUE_MAX_LENGTH,
+  CUSTOM_FIELD_VALUES_TOTAL_MAX_LENGTH,
+} from '../logic/custom-field-values';
+import {
+  ENTRY_FREE_TEXT_MAX_LENGTH,
+  ENTRY_NAME_MAX_LENGTH,
   EntryEditInputSchema,
   EntryInputSchema,
   EntrySchema,
@@ -68,6 +74,125 @@ describe('EntryInputSchema', () => {
   });
 });
 
+describe('EntryInputSchema length limits', () => {
+  const VALID_ENTRY = {
+    name: '山田太郎',
+    furigana: 'やまだたろう',
+    displayName: '太郎',
+    email: 'taro@example.com',
+    password: 'quiz-pass-one',
+    passwordConfirm: 'quiz-pass-one',
+    regulationIds: ['00000000-0000-0000-0000-000000000000'],
+    customFieldValues: {},
+  };
+
+  it('accepts a name at the maximum length', () => {
+    const result = EntryInputSchema.safeParse({
+      ...VALID_ENTRY,
+      name: 'あ'.repeat(ENTRY_NAME_MAX_LENGTH),
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a name over the maximum length', () => {
+    const result = EntryInputSchema.safeParse({
+      ...VALID_ENTRY,
+      name: 'あ'.repeat(ENTRY_NAME_MAX_LENGTH + 1),
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.flatten().fieldErrors).toEqual({
+        name: [`氏名は${ENTRY_NAME_MAX_LENGTH}文字以内で入力してください`],
+      });
+    }
+  });
+
+  it('rejects a furigana and display name over the maximum length', () => {
+    const result = EntryInputSchema.safeParse({
+      ...VALID_ENTRY,
+      furigana: 'あ'.repeat(ENTRY_NAME_MAX_LENGTH + 1),
+      displayName: 'あ'.repeat(ENTRY_NAME_MAX_LENGTH + 1),
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(Object.keys(result.error.flatten().fieldErrors)).toEqual([
+        'furigana',
+        'displayName',
+      ]);
+    }
+  });
+
+  it('rejects free text over the maximum length', () => {
+    const result = EntryInputSchema.safeParse({
+      ...VALID_ENTRY,
+      freeText: 'あ'.repeat(ENTRY_FREE_TEXT_MAX_LENGTH + 1),
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.flatten().fieldErrors).toEqual({
+        freeText: [
+          `自由記述は${ENTRY_FREE_TEXT_MAX_LENGTH}文字以内で入力してください`,
+        ],
+      });
+    }
+  });
+
+  it('rejects a custom field answer over the per-answer maximum', () => {
+    const result = EntryInputSchema.safeParse({
+      ...VALID_ENTRY,
+      customFieldValues: {
+        note: 'あ'.repeat(CUSTOM_FIELD_VALUE_MAX_LENGTH + 1),
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects custom field answers over the combined maximum', () => {
+    // Every answer is within the per-answer bound; only their sum is not.
+    const count =
+      Math.floor(
+        CUSTOM_FIELD_VALUES_TOTAL_MAX_LENGTH / CUSTOM_FIELD_VALUE_MAX_LENGTH,
+      ) + 1;
+    const customFieldValues = Object.fromEntries(
+      Array.from({length: count}, (_, i) => [
+        `note_${i}`,
+        'あ'.repeat(CUSTOM_FIELD_VALUE_MAX_LENGTH),
+      ]),
+    );
+
+    const result = EntryInputSchema.safeParse({
+      ...VALID_ENTRY,
+      customFieldValues,
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.flatten().fieldErrors.customFieldValues).toEqual([
+        `追加項目の回答は合計${CUSTOM_FIELD_VALUES_TOTAL_MAX_LENGTH}文字以内で入力してください`,
+      ]);
+    }
+  });
+
+  it('rejects a checkbox answer that repeats an option past the combined maximum', () => {
+    const result = EntryInputSchema.safeParse({
+      ...VALID_ENTRY,
+      customFieldValues: {
+        allergies: Array.from(
+          {length: CUSTOM_FIELD_VALUES_TOTAL_MAX_LENGTH + 1},
+          () => '卵',
+        ),
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
+
 describe('EntryInputSchema password', () => {
   // The same field is how a returning participant proves an existing
   // password, which may predate the common-password rule; the backend
@@ -124,6 +249,26 @@ describe('EntryEditInputSchema', () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it('applies the same length limits as the entry form', () => {
+    const result = EntryEditInputSchema.safeParse({
+      ...BASE_EDIT,
+      displayName: 'あ'.repeat(ENTRY_NAME_MAX_LENGTH + 1),
+      freeText: 'あ'.repeat(ENTRY_FREE_TEXT_MAX_LENGTH + 1),
+      customFieldValues: {
+        note: 'あ'.repeat(CUSTOM_FIELD_VALUES_TOTAL_MAX_LENGTH + 1),
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(Object.keys(result.error.flatten().fieldErrors)).toEqual([
+        'displayName',
+        'freeText',
+        'customFieldValues',
+      ]);
+    }
   });
 });
 

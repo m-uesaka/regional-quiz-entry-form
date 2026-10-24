@@ -94,6 +94,40 @@ bunx supabase db push --linked
 
 順序の入れ替わりが意図通りであれば `--include-all` を付けて適用します。意図通りでない(= 実際に順序依存がある)場合は、マイグレーションファイルを rebase してタイムスタンプを振り直してください。**production で `--include-all` に頼るのは避け、production に到達する前に staging で解消しておきます。**
 
+### 5.2 入力長の上限を張る前の確認
+
+`0021_entry_text_length_limits.sql` は `entries` の文字列項目に長さの check 制約(`entries_text_lengths`)を張ります(#122)。それ以前の行は上限なしで書かれているため、超えている行が 1 件でもあるとマイグレーションは件数と項目名を添えて失敗し、デプロイが止まります。`not valid` で既存行を見逃さないのは、見逃した行がエントリー編集で値をそのまま書き戻しただけで制約にかかり、参加者に 500 として見えるためです。
+
+**このマイグレーションを含むリリースを staging / production に流す前に**、それぞれのプロジェクトの SQL Editor で次を実行し、0 件であることを確認してください(改行は CRLF で保存されている場合 1 つにつき 2 文字と数えられます)。
+
+```sql
+select id,
+       char_length(name) as name,
+       char_length(furigana) as furigana,
+       char_length(display_name) as display_name,
+       char_length(free_text) as free_text
+from entries
+where char_length(name) > 100
+   or char_length(furigana) > 100
+   or char_length(display_name) > 100
+   or char_length(free_text) > 2000;
+```
+
+`custom_field_values`(回答の合計 10000 文字)はマイグレーションが作る関数で数えるため、事前には次で確認します。
+
+```sql
+select e.id, sum(char_length(v.element)) as total
+from entries e
+cross join lateral jsonb_each(e.custom_field_values) as f (key, value)
+cross join lateral jsonb_array_elements_text(
+  case jsonb_typeof(f.value) when 'array' then f.value else jsonb_build_array(f.value) end
+) as v (element)
+group by e.id
+having sum(char_length(v.element)) > 10000;
+```
+
+該当行があれば、参加者・地域スタッフと相談のうえ値を短くしてから(CRLF は `replace(free_text, E'\r\n', E'\n')` で 1 文字にできます)デプロイしてください。
+
 ## 6. 環境変数・シークレット管理
 
 ### 6.1 Supabase 側の値

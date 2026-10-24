@@ -222,13 +222,14 @@ required={hydrated && field.required && !hasCheckboxSelection}
 | `checkbox` 以外の値が配列でない | `expects-single` | `custom field expects a single value: {key}` |
 | 必須項目が空でない | `required` | `custom field is required: {key}` |
 | 選択肢が定義内の値である | `unknown-option` | `custom field has an unknown option: {key}` |
+| 回答(`checkbox` は各要素)が `CUSTOM_FIELD_VALUE_MAX_LENGTH`(2000 文字)以内である | `too-long` | `custom field answer is too long: {key}` |
 
 戻り値は `CustomFieldValuesError`(`{reason, fieldKey, message}`)か `null` です。API が答えるのは `message` の英語識別子だけですが、`reason` と `fieldKey` があるのは、フロントエンドの form action が同じ関数で検証した結果を**日本語で、しかも該当項目の直下に**出せるようにするためです(`customFieldErrors()` / `apps/frontend/src/lib/server/custom-field-values.ts`)。
 
 補足:
 
 - キーが存在しない場合は「空の回答」として扱われ、必須項目のときだけエラーになります。
-- `textarea` は自由記述なので選択肢の照合をスキップします。
+- `textarea` は自由記述なので選択肢の照合をスキップします。長さの上限(`too-long`)だけは見ます。フォームの `<textarea>` にも同じ値の `maxlength` を付けています。
 - 単独ブールチェックボックス(`options` が**省略されているか空配列**の `checkbox`)は、「自分のキー1つだけを選択肢に持つ」ものとして照合されます。つまり `[field.key]` か `[]` 以外は弾かれます。
 - `checkbox` にスカラー値が来た場合は、選択肢の照合自体は通ってしまうものの弾いています。保存できてしまうと、エントリーを開き直したときに描画側(配列しか見ない)が選択を認識できず、回答が黙って消えたように見えるためです。
 
@@ -236,7 +237,7 @@ required={hydrated && field.required && !hasCheckboxSelection}
 
 この照合は Zod スキーマの検証を短絡させず、**両方の結果をまとめて1回で返します**。ブラウザ側の検証が一切効かない(ハイドレーション前・JS 無効の)送信こそこの照合の対象なので、1項目ずつ突き返すと往復のたびにエラーが1つずつしか分かりません。エントリーフォームはパスワード2欄を再表示しない方針なので、往復のたびにパスワードの打ち直しを強いることにもなります。
 
-`EntryInputSchema` / `EntryEditInputSchema` の `z.record()` は形(`Record<string, string | string[]>`)しか見ないため、大会のフォーム定義との照合はこの関数が担っています。新しい入力形式を足すときに `findFieldError()`(`findCustomFieldValuesError()` / `findCustomFieldValuesErrors()` の中身)の更新を忘れると、その形式だけ素通りする点に注意してください。
+`EntryInputSchema` / `EntryEditInputSchema` の `customFieldValues`(`CustomFieldValuesInputSchema`)は形(`Record<string, string | string[]>`)と長さしか見ないため、大会のフォーム定義との照合はこの関数が担っています。長さは**回答 1 件 2000 文字**(`CUSTOM_FIELD_VALUE_MAX_LENGTH`)と**全回答の合計 10000 文字**(`CUSTOM_FIELD_VALUES_TOTAL_MAX_LENGTH`。`customFieldValuesLength()` で数え、キーは数えない)の両方を見ます(#122)。合計を別に見るのは、textarea 項目がいくつあってもよく、`checkbox` の回答は同じ選択肢を何度でも繰り返せるためです。合計の超過はどの項目のせいとも言えないので、フォームでは追加項目の下にまとめて出します。DB にも同じ合計の check 制約があります([`database-schema.md`](./database-schema.md) の `entries`)。新しい入力形式を足すときに `findFieldError()`(`findCustomFieldValuesError()` / `findCustomFieldValuesErrors()` の中身)の更新を忘れると、その形式だけ素通りする点に注意してください。
 
 `createEntry()` はこの照合をレギュレーション検証の直後、participant の検索・作成より**前**に行います。フォームからは生成し得ない回答を弾くついでにアカウントだけが作られる、という副作用を残さないためです。
 

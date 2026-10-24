@@ -1,5 +1,8 @@
 <script lang="ts">
-  import type {FormFieldDefYaml} from '@regional-quiz/shared';
+  import {
+    CUSTOM_FIELD_VALUE_MAX_LENGTH,
+    type FormFieldDefYaml,
+  } from '@regional-quiz/shared';
   import {customFieldName} from '$lib/custom-field-name';
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import Textarea from '$lib/components/ui/atoms/Textarea.svelte';
@@ -87,6 +90,8 @@
       id={controlName}
       name={controlName}
       required={field.required}
+      maxlength={CUSTOM_FIELD_VALUE_MAX_LENGTH}
+      isError={!!error}
       bind:value
     />
     {@render errorMessage()}

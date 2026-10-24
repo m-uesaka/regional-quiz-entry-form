@@ -8,7 +8,9 @@ import {
 import {createApiClient} from '$lib/api';
 import {
   customFieldErrors,
+  entrySchemaFieldErrors,
   readCustomFieldValues,
+  readFormText,
 } from '$lib/server/custom-field-values';
 import {redirectToParticipantLogin} from '$lib/server/participant-session';
 import type {EntryEditFormValues} from '$lib/types/entry-form';
@@ -89,7 +91,7 @@ export const actions = {
     const {formFieldDefs} = await detailRes.json();
 
     const formData = await request.formData();
-    const freeText = String(formData.get('freeText') ?? '');
+    const freeText = readFormText(formData, 'freeText');
     // Echoed back with every failure so a rejected submission re-renders
     // what the participant typed instead of resetting to the stored entry.
     const values: EntryEditFormValues = {
@@ -118,12 +120,14 @@ export const actions = {
 
     // Both checks are reported together rather than the custom fields
     // short-circuiting the schema, so every rejected field is marked in one
-    // round trip instead of one per submission.
+    // round trip instead of one per submission. The custom fields' messages
+    // are keyed by their namespaced control names, so they can't collide
+    // with the schema's.
     if (!parsed.success || customFieldValuesErrors.length > 0) {
-      const fieldErrors: EditFieldErrors = customFieldErrors(
-        customFieldValuesErrors,
-        formFieldDefs,
-      );
+      const fieldErrors: EditFieldErrors = {
+        ...(parsed.success ? {} : entrySchemaFieldErrors(parsed.error.issues)),
+        ...customFieldErrors(customFieldValuesErrors, formFieldDefs),
+      };
       return fail(400, {
         error: '入力内容を確認してください',
         fieldErrors,
