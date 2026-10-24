@@ -573,11 +573,14 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 
 ### `GET /api/tournaments/:tournamentId/entry-list`
 
-認証不要の公開エンドポイント。`created_at` 昇順で返します。
+認証不要の公開エンドポイント。`created_at, id` 昇順で、**1ページ分**を返します。
 
-- `200`: `EntryListItem[]` — `{displayName: string, status: 'confirmed' | 'waitlisted' | 'cancelled', waitlistPosition: number | null}`
-- `400`: `:tournamentId` が UUID でない
+- クエリ: `PageQuerySchema` — `limit`(1〜500、既定 100)/ `offset`(0 以上、既定 0)
+- `200`: `{items: EntryListItem[], total: number, limit: number, offset: number}` — `EntryListItem` は `{displayName: string, status: 'confirmed' | 'waitlisted' | 'cancelled', waitlistPosition: number | null}`。`total` は条件に合う全件数で、ページ本体と同じクエリ(`count: 'exact'`)で取ります。最終行を越えた `offset` には空の `items` と `total` を返します(PostgREST の 416 を空ページとして扱う)
+- `400`: `:tournamentId` が UUID でない、`limit` / `offset` が範囲外
 - `500`
+
+全件を返さないのは、リスト画面の `load` の戻り値が SSR された HTML に埋め込まれるためです。全件だと定員の大きい地域ほどページが重くなり、締切直前のアクセス集中時に効いてきます。並び順は `created_at, id` で全順序になっているので、オフセットでもページ境界で行が重複・欠落しません。
 
 エントリー期間のゲート(`requireOpenEntryPeriodOrStaff()`)は**意図的に掛けていません**。エントリーリストは公開された結果であり、最も読まれるのは期間が終わった後だからです。
 
@@ -586,7 +589,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 上と同じものを、公開 URL と同じスラッグの組で引くルート。リスト画面用です。大会取得 API で UUID を解決してから上を叩く形はもう使えません — 大会取得 API はエントリー期間のゲートの後ろにあり、期間終了後にはスタッフ以外を拒むためです。
 
 - パス: `tournamentSlug` は `'saikyoi' | 'shinjinou'`
-- `200`: `EntryListItem[]`
+- クエリ / `200`: 上と同じ(`{items: EntryListItem[], total, limit, offset}`)
 - `404`: `{"error": "tournament not found"}`(地域が無い場合も同じ応答)
 - `500`
 
@@ -665,15 +668,17 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 ### `GET /api/staff/tournaments/:tournamentId/entries`
 
-- `200`: `Entry[]`(`created_at` 昇順)
+- クエリ: `StaffEntryListQuerySchema` — `limit` / `offset`(公開エントリーリストと同じ `PageQuerySchema`)に加えて、任意の `status`(`EntryStatus` のいずれか)。指定するとそのステータスのエントリーだけに絞り込み、`total` も絞り込み後の件数になります
+- `200`: `{items: Entry[], total: number, limit: number, offset: number}`(`created_at, id` 昇順)
 
 `Entry` は `id` / `tournamentId` / `name` / `furigana` / `displayName` / `email` / `regulationIds` / `regulationLabels` / `freeText` / `customFieldValues` / `status` / `waitlistPosition` を含みます。`email` は `participants` の、`regulationIds` / `regulationLabels` は `entry_regulations` 経由の JOIN 結果で、大会の `display_order` 昇順に揃えて返します(1エントリーが複数のレギュレーションを選べるため配列)。
 
+- `400`: `limit` / `offset` が範囲外、または `status` が未知の値
 - `401` / `403` / `500`
 
 ### `GET /api/staff/tournaments/:tournamentId/entries.csv`
 
-エントリー一覧の CSV エクスポート。一覧エンドポイントと同じ範囲(当該大会の全エントリー、`created_at` 昇順)を CSV で返します。
+エントリー一覧の CSV エクスポート。一覧エンドポイントと違いページングも絞り込みもせず、当該大会の**全エントリー**(`created_at, id` 昇順)を CSV で返します(全件を手元に落とすのがこのエクスポートの用途のため。内部では `fetchAllRows()` で 500 件ずつ集めます)。
 
 - `200`: `text/csv; charset=utf-8` / `Content-Disposition: attachment; filename="entries-<tournamentId>.csv"`
 - `401` / `403` / `500`

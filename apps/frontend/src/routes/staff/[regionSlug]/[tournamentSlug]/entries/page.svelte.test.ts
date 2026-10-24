@@ -1,4 +1,4 @@
-import {render, screen} from '@testing-library/svelte';
+import {render, screen, within} from '@testing-library/svelte';
 import {describe, expect, it} from 'vitest';
 import type {Entry, Tournament} from '@regional-quiz/shared';
 import Page from './+page.svelte';
@@ -54,6 +54,10 @@ describe('staff entries +page.svelte', () => {
           isGeneralStaff: false,
           tournament: TOURNAMENT,
           entries: ENTRIES,
+          total: ENTRIES.length,
+          limit: 100,
+          offset: 0,
+          status: null,
         },
         form: null,
       },
@@ -61,9 +65,10 @@ describe('staff entries +page.svelte', () => {
 
     expect(screen.getByText('山田太郎')).toBeInTheDocument();
     expect(screen.getByText('ヤマダタロウ')).toBeInTheDocument();
-    expect(screen.getByText(/キャンセル待ち/)).toHaveTextContent(
-      'キャンセル待ち (2番目)',
-    );
+    // Scoped to the table: the status filter offers キャンセル待ち too.
+    expect(
+      within(screen.getByRole('table')).getByText(/キャンセル待ち/),
+    ).toHaveTextContent('キャンセル待ち (2番目)');
   });
 
   it('links to the CSV export for this tournament', () => {
@@ -75,6 +80,10 @@ describe('staff entries +page.svelte', () => {
           isGeneralStaff: false,
           tournament: TOURNAMENT,
           entries: ENTRIES,
+          total: ENTRIES.length,
+          limit: 100,
+          offset: 0,
+          status: null,
         },
         form: null,
       },
@@ -97,6 +106,10 @@ describe('staff entries +page.svelte', () => {
           isGeneralStaff: false,
           tournament: TOURNAMENT,
           entries: ENTRIES,
+          total: ENTRIES.length,
+          limit: 100,
+          offset: 0,
+          status: null,
         },
         form: null,
       },
@@ -116,6 +129,10 @@ describe('staff entries +page.svelte', () => {
           isGeneralStaff: false,
           tournament: TOURNAMENT,
           entries: ENTRIES,
+          total: ENTRIES.length,
+          limit: 100,
+          offset: 0,
+          status: null,
         },
         form: null,
       },
@@ -126,5 +143,73 @@ describe('staff entries +page.svelte', () => {
       'href',
       `/staff/tokyo/saikyoi/entries/${ENTRIES[0].id}`,
     );
+  });
+
+  it('keeps the status filter in the pager links', () => {
+    render(Page, {
+      props: {
+        params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
+        data: {
+          loggedIn: true,
+          isGeneralStaff: false,
+          tournament: TOURNAMENT,
+          entries: ENTRIES,
+          total: 250,
+          limit: 100,
+          offset: 100,
+          status: 'waitlisted',
+        },
+        form: null,
+      },
+    });
+
+    expect(screen.getByText('250 件中 101〜200 件')).toBeInTheDocument();
+    expect(screen.getByRole('link', {name: '次へ'})).toHaveAttribute(
+      'href',
+      '?status=waitlisted&offset=200',
+    );
+    expect(screen.getByRole('link', {name: '前へ'})).toHaveAttribute(
+      'href',
+      '?status=waitlisted',
+    );
+    expect(screen.getByRole('combobox', {name: 'ステータス'})).toHaveValue(
+      'waitlisted',
+    );
+  });
+
+  it('offers every status, and all of them, in the filter', () => {
+    render(Page, {
+      props: {
+        params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
+        data: {
+          loggedIn: true,
+          isGeneralStaff: false,
+          tournament: TOURNAMENT,
+          entries: [],
+          total: 0,
+          limit: 100,
+          offset: 0,
+          status: null,
+        },
+        form: null,
+      },
+    });
+
+    const select = screen.getByRole('combobox', {
+      name: 'ステータス',
+    });
+    expect(select).toHaveValue('');
+    expect(
+      Array.from(select.querySelectorAll('option'), option => option.text),
+    ).toEqual([
+      'すべて',
+      'メール確認待ち',
+      '確定',
+      'キャンセル待ち',
+      'キャンセル',
+    ]);
+    expect(
+      screen.getByText('該当するエントリーはありません。'),
+    ).toBeInTheDocument();
   });
 });
