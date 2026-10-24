@@ -904,3 +904,68 @@ describe.skipIf(!(await isDbReachable()))(
     });
   },
 );
+
+// The indexes added in migration 0022 (and the regulations one from 0014
+// that 0022 deliberately doesn't repeat). Checked by leading column rather
+// than by name, since what matters is whether `where <column> = ?` can use
+// one.
+describe.skipIf(!(await isDbReachable()))(
+  'indexes (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+
+    afterAll(async () => {
+      await sql.close();
+    });
+
+    /**
+     * Lists the indexes on a table whose leading column is the given one.
+     * @param table The table to inspect.
+     * @param column The column the index has to lead with.
+     * @return The names of the matching indexes.
+     */
+    async function indexesLeadingWith(
+      table: string,
+      column: string,
+    ): Promise<string[]> {
+      const rows = await sql`
+        select i.indexrelid::regclass::text as name
+          from pg_index i
+          join pg_attribute a
+            on a.attrelid = i.indrelid and a.attnum = i.indkey[0]
+          where i.indrelid = ${table}::regclass and a.attname = ${column}
+      `;
+      return rows.map((row: {name: string}) => row.name);
+    }
+
+    it('email_verification_tokens has an index on entry_id', async () => {
+      expect(
+        await indexesLeadingWith('email_verification_tokens', 'entry_id'),
+      ).toHaveLength(1);
+    });
+
+    it('participants has an index on region_id', async () => {
+      expect(
+        await indexesLeadingWith('participants', 'region_id'),
+      ).toHaveLength(1);
+    });
+
+    it('staff_accounts has an index on region_id', async () => {
+      expect(
+        await indexesLeadingWith('staff_accounts', 'region_id'),
+      ).toHaveLength(1);
+    });
+
+    it('regulations has an index usable for a tournament_id lookup', async () => {
+      expect(
+        await indexesLeadingWith('regulations', 'tournament_id'),
+      ).toContain('regulations_tournament_id_display_order_idx');
+    });
+
+    it('no duplicate index is created for regulations', async () => {
+      expect(
+        await indexesLeadingWith('regulations', 'tournament_id'),
+      ).toHaveLength(1);
+    });
+  },
+);
