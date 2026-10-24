@@ -114,17 +114,22 @@ const FORM_FIELD_DEF_ROWS = [
   },
 ];
 
+/** What `requireStaffForTournament()`'s tournament read finds. */
+const TOURNAMENT_PAGE = [{region_id: REGION_ID, type: 'saikyoi'}];
+
 /**
  * Mocks the sequence of `fetch` calls Supabase's REST client makes,
  * returning each `responses` entry's body in order (one per call). A
  * scope-checked request under `requireStaffForTournament()` /
  * `requireStaffForEntry()` makes one call for the scope lookup followed by
- * one for the route handler's own query; general staff skip the scope
- * lookup and only trigger the second. The single-entry detail route makes
- * one further call after that to fetch the tournament's form field defs.
- * An array body also carries the `Content-Range` total PostgREST sends,
- * which supabase-js only reads for an exact-count query such as the
- * paginated list's.
+ * one for the route handler's own query. `requireStaffForTournament()`
+ * reads the tournament for general staff too (it hands the row to the
+ * handler, #123), so those requests start with `TOURNAMENT_PAGE` as well;
+ * `requireStaffForEntry()` skips its lookup for them. The single-entry
+ * detail route makes one further call after that to fetch the tournament's
+ * form field defs. An array body also carries the `Content-Range` total
+ * PostgREST sends, which supabase-js only reads for an exact-count query
+ * such as the paginated list's.
  */
 function mockSequentialFetch(responses: unknown[]): void {
   let callIndex = 0;
@@ -147,11 +152,12 @@ interface EntryListPage {
 }
 
 /**
- * Mocks the entries list request for general staff (who skip the scope
- * lookup) the way PostgREST answers an exact-count query over `rows`: the
- * requested `offset` / `limit` slice, with the total in `Content-Range`.
- * Each request's URL is recorded, so tests can see the filter and page
- * that were asked for.
+ * Mocks the entries list request for general staff the way PostgREST
+ * answers an exact-count query over `rows`: the requested `offset` /
+ * `limit` slice, with the total in `Content-Range`. The guard's tournament
+ * read that comes first is answered with `TOURNAMENT_PAGE`. Each entries
+ * request's URL is recorded, so tests can see the filter and page that
+ * were asked for.
  * @param rows Every row the query would match.
  */
 function mockEntriesListFetch(rows: unknown[]): URL[] {
@@ -160,6 +166,9 @@ function mockEntriesListFetch(rows: unknown[]): URL[] {
     const url = new URL(
       input instanceof Request ? input.url : input.toString(),
     );
+    if (url.pathname.endsWith('/tournaments')) {
+      return Promise.resolve(Response.json(TOURNAMENT_PAGE));
+    }
     requests.push(url);
     const offset = Number(url.searchParams.get('offset') ?? 0);
     const limit = Number(url.searchParams.get('limit') ?? rows.length);
@@ -322,7 +331,7 @@ describe('GET /staff/tournaments/:id/entries (mocked Supabase)', () => {
   });
 
   it('allows general staff for any tournament', async () => {
-    mockSequentialFetch([[FULL_ENTRY_ROW]]);
+    mockSequentialFetch([TOURNAMENT_PAGE, [FULL_ENTRY_ROW]]);
     const cookie = await generalStaffCookie();
 
     const res = await app.request(
@@ -395,7 +404,7 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
   });
 
   it('returns a header-only CSV when the tournament has no entries', async () => {
-    mockSequentialFetch([[], FORM_FIELD_DEF_ROWS]);
+    mockSequentialFetch([TOURNAMENT_PAGE, [], FORM_FIELD_DEF_ROWS]);
     const cookie = await generalStaffCookie();
 
     const res = await app.request(
@@ -420,6 +429,7 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
       name: `参加者${index}`,
     }));
     mockSequentialFetch([
+      TOURNAMENT_PAGE,
       firstPage,
       [{...CSV_ENTRY_ROW, name: '参加者500'}],
       [],
@@ -439,6 +449,35 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
     expect(lines).toHaveLength(502);
     expect(lines[1].startsWith('参加者0,')).toBe(true);
     expect(lines[501].startsWith('参加者500,')).toBe(true);
+  });
+
+  it('keeps paging when the server hands back a smaller page than asked for', async () => {
+    // A deployment whose `max_rows` is below the requested page size trims
+    // every response, so the first batch is short without the entries being
+    // exhausted. Ending the export there would drop the rest.
+    mockSequentialFetch([
+      TOURNAMENT_PAGE,
+      [
+        {...CSV_ENTRY_ROW, name: '参加者0'},
+        {...CSV_ENTRY_ROW, name: '参加者1'},
+      ],
+      [{...CSV_ENTRY_ROW, name: '参加者2'}],
+      [],
+      FORM_FIELD_DEF_ROWS,
+    ]);
+    const cookie = await generalStaffCookie();
+
+    const res = await app.request(
+      `/api/staff/tournaments/${TOURNAMENT_ID}/entries.csv`,
+      {headers: {cookie}},
+      ENV,
+    );
+    const lines = (await res.text()).slice(1).split('\r\n');
+
+    expect(res.status).toBe(200);
+    // One header line plus every row of all three trimmed pages.
+    expect(lines).toHaveLength(4);
+    expect(lines[3].startsWith('参加者2,')).toBe(true);
   });
 
   it('returns 401 without a staff session', async () => {

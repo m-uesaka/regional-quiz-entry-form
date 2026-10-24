@@ -15,7 +15,7 @@ import {fetchPage, toPageResponse} from '../lib/paged-select';
 import {internalError} from '../lib/errors';
 import {
   fetchTournamentBySlug,
-  TournamentLookupError,
+  tournamentLookupFailure,
   type TournamentRow,
 } from '../lib/tournaments';
 
@@ -118,11 +118,7 @@ export const entryListRoute = new Hono<Env>()
           tournamentSlug,
         );
       } catch (e: unknown) {
-        const cause = e instanceof TournamentLookupError ? e.cause : e;
-        return c.json(
-          internalError('failed to read the tournament', cause),
-          500,
-        );
+        return c.json(tournamentLookupFailure(e), 500);
       }
       if (!tournament) {
         return c.json({error: 'tournament not found'}, 404);
