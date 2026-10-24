@@ -13,7 +13,7 @@
 
 <PageContainer>
   <PageHeader title="エントリーリスト" />
-  {#if data.total > 0}
+  {#if data.entries.length > 0}
     <Card class="py-3">
       <ul class="divide-y divide-border">
         {#each data.entries as entry, i (i)}
@@ -28,15 +28,23 @@
         {/each}
       </ul>
     </Card>
+  {:else}
+    <!-- With entries but none on this page, the URL is a stale or
+         hand-edited one past the last page; the pager below leads back. -->
+    <Card>
+      <p class="text-sm text-muted-foreground">
+        {data.total > 0
+          ? 'このページにはエントリーがありません。'
+          : 'まだエントリーはありません。'}
+      </p>
+    </Card>
+  {/if}
+  {#if data.total > 0}
     <Pager
       total={data.total}
       limit={data.limit}
       offset={data.offset}
       {hrefFor}
     />
-  {:else}
-    <Card>
-      <p class="text-sm text-muted-foreground">まだエントリーはありません。</p>
-    </Card>
   {/if}
 </PageContainer>

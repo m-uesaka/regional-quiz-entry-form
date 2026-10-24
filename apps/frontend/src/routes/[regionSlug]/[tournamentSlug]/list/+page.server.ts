@@ -33,11 +33,6 @@ export const load: PageServerLoad = async ({params, fetch, url}) => {
     throw error(502, 'エントリーリストの取得に失敗しました');
   }
 
-  const page = await res.json();
-  return {
-    entries: page.items,
-    total: page.total,
-    limit: page.limit,
-    offset: page.offset,
-  };
+  const {items, ...paging} = await res.json();
+  return {entries: items, ...paging};
 };

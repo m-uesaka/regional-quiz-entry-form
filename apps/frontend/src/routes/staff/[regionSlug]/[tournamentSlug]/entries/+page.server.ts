@@ -81,13 +81,6 @@ export const load: PageServerLoad = async ({
     throw error(502, 'エントリー情報の取得に失敗しました');
   }
 
-  const page = await entriesRes.json();
-  return {
-    tournament,
-    entries: page.items,
-    total: page.total,
-    limit: page.limit,
-    offset: page.offset,
-    status,
-  };
+  const {items, ...paging} = await entriesRes.json();
+  return {tournament, entries: items, ...paging, status};
 };

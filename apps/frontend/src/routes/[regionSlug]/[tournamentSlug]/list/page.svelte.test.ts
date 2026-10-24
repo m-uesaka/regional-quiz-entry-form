@@ -80,4 +80,25 @@ describe('list +page.svelte', () => {
       '?offset=100',
     );
   });
+
+  it('on a stale page past the last row, says so and leads back to the last real page', () => {
+    render(Page, {
+      props: {
+        params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
+        data: {entries: [], total: 250, limit: 100, offset: 1000},
+        form: null,
+      },
+    });
+
+    expect(
+      screen.getByText('このページにはエントリーがありません。'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('list')).toBeNull();
+    expect(screen.getByText('250 件')).toBeInTheDocument();
+    // Straight to the last page (201–250), not one empty page back.
+    expect(screen.getByRole('link', {name: '前へ'})).toHaveAttribute(
+      'href',
+      '?offset=200',
+    );
+  });
 });

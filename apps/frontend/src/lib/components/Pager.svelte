@@ -21,6 +21,14 @@ each page has its own URL; the page's `load` reads the offset back off it.
   let {total, limit, offset, hrefFor}: Props = $props();
 
   const hasPrevious = $derived(offset > 0);
+  // Where "previous" leads. Past the last row (a stale link) one page back
+  // would usually be just as empty, so it jumps to the last real page.
+  const lastPageOffset = $derived(
+    total > 0 ? Math.floor((total - 1) / limit) * limit : 0,
+  );
+  const previousOffset = $derived(
+    Math.max(Math.min(offset - limit, lastPageOffset), 0),
+  );
   const hasNext = $derived(offset + limit < total);
   // Past the last row (a stale link) the page is empty; say so instead of
   // a backwards range such as "301〜300".
@@ -33,7 +41,7 @@ each page has its own URL; the page's `load` reads the offset back off it.
 
 <nav aria-label="ページ送り" class="flex items-center justify-between gap-4 text-sm">
   <Link
-    href={hrefFor(Math.max(offset - limit, 0))}
+    href={hrefFor(previousOffset)}
     disabled={!hasPrevious}
     rel="prev"
   >
