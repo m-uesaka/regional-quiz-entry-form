@@ -17,6 +17,21 @@ import {
   type TournamentRow,
 } from '../lib/tournaments';
 
+/**
+ * 成功したエントリーリストの応答に付ける `Cache-Control`(#125)。
+ *
+ * 締切直前に最も読まれ、全員が同じ内容を見る。30 秒の陳腐化は許容範囲で、
+ * その間の Worker → Supabase の往復が丸ごと消える。stale-while-revalidate を
+ * 長めに取るのは、オリジンが詰まっている間も古い内容を返し続けられるように
+ * するため。
+ *
+ * 付けるのは 200 だけ。404(大会が見つからない)や 500 を共有キャッシュに
+ * 載せると、直後に作られた大会や一時的な障害からの復旧が最大で
+ * max-age + stale-while-revalidate の間見えなくなるので、エラーには付けない。
+ */
+const ENTRY_LIST_CACHE_CONTROL =
+  'public, max-age=30, stale-while-revalidate=300';
+
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 const TournamentBySlugParamSchema = z.object({
   regionSlug: z.string(),
@@ -68,7 +83,9 @@ async function respondWithEntryList(c: Context<Env>, tournamentId: string) {
   if (error) {
     return c.json(internalError('failed to read the entry list', error), 500);
   }
-  return c.json(rows.map(rowToEntryListItem));
+  return c.json(rows.map(rowToEntryListItem), 200, {
+    'Cache-Control': ENTRY_LIST_CACHE_CONTROL,
+  });
 }
 
 export const entryListRoute = new Hono<Env>()
