@@ -17,12 +17,20 @@ export type Tournament = z.infer<typeof TournamentSchema>;
 // Request body of `POST /api/tournaments`: everything but the id, which the
 // database assigns. Shared so the admin form's own check and the API's
 // `zValidator` are the same rule rather than two that can drift apart.
-export const TournamentCreateInputSchema = TournamentSchema.omit({id: true});
+//
+// `name` may be left out or blank: the usual name is just the region's
+// name followed by the type's label, so the API stores
+// `defaultTournamentName()` in its place rather than making staff type it.
+export const TournamentCreateInputSchema = TournamentSchema.omit({
+  id: true,
+}).extend({name: z.string().trim().default('')});
 export type TournamentCreateInput = z.infer<typeof TournamentCreateInputSchema>;
 
 // Request body of `PATCH /api/tournaments/:id`. Every field is optional
 // because this is a PATCH: an omitted one keeps the tournament's current
-// value.
+// value. A blank `name` is not "keep": it resets the name to
+// `defaultTournamentName()` for the tournament's (possibly new) region and
+// type.
 export const TournamentUpdateInputSchema =
   TournamentCreateInputSchema.partial();
 export type TournamentUpdateInput = z.infer<typeof TournamentUpdateInputSchema>;
@@ -33,3 +41,16 @@ export const TOURNAMENT_TYPE_LABELS: Record<TournamentType, string> = {
   saikyoi: '最強位',
   shinjinou: '新人王',
 };
+
+/**
+ * The name a tournament gets when staff leave 大会名 blank: the region's
+ * name followed by the type's label, e.g. 「東京最強位」.
+ * @param regionName The name of the region the tournament is held in.
+ * @param type The tournament's type.
+ */
+export function defaultTournamentName(
+  regionName: string,
+  type: TournamentType,
+): string {
+  return `${regionName}${TOURNAMENT_TYPE_LABELS[type]}`;
+}
