@@ -10,6 +10,7 @@ export * from './schemas/password';
 export * from './schemas/mail';
 export * from './schemas/dashboard';
 export * from './schemas/portal';
+export * from './schemas/pagination';
 export * from './logic/custom-field-values';
 export * from './logic/regulation-eligibility';
 export * from './logic/entry-period';
