@@ -49,11 +49,22 @@ function fakeFetch(options: {
   tournamentStatus?: number;
   entries?: Entry[];
   entriesStatus?: number;
+  /** Collects the staff entries request URLs. */
+  entriesRequests?: URL[];
 }): typeof fetch {
   return (async input => {
     const url = typeof input === 'string' ? input : input.toString();
     if (url.includes(`/staff/tournaments/${TOURNAMENT.id}/entries`)) {
-      return new Response(JSON.stringify(options.entries ?? []), {
+      const requested = new URL(url, 'http://localhost');
+      options.entriesRequests?.push(requested);
+      const entries = options.entries ?? [];
+      const page = {
+        items: entries,
+        total: entries.length,
+        limit: 100,
+        offset: Number(requested.searchParams.get('offset') ?? 0),
+      };
+      return new Response(JSON.stringify(page), {
         status: options.entriesStatus ?? 200,
         headers: {'Content-Type': 'application/json'},
       });
@@ -85,6 +96,7 @@ function buildEvent(options: {
   fetch: typeof fetch;
   staff: StaffClaims | null;
   tournamentSlug?: string;
+  search?: string;
 }): Parameters<typeof load>[0] {
   const tournamentSlug = options.tournamentSlug ?? 'saikyoi';
   return {
@@ -92,7 +104,9 @@ function buildEvent(options: {
     fetch: options.fetch,
     cookies: fakeCookies(),
     locals: {staff: options.staff},
-    url: new URL(`http://localhost/staff/tokyo/${tournamentSlug}/entries`),
+    url: new URL(
+      `http://localhost/staff/tokyo/${tournamentSlug}/entries${options.search ?? ''}`,
+    ),
   } as Parameters<typeof load>[0];
 }
 
@@ -124,7 +138,7 @@ describe('staff entries +page.server load', () => {
     } satisfies Partial<Redirect>);
   });
 
-  it('returns the full entry list for authorized staff', async () => {
+  it('returns the first page of entries for authorized staff', async () => {
     const event = buildEvent({
       fetch: fakeFetch({tournament: TOURNAMENT, entries: ENTRIES}),
       staff: GENERAL_STAFF,
@@ -133,7 +147,47 @@ describe('staff entries +page.server load', () => {
     await expect(load(event)).resolves.toEqual({
       tournament: TOURNAMENT,
       entries: ENTRIES,
+      total: 1,
+      limit: 100,
+      offset: 0,
+      status: null,
     });
+  });
+
+  it('passes the status filter and the offset on to the backend', async () => {
+    const entriesRequests: URL[] = [];
+    const event = buildEvent({
+      fetch: fakeFetch({
+        tournament: TOURNAMENT,
+        entries: ENTRIES,
+        entriesRequests,
+      }),
+      staff: GENERAL_STAFF,
+      search: '?status=waitlisted&offset=100',
+    });
+
+    await expect(load(event)).resolves.toMatchObject({
+      status: 'waitlisted',
+      offset: 100,
+    });
+    expect(entriesRequests[0].searchParams.get('status')).toBe('waitlisted');
+    expect(entriesRequests[0].searchParams.get('offset')).toBe('100');
+  });
+
+  it('lists every status when the URL names an unknown one', async () => {
+    const entriesRequests: URL[] = [];
+    const event = buildEvent({
+      fetch: fakeFetch({
+        tournament: TOURNAMENT,
+        entries: ENTRIES,
+        entriesRequests,
+      }),
+      staff: GENERAL_STAFF,
+      search: '?status=nope',
+    });
+
+    await expect(load(event)).resolves.toMatchObject({status: null});
+    expect(entriesRequests[0].searchParams.has('status')).toBe(false);
   });
 
   it('throws 404 when the tournament slug is not a valid tournament type', async () => {

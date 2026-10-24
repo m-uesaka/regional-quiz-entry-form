@@ -1,6 +1,7 @@
 import {error, redirect} from '@sveltejs/kit';
-import {TournamentTypeSchema} from '@regional-quiz/shared';
+import {EntryStatusSchema, TournamentTypeSchema} from '@regional-quiz/shared';
 import {createApiClient, isUnauthorized} from '$lib/api';
+import {readPageOffset} from '$lib/pagination';
 import {staffLoginPath} from '$lib/server/staff-login';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {PageServerLoad} from './$types';
@@ -53,10 +54,20 @@ export const load: PageServerLoad = async ({
   }
   const tournament = await tournamentRes.json();
 
+  // An unknown `?status=` (a hand-edited URL) lists every status rather
+  // than letting the backend's 400 fail the page.
+  const parsedStatus = EntryStatusSchema.safeParse(
+    url.searchParams.get('status'),
+  );
+  const status = parsedStatus.success ? parsedStatus.data : null;
   const entriesRes = await api.api.staff.tournaments[
     ':tournamentId'
   ].entries.$get({
     param: {tournamentId: tournament.id},
+    query: {
+      offset: readPageOffset(url.searchParams),
+      ...(status ? {status} : {}),
+    },
   });
   if (!entriesRes.ok) {
     // The claims check above cannot rule this out: the JWT may expire between
@@ -70,5 +81,13 @@ export const load: PageServerLoad = async ({
     throw error(502, 'エントリー情報の取得に失敗しました');
   }
 
-  return {tournament, entries: await entriesRes.json()};
+  const page = await entriesRes.json();
+  return {
+    tournament,
+    entries: page.items,
+    total: page.total,
+    limit: page.limit,
+    offset: page.offset,
+    status,
+  };
 };
