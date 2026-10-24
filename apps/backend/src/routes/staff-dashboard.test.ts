@@ -85,7 +85,8 @@ const SUMMARY_ROWS = [
   },
   {
     tournament_id: OSAKA_TOURNAMENT_ID,
-    tournament_name: '大阪大会',
+    // Left blank, so named after the region on read (0024).
+    tournament_name: null,
     tournament_type: 'shinjinou',
     region_id: OSAKA_REGION_ID,
     region_slug: 'osaka',
@@ -171,7 +172,7 @@ describe('GET /staff/dashboard', () => {
       },
       {
         tournamentId: OSAKA_TOURNAMENT_ID,
-        tournamentName: '大阪大会',
+        tournamentName: '大阪新人王',
         tournamentType: 'shinjinou',
         regionId: OSAKA_REGION_ID,
         regionSlug: 'osaka',

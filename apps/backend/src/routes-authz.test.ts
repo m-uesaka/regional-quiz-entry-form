@@ -92,6 +92,7 @@ const ROUTE_POLICIES: Readonly<Record<string, Policy>> = {
   'GET /api/tournaments/:id': {access: 'general-staff'},
   'POST /api/tournaments': {access: 'general-staff'},
   'PATCH /api/tournaments/:id': {access: 'general-staff'},
+  'DELETE /api/tournaments/:id': {access: 'general-staff'},
   'GET /api/tournaments/:regionSlug/:tournamentSlug': {access: 'entry-period'},
   'GET /api/tournaments/:tournamentId/regulations': {access: 'entry-period'},
   'PUT /api/tournaments/:tournamentId/regulations': {access: 'general-staff'},
@@ -273,6 +274,7 @@ const CLOSED_TOURNAMENT = {
   capacity: null,
   entry_opens_at: '2020-01-01T00:00:00.000Z',
   entry_closes_at: '2020-01-31T00:00:00.000Z',
+  regions: {name: 'テスト地域'},
 };
 
 /** The columns `lib/tournaments.ts` selects, as they appear in the URL. */
@@ -329,11 +331,11 @@ function classifyRead(url: URL): GuardRead | null {
       .filter(key => key !== 'select')
       .sort()
       .join(',');
-    if (select === TOURNAMENT_SELECT && filters === 'id') {
+    if (select === `${TOURNAMENT_SELECT},regions(name)` && filters === 'id') {
       return {kind: 'tournament-by-id', body: [CLOSED_TOURNAMENT]};
     }
     if (
-      select === `${TOURNAMENT_SELECT},regions!inner()` &&
+      select === `${TOURNAMENT_SELECT},regions!inner(name)` &&
       filters === 'regions.slug,type'
     ) {
       return {kind: 'tournament-by-slug', body: [CLOSED_TOURNAMENT]};

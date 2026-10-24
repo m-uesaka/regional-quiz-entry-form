@@ -114,7 +114,7 @@ flowchart TB
 | `id` | uuid | PK | |
 | `region_id` | uuid | not null, FK → `regions.id` | |
 | `type` | tournament_type | not null | 最強位 / 新人王 |
-| `name` | text | not null | 大会名 |
+| `name` | text | null 可 | 大会名。管理画面で空欄にすると `null` になり、API が読むたびに「地域名＋種別」(例: `東京最強位`)を作って返す(#164、`0024`)。地域名の変更や地域・種別の修正に追従させるため、既定名は保存しない |
 | `capacity` | integer | nullable | 定員。**`null` は「定員無制限」を意味する**(0 ではない) |
 | `entry_opens_at` | timestamptz | not null | エントリー開始日時 |
 | `entry_closes_at` | timestamptz | not null | エントリー終了日時 |
@@ -122,6 +122,7 @@ flowchart TB
 
 - `unique (region_id, type)`: 1つの地域につき、各大会種別は1大会まで。この制約があるため `/{regionSlug}/{tournamentSlug}` の組から大会を一意に引ける。
 - `capacity` が `null` のときは定員チェック自体を行いません(`confirm_entry_by_token()` / `promote_next_waitlisted_entry()` の両方で `v_capacity is not null` を条件にしている)。
+- 削除(`DELETE /api/tournaments/:id`、#164)では `regulations`・`form_field_defs`・`mail_jobs` が一緒に消えます(`0023` で `on delete cascade`)。`entries` の外部キーは no action のままなので、エントリーがある大会の削除は外部キー違反で止まります。
 - エントリー期間の判定は `packages/shared/src/logic/entry-period.ts` の `isWithinEntryPeriod()` に集約されており、バックエンド(API での拒否)とフロントエンド(UI の非表示)で同じ関数を共有しています。
 
 ### regulations — レギュレーション
@@ -129,7 +130,7 @@ flowchart TB
 | カラム | 型 | 制約 | 説明 |
 | --- | --- | --- | --- |
 | `id` | uuid | PK | |
-| `tournament_id` | uuid | not null, FK → `tournaments.id` | |
+| `tournament_id` | uuid | not null, FK → `tournaments.id`(on delete cascade) | |
 | `label` | text | not null | 表示ラベル |
 | `priority_starts_at` | timestamptz | nullable | 優先エントリー期間の開始 |
 | `priority_ends_at` | timestamptz | nullable | 優先エントリー期間の終了 |
@@ -146,7 +147,7 @@ flowchart TB
 | カラム | 型 | 制約 | 説明 |
 | --- | --- | --- | --- |
 | `id` | uuid | PK | |
-| `tournament_id` | uuid | not null, FK → `tournaments.id` | |
+| `tournament_id` | uuid | not null, FK → `tournaments.id`(on delete cascade) | |
 | `field_key` | text | not null | 項目キー。`entries.custom_field_values` の JSON キーになる |
 | `label` | text | not null | 画面上のラベル |
 | `field_type` | text | not null, check in (`checkbox`, `radio`, `textarea`) | 入力形式 |
@@ -302,7 +303,7 @@ flowchart TB
 | カラム | 型 | 制約 | 説明 |
 | --- | --- | --- | --- |
 | `id` | uuid | PK | `POST /api/staff/tournaments/:id/mail` が返す `jobId` |
-| `tournament_id` | uuid | not null, FK → `tournaments.id` | 送信対象の大会 |
+| `tournament_id` | uuid | not null, FK → `tournaments.id`(on delete cascade) | 送信対象の大会 |
 | `subject` | text | not null | 件名 |
 | `body_html` | text | not null | 本文。スタッフが書いた HTML を `sanitizeMailHtml()` で許可タグだけに絞ったもの(#122) |
 | `total` | integer | not null | 受け付けた宛先数 |
@@ -468,7 +469,7 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 - 他の関数と違い、アトミック性やロックのために存在するわけではありません。Worker 側で数えようとすると「大会ごとに `entries` を 1 クエリ」か「全地域のエントリー行を丸ごと取得して数える」のどちらかになるため、集計を DB に寄せています。書き込みがないので `language sql` / `stable` です。
 - `tournaments` から `entries` への **`left join`** が要点です。`count(*) filter (...)` は null 拡張された行を数えないため、エントリーが 0 件の大会も「全件 0」の行として残ります。`inner join` にすると、まだ誰も申し込んでいない大会がダッシュボードから消えてしまいます。
 - 件数は `count()` の `bigint` から `integer` にキャストしています。PostgREST 経由で `bigint` は文字列として届く可能性があり、エントリー件数が `integer` の範囲に迫ることはないためです。
-- 地域名・大会名も一緒に返すため、`regions` を JOIN しています。呼び出し側で JOIN し直さずに済みます。
+- 地域名・大会名も一緒に返すため、`regions` を JOIN しています。呼び出し側で JOIN し直さずに済みます。大会名を空欄にした大会では `tournament_name` が `null` になり、`routes/staff-dashboard.ts` が地域名と種別から既定名を作ります(`0024`)。
 - 本体の列参照はすべてテーブル修飾(`t.id` / `r.slug` など)しています。`returns table` の出力列名(`region_id` など)と衝突して曖昧参照になるのを避けるためです。
 
 ### check_region_dual_entry()(トリガ関数)
@@ -517,3 +518,6 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0019_mail_jobs.sql` | `mail_jobs` テーブル・`updated_at` トリガ・索引・`record_mail_job_progress()` |
 | `0020_staff_accounts_sessions_valid_from.sql` | `staff_accounts.sessions_valid_from` を追加し、再設定時に打刻(`0015` の `reset_staff_password()` を再定義) |
 | `0021_entry_text_length_limits.sql` | `custom_field_values_length()` と `entries` の長さの check 制約 `entries_text_lengths` |
+| `0022_missing_indexes.sql` | `email_verification_tokens (entry_id)`・`participants (region_id)`・`staff_accounts (region_id)` など、外部キーの子側で抜けていたインデックス |
+| `0023_tournament_delete_cascade.sql` | 大会削除(#164)のため、`regulations`・`form_field_defs`・`mail_jobs` の `tournament_id` 外部キーを `on delete cascade` に張り直す(`entries` は no action のまま) |
+| `0024_tournament_default_name.sql` | `tournaments.name` を null 可にし、null を「既定名(地域名＋種別)を読み出し時に作る」とする(#164)。既定名と同じ名前・空文字の既存行は null に置き換える |

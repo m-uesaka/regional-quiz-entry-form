@@ -22,7 +22,8 @@ function row(
 ): Record<string, unknown> {
   return {
     type,
-    name: `${regionName}${type === 'saikyoi' ? '最強位' : '新人王'}`,
+    // Left blank, so named after the region on read (0024).
+    name: null,
     entry_opens_at: '2026-11-01T00:00:00+00:00',
     entry_closes_at: '2026-11-30T00:00:00+00:00',
     regions: {slug: regionSlug, name: regionName},

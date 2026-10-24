@@ -151,7 +151,7 @@ flowchart TB
 
 これで防げるのは**大会種別の取り違え**(最強位の定義を新人王に保存してしまう等)だけです。`tournamentSlug` は地域を含まないため、**同じ種別の別地域の大会に保存してしまう取り違えは検出できません**。完全に防ぐには YAML に `regionSlug` を持たせて `(regionSlug, tournamentSlug)` の組で突き合わせる必要があります(issue #62 の案2)。
 
-スプレッドシート取り込み画面(`SheetImportPanel.svelte`)は大会スラッグを手入力させず、**編集中の大会の `type` をそのまま YAML に埋め込みます**。手入力の誤りがそもそも発生しないため、この検証で 400 になるのは主に「別の大会向けに作った YAML を手動でアップロードした」ケースです。
+大会編集画面のフォーム定義エディタ(`FormDefinitionEditor.svelte`)は大会スラッグを手入力させず、スプレッドシートから読み込んだ YAML にも、保存済みの定義から書き戻した YAML(`formFieldDefsToYaml()`)にも、**編集中の大会の `type` をそのまま埋め込みます**。エディタでは YAML を直接書き換えられる(#164)ので、この検証で 400 になるのは主に「エディタで `tournamentSlug` を書き換えた」か「別の大会向けに作った YAML を貼り付けた・API に直接送った」ケースです。
 
 ## 5. 描画(`DynamicFormField.svelte`)
 
@@ -309,5 +309,5 @@ flowchart LR
 | `apps/backend/src/lib/sheet-to-form-definition.ts` | スプレッドシート → YAML |
 | `apps/backend/src/routes/sheet-import.ts` | `POST /api/sheet-import/preview` |
 | `apps/frontend/src/lib/components/DynamicFormField.svelte` | 1項目ぶんの入力要素を描画 |
-| `apps/frontend/src/lib/components/SheetImportPanel.svelte` | プレビュー → 保存の UI |
+| `apps/frontend/src/lib/components/FormDefinitionEditor.svelte` | YAML の直接編集・スプレッドシートからの読み込み → 保存の UI |
 | `supabase/migrations/0002_sync_form_field_defs_fn.sql` | 全削除+一括挿入の DB 関数 |

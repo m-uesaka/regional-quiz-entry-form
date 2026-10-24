@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import type {Cookies, HttpError} from '@sveltejs/kit';
-import type {Region, Tournament} from '@regional-quiz/shared';
+import type {FormFieldDef, Region, Tournament} from '@regional-quiz/shared';
 import {actions, load} from './+page.server';
 
 const TOKYO: Region = {
@@ -20,6 +20,17 @@ const TOURNAMENT: Tournament = {
   entryClosesAt: '2026-02-01T00:00:00.000Z',
 };
 
+const FORM_FIELD_DEFS: FormFieldDef[] = [
+  {
+    fieldKey: 'note',
+    label: '備考',
+    fieldType: 'textarea',
+    required: false,
+    options: null,
+    displayOrder: 0,
+  },
+];
+
 /** One request an action put on the wire. */
 interface ApiCall {
   method: string;
@@ -28,8 +39,9 @@ interface ApiCall {
 }
 
 /**
- * Builds a fake `fetch` answering the regions and tournaments APIs.
- * @param options.status The status to answer a PATCH with.
+ * Builds a fake `fetch` answering the regions, tournaments and form
+ * definition APIs.
+ * @param options.status The status to answer a PATCH or DELETE with.
  * @param options.error The `{error}` message to answer a refusal with.
  * @param options.tournaments The tournaments `GET /api/tournaments/:id` can
  *     find.
@@ -62,10 +74,17 @@ function fakeFetch(
         t => url === `/api/tournaments/${t.id}`,
       );
       return tournament
-        ? jsonResponse(tournament)
+        ? jsonResponse({
+            tournament,
+            customName: tournament.name,
+            formFieldDefs: FORM_FIELD_DEFS,
+          })
         : jsonResponse({error: 'tournament not found'}, 404);
     }
     const status = options.status ?? 200;
+    if (status === 204) {
+      return new Response(null, {status});
+    }
     return status >= 400
       ? jsonResponse({error: options.error ?? 'nope'}, status)
       : jsonResponse(TOURNAMENT, status);
@@ -132,11 +151,20 @@ describe('admin tournament edit +page.server load', () => {
   it('returns the tournament alongside the regions the form offers', async () => {
     await expect(load(buildLoadEvent(fakeFetch()))).resolves.toEqual({
       tournament: TOURNAMENT,
+      customName: TOURNAMENT.name,
       regions: [TOKYO],
+      formDefinitionYaml:
+        'tournamentSlug: saikyoi\n' +
+        'fields:\n' +
+        '  - key: note\n' +
+        '    label: 備考\n' +
+        '    type: textarea\n' +
+        '    required: false\n',
     });
   });
 
-  // Not the whole list to `find` the one being edited in (#123).
+  // Not the whole list to `find` the one being edited in (#123), and its
+  // form fields with it rather than through the entry-period-gated read.
   it('load fetches only the tournament it needs', async () => {
     const calls: ApiCall[] = [];
 
@@ -240,6 +268,68 @@ describe('admin tournament update action', () => {
         error: 'insert or update violates foreign key',
         values: {name: '書きかけの大会名'},
       },
+    });
+  });
+});
+
+describe('admin tournament delete action', () => {
+  function deleteFormData(confirmed = true): FormData {
+    const formData = new FormData();
+    if (confirmed) {
+      formData.set('confirm', 'on');
+    }
+    return formData;
+  }
+
+  it('deletes the tournament and lands on the tournament list', async () => {
+    const calls: ApiCall[] = [];
+    const event = buildActionEvent(
+      fakeFetch({status: 204, calls}),
+      deleteFormData(),
+    );
+
+    await expect(actions.delete(event)).rejects.toMatchObject({
+      status: 303,
+      location: '/admin/tournaments?deleted',
+    });
+    expect(calls).toEqual([
+      {
+        method: 'DELETE',
+        url: `/api/tournaments/${TOURNAMENT.id}`,
+        body: undefined,
+      },
+    ]);
+  });
+
+  it('refuses a post without the confirmation, without asking the API', async () => {
+    const calls: ApiCall[] = [];
+    const event = buildActionEvent(fakeFetch({calls}), deleteFormData(false));
+
+    await expect(actions.delete(event)).resolves.toMatchObject({
+      status: 400,
+      data: {deleteError: '削除の確認にチェックを入れてください'},
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it("surfaces the API's refusal of a tournament that has entries", async () => {
+    const event = buildActionEvent(
+      fakeFetch({status: 409, error: 'エントリーがある大会は削除できません'}),
+      deleteFormData(),
+    );
+
+    await expect(actions.delete(event)).resolves.toMatchObject({
+      status: 409,
+      data: {deleteError: 'エントリーがある大会は削除できません'},
+    });
+  });
+
+  it('reports a tournament that is already gone', async () => {
+    const event = buildActionEvent(fakeFetch({status: 404}), deleteFormData());
+
+    await expect(actions.delete(event)).resolves.toMatchObject({
+      status: 404,
+      data: {deleteError: '大会が見つかりません'},
     });
   });
 });

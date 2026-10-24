@@ -1,6 +1,6 @@
-import {parse as parseYaml} from 'yaml';
+import {parse as parseYaml, stringify as stringifyYaml} from 'yaml';
 import {z} from 'zod';
-import {TournamentTypeSchema} from './tournament';
+import {TournamentTypeSchema, type TournamentType} from './tournament';
 
 export const FormFieldTypeSchema = z.enum(['checkbox', 'radio', 'textarea']);
 
@@ -49,6 +49,20 @@ export type FormDefinitionYaml = z.infer<typeof FormDefinitionYamlSchema>;
 
 export function parseFormDefinitionYaml(yamlText: string): FormDefinitionYaml {
   return FormDefinitionYamlSchema.parse(parseYaml(yamlText));
+}
+
+/**
+ * Writes a form definition out as the YAML `parseFormDefinitionYaml()`
+ * reads, so a definition generated from a spreadsheet and one rebuilt from
+ * the stored fields look the same in the staff editor.
+ * @param tournamentSlug The tournament type the definition belongs to.
+ * @param fields The fields, in display order.
+ */
+export function stringifyFormDefinitionYaml(
+  tournamentSlug: TournamentType,
+  fields: FormFieldDefYaml[],
+): string {
+  return stringifyYaml({tournamentSlug, fields});
 }
 
 /**
@@ -105,23 +119,45 @@ export type FormFieldDef = z.infer<typeof FormFieldDefSchema>;
  * @param fieldDef The definition as returned by the API.
  */
 export function toFormFieldDefYaml(fieldDef: FormFieldDef): FormFieldDefYaml {
-  const base = {
-    key: fieldDef.fieldKey,
-    label: fieldDef.label,
-    required: fieldDef.required,
-  };
+  // Keys in the order a spreadsheet import writes them, so the YAML this
+  // ends up in reads the same either way.
+  const {fieldKey: key, label, required} = fieldDef;
   // `radio` is the one variant whose options are non-optional; a stored
   // definition with none can't happen through `FormDefinitionYamlSchema`,
   // but the database column is nullable, so fall back to an empty list
   // rather than asserting.
   if (fieldDef.fieldType === 'radio') {
-    return {...base, type: 'radio', options: fieldDef.options ?? []};
+    return {
+      key,
+      label,
+      type: 'radio',
+      required,
+      options: fieldDef.options ?? [],
+    };
   }
   return {
-    ...base,
+    key,
+    label,
     type: fieldDef.fieldType,
+    required,
     options: fieldDef.options ?? undefined,
   };
+}
+
+/**
+ * Writes a tournament's stored form fields back out as its form-definition
+ * YAML, for the staff editor to start from.
+ * @param tournamentSlug The tournament's type.
+ * @param fieldDefs The stored fields as returned by the API.
+ */
+export function formFieldDefsToYaml(
+  tournamentSlug: TournamentType,
+  fieldDefs: FormFieldDef[],
+): string {
+  const fields = [...fieldDefs]
+    .sort((a, b) => a.displayOrder - b.displayOrder)
+    .map(toFormFieldDefYaml);
+  return stringifyFormDefinitionYaml(tournamentSlug, fields);
 }
 
 /**

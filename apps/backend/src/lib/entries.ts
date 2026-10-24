@@ -7,6 +7,7 @@ import {
   type EntryInput,
   type EntrySessionInput,
   type EntryStatus,
+  type TournamentType,
 } from '@regional-quiz/shared';
 import {isCommonPassword} from '@regional-quiz/shared/password-policy';
 import type {Bindings} from '../types/env';
@@ -16,6 +17,7 @@ import {sendVerificationEmail} from './entry-verification';
 import {FORM_FIELD_DEF_COLUMNS, toFormFieldDef} from './form-field-defs';
 import type {FormFieldDefRow} from './form-field-defs';
 import {hashPassword} from './password';
+import {tournamentDisplayName} from './tournaments';
 import {verifyAccountPassword} from './password-rehash';
 import {promoteNextWaitlistedEntry} from './waitlist';
 
@@ -56,13 +58,14 @@ interface RegulationRow {
 /** The tournament an entry submission is checked against. */
 export interface EntryTournamentRow {
   id: string;
-  name: string;
+  name: string | null;
+  type: TournamentType;
   region_id: string;
   entry_opens_at: string;
   entry_closes_at: string;
   // A to-one embed, so PostgREST answers with the region object itself
   // rather than a single-element array (unlike `regulations` below).
-  regions: {allows_dual_entry: boolean};
+  regions: {allows_dual_entry: boolean; name: string};
   regulations: RegulationRow[];
 }
 
@@ -334,8 +337,8 @@ export async function checkEntrySubmission(
   const {data: tournament, error: tournamentError} = await db
     .from('tournaments')
     .select(
-      'id, name, region_id, entry_opens_at, entry_closes_at, ' +
-        'regions(allows_dual_entry), ' +
+      'id, name, type, region_id, entry_opens_at, entry_closes_at, ' +
+        'regions(allows_dual_entry, name), ' +
         'regulations(id, priority_starts_at, priority_ends_at)',
     )
     .eq('id', tournamentId)
@@ -741,7 +744,16 @@ async function sendEntryNotice(
   reason: EntryNoticeReason,
 ): Promise<boolean> {
   try {
-    await sendEntryNoticeEmail(env, email, tournament.name, reason);
+    await sendEntryNoticeEmail(
+      env,
+      email,
+      tournamentDisplayName(
+        tournament.name,
+        tournament.regions.name,
+        tournament.type,
+      ),
+      reason,
+    );
     return true;
   } catch (mailError) {
     console.error('failed to send the entry notice', {

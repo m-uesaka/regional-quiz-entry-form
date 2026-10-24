@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'bun:test';
 import {ZodError} from 'zod';
 import {
+  formFieldDefsToYaml,
   FormFieldDefSchema,
   parseFormDefinitionYaml,
   toFormFieldDefRows,
@@ -177,6 +178,60 @@ describe('toFormFieldDefYaml', () => {
       type: 'checkbox',
       required: false,
       options: undefined,
+    });
+  });
+});
+
+describe('formFieldDefsToYaml', () => {
+  it('writes the stored fields out in display order as YAML that parses back', () => {
+    const yaml = formFieldDefsToYaml('shinjinou', [
+      {
+        fieldKey: 'agree_to_rules',
+        label: '規約に同意する',
+        fieldType: 'checkbox',
+        required: false,
+        options: null,
+        displayOrder: 1,
+      },
+      {
+        fieldKey: 't_shirt_size',
+        label: 'Tシャツサイズ',
+        fieldType: 'radio',
+        required: true,
+        options: ['S', 'M', 'L'],
+        displayOrder: 0,
+      },
+    ]);
+
+    expect(parseFormDefinitionYaml(yaml)).toEqual({
+      tournamentSlug: 'shinjinou',
+      fields: [
+        {
+          key: 't_shirt_size',
+          label: 'Tシャツサイズ',
+          type: 'radio',
+          required: true,
+          options: ['S', 'M', 'L'],
+        },
+        {
+          key: 'agree_to_rules',
+          label: '規約に同意する',
+          type: 'checkbox',
+          required: false,
+        },
+      ],
+    });
+    // A checkbox without options leaves the key out rather than writing
+    // `options: null`, which the schema would refuse on the way back in.
+    expect(yaml).not.toContain('null');
+  });
+
+  it('writes an empty field list for a tournament without custom fields', () => {
+    const yaml = formFieldDefsToYaml('saikyoi', []);
+
+    expect(parseFormDefinitionYaml(yaml)).toEqual({
+      tournamentSlug: 'saikyoi',
+      fields: [],
     });
   });
 });
