@@ -89,6 +89,7 @@ const ROUTE_POLICIES: Readonly<Record<string, Policy>> = {
   'POST /api/regions': {access: 'general-staff'},
   'PATCH /api/regions/:id': {access: 'general-staff'},
   'GET /api/tournaments': {access: 'general-staff'},
+  'GET /api/tournaments/:id': {access: 'general-staff'},
   'POST /api/tournaments': {access: 'general-staff'},
   'PATCH /api/tournaments/:id': {access: 'general-staff'},
   'GET /api/tournaments/:regionSlug/:tournamentSlug': {access: 'entry-period'},
@@ -302,23 +303,16 @@ function classifyRead(url: URL): GuardRead | null {
       body: [{password_changed_at: PASSWORD_CHANGED_AT}],
     };
   }
-  if (table === 'tournaments' && select === 'region_id,type') {
-    return {
-      kind: 'scope',
-      body: [{region_id: STUB_REGION_ID, type: 'saikyoi'}],
-    };
-  }
   if (table === 'entries' && select === 'tournaments(region_id,type)') {
     return {
       kind: 'scope',
       body: [{tournaments: {region_id: STUB_REGION_ID, type: 'saikyoi'}}],
     };
   }
+  // `requireStaffForTournament()` reads the whole row too, to hand it to the
+  // handler (#123), so its scope read lands here rather than as 'scope'.
   if (table === 'tournaments' && select.includes('entry_opens_at')) {
     return {kind: 'tournament', body: [CLOSED_TOURNAMENT]};
-  }
-  if (table === 'regions' && select === 'id') {
-    return {kind: 'tournament', body: [{id: STUB_REGION_ID}]};
   }
   return null;
 }
@@ -451,7 +445,9 @@ const PROBES: Readonly<Record<Exclude<Policy['access'], 'public'>, Probe[]>> = {
       session: 'regional-staff-out-of-scope',
       status: 403,
       error: FORBIDDEN,
-      allowedReads: ['staff-session', 'scope'],
+      // 'tournament' is `requireStaffForTournament()`'s scope read, 'scope'
+      // `requireStaffForEntry()`'s.
+      allowedReads: ['staff-session', 'scope', 'tournament'],
     },
   ],
   participant: [

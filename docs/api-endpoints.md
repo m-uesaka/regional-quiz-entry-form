@@ -63,7 +63,7 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 | `requireStaffForTournament()` | 有効で失効していない `staff_session`。`general` なら無条件通過、`regional` なら `:tournamentId` の大会が担当範囲(`region_id` と `type` が両方一致)であること | 401 / 403 / 500 |
 | `requireStaffForEntry()` | 同上。ただし `:entryId` から `tournament_id` を辿って範囲を判定する | 401 / 403 / 500 |
 
-スタッフ用の3つは同じ関数(`authenticateStaff()`)で Cookie を読み、失効の確認(`staff_accounts` の読み取り)と範囲の確認(`regional` の場合の大会・エントリーの読み取り)を**並行して**行います。どちらも問題があるときは**失効の 401 が優先**です。失効したセッションは担当範囲にかかわらず死んでいるので、スタッフ画面がログイン画面へ戻せるようにするためです。
+スタッフ用の3つは同じ関数(`authenticateStaff()`)で Cookie を読み、失効の確認(`staff_accounts` の読み取り)と範囲の確認(`regional` の場合の大会・エントリーの読み取り)を**並行して**行います。どちらも問題があるときは**失効の 401 が優先**です。失効したセッションは担当範囲にかかわらず死んでいるので、スタッフ画面がログイン画面へ戻せるようにするためです。`requireStaffForTournament()` は範囲判定で読んだ `tournaments` 行を `c.set('tournament', ...)` でハンドラへ渡します(#123)。`general` は範囲判定を飛ばして行を読まないので、その場合は未設定です(ハンドラ側は「あれば使う、無ければ自分で読む」)。
 | `requireParticipant()` | 有効な `participant_session`。加えて `pwdChangedAt` クレームが `participants.password_changed_at` と一致すること(パスワード再設定でセッションが切れる) | 401 / 500 |
 | `requireOpenEntryPeriodOrStaff()` | エントリー期間中なら**誰でも通過**。期間外は担当スタッフ(`general`、または `region_id` と `type` が一致する `regional`)のみ | 401 / 403 / 404 / 500 |
 
@@ -204,6 +204,7 @@ if ('yaml' in body) {
 | POST | `/api/regions` | 統括スタッフ |
 | PATCH | `/api/regions/:id` | 統括スタッフ |
 | GET | `/api/tournaments` | 統括スタッフ |
+| GET | `/api/tournaments/:id` | 統括スタッフ |
 | POST | `/api/tournaments` | 統括スタッフ |
 | PATCH | `/api/tournaments/:id` | 統括スタッフ |
 | GET | `/api/tournaments/:regionSlug/:tournamentSlug` | 期間中はなし / 期間外は担当スタッフ |
@@ -372,6 +373,18 @@ if ('yaml' in body) {
 - `200`: `Tournament[]`
 - `500`: `{"error": <Supabase のメッセージ>}`
 
+### `GET /api/tournaments/:id`
+
+大会を1件返します。大会編集画面用(以前は全件を取ってきてクライアント側で `find` していました、#123)。
+
+- パス: `id` は UUID
+- `200`: `Tournament`
+- `400`: `id` が UUID でない
+- `404`: `{"error": "tournament not found"}`
+- `500`: `{"error": "internal server error"}`
+
+1セグメントのパスなので、2セグメントの `GET /api/tournaments/:regionSlug/:tournamentSlug` や `/:tournamentId/...` 系のルートとは衝突しません。
+
 ### `POST /api/tournaments`
 
 - リクエスト: `TournamentSchema.omit({id: true})` — `{regionId, type, name, capacity, entryOpensAt, entryClosesAt}`
@@ -401,7 +414,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 
 ### `GET /api/tournaments/:regionSlug/:tournamentSlug`
 
-エントリー期間中は公開、期間外は担当スタッフのみ(`requireOpenEntryPeriodOrStaff()`、§1「認可ミドルウェア」)。地域スラッグと大会種別スラッグの組から大会を1件引きます。`regions` を slug で引いてから `tournaments` を `(region_id, type)` で引く2段階のクエリで、これはミドルウェアが行い、ハンドラはその結果を返すだけです。
+エントリー期間中は公開、期間外は担当スタッフのみ(`requireOpenEntryPeriodOrStaff()`、§1「認可ミドルウェア」)。地域スラッグと大会種別スラッグの組から大会を1件引きます。`tournaments` に `regions!inner(slug)` を埋め込み、`regions.slug` と `type` で絞る**1回のクエリ**です(#123。以前は `regions` → `tournaments` の2段階でした)。内部結合なので地域が無い場合も「該当行なし」になります。クエリはミドルウェアが行い、ハンドラはその結果を返すだけです。
 
 - パス: `tournamentSlug` は `'saikyoi' | 'shinjinou'`
 - `200`: `Tournament`

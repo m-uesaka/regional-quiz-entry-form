@@ -14,7 +14,12 @@ import {
 } from '../middleware/entry-period';
 import {createDbClient} from '../lib/db';
 import {internalError} from '../lib/errors';
-import {rowToTournament, type TournamentRow} from '../lib/tournaments';
+import {
+  fetchTournamentById,
+  rowToTournament,
+  TournamentLookupError,
+  type TournamentRow,
+} from '../lib/tournaments';
 
 const TournamentIdParamSchema = z.object({id: z.string().uuid()});
 
@@ -106,6 +111,31 @@ export const tournamentsRoute = new Hono<StaffEnv>()
     }
     return c.json((data as TournamentRow[]).map(rowToTournament));
   })
+  // For the edit screen, which used to fetch the whole list above just to
+  // `find` one tournament in it (#123). One segment, so it can't collide
+  // with the two-segment `/:regionSlug/:tournamentSlug` read below, nor with
+  // the `/:tournamentId/...` routes mounted beside this app.
+  .get(
+    '/:id',
+    requireGeneralStaff(),
+    zValidator('param', TournamentIdParamSchema),
+    async c => {
+      let tournament: TournamentRow | null;
+      try {
+        tournament = await fetchTournamentById(c.env, c.req.valid('param').id);
+      } catch (e: unknown) {
+        const cause = e instanceof TournamentLookupError ? e.cause : e;
+        return c.json(
+          internalError('failed to read the tournament', cause),
+          500,
+        );
+      }
+      if (!tournament) {
+        return c.json({error: 'tournament not found'}, 404);
+      }
+      return c.json(rowToTournament(tournament));
+    },
+  )
   .post(
     '/',
     requireGeneralStaff(),

@@ -14,6 +14,7 @@ import {
   TEST_SESSIONS_VALID_FROM,
   TEST_SESSIONS_VALID_FROM_MS,
 } from '../test-support/staff-session';
+import {openEntryPeriodTournament} from '../test-support/tournaments';
 
 const SESSION_SECRET = 'test-session-secret';
 const ENV: Bindings = {
@@ -166,6 +167,53 @@ describe('requireStaffForTournament', () => {
     );
 
     expect(res.status).toBe(200);
+  });
+
+  // The handler gets the row the scope check passed, so it neither reads it
+  // again nor risks seeing a different version of it (#123).
+  const appExposingTournament = new Hono<StaffEnv>().get(
+    '/tournaments/:tournamentId/x',
+    requireStaffForTournament(),
+    c => c.json({tournament: c.get('tournament') ?? null}),
+  );
+
+  it('requireStaffForTournament exposes the tournament it read to the handler', async () => {
+    const row = openEntryPeriodTournament({region_id: REGION_ID});
+    mockTournamentFetch(row);
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'regional',
+      regionId: REGION_ID,
+      tournamentType: 'saikyoi',
+    });
+
+    const res = await appExposingTournament.request(
+      `/tournaments/${row.id}/x`,
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as unknown).toEqual({tournament: row});
+  });
+
+  it('requireStaffForTournament sets no tournament for general staff', async () => {
+    mockTournamentFetch(openEntryPeriodTournament());
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'general',
+      regionId: null,
+      tournamentType: null,
+    });
+
+    const res = await appExposingTournament.request(
+      '/tournaments/t1/x',
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as unknown).toEqual({tournament: null});
   });
 
   it('returns 401 for a malformed token', async () => {

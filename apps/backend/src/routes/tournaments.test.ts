@@ -346,6 +346,142 @@ describe('GET /tournaments/:regionSlug/:tournamentSlug (entry period)', () => {
   });
 });
 
+// The by-slug read and the by-id read, with PostgREST stubbed by a fixture
+// that honours the filters the route sends, so a region or type that
+// doesn't match finds nothing the way the real join would (#123).
+describe('GET /tournaments/:id and /:regionSlug/:tournamentSlug (queries)', () => {
+  const originalFetch = globalThis.fetch;
+  const tournament = openEntryPeriodTournament();
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  /**
+   * Answers `tournaments` reads with `tournament` when every `eq` filter on
+   * the request matches it, recording each Supabase URL besides the staff
+   * session check.
+   * @param calls Collects the requested URLs.
+   */
+  function mockFilteringFetch(calls: URL[] = []): void {
+    const known: Record<string, string> = {
+      id: tournament.id,
+      type: tournament.type,
+      'regions.slug': 'tokyo',
+    };
+    globalThis.fetch = staffSessionAwareFetch(((input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      calls.push(url);
+      if (!url.pathname.endsWith('/rest/v1/tournaments')) {
+        return Promise.resolve(Response.json([]));
+      }
+      const matches = [...url.searchParams].every(
+        ([key, value]) =>
+          !value.startsWith('eq.') || known[key] === value.slice(3),
+      );
+      return Promise.resolve(
+        Response.json(
+          matches ? [{...tournament, regions: {slug: 'tokyo'}}] : [],
+        ),
+      );
+    }) as unknown as typeof fetch);
+  }
+
+  it('GET /tournaments/:regionSlug/:tournamentSlug returns 404 for an unknown region', async () => {
+    mockFilteringFetch();
+
+    const res = await app.request('/api/tournaments/osaka/saikyoi', {}, env);
+
+    expect(res.status).toBe(404);
+  });
+
+  it('GET /tournaments/:regionSlug/:tournamentSlug returns 404 for a known region without that tournament type', async () => {
+    mockFilteringFetch();
+
+    const res = await app.request('/api/tournaments/tokyo/shinjinou', {}, env);
+
+    expect(res.status).toBe(404);
+  });
+
+  it('GET /tournaments/:regionSlug/:tournamentSlug resolves in a single query', async () => {
+    const calls: URL[] = [];
+    mockFilteringFetch(calls);
+
+    const res = await app.request('/api/tournaments/tokyo/saikyoi', {}, env);
+
+    expect(res.status).toBe(200);
+    // The embed is filtered on but not answered with.
+    expect((await res.json()) as unknown).not.toHaveProperty('regions');
+    expect(calls).toHaveLength(1);
+    expect(calls[0].pathname).toEndWith('/rest/v1/tournaments');
+    expect(calls[0].searchParams.get('select')).toContain(
+      'regions!inner(slug)',
+    );
+  });
+
+  it('GET /tournaments/:id returns the tournament for general staff', async () => {
+    mockFilteringFetch();
+
+    const res = await app.request(
+      `/api/tournaments/${tournament.id}`,
+      {headers: {cookie: await generalStaffCookie()}},
+      env,
+    );
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as unknown).toEqual({
+      id: tournament.id,
+      regionId: tournament.region_id,
+      type: tournament.type,
+      name: tournament.name,
+      capacity: tournament.capacity,
+      entryOpensAt: tournament.entry_opens_at,
+      entryClosesAt: tournament.entry_closes_at,
+    });
+  });
+
+  it('GET /tournaments/:id returns 404 for an id that names no tournament', async () => {
+    mockFilteringFetch();
+
+    const res = await app.request(
+      '/api/tournaments/99999999-9999-9999-9999-999999999998',
+      {headers: {cookie: await generalStaffCookie()}},
+      env,
+    );
+
+    expect(res.status).toBe(404);
+  });
+
+  it('GET /tournaments/:id returns 403 for regional staff', async () => {
+    mockFilteringFetch();
+
+    const res = await app.request(
+      `/api/tournaments/${tournament.id}`,
+      {headers: {cookie: await regionalStaffCookie(tournament.region_id)}},
+      env,
+    );
+
+    expect(res.status).toBe(403);
+  });
+
+  it('GET /tournaments/:id does not shadow the two-segment slug route', async () => {
+    mockFilteringFetch();
+
+    // Public, no session: had `/:id` caught it, this would be a 401.
+    const bySlug = await app.request('/api/tournaments/tokyo/saikyoi', {}, env);
+    // And the other way round: one segment is never read as a slug pair.
+    const byId = await app.request(
+      `/api/tournaments/${tournament.id}`,
+      {},
+      env,
+    );
+
+    expect(bySlug.status).toBe(200);
+    expect(((await bySlug.json()) as {id: string}).id).toBe(tournament.id);
+    expect(byId.status).toBe(401);
+  });
+});
+
 describe.skipIf(!(await isDbReachable()))(
   'tournaments routes (local Supabase integration)',
   () => {

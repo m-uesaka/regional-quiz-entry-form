@@ -71,9 +71,20 @@ export async function fetchTournamentById(
   return data;
 }
 
+/** A `tournaments` row with the region embedded to filter on its slug. */
+interface TournamentWithRegionSlugRow extends TournamentRow {
+  regions: {slug: string};
+}
+
 /**
  * Reads one tournament by the pair the public URLs name it with: its
  * region's slug and its own type.
+ *
+ * One round trip (#123): almost every page's `load` starts here, so the
+ * old two-step read -- the region's id from `regions`, then the tournament
+ * -- cost every screen an extra round trip. `regions!inner` makes the embed
+ * an inner join, so a missing region comes back as no row at all, the same
+ * answer as a missing tournament.
  * @param env The Worker bindings.
  * @param regionSlug The region's slug.
  * @param tournamentSlug The tournament's type.
@@ -86,26 +97,22 @@ export async function fetchTournamentBySlug(
   tournamentSlug: string,
 ): Promise<TournamentRow | null> {
   const db = createDbClient(env);
-  const {data: region, error: regionError} = await db
-    .from('regions')
-    .select('id')
-    .eq('slug', regionSlug)
-    .maybeSingle();
-  if (regionError) {
-    throw new TournamentLookupError(regionError);
-  }
-  if (!region) {
-    return null;
-  }
   const {data, error} = await db
     .from('tournaments')
-    .select(TOURNAMENT_COLUMNS)
-    .eq('region_id', region.id)
+    .select(`${TOURNAMENT_COLUMNS}, regions!inner(slug)`)
+    .eq('regions.slug', regionSlug)
     .eq('type', tournamentSlug)
-    .returns<TournamentRow[]>()
+    .returns<TournamentWithRegionSlugRow[]>()
     .maybeSingle();
   if (error) {
     throw new TournamentLookupError(error);
   }
-  return data;
+  if (!data) {
+    return null;
+  }
+  // The embed is only there to filter on, so callers (including whatever
+  // ends up in `c.set('tournament')`) get the plain `TournamentRow` shape.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const {regions, ...tournament} = data;
+  return tournament;
 }

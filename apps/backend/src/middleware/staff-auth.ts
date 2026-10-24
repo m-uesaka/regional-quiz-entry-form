@@ -10,6 +10,7 @@ import {
 } from '@regional-quiz/shared';
 import type {Bindings, StaffEnv} from '../types/env';
 import {createDbClient} from '../lib/db';
+import {fetchTournamentById, type TournamentRow} from '../lib/tournaments';
 
 export const STAFF_SESSION_COOKIE = 'staff_session';
 
@@ -212,21 +213,35 @@ export function isInScope(
   );
 }
 
+/**
+ * Lets through staff whose scope covers the `:tournamentId` in the path.
+ *
+ * The row read for the scope check is left on the context as `tournament`,
+ * so a handler that needs the tournament doesn't fetch it a second time --
+ * and can't see a different version of it than the one the check passed
+ * (#123). General staff skip the check and so never read the row: there
+ * `tournament` is unset, and a handler has to read it itself.
+ */
 export function requireStaffForTournament() {
   return createMiddleware<StaffEnv>(async (c, next) => {
+    let tournament: TournamentRow | null = null;
     const staff = await authenticateStaff(c, async staff => {
       if (staff.role === 'general') return 'allowed';
-      const {data: tournament, error} = await createDbClient(c.env)
-        .from('tournaments')
-        .select('region_id, type')
-        .eq('id', c.req.param('tournamentId'))
-        .returns<TournamentScopeRow[]>()
-        .maybeSingle();
-      if (error) return 'error';
+      try {
+        tournament = await fetchTournamentById(
+          c.env,
+          c.req.param('tournamentId') ?? '',
+        );
+      } catch {
+        return 'error';
+      }
       return isInScope(staff, tournament) ? 'allowed' : 'forbidden';
     });
     if (staff instanceof Response) return staff;
     c.set('staff', staff);
+    if (tournament) {
+      c.set('tournament', tournament);
+    }
     await next();
   });
 }
