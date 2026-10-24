@@ -1,5 +1,6 @@
 import {error, redirect} from '@sveltejs/kit';
 import {createApiClient} from '$lib/api';
+import {dropCachedEntryList} from '$lib/server/entry-list-cache';
 import type {PageServerLoad} from './$types';
 
 /**
@@ -22,10 +23,11 @@ const VERIFY_STATUSES: readonly VerifyStatus[] = [
 export const load: PageServerLoad = async ({
   url,
   fetch,
+  platform,
 }): Promise<{status: VerifyStatus}> => {
   const token = url.searchParams.get('token');
   if (token) {
-    const status = await confirmEntry(fetch, token);
+    const status = await confirmEntry(fetch, token, platform, url.origin);
     // Confirming consumes the token, so the outcome is carried into a
     // token-less URL before anything is rendered. A reload or a Back
     // navigation re-runs this `load` (SvelteKit re-fetches the server data
@@ -41,10 +43,16 @@ export const load: PageServerLoad = async ({
   return {status: isVerifyStatus(status) ? status : 'invalid'};
 };
 
-/** Confirms the entry the token was issued for, consuming the token. */
+/**
+ * Confirms the entry the token was issued for, consuming the token. This is
+ * the moment the entry first shows up on its tournament's public list, so
+ * the cached copy of that list is dropped (#125).
+ */
 async function confirmEntry(
   fetchImpl: typeof fetch,
   token: string,
+  platform: App.Platform | undefined,
+  origin: string,
 ): Promise<VerifyStatus> {
   const api = createApiClient(fetchImpl);
   const res = await api.api.entries.verify.$get({query: {token}});
@@ -60,7 +68,13 @@ async function confirmEntry(
     throw error(502, 'エントリーの確定に失敗しました');
   }
 
-  return (await res.json()).status;
+  const {status, tournament} = await res.json();
+  // `null` when the backend could not say which tournament it was; the
+  // list then catches up when its cached copy expires.
+  if (tournament) {
+    await dropCachedEntryList(platform, origin, tournament);
+  }
+  return status;
 }
 
 function isVerifyStatus(value: string | null): value is VerifyStatus {

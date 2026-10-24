@@ -1,6 +1,7 @@
 import {error, fail, redirect} from '@sveltejs/kit';
 import {MypageEntrySchema} from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
+import {dropCachedEntryList} from '$lib/server/entry-list-cache';
 import {
   clearParticipantSession,
   PARTICIPANT_LOGIN_PATH,
@@ -48,7 +49,7 @@ export const actions = {
     redirect(303, PARTICIPANT_LOGIN_PATH);
   },
 
-  cancel: async ({cookies, request, fetch, url}) => {
+  cancel: async ({cookies, request, fetch, platform, url}) => {
     const formData = await request.formData();
     // The id travels in the body (one form per listed entry), so it's
     // validated against the same schema the API answers with rather than
@@ -75,6 +76,21 @@ export const actions = {
         return fail(404, {error: 'エントリーが見つかりません'});
       }
       return fail(502, {error: 'エントリーのキャンセルに失敗しました'});
+    }
+
+    // The entry now reads キャンセル on its tournament's public list (and
+    // may have promoted a waitlisted one), so the cached copy goes (#125).
+    // Which list that is travels with the form, from the same `load` data
+    // the entry id does. It is only trusted to name a cache entry: a forged
+    // pair drops some other list early, which costs one extra backend read.
+    const tournament = MypageEntrySchema.shape.tournament
+      .pick({regionSlug: true, type: true})
+      .safeParse({
+        regionSlug: formData.get('regionSlug'),
+        type: formData.get('tournamentType'),
+      });
+    if (tournament.success) {
+      await dropCachedEntryList(platform, url.origin, tournament.data);
     }
 
     // Nothing is returned on success: `load` re-runs after the action, so

@@ -1,6 +1,10 @@
 import {describe, expect, it} from 'vitest';
 import type {Cookies, HttpError, Redirect} from '@sveltejs/kit';
 import type {MypageEntry} from '@regional-quiz/shared';
+import {
+  fakePlatform,
+  TOKYO_SAIKYOI_LIST_KEY,
+} from '../../test-support/fake-platform';
 import {actions, load} from './+page.server';
 
 const ENTRIES: MypageEntry[] = [
@@ -13,6 +17,7 @@ const ENTRIES: MypageEntry[] = [
       name: 'テスト大会',
       type: 'saikyoi',
       regionId: '00000000-0000-0000-0000-000000000003',
+      regionSlug: 'tokyo',
       entryOpensAt: '2020-01-01T00:00:00.000Z',
       entryClosesAt: '2099-01-01T00:00:00.000Z',
     },
@@ -64,11 +69,18 @@ function buildCancelEvent(
   fetchImpl: typeof fetch,
   entryId: string = ENTRY_ID,
   deleted: string[] = [],
+  options: {platform?: App.Platform; withTournament?: boolean} = {},
 ): Parameters<typeof actions.cancel>[0] {
   const body = new FormData();
   body.set('entryId', entryId);
+  // The hidden fields `+page.svelte` puts next to the entry id.
+  if (options.withTournament ?? true) {
+    body.set('regionSlug', ENTRIES[0].tournament.regionSlug);
+    body.set('tournamentType', ENTRIES[0].tournament.type);
+  }
   return {
     fetch: fetchImpl,
+    platform: options.platform,
     cookies: fakeCookies(deleted),
     url: new URL('http://localhost/mypage'),
     request: new Request('http://localhost/mypage?/cancel', {
@@ -117,6 +129,51 @@ describe('mypage +page.server load', () => {
 });
 
 describe('mypage +page.server cancel action', () => {
+  it('drops the cached public list of the cancelled entry (#125)', async () => {
+    const {platform, stored} = fakePlatform();
+    stored.set(TOKYO_SAIKYOI_LIST_KEY, Response.json([]));
+
+    await actions.cancel(
+      buildCancelEvent(fakeDeleteFetch(200), ENTRY_ID, [], {platform}),
+    );
+
+    expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(false);
+  });
+
+  it('keeps the cached list when the cancellation fails', async () => {
+    const {platform, stored} = fakePlatform();
+    stored.set(TOKYO_SAIKYOI_LIST_KEY, Response.json([]));
+
+    await actions.cancel(
+      buildCancelEvent(fakeDeleteFetch(500), ENTRY_ID, [], {platform}),
+    );
+
+    expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(true);
+  });
+
+  it('still cancels when the form does not name the tournament', async () => {
+    const {platform} = fakePlatform();
+
+    await expect(
+      actions.cancel(
+        buildCancelEvent(fakeDeleteFetch(200), ENTRY_ID, [], {
+          platform,
+          withTournament: false,
+        }),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it('still cancels when the cache cannot be reached', async () => {
+    const {platform} = fakePlatform({failDelete: true});
+
+    await expect(
+      actions.cancel(
+        buildCancelEvent(fakeDeleteFetch(200), ENTRY_ID, [], {platform}),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   it('cancels the entry the form names', async () => {
     let requested: {url: string; method?: string} | undefined;
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {

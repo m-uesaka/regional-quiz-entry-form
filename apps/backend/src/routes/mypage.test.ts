@@ -235,11 +235,16 @@ describe.skipIf(!(await isDbReachable()))(
         {headers: {cookie: await participantCookie(participantId)}},
         env,
       );
-      const body = (await res.json()) as Array<{tournamentId: string}>;
+      const body = (await res.json()) as Array<{
+        tournamentId: string;
+        tournament: {regionSlug: string};
+      }>;
 
       expect(res.status).toBe(200);
       expect(body).toHaveLength(1);
       expect(body[0].tournamentId).toBe(tournamentId);
+      // Names the public list page whose cache a cancel drops (#125).
+      expect(body[0].tournament.regionSlug).toBe(`${testRegionSlug}-own`);
     });
 
     it('returns entries for both saikyoi and shinjinou in the same region', async () => {

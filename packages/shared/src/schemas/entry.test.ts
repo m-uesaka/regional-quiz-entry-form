@@ -288,6 +288,7 @@ describe('MypageEntryDetailSchema', () => {
       name: 'テスト大会',
       type: 'saikyoi' as const,
       regionId: '00000000-0000-0000-0000-000000000002',
+      regionSlug: 'tokyo',
       entryOpensAt: '2026-01-01T00:00:00+00:00',
       entryClosesAt: '2026-02-01T00:00:00+00:00',
     },

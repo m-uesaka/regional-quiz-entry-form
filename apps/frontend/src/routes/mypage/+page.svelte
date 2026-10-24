@@ -73,6 +73,17 @@
               }}
             >
               <input type="hidden" name="entryId" value={entry.id} />
+              <!-- Names the public list whose cached copy the cancel drops. -->
+              <input
+                type="hidden"
+                name="regionSlug"
+                value={entry.tournament.regionSlug}
+              />
+              <input
+                type="hidden"
+                name="tournamentType"
+                value={entry.tournament.type}
+              />
               <Button type="submit" variant="danger" tone="ghost" size="small">
                 エントリーをキャンセルする
               </Button>

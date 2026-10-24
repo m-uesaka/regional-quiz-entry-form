@@ -29,7 +29,7 @@ const EntryIdParamSchema = z.object({entryId: z.string().uuid()});
 const LIST_COLUMNS =
   'id, tournament_id, status, waitlist_position, ' +
   'tournaments(name, type, region_id, entry_opens_at, entry_closes_at, ' +
-  'regions(name))';
+  'regions(slug, name))';
 
 const DETAIL_COLUMNS =
   LIST_COLUMNS +
@@ -48,7 +48,7 @@ interface MypageEntryRow {
     region_id: string;
     entry_opens_at: string;
     entry_closes_at: string;
-    regions: {name: string};
+    regions: {slug: string; name: string};
   };
 }
 
@@ -76,6 +76,7 @@ function rowToMypageEntry(row: MypageEntryRow): MypageEntry {
       ),
       type: row.tournaments.type,
       regionId: row.tournaments.region_id,
+      regionSlug: row.tournaments.regions.slug,
       entryOpensAt: row.tournaments.entry_opens_at,
       entryClosesAt: row.tournaments.entry_closes_at,
     },
