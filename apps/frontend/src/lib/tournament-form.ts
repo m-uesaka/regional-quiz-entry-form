@@ -23,14 +23,20 @@ export function emptyTournamentFormValues(): TournamentFormValues {
  * window is shown as JST wall-clock time, which is what the action reads
  * back.
  * @param tournament The tournament being edited.
+ * @param customName The 大会名 staff typed, or null when it was left blank.
+ *     A blank one stays blank here rather than showing the default name
+ *     `tournament.name` carries: sent back, that would pin the name to the
+ *     current region and type, and a corrected region would keep the old
+ *     region's name.
  */
 export function toTournamentFormValues(
   tournament: Tournament,
+  customName: string | null,
 ): TournamentFormValues {
   return {
     regionId: tournament.regionId,
     type: tournament.type,
-    name: tournament.name,
+    name: customName ?? '',
     // A blank control is the "no limit" the API takes as null.
     capacity: tournament.capacity === null ? '' : String(tournament.capacity),
     entryOpensAt: toJstDatetimeLocal(tournament.entryOpensAt),

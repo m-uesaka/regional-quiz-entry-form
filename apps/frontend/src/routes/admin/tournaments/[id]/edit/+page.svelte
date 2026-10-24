@@ -29,6 +29,7 @@
   {#key data.tournament.id}
     <TournamentEditor
       tournament={data.tournament}
+      customName={data.customName}
       formDefinitionYaml={data.formDefinitionYaml}
       regions={data.regions}
       result={updateResult}

@@ -40,6 +40,12 @@ stands, so a reloaded sheet can be checked (and touched up) first.
   // type, which is when a fresh start is wanted.
   // svelte-ignore state_referenced_locally
   let yaml = $state(initialYaml);
+  // The text as last stored: what `load` read, then what each save sent.
+  // svelte-ignore state_referenced_locally
+  let storedYaml = $state(initialYaml);
+  // The text the last sheet reload put in, so reloading again over it
+  // untouched isn't taken for discarding an edit.
+  let loadedYaml = $state<string | null>(null);
 
   let spreadsheetId = $state('');
   let loading = $state(false);
@@ -49,9 +55,23 @@ stands, so a reloaded sheet can be checked (and touched up) first.
   type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
   let saveStatus = $state<SaveStatus>('idle');
   let saveError = $state<string | null>(null);
+  // 保存しました only while the text is still what was saved: typing after
+  // the save makes it a draft again.
+  const showSaved = $derived(saveStatus === 'saved' && yaml === storedYaml);
 
   async function handleLoadSheet(event: SubmitEvent): Promise<void> {
     event.preventDefault();
+    // A reload replaces the whole text, so hand edits not yet saved would go
+    // with it and there is no undo.
+    if (
+      yaml !== storedYaml &&
+      yaml !== loadedYaml &&
+      !confirm(
+        '保存していない YAML の変更は失われます。スプレッドシートの内容で置き換えますか?',
+      )
+    ) {
+      return;
+    }
     loading = true;
     loadError = null;
     loaded = false;
@@ -71,6 +91,7 @@ stands, so a reloaded sheet can be checked (and touched up) first.
       const body = await res.json();
       if ('yaml' in body) {
         yaml = body.yaml;
+        loadedYaml = body.yaml;
         loaded = true;
       } else if ('error' in body && typeof body.error === 'string') {
         loadError = body.error;
@@ -90,14 +111,18 @@ stands, so a reloaded sheet can be checked (and touched up) first.
     saveStatus = 'saving';
     saveError = null;
     loaded = false;
+    // What is stored on success is what was sent, not whatever has been
+    // typed while the request was out.
+    const sent = yaml;
 
     try {
       const res = await api.api['form-definitions'][':tournamentId'].$put({
         param: {tournamentId},
-        json: {yaml},
+        json: {yaml: sent},
       });
       const body = await res.json();
       if ('ok' in body && body.ok) {
+        storedYaml = sent;
         saveStatus = 'saved';
       } else if ('error' in body && typeof body.error === 'string') {
         saveStatus = 'error';
@@ -169,7 +194,7 @@ stands, so a reloaded sheet can be checked (and touched up) first.
     </div>
   </form>
 
-  {#if saveStatus === 'saved'}
+  {#if showSaved}
     <Message variant="success">
       <p class="text-sm text-foreground" role="status">保存しました</p>
     </Message>

@@ -55,6 +55,7 @@ const OTHER_TOURNAMENT: Tournament = {
 function renderPage(
   tournament: Tournament = TOURNAMENT,
   form: PageProps['form'] = null,
+  customName: string | null = tournament.name,
 ) {
   return render(Page, {
     props: {
@@ -62,6 +63,7 @@ function renderPage(
       data: {
         staff: STAFF,
         tournament,
+        customName,
         regions: REGIONS,
         formDefinitionYaml: FORM_DEFINITION_YAML,
       },
@@ -79,6 +81,15 @@ describe('admin tournament edit +page.svelte', () => {
     expect(screen.getByLabelText(/定員/)).toHaveValue(TOURNAMENT.capacity);
     expect(screen.getByLabelText('種別')).toHaveValue('saikyoi');
     expect(screen.getByText(/対象: 最強位/)).toBeInTheDocument();
+  });
+
+  // A 大会名 left blank is answered as the default name (東京最強位), which
+  // must not come back as a typed one: a region fixed on this form would
+  // then keep the old region's name.
+  it('leaves a blank 大会名 blank rather than showing the default name', () => {
+    renderPage({...TOURNAMENT, name: '東京最強位'}, null, null);
+
+    expect(screen.getByLabelText(/大会名/)).toHaveValue('');
   });
 
   // The entry window is labelled JST, and is server-rendered by a Worker
@@ -152,6 +163,7 @@ describe('admin tournament edit +page.svelte', () => {
       data: {
         staff: STAFF,
         tournament: {...TOURNAMENT, type: 'shinjinou'},
+        customName: TOURNAMENT.name,
         regions: REGIONS,
         formDefinitionYaml: 'tournamentSlug: shinjinou\nfields: []\n',
       },
@@ -177,6 +189,7 @@ describe('admin tournament edit +page.svelte', () => {
       data: {
         staff: STAFF,
         tournament: OTHER_TOURNAMENT,
+        customName: OTHER_TOURNAMENT.name,
         regions: REGIONS,
         formDefinitionYaml: 'tournamentSlug: shinjinou\nfields: []\n',
       },

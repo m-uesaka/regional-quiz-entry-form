@@ -70,14 +70,15 @@ function fakeFetch(
       if (url.includes('/regions')) {
         return jsonResponse([TOKYO]);
       }
-      if (url.startsWith('/api/form-definitions/')) {
-        return jsonResponse(FORM_FIELD_DEFS);
-      }
       const tournament = (options.tournaments ?? [TOURNAMENT]).find(
         t => url === `/api/tournaments/${t.id}`,
       );
       return tournament
-        ? jsonResponse(tournament)
+        ? jsonResponse({
+            tournament,
+            customName: tournament.name,
+            formFieldDefs: FORM_FIELD_DEFS,
+          })
         : jsonResponse({error: 'tournament not found'}, 404);
     }
     const status = options.status ?? 200;
@@ -150,6 +151,7 @@ describe('admin tournament edit +page.server load', () => {
   it('returns the tournament alongside the regions the form offers', async () => {
     await expect(load(buildLoadEvent(fakeFetch()))).resolves.toEqual({
       tournament: TOURNAMENT,
+      customName: TOURNAMENT.name,
       regions: [TOKYO],
       formDefinitionYaml:
         'tournamentSlug: saikyoi\n' +
@@ -161,14 +163,14 @@ describe('admin tournament edit +page.server load', () => {
     });
   });
 
-  // Not the whole list to `find` the one being edited in (#123).
+  // Not the whole list to `find` the one being edited in (#123), and its
+  // form fields with it rather than through the entry-period-gated read.
   it('load fetches only the tournament it needs', async () => {
     const calls: ApiCall[] = [];
 
     await load(buildLoadEvent(fakeFetch({calls})));
 
     expect(calls.map(call => `${call.method} ${call.url}`).sort()).toEqual([
-      `GET /api/form-definitions/${TOURNAMENT.id}`,
       'GET /api/regions',
       `GET /api/tournaments/${TOURNAMENT.id}`,
     ]);

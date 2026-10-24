@@ -46,38 +46,31 @@ export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
 
   const api = createApiClient(fetch);
   // Only the tournament being edited, not the whole list to `find` it in
-  // (#123).
-  const [tournamentRes, regionsRes, formFieldDefsRes] = await Promise.all([
+  // (#123). Its form fields come in the same response rather than from
+  // `GET /api/form-definitions/:tournamentId`, whose entry-period gate would
+  // read the tournament a second time.
+  const [tournamentRes, regionsRes] = await Promise.all([
     api.api.tournaments[':id'].$get({param: {id: params.id}}),
     api.api.regions.$get(),
-    api.api['form-definitions'][':tournamentId'].$get({
-      param: {tournamentId: params.id},
-    }),
   ]);
-  if (
-    isUnauthorized(tournamentRes) ||
-    isUnauthorized(regionsRes) ||
-    isUnauthorized(formFieldDefsRes)
-  ) {
+  if (isUnauthorized(tournamentRes) || isUnauthorized(regionsRes)) {
     redirectToStaffLogin(cookies, url);
   }
   if (tournamentRes.status === 404) {
     error(404, '大会が見つかりません');
   }
-  if (!tournamentRes.ok || !regionsRes.ok || !formFieldDefsRes.ok) {
+  if (!tournamentRes.ok || !regionsRes.ok) {
     error(502, '大会情報の取得に失敗しました');
   }
 
-  const tournament = await tournamentRes.json();
+  const {tournament, customName, formFieldDefs} = await tournamentRes.json();
   return {
     tournament,
+    customName,
     regions: await regionsRes.json(),
     // Written out as the YAML the editor works on, so editing starts from
     // what is stored rather than from a blank page or the spreadsheet.
-    formDefinitionYaml: formFieldDefsToYaml(
-      tournament.type,
-      await formFieldDefsRes.json(),
-    ),
+    formDefinitionYaml: formFieldDefsToYaml(tournament.type, formFieldDefs),
   };
 };
 

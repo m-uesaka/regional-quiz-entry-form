@@ -9,6 +9,8 @@
 
   interface Props {
     tournament: Tournament;
+    /** The 大会名 as staff typed it, or null when it was left blank. */
+    customName: string | null;
     /** The tournament's stored form definition, written out as YAML. */
     formDefinitionYaml: string;
     /** Passed straight through to the form's region select. */
@@ -21,11 +23,14 @@
     } | null;
   }
 
-  const {tournament, formDefinitionYaml, regions, result}: Props = $props();
+  const {tournament, customName, formDefinitionYaml, regions, result}: Props =
+    $props();
 
   // A refused save re-renders what was submitted; anything else shows the
   // stored tournament, which `load` re-reads after every successful save.
-  const values = $derived(result?.values ?? toTournamentFormValues(tournament));
+  const values = $derived(
+    result?.values ?? toTournamentFormValues(tournament, customName),
+  );
 </script>
 
 <Card>

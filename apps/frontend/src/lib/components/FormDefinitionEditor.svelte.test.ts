@@ -105,6 +105,62 @@ describe('FormDefinitionEditor', () => {
     expect(screen.getByLabelText('YAML')).toHaveValue(STORED_YAML);
   });
 
+  it('drops 保存しました once the saved text is edited again', async () => {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValueOnce(jsonResponse({ok: true}));
+    render(FormDefinitionEditor, {props: PROPS});
+
+    await user.click(screen.getByRole('button', {name: '保存'}));
+    expect(await screen.findByText('保存しました')).toBeInTheDocument();
+    await user.type(screen.getByLabelText('YAML'), '# 追記');
+
+    expect(screen.queryByText('保存しました')).not.toBeInTheDocument();
+  });
+
+  // A reload replaces the whole text, with no undo.
+  describe('reloading over unsaved hand edits', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    async function editThenReload(): Promise<void> {
+      const user = userEvent.setup();
+      render(FormDefinitionEditor, {props: PROPS});
+      await user.type(screen.getByLabelText('YAML'), '# 手で直した');
+      await user.type(
+        screen.getByPlaceholderText('スプレッドシートID'),
+        'sheet-123',
+      );
+      await user.click(
+        screen.getByRole('button', {name: 'スプレッドシートから読み込む'}),
+      );
+    }
+
+    it('keeps the edits when the reload is not confirmed', async () => {
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+      await editThenReload();
+
+      expect(confirm).toHaveBeenCalledOnce();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(screen.getByLabelText('YAML')).toHaveValue(
+        `${STORED_YAML}# 手で直した`,
+      );
+    });
+
+    it('replaces them once the reload is confirmed', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      fetchMock.mockResolvedValueOnce(jsonResponse({yaml: SHEET_YAML}));
+
+      await editThenReload();
+
+      expect(await screen.findByRole('status')).toHaveTextContent(
+        '確認してから保存してください',
+      );
+      expect(screen.getByLabelText('YAML')).toHaveValue(SHEET_YAML);
+    });
+  });
+
   it("shows the API's refusal of the YAML", async () => {
     const user = userEvent.setup();
     fetchMock.mockResolvedValueOnce(
