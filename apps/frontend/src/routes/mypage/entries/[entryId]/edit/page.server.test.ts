@@ -6,6 +6,10 @@ import {
   ENTRY_NAME_MAX_LENGTH,
   type MypageEntryDetail,
 } from '@regional-quiz/shared';
+import {
+  fakePlatform,
+  TOKYO_SAIKYOI_LIST_KEY,
+} from '../../../../../test-support/fake-platform';
 import {actions, load} from './+page.server';
 
 const OPEN_PERIOD = {
@@ -28,6 +32,7 @@ const ENTRY: MypageEntryDetail = {
     name: 'テスト大会',
     type: 'saikyoi',
     regionId: '00000000-0000-0000-0000-000000000003',
+    regionSlug: 'tokyo',
     ...OPEN_PERIOD,
   },
   formFieldDefs: [
@@ -111,10 +116,12 @@ function buildActionEvent(
   fetchImpl: typeof fetch,
   formData: FormData,
   deleted: string[] = [],
+  platform?: App.Platform,
 ): Parameters<typeof actions.default>[0] {
   return {
     params: {entryId: ENTRY.id},
     fetch: fetchImpl,
+    platform,
     cookies: fakeCookies(deleted),
     url: new URL(`http://localhost/mypage/entries/${ENTRY.id}/edit`),
     request: {formData: async () => formData},
@@ -445,5 +452,39 @@ describe('mypage entry edit form action', () => {
         .fieldErrors.customFieldValues,
     ).toBeUndefined();
     expect(log.patchBodies).toEqual([]);
+  });
+
+  describe('the cached public entry list (#125)', () => {
+    it('drops it once the edit is saved', async () => {
+      const {platform, stored} = fakePlatform();
+      stored.set(TOKYO_SAIKYOI_LIST_KEY, Response.json([]));
+      const event = buildActionEvent(
+        fakeFetch(),
+        validFormData(),
+        [],
+        platform,
+      );
+
+      await expect(actions.default(event)).rejects.toMatchObject({
+        status: 303,
+      });
+      expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(false);
+    });
+
+    it('keeps it when the backend refuses the edit', async () => {
+      const {platform, stored} = fakePlatform();
+      stored.set(TOKYO_SAIKYOI_LIST_KEY, Response.json([]));
+      const event = buildActionEvent(
+        fakeFetch({patchStatus: 403}),
+        validFormData(),
+        [],
+        platform,
+      );
+
+      await expect(actions.default(event)).resolves.toMatchObject({
+        status: 403,
+      });
+      expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(true);
+    });
   });
 });

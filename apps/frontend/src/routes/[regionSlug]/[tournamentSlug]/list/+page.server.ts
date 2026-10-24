@@ -1,22 +1,12 @@
 import {error} from '@sveltejs/kit';
-import {TournamentTypeSchema, type EntryListItem} from '@regional-quiz/shared';
+import {TournamentTypeSchema} from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
+import {
+  readCachedEntryList,
+  storeEntryList,
+  type EntryListRef,
+} from '$lib/server/entry-list-cache';
 import type {PageServerLoad} from './$types';
-
-/**
- * How long a fetched entry list is served from the Cloudflare cache (#125).
- *
- * The list is read most right before the deadline, and everyone reads the
- * same thing, so up to this many seconds of staleness buys back the
- * Worker → Supabase round-trips for every render in between.
- *
- * The cache lives here rather than in the backend Worker because the SSR
- * call reaches the Worker through its `*.workers.dev` origin (`BACKEND_URL`),
- * where the Cache API is a no-op. Only the backend's JSON is cached, not
- * the rendered page: the page carries a per-response CSP nonce, and the
- * browser is not told to keep anything.
- */
-const ENTRY_LIST_CACHE_SECONDS = 30;
 
 export const load: PageServerLoad = async ({params, fetch, platform, url}) => {
   // Same slug-narrowing rationale as the entry route's `load`: the RPC
@@ -26,14 +16,15 @@ export const load: PageServerLoad = async ({params, fetch, platform, url}) => {
     throw error(404, '大会が見つかりません');
   }
 
-  // `platform` is absent under `vite dev`; the list is then simply fetched
-  // every time. The key only has to be a URL on this host that no real
-  // request uses.
-  const cache = platform?.caches.default;
-  const cacheKey = `${url.origin}/__cache/entry-list/${encodeURIComponent(params.regionSlug)}/${parsedType.data}`;
-  const cached = await cache?.match(cacheKey);
+  // Served from the Cloudflare cache when it can be (#125); see
+  // `$lib/server/entry-list-cache` for why there and for how long.
+  const ref: EntryListRef = {
+    regionSlug: params.regionSlug,
+    type: parsedType.data,
+  };
+  const cached = await readCachedEntryList(platform, url.origin, ref);
   if (cached) {
-    return {entries: (await cached.json()) as EntryListItem[]};
+    return {entries: cached};
   }
 
   const api = createApiClient(fetch);
@@ -57,16 +48,6 @@ export const load: PageServerLoad = async ({params, fetch, platform, url}) => {
   }
 
   const entries = await res.json();
-  if (cache) {
-    const copy = Response.json(entries, {
-      headers: {'cache-control': `public, max-age=${ENTRY_LIST_CACHE_SECONDS}`},
-    });
-    // The cast only bridges the DOM and `@cloudflare/workers-types`
-    // declarations of `Response` (the latter adds `Headers.getAll`); at
-    // runtime this is the Workers `Response` either way.
-    platform.ctx.waitUntil(
-      cache.put(cacheKey, copy as unknown as Parameters<typeof cache.put>[1]),
-    );
-  }
+  storeEntryList(platform, url.origin, ref, entries);
   return {entries};
 };

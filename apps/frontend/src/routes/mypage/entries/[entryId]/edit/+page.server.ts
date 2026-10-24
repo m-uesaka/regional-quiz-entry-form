@@ -12,6 +12,7 @@ import {
   readCustomFieldValues,
   readFormText,
 } from '$lib/server/custom-field-values';
+import {dropCachedEntryList} from '$lib/server/entry-list-cache';
 import {redirectToParticipantLogin} from '$lib/server/participant-session';
 import type {EntryEditFormValues} from '$lib/types/entry-form';
 import type {Actions, PageServerLoad} from './$types';
@@ -69,7 +70,7 @@ export const load: PageServerLoad = async ({cookies, params, fetch, url}) => {
 };
 
 export const actions = {
-  default: async ({cookies, params, request, fetch, url}) => {
+  default: async ({cookies, params, request, fetch, platform, url}) => {
     const api = createApiClient(fetch);
 
     // The field definitions decide how the submitted body is interpreted,
@@ -88,7 +89,7 @@ export const actions = {
       }
       throw error(502, 'エントリー情報の取得に失敗しました');
     }
-    const {formFieldDefs} = await detailRes.json();
+    const {formFieldDefs, tournament} = await detailRes.json();
 
     const formData = await request.formData();
     const freeText = readFormText(formData, 'freeText');
@@ -176,6 +177,8 @@ export const actions = {
       });
     }
 
+    // The display name is on the public list, so its cached copy goes (#125).
+    await dropCachedEntryList(platform, url.origin, tournament);
     throw redirect(303, '/mypage');
   },
 } satisfies Actions;

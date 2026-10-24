@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import type {HttpError} from '@sveltejs/kit';
 import type {EntryListItem} from '@regional-quiz/shared';
+import {fakePlatform} from '../../../../test-support/fake-platform';
 import {load} from './+page.server';
 
 const ENTRIES: EntryListItem[] = [
@@ -29,27 +30,6 @@ function fakeFetch(options: {
       headers: {'Content-Type': 'application/json'},
     });
   }) as typeof fetch;
-}
-
-/**
- * A stand-in for Cloudflare's `platform`: `caches.default` is a `Map` keyed
- * by the URL string `load` passes, and `waitUntil` collects the promises so a test can await them.
- */
-function fakePlatform(stored: Map<string, Response> = new Map()) {
-  const pending: Array<Promise<unknown>> = [];
-  const platform = {
-    caches: {
-      default: {
-        match: (key: string) => Promise.resolve(stored.get(key)),
-        put: (key: string, res: Response) => {
-          stored.set(key, res);
-          return Promise.resolve();
-        },
-      },
-    },
-    ctx: {waitUntil: (p: Promise<unknown>) => pending.push(p)},
-  } as unknown as App.Platform;
-  return {platform, stored, settled: () => Promise.all(pending)};
 }
 
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */

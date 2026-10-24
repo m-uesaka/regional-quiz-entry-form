@@ -196,6 +196,9 @@ export const MypageEntrySchema = z.object({
     name: z.string(),
     type: TournamentTypeSchema,
     regionId: z.string().uuid(),
+    // Names the tournament's public list page, whose cached copy the
+    // frontend drops when the entry is cancelled or edited (#125).
+    regionSlug: z.string(),
     entryOpensAt: z.string().datetime({offset: true}),
     entryClosesAt: z.string().datetime({offset: true}),
   }),

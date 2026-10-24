@@ -1,5 +1,9 @@
 import {describe, expect, it} from 'vitest';
 import type {HttpError, Redirect} from '@sveltejs/kit';
+import {
+  fakePlatform,
+  TOKYO_SAIKYOI_LIST_KEY,
+} from '../../test-support/fake-platform';
 import {load} from './+page.server';
 
 /** Builds a fake `fetch` answering the single verify call `load` makes. */
@@ -21,14 +25,50 @@ function fakeFetch(options: {
 function buildEvent(options: {
   fetch: typeof fetch;
   search?: string;
+  platform?: App.Platform;
 }): Parameters<typeof load>[0] {
   return {
     url: new URL(`http://localhost/verify${options.search ?? ''}`),
     fetch: options.fetch,
+    platform: options.platform,
   } as Parameters<typeof load>[0];
 }
 
 describe('verify +page.server load (confirming a token)', () => {
+  it('drops the cached public list the entry now appears on (#125)', async () => {
+    const {platform, stored} = fakePlatform();
+    stored.set(TOKYO_SAIKYOI_LIST_KEY, Response.json([]));
+    const event = buildEvent({
+      search: '?token=abc123',
+      fetch: fakeFetch({
+        body: {
+          status: 'confirmed',
+          tournament: {regionSlug: 'tokyo', type: 'saikyoi'},
+        },
+      }),
+      platform,
+    });
+
+    await expect(load(event)).rejects.toMatchObject({status: 303});
+    expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(false);
+  });
+
+  it('still confirms when the backend cannot name the tournament', async () => {
+    const {platform, stored} = fakePlatform();
+    stored.set(TOKYO_SAIKYOI_LIST_KEY, Response.json([]));
+    const event = buildEvent({
+      search: '?token=abc123',
+      fetch: fakeFetch({body: {status: 'confirmed', tournament: null}}),
+      platform,
+    });
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 303,
+      location: '/verify?status=confirmed',
+    } satisfies Partial<Redirect>);
+    expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(true);
+  });
+
   it('passes the token through and redirects to the token-less result URL', async () => {
     const requested: string[] = [];
     const event = buildEvent({
