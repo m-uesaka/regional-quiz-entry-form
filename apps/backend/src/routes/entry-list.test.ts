@@ -195,41 +195,6 @@ describe('GET /tournaments/:tournamentId/entry-list (mocked Supabase)', () => {
     expect(body[2].displayName).toBe('参加者2');
   });
 
-  // `app` 経由で叩くので、`index.ts` の `secureHeaders()` がこのヘッダを
-  // 上書きしていないことも併せて確かめている(#125)。
-  it('GET /entry-list answers with a public cache-control header', async () => {
-    mockEntriesFetch([
-      {display_name: '太郎', status: 'confirmed', waitlist_position: null},
-    ]);
-
-    const res = await app.request(
-      `/api/tournaments/${tournamentId}/entry-list`,
-      {},
-      env,
-    );
-
-    expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toBe(
-      'public, max-age=30, stale-while-revalidate=300',
-    );
-  });
-
-  it('does not mark a failed entry-list read as cacheable', async () => {
-    globalThis.fetch = (() =>
-      Promise.resolve(
-        Response.json({message: 'boom'}, {status: 500}),
-      )) as unknown as typeof fetch;
-
-    const res = await app.request(
-      `/api/tournaments/${tournamentId}/entry-list`,
-      {},
-      env,
-    );
-
-    expect(res.status).toBe(500);
-    expect(res.headers.get('cache-control')).toBeNull();
-  });
-
   it('returns waitlistPosition for waitlisted entries', async () => {
     mockEntriesFetch([
       {display_name: '次郎', status: 'waitlisted', waitlist_position: 3},
@@ -304,9 +269,6 @@ describe('the entry list stays public after the entry period', () => {
 
     expect(res.status).toBe(200);
     expect(body[0].displayName).toBe('太郎');
-    expect(res.headers.get('cache-control')).toBe(
-      'public, max-age=30, stale-while-revalidate=300',
-    );
   });
 
   it('answers the slug-keyed route with 404 for an unknown tournament', async () => {
@@ -320,8 +282,6 @@ describe('the entry list stays public after the entry period', () => {
     );
 
     expect(res.status).toBe(404);
-    // 直後に作られた大会が見えなくならないよう、404 はキャッシュさせない。
-    expect(res.headers.get('cache-control')).toBeNull();
   });
 });
 

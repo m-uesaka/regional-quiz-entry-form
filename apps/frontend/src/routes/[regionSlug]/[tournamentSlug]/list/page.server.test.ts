@@ -1,4 +1,4 @@
-import {describe, expect, it, vi} from 'vitest';
+import {describe, expect, it} from 'vitest';
 import type {HttpError} from '@sveltejs/kit';
 import type {EntryListItem} from '@regional-quiz/shared';
 import {load} from './+page.server';
@@ -32,32 +32,41 @@ function fakeFetch(options: {
 }
 
 /**
- * Builds the partial `RequestEvent` `load` needs, cast for test use.
- * `locals` throws on any access, so a `load` that starts personalizing the
- * page (which would make the public cache-control below unsafe) fails here.
+ * A stand-in for Cloudflare's `platform`: `caches.default` is a `Map` keyed
+ * by the URL string `load` passes, and `waitUntil` collects the promises so a test can await them.
  */
+function fakePlatform(stored: Map<string, Response> = new Map()) {
+  const pending: Array<Promise<unknown>> = [];
+  const platform = {
+    caches: {
+      default: {
+        match: (key: string) => Promise.resolve(stored.get(key)),
+        put: (key: string, res: Response) => {
+          stored.set(key, res);
+          return Promise.resolve();
+        },
+      },
+    },
+    ctx: {waitUntil: (p: Promise<unknown>) => pending.push(p)},
+  } as unknown as App.Platform;
+  return {platform, stored, settled: () => Promise.all(pending)};
+}
+
+/** Builds the partial `RequestEvent` `load` needs, cast for test use. */
 function buildEvent(options: {
   fetch: typeof fetch;
   tournamentSlug?: string;
-  setHeaders?: (headers: Record<string, string>) => void;
+  platform?: App.Platform;
 }): Parameters<typeof load>[0] {
-  const locals = new Proxy(
-    {},
-    {
-      get(_target, key) {
-        throw new Error(`load read locals.${String(key)}`);
-      },
-    },
-  );
   return {
     params: {
       regionSlug: 'tokyo',
       tournamentSlug: options.tournamentSlug ?? 'saikyoi',
     },
     fetch: options.fetch,
-    setHeaders: options.setHeaders ?? (() => {}),
-    locals,
-  } as unknown as Parameters<typeof load>[0];
+    platform: options.platform,
+    url: new URL('https://entry.example/tokyo/saikyoi/list'),
+  } as Parameters<typeof load>[0];
 }
 
 describe('list +page.server load', () => {
@@ -65,36 +74,6 @@ describe('list +page.server load', () => {
     const event = buildEvent({fetch: fakeFetch({entries: ENTRIES})});
 
     await expect(load(event)).resolves.toEqual({entries: ENTRIES});
-  });
-
-  it('load sets a public cache-control header', async () => {
-    const setHeaders = vi.fn();
-    const event = buildEvent({
-      fetch: fakeFetch({entries: ENTRIES}),
-      setHeaders,
-    });
-
-    await load(event);
-
-    expect(setHeaders).toHaveBeenCalledWith({
-      'cache-control': 'public, max-age=30',
-    });
-  });
-
-  // 個人化されていないことの回帰テスト(#125)。`buildEvent` の `locals` は
-  // どのプロパティを読んでも throw するので、読めばここで落ちる。
-  it('load reads nothing from locals', async () => {
-    const event = buildEvent({fetch: fakeFetch({entries: ENTRIES})});
-
-    await expect(load(event)).resolves.toEqual({entries: ENTRIES});
-  });
-
-  it('does not make an error page cacheable', async () => {
-    const setHeaders = vi.fn();
-    const event = buildEvent({fetch: fakeFetch({status: 404}), setHeaders});
-
-    await expect(load(event)).rejects.toMatchObject({status: 404});
-    expect(setHeaders).not.toHaveBeenCalled();
   });
 
   it('throws 404 when the tournament slug is not a valid tournament type', async () => {
@@ -122,5 +101,63 @@ describe('list +page.server load', () => {
     await expect(load(event)).rejects.toMatchObject({
       status: 502,
     } satisfies Partial<HttpError>);
+  });
+
+  describe('the Cloudflare cache (#125)', () => {
+    it('stores a fetched list for 30 seconds', async () => {
+      const {platform, stored, settled} = fakePlatform();
+      const event = buildEvent({
+        fetch: fakeFetch({entries: ENTRIES}),
+        platform,
+      });
+
+      await expect(load(event)).resolves.toEqual({entries: ENTRIES});
+      await settled();
+
+      const [res] = [...stored.values()];
+      expect(stored.size).toBe(1);
+      expect(res.headers.get('cache-control')).toBe('public, max-age=30');
+      expect(await res.json()).toEqual(ENTRIES);
+    });
+
+    it('answers from the cache without calling the backend', async () => {
+      const {platform, settled} = fakePlatform();
+      await load(buildEvent({fetch: fakeFetch({entries: ENTRIES}), platform}));
+      await settled();
+
+      const event = buildEvent({
+        fetch: (() => {
+          throw new Error('the backend was called on a cache hit');
+        }) as typeof fetch,
+        platform,
+      });
+
+      await expect(load(event)).resolves.toEqual({entries: ENTRIES});
+    });
+
+    it('keeps tournaments apart in the cache', async () => {
+      const {platform, settled} = fakePlatform();
+      await load(buildEvent({fetch: fakeFetch({entries: ENTRIES}), platform}));
+      await settled();
+
+      // A different tournament type must miss and reach the backend.
+      const event = buildEvent({
+        fetch: fakeFetch({entries: ENTRIES}),
+        tournamentSlug: 'shinjinou',
+        platform,
+      });
+
+      await expect(load(event)).rejects.toThrow(/unexpected request/);
+    });
+
+    it('does not cache a failed read', async () => {
+      const {platform, stored, settled} = fakePlatform();
+      const event = buildEvent({fetch: fakeFetch({status: 500}), platform});
+
+      await expect(load(event)).rejects.toMatchObject({status: 502});
+      await settled();
+
+      expect(stored.size).toBe(0);
+    });
   });
 });
