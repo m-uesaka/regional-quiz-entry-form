@@ -32,27 +32,27 @@ const INVALID_INPUT_MESSAGE = '入力内容を確認してください';
 // lands, so a client-side call would 404 in production.
 export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
   const api = createApiClient(fetch);
-  const [tournamentsRes, regionsRes] = await Promise.all([
-    api.api.tournaments.$get(),
+  // Only the tournament being edited, not the whole list to `find` it in
+  // (#123).
+  const [tournamentRes, regionsRes] = await Promise.all([
+    api.api.tournaments[':id'].$get({param: {id: params.id}}),
     api.api.regions.$get(),
   ]);
-  if (!tournamentsRes.ok || !regionsRes.ok) {
-    if (isUnauthorized(tournamentsRes) || isUnauthorized(regionsRes)) {
-      redirectToStaffLogin(cookies, url);
-    }
+  if (isUnauthorized(tournamentRes) || isUnauthorized(regionsRes)) {
+    redirectToStaffLogin(cookies, url);
+  }
+  // 400 is an id that isn't a UUID, which names no tournament either.
+  if (tournamentRes.status === 404 || tournamentRes.status === 400) {
+    error(404, '大会が見つかりません');
+  }
+  if (!tournamentRes.ok || !regionsRes.ok) {
     error(502, '大会情報の取得に失敗しました');
   }
 
-  // `GET /api/tournaments/:id` doesn't exist (only list + create + update),
-  // so the tournament being edited is picked out of the full list.
-  const tournament = (await tournamentsRes.json()).find(
-    t => t.id === params.id,
-  );
-  if (!tournament) {
-    error(404, '大会が見つかりません');
-  }
-
-  return {tournament, regions: await regionsRes.json()};
+  return {
+    tournament: await tournamentRes.json(),
+    regions: await regionsRes.json(),
+  };
 };
 
 export const actions = {

@@ -31,7 +31,8 @@ interface ApiCall {
  * Builds a fake `fetch` answering the regions and tournaments APIs.
  * @param options.status The status to answer a PATCH with.
  * @param options.error The `{error}` message to answer a refusal with.
- * @param options.tournaments What the tournament list should hold.
+ * @param options.tournaments The tournaments `GET /api/tournaments/:id` can
+ *     find.
  * @param options.calls Collects the recorded requests.
  */
 function fakeFetch(
@@ -54,11 +55,15 @@ function fakeFetch(
           : (JSON.parse(String(init.body)) as unknown),
     });
     if (method === 'GET') {
-      return jsonResponse(
-        url.includes('/regions')
-          ? [TOKYO]
-          : (options.tournaments ?? [TOURNAMENT]),
+      if (url.includes('/regions')) {
+        return jsonResponse([TOKYO]);
+      }
+      const tournament = (options.tournaments ?? [TOURNAMENT]).find(
+        t => url === `/api/tournaments/${t.id}`,
       );
+      return tournament
+        ? jsonResponse(tournament)
+        : jsonResponse({error: 'tournament not found'}, 404);
     }
     const status = options.status ?? 200;
     return status >= 400
@@ -129,6 +134,18 @@ describe('admin tournament edit +page.server load', () => {
       tournament: TOURNAMENT,
       regions: [TOKYO],
     });
+  });
+
+  // Not the whole list to `find` the one being edited in (#123).
+  it('load fetches only the tournament it needs', async () => {
+    const calls: ApiCall[] = [];
+
+    await load(buildLoadEvent(fakeFetch({calls})));
+
+    expect(calls.map(call => `${call.method} ${call.url}`).sort()).toEqual([
+      'GET /api/regions',
+      `GET /api/tournaments/${TOURNAMENT.id}`,
+    ]);
   });
 
   it('reports an id that names no tournament as not found', async () => {
