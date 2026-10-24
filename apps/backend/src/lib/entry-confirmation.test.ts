@@ -162,7 +162,12 @@ describe.skipIf(!(await isDbReachable()))(
 
       const result = await confirmEntryByToken(env, token);
 
-      expect(result).toEqual({ok: true, status: 'confirmed'});
+      expect(result).toEqual({
+        ok: true,
+        status: 'confirmed',
+        // What the frontend needs to drop the list from its cache (#125).
+        tournament: {regionSlug: `${testRegionSlug}-confirm`, type: 'saikyoi'},
+      });
       const [entryRow] = await sql`
         select status, email_verified_at from entries where id = ${entryId}
       `;
@@ -187,7 +192,14 @@ describe.skipIf(!(await isDbReachable()))(
 
       const result = await confirmEntryByToken(env, token);
 
-      expect(result).toEqual({ok: true, status: 'waitlisted'});
+      expect(result).toEqual({
+        ok: true,
+        status: 'waitlisted',
+        tournament: {
+          regionSlug: `${testRegionSlug}-capacity`,
+          type: 'saikyoi',
+        },
+      });
       const [entryRow] = await sql`
         select status, waitlist_position from entries where id = ${entryId}
       `;

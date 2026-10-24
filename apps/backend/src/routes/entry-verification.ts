@@ -26,6 +26,6 @@ export const entryVerificationRoute = new Hono<Env>().get(
         500,
       );
     }
-    return c.json({status: result.status});
+    return c.json({status: result.status, tournament: result.tournament});
   },
 );

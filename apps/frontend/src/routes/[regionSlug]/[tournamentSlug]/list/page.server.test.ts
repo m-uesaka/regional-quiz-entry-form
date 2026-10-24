@@ -1,6 +1,11 @@
 import {describe, expect, it} from 'vitest';
 import type {HttpError} from '@sveltejs/kit';
 import type {EntryListItem} from '@regional-quiz/shared';
+import {dropCachedEntryList} from '$lib/server/entry-list-cache';
+import {
+  fakePlatform,
+  TOKYO_SAIKYOI_LIST_KEY,
+} from '../../../../test-support/fake-platform';
 import {load} from './+page.server';
 
 const ENTRIES: EntryListItem[] = [
@@ -48,11 +53,13 @@ function buildEvent(options: {
   fetch: typeof fetch;
   tournamentSlug?: string;
   search?: string;
+  platform?: App.Platform;
 }): Parameters<typeof load>[0] {
   const tournamentSlug = options.tournamentSlug ?? 'saikyoi';
   return {
     params: {regionSlug: 'tokyo', tournamentSlug},
     fetch: options.fetch,
+    platform: options.platform,
     url: new URL(
       `http://localhost/tokyo/${tournamentSlug}/list${options.search ?? ''}`,
     ),
@@ -122,5 +129,131 @@ describe('list +page.server load', () => {
     await expect(load(event)).rejects.toMatchObject({
       status: 502,
     } satisfies Partial<HttpError>);
+  });
+
+  describe('the Cloudflare cache (#125)', () => {
+    /** The cached pages, i.e. every stored key but the list versions. */
+    function pageKeys(stored: Map<string, Response>): string[] {
+      return [...stored.keys()].filter(key => key.includes('?offset='));
+    }
+
+    it('stores a fetched page for 30 seconds, under the list version', async () => {
+      const {platform, stored, settled} = fakePlatform();
+      const event = buildEvent({
+        fetch: fakeFetch({entries: ENTRIES}),
+        platform,
+      });
+
+      await load(event);
+      await settled();
+
+      const version = await stored.get(TOKYO_SAIKYOI_LIST_KEY)?.text();
+      expect(version).toBeTruthy();
+      const [pageKey] = pageKeys(stored);
+      expect(pageKey).toBe(
+        `http://localhost/__cache/entry-list/tokyo/saikyoi/${version}?offset=0`,
+      );
+      const page = stored.get(pageKey);
+      expect(page?.headers.get('cache-control')).toBe('public, max-age=30');
+      expect(await page?.json()).toEqual({
+        items: ENTRIES,
+        total: 2,
+        limit: 100,
+        offset: 0,
+      });
+    });
+
+    it('answers from the cache without calling the backend', async () => {
+      const {platform, settled} = fakePlatform();
+      await load(buildEvent({fetch: fakeFetch({entries: ENTRIES}), platform}));
+      await settled();
+
+      const event = buildEvent({
+        fetch: (() => {
+          throw new Error('the backend was called on a cache hit');
+        }) as typeof fetch,
+        platform,
+      });
+
+      await expect(load(event)).resolves.toEqual({
+        entries: ENTRIES,
+        total: 2,
+        limit: 100,
+        offset: 0,
+      });
+    });
+
+    it('keeps pages apart', async () => {
+      const {platform, settled} = fakePlatform();
+      await load(buildEvent({fetch: fakeFetch({entries: ENTRIES}), platform}));
+      await settled();
+
+      const requests: URL[] = [];
+      await load(
+        buildEvent({
+          fetch: fakeFetch({entries: ENTRIES, total: 250, requests}),
+          search: '?offset=100',
+          platform,
+        }),
+      );
+
+      expect(requests).toHaveLength(1);
+    });
+
+    it('keeps tournaments apart', async () => {
+      const {platform, settled} = fakePlatform();
+      await load(buildEvent({fetch: fakeFetch({entries: ENTRIES}), platform}));
+      await settled();
+
+      // A different tournament type must miss and reach the backend.
+      const event = buildEvent({
+        fetch: fakeFetch({entries: ENTRIES}),
+        tournamentSlug: 'shinjinou',
+        platform,
+      });
+
+      await expect(load(event)).rejects.toThrow(/unexpected request/);
+    });
+
+    it('does not cache an offset the pager never links to', async () => {
+      const {platform, stored, settled} = fakePlatform();
+      const event = buildEvent({
+        fetch: fakeFetch({entries: ENTRIES, total: 250}),
+        search: '?offset=150',
+        platform,
+      });
+
+      await load(event);
+      await settled();
+
+      expect(stored.size).toBe(0);
+    });
+
+    it('does not cache a failed read', async () => {
+      const {platform, stored, settled} = fakePlatform();
+      const event = buildEvent({fetch: fakeFetch({status: 500}), platform});
+
+      await expect(load(event)).rejects.toMatchObject({status: 502});
+      await settled();
+
+      expect(pageKeys(stored)).toEqual([]);
+    });
+
+    it('reaches the backend again once the list is dropped', async () => {
+      const {platform, settled} = fakePlatform();
+      await load(buildEvent({fetch: fakeFetch({entries: ENTRIES}), platform}));
+      await settled();
+
+      await dropCachedEntryList(platform, 'http://localhost', {
+        regionSlug: 'tokyo',
+        type: 'saikyoi',
+      });
+      const requests: URL[] = [];
+      await load(
+        buildEvent({fetch: fakeFetch({entries: ENTRIES, requests}), platform}),
+      );
+
+      expect(requests).toHaveLength(1);
+    });
   });
 });

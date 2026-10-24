@@ -1,3 +1,4 @@
+import type {TournamentType} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import {hashToken} from './token';
@@ -14,8 +15,21 @@ import {hashToken} from './token';
  */
 type ConfirmFailureReason = 'invalid_token' | 'internal';
 
+/**
+ * The tournament a confirmed entry belongs to, as the public list page's
+ * URL names it, so the frontend can drop that list from its cache (#125).
+ */
+interface ConfirmedTournament {
+  regionSlug: string;
+  type: TournamentType;
+}
+
 type ConfirmResult =
-  | {ok: true; status: 'confirmed' | 'waitlisted'}
+  | {
+      ok: true;
+      status: 'confirmed' | 'waitlisted';
+      tournament: ConfirmedTournament | null;
+    }
   | {ok: false; reason: ConfirmFailureReason; error: string};
 
 /**
@@ -50,8 +64,9 @@ export async function confirmEntryByToken(
 ): Promise<ConfirmResult> {
   const db = createDbClient(env);
 
+  const tokenHash = await hashToken(token);
   const {data, error} = await db.rpc('confirm_entry_by_token', {
-    p_token_hash: await hashToken(token),
+    p_token_hash: tokenHash,
   });
   if (error) {
     if (error.code === INVALID_TOKEN_SQLSTATE) {
@@ -64,5 +79,39 @@ export async function confirmEntryByToken(
     return {ok: false, reason: 'internal', error: error.message};
   }
 
-  return {ok: true, status: data as 'confirmed' | 'waitlisted'};
+  return {
+    ok: true,
+    status: data as 'confirmed' | 'waitlisted',
+    tournament: await readConfirmedTournament(env, tokenHash),
+  };
+}
+
+/** Shape of the token row as selected by `readConfirmedTournament`. */
+interface ConfirmedTournamentRow {
+  entries: {tournaments: {type: TournamentType; regions: {slug: string}}};
+}
+
+/**
+ * Reads which tournament the just-used token's entry belongs to. The token
+ * row is only marked used, not deleted, so it can still be followed after
+ * the RPC. Best-effort: the entry is confirmed either way, and a list left
+ * in the frontend's cache only lags by that cache's lifetime, so a failed
+ * read answers `null` rather than turning a confirmation into an error.
+ */
+async function readConfirmedTournament(
+  env: Bindings,
+  tokenHash: string,
+): Promise<ConfirmedTournament | null> {
+  const {data, error} = await createDbClient(env)
+    .from('email_verification_tokens')
+    .select('entries(tournaments(type, regions(slug)))')
+    .eq('token_hash', tokenHash)
+    .maybeSingle<ConfirmedTournamentRow>();
+  if (error || !data) {
+    return null;
+  }
+  return {
+    regionSlug: data.entries.tournaments.regions.slug,
+    type: data.entries.tournaments.type,
+  };
 }
