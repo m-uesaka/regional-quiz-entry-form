@@ -67,19 +67,56 @@ interface MockEntryRow {
   [extraPersonalField: string]: unknown;
 }
 
+/** Shape of one page of the entry-list response. */
+interface EntryListPage {
+  items: Array<Record<string, unknown>>;
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/**
+ * Answers one entries request the way PostgREST does for an exact-count
+ * query over `rows`: the requested `offset` / `limit` slice, with the
+ * total in `Content-Range`.
+ * @param url The request URL `@supabase/supabase-js` built.
+ * @param rows Every row the query would match.
+ */
+function answerEntriesPage(url: URL, rows: MockEntryRow[]): Response {
+  const offset = Number(url.searchParams.get('offset') ?? 0);
+  const limit = Number(url.searchParams.get('limit') ?? rows.length);
+  const page = rows.slice(offset, offset + limit);
+  const range = page.length > 0 ? `${offset}-${offset + page.length - 1}` : '*';
+  return Response.json(page, {
+    headers: {'Content-Range': `${range}/${rows.length}`},
+  });
+}
+
 // Mocks the `fetch` calls `@supabase/supabase-js` makes for
 // `.from('entries').select(...)` (same convention as
 // `routes/staff-auth.test.ts`'s `mockStaffAccountFetch`), so these run
-// unconditionally in CI without a local Supabase stack. The route pages
-// through the entries, so each `pages` entry answers one request and an
-// exhausted mock answers with the empty page that ends the paging.
-function mockEntriesFetch(...pages: MockEntryRow[][]): void {
-  let callIndex = 0;
-  globalThis.fetch = (() => {
-    const body = pages[callIndex] ?? [];
-    callIndex++;
-    return Promise.resolve(Response.json(body));
+// unconditionally in CI without a local Supabase stack. Every request's URL
+// is recorded, so tests can see which page and order were asked for.
+function mockEntriesFetch(rows: MockEntryRow[]): URL[] {
+  const requests: URL[] = [];
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = new URL(typeof input === 'string' ? input : input.toString());
+    requests.push(url);
+    return Promise.resolve(answerEntriesPage(url, rows));
   }) as unknown as typeof fetch;
+  return requests;
+}
+
+/**
+ * Builds `count` confirmed entry rows named `参加者0`, `参加者1`, ....
+ * @param count How many rows to build.
+ */
+function confirmedRows(count: number): MockEntryRow[] {
+  return Array.from({length: count}, (_, index) => ({
+    display_name: `参加者${index}`,
+    status: 'confirmed',
+    waitlist_position: null,
+  }));
 }
 
 // A request that reaches `entryListRoute`'s handler at all (rather than,
@@ -116,15 +153,15 @@ describe('GET /tournaments/:tournamentId/entry-list (mocked Supabase)', () => {
       {},
       env,
     );
-    const body = (await res.json()) as Array<Record<string, unknown>>;
+    const body = (await res.json()) as EntryListPage;
 
     expect(res.status).toBe(200);
-    expect(body).toHaveLength(1);
-    expect(body[0].displayName).toBe('太郎');
-    expect(body[0]).not.toHaveProperty('email');
-    expect(body[0]).not.toHaveProperty('name');
-    expect(body[0]).not.toHaveProperty('furigana');
-    expect(body[0]).not.toHaveProperty('freeText');
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].displayName).toBe('太郎');
+    expect(body.items[0]).not.toHaveProperty('email');
+    expect(body.items[0]).not.toHaveProperty('name');
+    expect(body.items[0]).not.toHaveProperty('furigana');
+    expect(body.items[0]).not.toHaveProperty('freeText');
   });
 
   it('masks cancelled entries as "キャンセル"', async () => {
@@ -137,62 +174,12 @@ describe('GET /tournaments/:tournamentId/entry-list (mocked Supabase)', () => {
       {},
       env,
     );
-    const body = (await res.json()) as Array<Record<string, unknown>>;
+    const body = (await res.json()) as EntryListPage;
 
     expect(res.status).toBe(200);
-    expect(body).toHaveLength(1);
-    expect(body[0].displayName).toBe('キャンセル');
-    expect(body[0].status).toBe('cancelled');
-  });
-
-  it('pages past the Data API row cap and returns every entry', async () => {
-    // The route asks for 500 rows at a time, so a full first page has to be
-    // followed by another request, and paging only ends once a request
-    // comes back empty.
-    const firstPage: MockEntryRow[] = Array.from({length: 500}, (_, index) => ({
-      display_name: `参加者${index}`,
-      status: 'confirmed',
-      waitlist_position: null,
-    }));
-
-    mockEntriesFetch(firstPage, [
-      {display_name: '参加者500', status: 'confirmed', waitlist_position: null},
-    ]);
-
-    const res = await app.request(
-      `/api/tournaments/${tournamentId}/entry-list`,
-      {},
-      env,
-    );
-    const body = (await res.json()) as Array<Record<string, unknown>>;
-
-    expect(res.status).toBe(200);
-    expect(body).toHaveLength(501);
-    expect(body[500].displayName).toBe('参加者500');
-  });
-
-  it('keeps paging when the server hands back a smaller page than asked for', async () => {
-    // A deployment whose `max_rows` is below the requested page size trims
-    // every response, so the first batch is short without the entries being
-    // exhausted. Ending there would drop the rest.
-    mockEntriesFetch(
-      [
-        {display_name: '参加者0', status: 'confirmed', waitlist_position: null},
-        {display_name: '参加者1', status: 'confirmed', waitlist_position: null},
-      ],
-      [{display_name: '参加者2', status: 'confirmed', waitlist_position: null}],
-    );
-
-    const res = await app.request(
-      `/api/tournaments/${tournamentId}/entry-list`,
-      {},
-      env,
-    );
-    const body = (await res.json()) as Array<Record<string, unknown>>;
-
-    expect(res.status).toBe(200);
-    expect(body).toHaveLength(3);
-    expect(body[2].displayName).toBe('参加者2');
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].displayName).toBe('キャンセル');
+    expect(body.items[0].status).toBe('cancelled');
   });
 
   it('returns waitlistPosition for waitlisted entries', async () => {
@@ -205,13 +192,130 @@ describe('GET /tournaments/:tournamentId/entry-list (mocked Supabase)', () => {
       {},
       env,
     );
-    const body = (await res.json()) as Array<Record<string, unknown>>;
+    const body = (await res.json()) as EntryListPage;
 
     expect(res.status).toBe(200);
-    expect(body).toHaveLength(1);
-    expect(body[0].displayName).toBe('次郎');
-    expect(body[0].status).toBe('waitlisted');
-    expect(body[0].waitlistPosition).toBe(3);
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].displayName).toBe('次郎');
+    expect(body.items[0].status).toBe('waitlisted');
+    expect(body.items[0].waitlistPosition).toBe(3);
+  });
+
+  it('GET /entry-list returns the first page and the total count', async () => {
+    const requests = mockEntriesFetch(confirmedRows(150));
+
+    const res = await app.request(
+      `/api/tournaments/${tournamentId}/entry-list`,
+      {},
+      env,
+    );
+    const body = (await res.json()) as EntryListPage;
+
+    expect(res.status).toBe(200);
+    expect(body.total).toBe(150);
+    expect(body.limit).toBe(100);
+    expect(body.offset).toBe(0);
+    expect(body.items).toHaveLength(100);
+    expect(body.items[0].displayName).toBe('参加者0');
+    expect(body.items[99].displayName).toBe('参加者99');
+    // One request, with the total counted in it rather than by a second
+    // query.
+    expect(requests).toHaveLength(1);
+    expect(requests[0].searchParams.get('offset')).toBe('0');
+    expect(requests[0].searchParams.get('limit')).toBe('100');
+  });
+
+  it('GET /entry-list honours limit and offset', async () => {
+    const requests = mockEntriesFetch(confirmedRows(30));
+
+    const res = await app.request(
+      `/api/tournaments/${tournamentId}/entry-list?limit=10&offset=20`,
+      {},
+      env,
+    );
+    const body = (await res.json()) as EntryListPage;
+
+    expect(res.status).toBe(200);
+    expect(body).toMatchObject({total: 30, limit: 10, offset: 20});
+    expect(body.items.map(item => item.displayName)).toEqual(
+      confirmedRows(30)
+        .slice(20)
+        .map(row => row.display_name),
+    );
+    expect(requests[0].searchParams.get('offset')).toBe('20');
+    expect(requests[0].searchParams.get('limit')).toBe('10');
+  });
+
+  it('GET /entry-list rejects a limit over the maximum', async () => {
+    const requests = mockEntriesFetch(confirmedRows(1));
+
+    const res = await app.request(
+      `/api/tournaments/${tournamentId}/entry-list?limit=501`,
+      {},
+      env,
+    );
+
+    expect(res.status).toBe(400);
+    expect(requests).toHaveLength(0);
+  });
+
+  it('GET /entry-list keeps a stable order across page boundaries', async () => {
+    // `created_at` alone is not unique, so entries created in the same
+    // instant could swap places between two page requests; the `id`
+    // tie-breaker is what makes adjacent pages neither overlap nor skip.
+    const requests = mockEntriesFetch(confirmedRows(5));
+
+    const first = (await (
+      await app.request(
+        `/api/tournaments/${tournamentId}/entry-list?limit=3`,
+        {},
+        env,
+      )
+    ).json()) as EntryListPage;
+    const second = (await (
+      await app.request(
+        `/api/tournaments/${tournamentId}/entry-list?limit=3&offset=3`,
+        {},
+        env,
+      )
+    ).json()) as EntryListPage;
+
+    expect(requests).toHaveLength(2);
+    for (const request of requests) {
+      expect(request.searchParams.get('order')).toBe('created_at.asc,id.asc');
+    }
+    expect(
+      [...first.items, ...second.items].map(item => item.displayName),
+    ).toEqual(confirmedRows(5).map(row => row.display_name));
+  });
+
+  it('answers an offset past the last entry with an empty page', async () => {
+    // With an exact count PostgREST refuses such an offset with 416
+    // (PGRST103) instead of an empty array; a stale pager link should
+    // still get a page back, not a 500.
+    const rows = confirmedRows(3);
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      const url = new URL(typeof input === 'string' ? input : input.toString());
+      if (Number(url.searchParams.get('offset')) >= rows.length) {
+        return Promise.resolve(
+          Response.json(
+            {code: 'PGRST103', message: 'Requested range not satisfiable'},
+            {status: 416},
+          ),
+        );
+      }
+      return Promise.resolve(answerEntriesPage(url, rows));
+    }) as unknown as typeof fetch;
+
+    const res = await app.request(
+      `/api/tournaments/${tournamentId}/entry-list?offset=100`,
+      {},
+      env,
+    );
+    const body = (await res.json()) as EntryListPage;
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({items: [], total: 3, limit: 100, offset: 100});
   });
 });
 
@@ -228,12 +332,15 @@ describe('the entry list stays public after the entry period', () => {
   });
 
   function mockClosedTournamentEntriesFetch(rows: MockEntryRow[]): void {
-    let served = false;
-    globalThis.fetch = tournamentAwareFetch(closed, (() => {
-      const body = served ? [] : rows;
-      served = true;
-      return Promise.resolve(Response.json(body));
-    }) as unknown as typeof fetch);
+    globalThis.fetch = tournamentAwareFetch(closed, ((
+      input: RequestInfo | URL,
+    ) =>
+      Promise.resolve(
+        answerEntriesPage(
+          new URL(typeof input === 'string' ? input : input.toString()),
+          rows,
+        ),
+      )) as unknown as typeof fetch);
   }
 
   it('serves GET /tournaments/:tournamentId/entry-list', async () => {
@@ -246,11 +353,11 @@ describe('the entry list stays public after the entry period', () => {
       {},
       env,
     );
-    const body = (await res.json()) as Array<Record<string, unknown>>;
+    const body = (await res.json()) as EntryListPage;
 
     expect(res.status).toBe(200);
-    expect(body).toHaveLength(1);
-    expect(body[0].displayName).toBe('太郎');
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].displayName).toBe('太郎');
   });
 
   // The slug-keyed twin, which is what the public list page calls now that
@@ -265,10 +372,10 @@ describe('the entry list stays public after the entry period', () => {
       {},
       env,
     );
-    const body = (await res.json()) as Array<Record<string, unknown>>;
+    const body = (await res.json()) as EntryListPage;
 
     expect(res.status).toBe(200);
-    expect(body[0].displayName).toBe('太郎');
+    expect(body.items[0].displayName).toBe('太郎');
   });
 
   it('answers the slug-keyed route with 404 for an unknown tournament', async () => {
@@ -384,7 +491,7 @@ describe.skipIf(!(await isDbReachable()))(
         {},
         env,
       );
-      const body = (await res.json()) as Array<Record<string, unknown>>;
+      const body = ((await res.json()) as EntryListPage).items;
 
       expect(res.status).toBe(200);
       expect(body).toHaveLength(1);
@@ -408,7 +515,7 @@ describe.skipIf(!(await isDbReachable()))(
         {},
         env,
       );
-      const body = (await res.json()) as Array<Record<string, unknown>>;
+      const body = ((await res.json()) as EntryListPage).items;
 
       expect(res.status).toBe(200);
       expect(body).toHaveLength(1);
@@ -430,7 +537,7 @@ describe.skipIf(!(await isDbReachable()))(
         {},
         env,
       );
-      const body = (await res.json()) as Array<Record<string, unknown>>;
+      const body = ((await res.json()) as EntryListPage).items;
 
       expect(res.status).toBe(200);
       expect(body).toHaveLength(0);

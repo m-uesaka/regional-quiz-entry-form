@@ -5,6 +5,7 @@ import {
   ENTRY_STATUS_LABELS,
   EntrySchema,
   StaffEntryDetailSchema,
+  StaffEntryListQuerySchema,
   type CustomFieldValues,
   type Entry,
   type EntryStatus,
@@ -27,7 +28,7 @@ import {
   sortEntryRegulations,
   type EntryRegulationRow,
 } from '../lib/entry-regulations';
-import {fetchAllRows, type AllRowsResult} from '../lib/paged-select';
+import {fetchAllRows, fetchPage, type AllRowsResult} from '../lib/paged-select';
 import {internalError} from '../lib/errors';
 
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
@@ -62,6 +63,10 @@ const UTF8_BOM = '\uFEFF';
 
 /**
  * Fetches every entry of a tournament in the shape the CSV export needs.
+ *
+ * Unlike the paginated list route, the export deliberately keeps going
+ * through `fetchAllRows()`: a file with every entry in it is the whole
+ * point of the export, and it is downloaded, not embedded in a page.
  * @param db The Supabase client to query with.
  * @param tournamentId The tournament whose entries are exported.
  */
@@ -120,24 +125,40 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
   .get(
     '/tournaments/:tournamentId/entries',
     zValidator('param', TournamentIdParamSchema),
+    zValidator('query', StaffEntryListQuerySchema),
     requireStaffForTournament(),
     async c => {
       const db = createDbClient(c.env);
       const {tournamentId} = c.req.valid('param');
-      const {rows, error} = await fetchAllRows<EntryRow>((from, to) =>
-        db
+      const {status, ...page} = c.req.valid('query');
+      // One page, optionally narrowed to one status: what staff look for is
+      // "only the waitlist" or "only the unverified", not a scroll through
+      // everyone. The total comes back in the same request (`count:
+      // 'exact'`), and counts the filtered rows, so the pager follows the
+      // filter.
+      const {rows, total, error} = await fetchPage<EntryRow>((from, to) => {
+        let query = db
           .from('entries')
-          .select(ENTRY_COLUMNS)
-          .eq('tournament_id', tournamentId)
+          .select(ENTRY_COLUMNS, {count: 'exact'})
+          .eq('tournament_id', tournamentId);
+        if (status) {
+          query = query.eq('status', status);
+        }
+        return query
           .order('created_at', {ascending: true})
           .order('id', {ascending: true})
           .range(from, to)
-          .returns<EntryRow[]>(),
-      );
+          .returns<EntryRow[]>();
+      }, page);
       if (error) {
         return c.json(internalError('failed to read the entries', error), 500);
       }
-      return c.json(rows.map(rowToEntry));
+      return c.json({
+        items: rows.map(rowToEntry),
+        total,
+        limit: page.limit,
+        offset: page.offset,
+      });
     },
   )
   .get(

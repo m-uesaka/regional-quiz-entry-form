@@ -132,6 +132,43 @@ function mockSequentialFetch(responses: unknown[]): void {
   }) as unknown as typeof fetch);
 }
 
+/** Shape of one page of the staff entry-list response. */
+interface EntryListPage {
+  items: Array<Record<string, unknown>>;
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/**
+ * Mocks the entries list request for general staff (who skip the scope
+ * lookup) the way PostgREST answers an exact-count query over `rows`: the
+ * requested `offset` / `limit` slice, with the total in `Content-Range`.
+ * Each request's URL is recorded, so tests can see the filter and page
+ * that were asked for.
+ * @param rows Every row the query would match.
+ */
+function mockEntriesListFetch(rows: unknown[]): URL[] {
+  const requests: URL[] = [];
+  globalThis.fetch = staffSessionAwareFetch(((input: RequestInfo | URL) => {
+    const url = new URL(
+      input instanceof Request ? input.url : input.toString(),
+    );
+    requests.push(url);
+    const offset = Number(url.searchParams.get('offset') ?? 0);
+    const limit = Number(url.searchParams.get('limit') ?? rows.length);
+    const page = rows.slice(offset, offset + limit);
+    const range =
+      page.length > 0 ? `${offset}-${offset + page.length - 1}` : '*';
+    return Promise.resolve(
+      Response.json(page, {
+        headers: {'Content-Range': `${range}/${rows.length}`},
+      }),
+    );
+  }) as unknown as typeof fetch);
+  return requests;
+}
+
 describe('staff-entries routes (request validation)', () => {
   it('GET /staff/tournaments/:id/entries returns 401 without a staff session', async () => {
     const res = await app.request(
@@ -169,11 +206,11 @@ describe('GET /staff/tournaments/:id/entries (mocked Supabase)', () => {
       {headers: {cookie}},
       ENV,
     );
-    const body = (await res.json()) as Array<Record<string, unknown>>;
+    const body = (await res.json()) as EntryListPage;
 
     expect(res.status).toBe(200);
-    expect(body).toHaveLength(1);
-    expect(body[0]).toMatchObject({
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0]).toMatchObject({
       id: ENTRY_ID,
       name: '山田太郎',
       furigana: 'ヤマダタロウ',
@@ -185,21 +222,57 @@ describe('GET /staff/tournaments/:id/entries (mocked Supabase)', () => {
     });
   });
 
-  it('pages past the Data API row cap and returns every entry', async () => {
-    // The route asks for 500 rows at a time, so a full first page has to
-    // be followed by another request, and paging only ends once a request
-    // comes back empty. Staff counts drive capacity and roster decisions,
-    // so a truncated list would be worse than an error.
-    const firstPage = Array.from({length: 500}, (_, index) => ({
-      ...FULL_ENTRY_ROW,
-      id: `55555555-5555-5555-5555-${String(index).padStart(12, '0')}`,
-      name: `参加者${index}`,
-    }));
-    mockSequentialFetch([
-      firstPage,
-      [{...FULL_ENTRY_ROW, name: '参加者500'}],
-      [],
+  it('returns one page with the total count', async () => {
+    const requests = mockEntriesListFetch(
+      Array.from({length: 150}, (_, index) => ({
+        ...FULL_ENTRY_ROW,
+        id: `55555555-5555-5555-5555-${String(index).padStart(12, '0')}`,
+        name: `参加者${index}`,
+      })),
+    );
+    const cookie = await generalStaffCookie();
+
+    const res = await app.request(
+      `/api/staff/tournaments/${TOURNAMENT_ID}/entries?limit=20&offset=100`,
+      {headers: {cookie}},
+      ENV,
+    );
+    const body = (await res.json()) as EntryListPage;
+
+    expect(res.status).toBe(200);
+    expect(body).toMatchObject({total: 150, limit: 20, offset: 100});
+    expect(body.items).toHaveLength(20);
+    expect(body.items[0].name).toBe('参加者100');
+    expect(requests).toHaveLength(1);
+    expect(requests[0].searchParams.get('order')).toBe('created_at.asc,id.asc');
+  });
+
+  it('GET /staff/.../entries filters by status', async () => {
+    const requests = mockEntriesListFetch([
+      {...FULL_ENTRY_ROW, status: 'waitlisted', waitlist_position: 1},
     ]);
+    const cookie = await generalStaffCookie();
+
+    const res = await app.request(
+      `/api/staff/tournaments/${TOURNAMENT_ID}/entries?status=waitlisted`,
+      {headers: {cookie}},
+      ENV,
+    );
+    const body = (await res.json()) as EntryListPage;
+
+    expect(res.status).toBe(200);
+    expect(body.total).toBe(1);
+    expect(body.items[0].status).toBe('waitlisted');
+    // The filter is applied by the query, so the total counts only the
+    // matching entries and the pager follows the filter.
+    expect(requests[0].searchParams.get('status')).toBe('eq.waitlisted');
+    expect(requests[0].searchParams.get('tournament_id')).toBe(
+      `eq.${TOURNAMENT_ID}`,
+    );
+  });
+
+  it('does not filter by status unless asked to', async () => {
+    const requests = mockEntriesListFetch([FULL_ENTRY_ROW]);
     const cookie = await generalStaffCookie();
 
     const res = await app.request(
@@ -207,11 +280,26 @@ describe('GET /staff/tournaments/:id/entries (mocked Supabase)', () => {
       {headers: {cookie}},
       ENV,
     );
-    const body = (await res.json()) as Array<Record<string, unknown>>;
 
     expect(res.status).toBe(200);
-    expect(body).toHaveLength(501);
-    expect(body[500].name).toBe('参加者500');
+    expect(requests[0].searchParams.has('status')).toBe(false);
+    expect(requests[0].searchParams.get('limit')).toBe('100');
+  });
+
+  it('rejects an unknown status and a limit over the maximum', async () => {
+    const requests = mockEntriesListFetch([FULL_ENTRY_ROW]);
+    const cookie = await generalStaffCookie();
+
+    for (const query of ['status=nope', 'limit=501']) {
+      const res = await app.request(
+        `/api/staff/tournaments/${TOURNAMENT_ID}/entries?${query}`,
+        {headers: {cookie}},
+        ENV,
+      );
+
+      expect(res.status).toBe(400);
+    }
+    expect(requests).toHaveLength(0);
   });
 
   it('returns 403 for staff of a different region', async () => {
@@ -273,7 +361,6 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
     mockSequentialFetch([
       [{region_id: REGION_ID, type: 'saikyoi'}],
       [CSV_ENTRY_ROW],
-      [],
       FORM_FIELD_DEF_ROWS,
     ]);
     const cookie = await regionalStaffCookie();
@@ -315,10 +402,11 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
     );
   });
 
-  it('pages past the Data API row cap and exports every entry', async () => {
-    // The route asks for 500 rows at a time, so a full first page has to
-    // be followed by another request, and paging only ends once a request
-    // comes back empty.
+  it('GET /staff/.../entries.csv still exports every row', async () => {
+    // Unlike the paginated list, the export pages through every entry:
+    // the route asks for 500 rows at a time, so a full first page has to be
+    // followed by another request, and the short page after it is the
+    // last.
     const firstPage = Array.from({length: 500}, (_, index) => ({
       ...CSV_ENTRY_ROW,
       name: `参加者${index}`,
@@ -326,7 +414,6 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
     mockSequentialFetch([
       firstPage,
       [{...CSV_ENTRY_ROW, name: '参加者500'}],
-      [],
       FORM_FIELD_DEF_ROWS,
     ]);
     const cookie = await generalStaffCookie();
@@ -343,34 +430,6 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
     expect(lines).toHaveLength(502);
     expect(lines[1].startsWith('参加者0,')).toBe(true);
     expect(lines[501].startsWith('参加者500,')).toBe(true);
-  });
-
-  it('keeps paging when the server hands back a smaller page than asked for', async () => {
-    // A deployment whose `max_rows` is below the requested page size trims
-    // every response, so the first batch is short without the entries being
-    // exhausted. Ending the export there would drop the rest.
-    mockSequentialFetch([
-      [
-        {...CSV_ENTRY_ROW, name: '参加者0'},
-        {...CSV_ENTRY_ROW, name: '参加者1'},
-      ],
-      [{...CSV_ENTRY_ROW, name: '参加者2'}],
-      [],
-      FORM_FIELD_DEF_ROWS,
-    ]);
-    const cookie = await generalStaffCookie();
-
-    const res = await app.request(
-      `/api/staff/tournaments/${TOURNAMENT_ID}/entries.csv`,
-      {headers: {cookie}},
-      ENV,
-    );
-    const lines = (await res.text()).slice(1).split('\r\n');
-
-    expect(res.status).toBe(200);
-    // One header line plus every row of all three trimmed pages.
-    expect(lines).toHaveLength(4);
-    expect(lines[3].startsWith('参加者2,')).toBe(true);
   });
 
   it('returns 401 without a staff session', async () => {
