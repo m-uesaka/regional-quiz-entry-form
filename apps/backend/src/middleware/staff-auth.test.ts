@@ -152,7 +152,7 @@ describe('requireStaffForTournament', () => {
   });
 
   it('allows general staff for any tournament', async () => {
-    mockTournamentFetch(null);
+    mockTournamentFetch({region_id: OTHER_REGION_ID, type: 'shinjinou'});
     const token = await tokenFor({
       sub: STAFF_ID,
       role: 'general',
@@ -197,8 +197,11 @@ describe('requireStaffForTournament', () => {
     expect((await res.json()) as unknown).toEqual({tournament: row});
   });
 
-  it('requireStaffForTournament sets no tournament for general staff', async () => {
-    mockTournamentFetch(openEntryPeriodTournament());
+  // General staff skip only the scope comparison, not the read, so the row
+  // is there for them too.
+  it('requireStaffForTournament exposes the tournament to general staff too', async () => {
+    const row = openEntryPeriodTournament({region_id: OTHER_REGION_ID});
+    mockTournamentFetch(row);
     const token = await tokenFor({
       sub: STAFF_ID,
       role: 'general',
@@ -207,13 +210,87 @@ describe('requireStaffForTournament', () => {
     });
 
     const res = await appExposingTournament.request(
-      '/tournaments/t1/x',
+      `/tournaments/${row.id}/x`,
       {headers: cookieHeader(token)},
       ENV,
     );
 
     expect(res.status).toBe(200);
-    expect((await res.json()) as unknown).toEqual({tournament: null});
+    expect((await res.json()) as unknown).toEqual({tournament: row});
+  });
+
+  it('answers general staff with 404 for a tournament that does not exist', async () => {
+    mockTournamentFetch(null);
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'general',
+      regionId: null,
+      tournamentType: null,
+    });
+
+    const res = await app.request(
+      '/tournaments/t1/x',
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(404);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'tournament not found',
+    });
+  });
+
+  // For regional staff a missing tournament looks the same as another
+  // region's, so ids can't be probed for existence.
+  it('answers regional staff with 403 for a tournament that does not exist', async () => {
+    mockTournamentFetch(null);
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'regional',
+      regionId: REGION_ID,
+      tournamentType: 'saikyoi',
+    });
+
+    const res = await app.request(
+      '/tournaments/t1/x',
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(403);
+  });
+
+  it('logs the cause and answers 500 when the tournament cannot be read', async () => {
+    globalThis.fetch = staffSessionAwareFetch((() =>
+      Promise.resolve(
+        Response.json({message: 'connection refused'}, {status: 500}),
+      )) as unknown as typeof fetch);
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'regional',
+      regionId: REGION_ID,
+      tournamentType: 'saikyoi',
+    });
+    const logged: unknown[][] = [];
+    const originalConsoleError = console.error;
+    console.error = (...args: unknown[]) => {
+      logged.push(args);
+    };
+    let res: Response;
+    try {
+      res = await app.request(
+        '/tournaments/t1/x',
+        {headers: cookieHeader(token)},
+        ENV,
+      );
+    } finally {
+      console.error = originalConsoleError;
+    }
+
+    expect(res.status).toBe(500);
+    expect(logged.map(args => args[0])).toContain(
+      'failed to read the tournament',
+    );
   });
 
   it('returns 401 for a malformed token', async () => {
@@ -412,7 +489,10 @@ describe('requireStaffForTournament', () => {
   it('accepts a session whose timestamp Postgres formats differently', async () => {
     // PostgREST renders `timestamptz` with a `+00:00` offset rather than `Z`;
     // the claim is compared as epoch milliseconds so both spell one instant.
-    mockTournamentFetch(null, '2026-08-25T01:23:45.678+00:00');
+    mockTournamentFetch(
+      {region_id: REGION_ID, type: 'saikyoi'},
+      '2026-08-25T01:23:45.678+00:00',
+    );
     const token = await tokenFor({
       sub: STAFF_ID,
       role: 'general',

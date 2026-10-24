@@ -148,6 +148,28 @@ describe('admin tournament edit +page.server load', () => {
     ]);
   });
 
+  it('reports an id that is not a UUID as not found, without asking the API', async () => {
+    const calls: ApiCall[] = [];
+    const event = {
+      ...buildLoadEvent(fakeFetch({calls})),
+      params: {id: 'not-a-uuid'},
+    } as Parameters<typeof load>[0];
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 404,
+    } satisfies Partial<HttpError>);
+    expect(calls).toEqual([]);
+  });
+
+  it('does not mistake another refusal of the API for a missing tournament', async () => {
+    const failing = (async () =>
+      jsonResponse({error: 'nope'}, 400)) as unknown as typeof fetch;
+
+    await expect(load(buildLoadEvent(failing))).rejects.toMatchObject({
+      status: 502,
+    } satisfies Partial<HttpError>);
+  });
+
   it('reports an id that names no tournament as not found', async () => {
     await expect(
       load(buildLoadEvent(fakeFetch({tournaments: []}))),

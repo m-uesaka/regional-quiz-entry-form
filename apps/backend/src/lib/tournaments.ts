@@ -5,6 +5,7 @@ import {
 } from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
+import {internalError} from './errors';
 
 /** Shape of a `tournaments` row as returned by Supabase (snake_case). */
 export interface TournamentRow {
@@ -49,6 +50,19 @@ export class TournamentLookupError extends Error {
 }
 
 /**
+ * Logs a failed tournament read and returns the body to answer it with.
+ *
+ * Shared by every caller of the lookups below, so the log line is the same
+ * whichever route or guard hit the outage, and a `TournamentLookupError` is
+ * unwrapped to the Supabase error it carries.
+ * @param e What the lookup threw.
+ */
+export function tournamentLookupFailure(e: unknown): {error: string} {
+  const cause = e instanceof TournamentLookupError ? e.cause : e;
+  return internalError('failed to read the tournament', cause);
+}
+
+/**
  * Reads one tournament by its primary key.
  * @param env The Worker bindings.
  * @param tournamentId The tournament's UUID.
@@ -71,11 +85,6 @@ export async function fetchTournamentById(
   return data;
 }
 
-/** A `tournaments` row with the region embedded to filter on its slug. */
-interface TournamentWithRegionSlugRow extends TournamentRow {
-  regions: {slug: string};
-}
-
 /**
  * Reads one tournament by the pair the public URLs name it with: its
  * region's slug and its own type.
@@ -84,7 +93,8 @@ interface TournamentWithRegionSlugRow extends TournamentRow {
  * old two-step read -- the region's id from `regions`, then the tournament
  * -- cost every screen an extra round trip. `regions!inner` makes the embed
  * an inner join, so a missing region comes back as no row at all, the same
- * answer as a missing tournament.
+ * answer as a missing tournament. The embed selects no columns (`()`): it is
+ * only there to filter on, so the row comes back as a plain `TournamentRow`.
  * @param env The Worker bindings.
  * @param regionSlug The region's slug.
  * @param tournamentSlug The tournament's type.
@@ -99,20 +109,13 @@ export async function fetchTournamentBySlug(
   const db = createDbClient(env);
   const {data, error} = await db
     .from('tournaments')
-    .select(`${TOURNAMENT_COLUMNS}, regions!inner(slug)`)
+    .select(`${TOURNAMENT_COLUMNS}, regions!inner()`)
     .eq('regions.slug', regionSlug)
     .eq('type', tournamentSlug)
-    .returns<TournamentWithRegionSlugRow[]>()
+    .returns<TournamentRow[]>()
     .maybeSingle();
   if (error) {
     throw new TournamentLookupError(error);
   }
-  if (!data) {
-    return null;
-  }
-  // The embed is only there to filter on, so callers (including whatever
-  // ends up in `c.set('tournament')`) get the plain `TournamentRow` shape.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const {regions, ...tournament} = data;
-  return tournament;
+  return data;
 }

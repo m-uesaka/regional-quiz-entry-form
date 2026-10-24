@@ -70,9 +70,9 @@ export interface Variables {
   // Set by `requireOpenEntryPeriodOrStaff()` (`middleware/entry-period.ts`)
   // and `requireStaffForTournament()` (`middleware/staff-auth.ts`) with the
   // row they had to read anyway, so the handler behind them doesn't fetch
-  // the same tournament a second time. Optional because most routes never
-  // run either middleware, and because the latter reads no row for general
-  // staff, whose scope it doesn't check.
+  // the same tournament a second time. Both set it on every path that
+  // reaches the handler, for every role; it is optional only because most
+  // routes run neither middleware.
   tournament?: TournamentRow;
   // Also set by `requireOpenEntryPeriodOrStaff()`, and only on the path it
   // took because the entry period has closed and the caller proved they are

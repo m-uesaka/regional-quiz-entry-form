@@ -3,11 +3,10 @@ import {createMiddleware} from 'hono/factory';
 import {getCookie} from 'hono/cookie';
 import {isWithinEntryPeriod} from '@regional-quiz/shared';
 import type {Env} from '../types/env';
-import {internalError} from '../lib/errors';
 import {
   fetchTournamentById,
   fetchTournamentBySlug,
-  TournamentLookupError,
+  tournamentLookupFailure,
   type TournamentRow,
 } from '../lib/tournaments';
 import {
@@ -68,8 +67,7 @@ export function requireOpenEntryPeriodOrStaff(
     try {
       tournament = await resolveTournament(c);
     } catch (e: unknown) {
-      const cause = e instanceof TournamentLookupError ? e.cause : e;
-      return c.json(internalError('failed to read the tournament', cause), 500);
+      return c.json(tournamentLookupFailure(e), 500);
     }
     if (!tournament) {
       return c.json({error: 'tournament not found'}, 404);

@@ -1,4 +1,5 @@
 import {error, fail} from '@sveltejs/kit';
+import {TournamentSchema} from '@regional-quiz/shared';
 import {createApiClient, isUnauthorized} from '$lib/api';
 import {
   parseTournamentFormValues,
@@ -31,6 +32,13 @@ const INVALID_INPUT_MESSAGE = '入力内容を確認してください';
 // the backend Worker for requests the frontend makes itself until Task 9-5
 // lands, so a client-side call would 404 in production.
 export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
+  // An id that isn't a UUID names no tournament, and is answered here
+  // rather than sent on to come back as the API's 400 -- which would then be
+  // indistinguishable from any other request the API refused.
+  if (!TournamentSchema.shape.id.safeParse(params.id).success) {
+    error(404, '大会が見つかりません');
+  }
+
   const api = createApiClient(fetch);
   // Only the tournament being edited, not the whole list to `find` it in
   // (#123).
@@ -41,8 +49,7 @@ export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
   if (isUnauthorized(tournamentRes) || isUnauthorized(regionsRes)) {
     redirectToStaffLogin(cookies, url);
   }
-  // 400 is an id that isn't a UUID, which names no tournament either.
-  if (tournamentRes.status === 404 || tournamentRes.status === 400) {
+  if (tournamentRes.status === 404) {
     error(404, '大会が見つかりません');
   }
   if (!tournamentRes.ok || !regionsRes.ok) {

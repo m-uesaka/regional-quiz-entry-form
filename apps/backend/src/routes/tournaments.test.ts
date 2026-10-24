@@ -379,11 +379,9 @@ describe('GET /tournaments/:id and /:regionSlug/:tournamentSlug (queries)', () =
         ([key, value]) =>
           !value.startsWith('eq.') || known[key] === value.slice(3),
       );
-      return Promise.resolve(
-        Response.json(
-          matches ? [{...tournament, regions: {slug: 'tokyo'}}] : [],
-        ),
-      );
+      // The region is embedded with no columns (`regions!inner()`), so
+      // PostgREST answers with the tournament's own columns alone.
+      return Promise.resolve(Response.json(matches ? [tournament] : []));
     }) as unknown as typeof fetch);
   }
 
@@ -410,13 +408,10 @@ describe('GET /tournaments/:id and /:regionSlug/:tournamentSlug (queries)', () =
     const res = await app.request('/api/tournaments/tokyo/saikyoi', {}, env);
 
     expect(res.status).toBe(200);
-    // The embed is filtered on but not answered with.
-    expect((await res.json()) as unknown).not.toHaveProperty('regions');
     expect(calls).toHaveLength(1);
     expect(calls[0].pathname).toEndWith('/rest/v1/tournaments');
-    expect(calls[0].searchParams.get('select')).toContain(
-      'regions!inner(slug)',
-    );
+    expect(calls[0].searchParams.get('select')).toContain('regions!inner()');
+    expect(calls[0].searchParams.get('regions.slug')).toBe('eq.tokyo');
   });
 
   it('GET /tournaments/:id returns the tournament for general staff', async () => {
