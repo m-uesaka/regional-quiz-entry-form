@@ -3,7 +3,7 @@ import {TournamentTypeSchema} from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
 import type {PageServerLoad} from './$types';
 
-export const load: PageServerLoad = async ({params, fetch}) => {
+export const load: PageServerLoad = async ({params, fetch, setHeaders}) => {
   // Same slug-narrowing rationale as the entry route's `load`: the RPC
   // client expects the literal tournament-type union, not a bare `string`.
   const parsedType = TournamentTypeSchema.safeParse(params.tournamentSlug);
@@ -29,5 +29,11 @@ export const load: PageServerLoad = async ({params, fetch}) => {
     throw error(502, 'エントリーリストの取得に失敗しました');
   }
 
+  // このページは locals を一切読まない(個人化された内容が無い)ので、
+  // 共有キャッシュに載せてよい(#125)。上位のレイアウトにも load は無い。
+  // ログイン状態で表示が変わるような変更を入れるときは、ここを private に
+  // 戻すこと。成功時にだけ付けるのは、404 / 502 の画面をキャッシュさせない
+  // ため(上の `throw error()` はここまで来ない)。
+  setHeaders({'cache-control': 'public, max-age=30'});
   return {entries: await res.json()};
 };

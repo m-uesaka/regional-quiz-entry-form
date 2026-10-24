@@ -1,4 +1,4 @@
-import {describe, expect, it} from 'vitest';
+import {describe, expect, it, vi} from 'vitest';
 import type {HttpError} from '@sveltejs/kit';
 import type {EntryListItem} from '@regional-quiz/shared';
 import {load} from './+page.server';
@@ -31,18 +31,33 @@ function fakeFetch(options: {
   }) as typeof fetch;
 }
 
-/** Builds the partial `RequestEvent` `load` needs, cast for test use. */
+/**
+ * Builds the partial `RequestEvent` `load` needs, cast for test use.
+ * `locals` throws on any access, so a `load` that starts personalizing the
+ * page (which would make the public cache-control below unsafe) fails here.
+ */
 function buildEvent(options: {
   fetch: typeof fetch;
   tournamentSlug?: string;
+  setHeaders?: (headers: Record<string, string>) => void;
 }): Parameters<typeof load>[0] {
+  const locals = new Proxy(
+    {},
+    {
+      get(_target, key) {
+        throw new Error(`load read locals.${String(key)}`);
+      },
+    },
+  );
   return {
     params: {
       regionSlug: 'tokyo',
       tournamentSlug: options.tournamentSlug ?? 'saikyoi',
     },
     fetch: options.fetch,
-  } as Parameters<typeof load>[0];
+    setHeaders: options.setHeaders ?? (() => {}),
+    locals,
+  } as unknown as Parameters<typeof load>[0];
 }
 
 describe('list +page.server load', () => {
@@ -50,6 +65,36 @@ describe('list +page.server load', () => {
     const event = buildEvent({fetch: fakeFetch({entries: ENTRIES})});
 
     await expect(load(event)).resolves.toEqual({entries: ENTRIES});
+  });
+
+  it('load sets a public cache-control header', async () => {
+    const setHeaders = vi.fn();
+    const event = buildEvent({
+      fetch: fakeFetch({entries: ENTRIES}),
+      setHeaders,
+    });
+
+    await load(event);
+
+    expect(setHeaders).toHaveBeenCalledWith({
+      'cache-control': 'public, max-age=30',
+    });
+  });
+
+  // 個人化されていないことの回帰テスト(#125)。`buildEvent` の `locals` は
+  // どのプロパティを読んでも throw するので、読めばここで落ちる。
+  it('load reads nothing from locals', async () => {
+    const event = buildEvent({fetch: fakeFetch({entries: ENTRIES})});
+
+    await expect(load(event)).resolves.toEqual({entries: ENTRIES});
+  });
+
+  it('does not make an error page cacheable', async () => {
+    const setHeaders = vi.fn();
+    const event = buildEvent({fetch: fakeFetch({status: 404}), setHeaders});
+
+    await expect(load(event)).rejects.toMatchObject({status: 404});
+    expect(setHeaders).not.toHaveBeenCalled();
   });
 
   it('throws 404 when the tournament slug is not a valid tournament type', async () => {

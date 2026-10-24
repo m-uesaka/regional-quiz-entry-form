@@ -10,8 +10,14 @@ vi.mock('$env/dynamic/private', () => ({env: {}}));
 /**
  * Runs `handle` for `path` the way SvelteKit would, with a `resolve` that
  * answers a bare page, and returns the response it produced.
+ * `pageHeaders` stands in for what the page's own `load` put on the
+ * response through `setHeaders()`.
  */
-async function respond(path: string, method = 'GET'): Promise<Response> {
+async function respond(
+  path: string,
+  method = 'GET',
+  pageHeaders: Record<string, string> = {},
+): Promise<Response> {
   const url = new URL(path, 'https://entry.example');
   const event = {
     url,
@@ -22,7 +28,9 @@ async function respond(path: string, method = 'GET'): Promise<Response> {
   } as unknown as RequestEvent;
   const resolve = () =>
     Promise.resolve(
-      new Response('<!doctype html>', {headers: {'content-type': 'text/html'}}),
+      new Response('<!doctype html>', {
+        headers: {'content-type': 'text/html', ...pageHeaders},
+      }),
     );
   return await handle({event, resolve});
 }
@@ -45,6 +53,24 @@ describe('handle: security headers (#120)', () => {
 
       expect(res.headers.get('cache-control'), path).toBe('private, no-store');
     }
+  });
+
+  // 公開リストの load が public なキャッシュを入れた(#125)ので、個人の
+  // データを出すページに同じ値が紛れ込んでも hook が上書きすることを固定する。
+  it('a mypage response is not publicly cacheable', async () => {
+    const res = await respond('/mypage', 'GET', {
+      'cache-control': 'public, max-age=30',
+    });
+
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+  });
+
+  it("keeps the public entry list's own cache-control", async () => {
+    const res = await respond('/tokyo/saikyoi/list', 'GET', {
+      'cache-control': 'public, max-age=30',
+    });
+
+    expect(res.headers.get('cache-control')).toBe('public, max-age=30');
   });
 
   it('a public entry list response is not marked no-store', async () => {
