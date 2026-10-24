@@ -92,6 +92,7 @@ const ROUTE_POLICIES: Readonly<Record<string, Policy>> = {
   'GET /api/tournaments/:id': {access: 'general-staff'},
   'POST /api/tournaments': {access: 'general-staff'},
   'PATCH /api/tournaments/:id': {access: 'general-staff'},
+  'DELETE /api/tournaments/:id': {access: 'general-staff'},
   'GET /api/tournaments/:regionSlug/:tournamentSlug': {access: 'entry-period'},
   'GET /api/tournaments/:tournamentId/regulations': {access: 'entry-period'},
   'PUT /api/tournaments/:tournamentId/regulations': {access: 'general-staff'},

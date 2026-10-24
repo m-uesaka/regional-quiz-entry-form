@@ -1,6 +1,6 @@
-import {stringify as stringifyYaml} from 'yaml';
 import {
   FormFieldDefYamlSchema,
+  stringifyFormDefinitionYaml,
   type TournamentType,
 } from '@regional-quiz/shared';
 
@@ -170,5 +170,5 @@ export function sheetRowsToYaml(
       options: row.options ? parseOptions(row.options) : undefined,
     });
   });
-  return stringifyYaml({tournamentSlug, fields});
+  return stringifyFormDefinitionYaml(tournamentSlug, fields);
 }

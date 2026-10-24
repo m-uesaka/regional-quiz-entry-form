@@ -2,9 +2,11 @@ import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
 import {
+  defaultTournamentName,
   TournamentCreateInputSchema,
   TournamentTypeSchema,
   TournamentUpdateInputSchema,
+  type TournamentType,
 } from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
@@ -57,6 +59,42 @@ function tournamentWriteError(
   }
   return {body: internalError(context, error), status: 500};
 }
+/** What a tournament delete answers when entries still point at it. */
+const TOURNAMENT_HAS_ENTRIES_MESSAGE = 'エントリーがある大会は削除できません';
+
+/**
+ * Works out the name to store for a tournament whose 大会名 was left blank.
+ * @param db The Supabase client to read the region with.
+ * @param regionId The region the tournament is (or will be) in.
+ * @param type The tournament's (new) type.
+ * @return The name, or the body and status to refuse the write with.
+ */
+async function readDefaultTournamentName(
+  db: ReturnType<typeof createDbClient>,
+  regionId: string,
+  type: TournamentType,
+): Promise<{name: string} | {body: {error: string}; status: 400 | 500}> {
+  const {data, error} = await db
+    .from('regions')
+    .select('name')
+    .eq('id', regionId)
+    .maybeSingle<{name: string}>();
+  if (error) {
+    return {
+      body: internalError('failed to read the region', error),
+      status: 500,
+    };
+  }
+  if (!data) {
+    // The same refusal the insert's foreign key would have produced.
+    return {
+      body: {error: TOURNAMENT_CONSTRAINT_MESSAGES['23503']},
+      status: 400,
+    };
+  }
+  return {name: defaultTournamentName(data.name, type)};
+}
+
 const TournamentBySlugParamSchema = z.object({
   regionSlug: z.string(),
   tournamentSlug: TournamentTypeSchema,
@@ -138,9 +176,21 @@ export const tournamentsRoute = new Hono<StaffEnv>()
     zValidator('json', TournamentCreateInputSchema),
     async c => {
       const db = createDbClient(c.env);
+      const input = c.req.valid('json');
+      if (input.name === '') {
+        const resolved = await readDefaultTournamentName(
+          db,
+          input.regionId,
+          input.type,
+        );
+        if (!('name' in resolved)) {
+          return c.json(resolved.body, resolved.status);
+        }
+        input.name = resolved.name;
+      }
       const {data, error} = await db
         .from('tournaments')
-        .insert(toTournamentRow(c.req.valid('json')))
+        .insert(toTournamentRow(input))
         .select()
         .single();
       if (error) {
@@ -160,10 +210,36 @@ export const tournamentsRoute = new Hono<StaffEnv>()
     zValidator('json', TournamentUpdateInputSchema),
     async c => {
       const db = createDbClient(c.env);
+      const {id} = c.req.valid('param');
+      const input = c.req.valid('json');
+      if (input.name === '') {
+        // The default follows the region and type the tournament ends up
+        // with, so whichever of them this request leaves alone is read off
+        // the stored row.
+        let {regionId, type} = input;
+        if (regionId === undefined || type === undefined) {
+          let current: TournamentRow | null;
+          try {
+            current = await fetchTournamentById(c.env, id);
+          } catch (e: unknown) {
+            return c.json(tournamentLookupFailure(e), 500);
+          }
+          if (!current) {
+            return c.json({error: 'tournament not found'}, 404);
+          }
+          regionId ??= current.region_id;
+          type ??= current.type;
+        }
+        const resolved = await readDefaultTournamentName(db, regionId, type);
+        if (!('name' in resolved)) {
+          return c.json(resolved.body, resolved.status);
+        }
+        input.name = resolved.name;
+      }
       const {data, error} = await db
         .from('tournaments')
-        .update(toTournamentRow(c.req.valid('json')))
-        .eq('id', c.req.valid('param').id)
+        .update(toTournamentRow(input))
+        .eq('id', id)
         .select()
         .single();
       if (error) {
@@ -180,6 +256,37 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         return c.json(body, status);
       }
       return c.json(rowToTournament(data as TournamentRow));
+    },
+  )
+  // For a tournament created by mistake. Its regulations, form fields and
+  // mail jobs go with it (`on delete cascade`, 0023), but its entries do
+  // not: they are participants' personal data and their record of having
+  // entered, so a tournament anyone has entered is refused instead.
+  .delete(
+    '/:id',
+    requireGeneralStaff(),
+    zValidator('param', TournamentIdParamSchema),
+    async c => {
+      const db = createDbClient(c.env);
+      const {data, error} = await db
+        .from('tournaments')
+        .delete()
+        .eq('id', c.req.valid('param').id)
+        .select('id');
+      if (error) {
+        // foreign_key_violation: `entries.tournament_id` still points here.
+        if (error.code === '23503') {
+          return c.json({error: TOURNAMENT_HAS_ENTRIES_MESSAGE}, 409);
+        }
+        return c.json(
+          internalError('failed to delete the tournament', error),
+          500,
+        );
+      }
+      if (data.length === 0) {
+        return c.json({error: 'tournament not found'}, 404);
+      }
+      return c.body(null, 204);
     },
   )
   // Public while the entry period is open, and the tournament's own staff
