@@ -41,10 +41,11 @@ flowchart LR
 | `apps/backend/src/lib/form-definitions.ts` | `syncFormFieldDefs()`。大会種別の照合と `form_field_defs` の置き換え(`sync_form_field_defs` RPC) |
 | `apps/backend/src/types/env.ts` | `Bindings.GOOGLE_SHEETS_API_KEY` を定義 |
 | `packages/shared/src/schemas/form-definition.ts` | YAML のスキーマ(`FormFieldDefYamlSchema` 等)。バックエンド/フロントエンド共通 |
-| `apps/frontend/src/lib/components/SheetImportPanel.svelte` | スプレッドシートID入力→プレビュー→保存の UI。大会スラッグは入力させず、props の `tournamentType` を使う |
-| `apps/frontend/src/lib/components/TournamentEditor.svelte` | 大会編集画面の本体。大会フォームの下に `SheetImportPanel` を置く |
-| `apps/frontend/src/routes/admin/tournaments/new/+page.server.ts` | 大会新規作成画面の action。作成成功後は大会編集画面(`SheetImportPanel` 表示)へリダイレクトする |
-| `apps/frontend/src/routes/admin/tournaments/[id]/edit/+page.svelte` | 大会編集画面。`TournamentEditor` 経由で常時 `SheetImportPanel` を表示 |
+| `apps/frontend/src/lib/components/FormDefinitionEditor.svelte` | フォーム定義の YAML エディタ。保存済みの定義から始め、YAML の直接編集と、スプレッドシートID入力→読み込み(エディタの中身を置き換え)のどちらでも直せる。保存は「保存」を押したときだけ。大会スラッグは入力させず、props の `tournamentType` を使う(#164) |
+| `apps/frontend/src/lib/components/TournamentEditor.svelte` | 大会編集画面の本体。大会フォームの下に `FormDefinitionEditor` を置く |
+| `apps/frontend/src/routes/admin/tournaments/new/+page.server.ts` | 大会新規作成画面の action。作成成功後は大会編集画面(`FormDefinitionEditor` 表示)へリダイレクトする |
+| `apps/frontend/src/routes/admin/tournaments/[id]/edit/+page.server.ts` | 大会編集画面の `load`。保存済みのフォーム定義(`GET /api/form-definitions/:tournamentId`)を `formFieldDefsToYaml()` で YAML に書き戻してエディタに渡す |
+| `apps/frontend/src/routes/admin/tournaments/[id]/edit/+page.svelte` | 大会編集画面。`TournamentEditor` 経由で常時 `FormDefinitionEditor` を表示 |
 | `apps/frontend/src/routes/admin/tournaments/[id]/regulations/+page.server.ts` | レギュレーション管理画面。`import` action がシートを読んでフォームの行を組み立て、`save` action が保存する |
 | `packages/shared/src/schemas/regulation.ts` | `REGULATION_SHEET_NAME`(シート名)・`RegulationSheetImportRequestSchema`・保存時の `RegulationSyncInputSchema` |
 
@@ -149,7 +150,7 @@ C列(type)・D列(required)は Google スプレッドシート側のデータの
 
 ## 7. 処理フロー(フォーム定義)
 
-1. 統括スタッフが管理画面(`SheetImportPanel.svelte`)で「スプレッドシートID」を入力し、「YAMLプレビュー」を押す。大会スラッグは手入力させず、**パネルが編集中の大会の `type`(`saikyoi` / `shinjinou`)を親から props で受け取ってそのまま使う**。取り込み先はパネル上部に表示される。
+1. 統括スタッフが大会編集画面のフォーム定義エディタ(`FormDefinitionEditor.svelte`)で「スプレッドシートID」を入力し、「スプレッドシートから読み込む」を押す。大会スラッグは手入力させず、**エディタが編集中の大会の `type`(`saikyoi` / `shinjinou`)を親から props で受け取ってそのまま使う**。対象の種別はエディタ上部に表示される。
 2. フロントエンドが `POST /api/sheet-import/preview` に `{spreadsheetId, tournamentSlug}`(`packages/shared` の `SheetImportRequestSchema`)を送信。`tournamentSlug` は `TournamentTypeSchema` の enum なので、`saikyoi` / `shinjinou` 以外は 400 で弾かれる。ルートは `requireGeneralStaff()` ミドルウェアで保護されており、統括スタッフ(`role: 'general'`)のみアクセス可能(未ログイン・セッション切れは 401、地域スタッフは 403)。この認証チェックはボディの検証より先に走る。
 3. バックエンドの `fetchSheetRows(spreadsheetId, c.env.GOOGLE_SHEETS_API_KEY)` がシートの `A2:E` を取得。ネットワークエラーや Google からの非 2xx レスポンスは、HTTP ステータス(取得できた場合)を保持した `SheetFetchError` として throw される。
 4. `sheetRowsToYaml(tournamentSlug, rows)` が各行を YAML 化する。
@@ -218,9 +219,9 @@ bunx wrangler secret put GOOGLE_SHEETS_API_KEY --env production
 ### Web UI から使う(通常の運用)
 
 1. `bunx wrangler dev`(`apps/backend`)と SvelteKit の dev server(`apps/frontend`)を起動。
-2. 統括スタッフでログインし、`/admin/tournaments/{id}/edit` を開く。取り込みパネルは大会の種別を必要とするため、大会を作成した**後**の編集画面にのみ置かれている(`/admin/tournaments/new` には無い)。
-3. 「スプレッドシート取り込み」パネルでスプレッドシートIDを入力し「YAMLプレビュー」を押す(大会スラッグは編集中の大会から自動で決まる)。
-4. プレビューされた YAML を確認し、問題なければ「保存」を押す。
+2. 統括スタッフでログインし、`/admin/tournaments`(管理メニューの「大会」)から大会の「編集」を開く(`/admin/tournaments/{id}/edit`)。フォーム定義エディタは大会の種別を必要とするため、大会を作成した**後**の編集画面にのみ置かれている(`/admin/tournaments/new` には無い)。
+3. 「フォーム定義」でスプレッドシートIDを入力し「スプレッドシートから読み込む」を押す(大会スラッグは編集中の大会から自動で決まる)。読み込んだ YAML がエディタの中身を置き換える(まだ保存はされない)。
+4. YAML を確認し(必要ならその場で書き換え)、問題なければ「保存」を押す。シートを直した後の再読み込みも同じ手順で、保存済みの定義が置き換わる。シートを使わず YAML を直接書き換えて「保存」してもよい。
 5. レギュレーションを取り込む場合は、同じ画面の「レギュレーションを管理」リンクから `/admin/tournaments/{id}/regulations` を開く。「スプレッドシートから読み込む」に同じスプレッドシートIDを入力して読み込み、フォームの内容を確認して「保存」を押す。
 
 ### API を直接叩く場合
@@ -256,7 +257,7 @@ curl -X POST http://localhost:8787/api/sheet-import/regulations/preview \
 - `RegulationSheetImportRequestSchema`: レギュレーションのプレビュー API のリクエストボディ(`{spreadsheetId: string}`)。
 - `RegulationSyncInputSchema`: 保存 API のリクエストボディ。プレビューの変換結果もこれで検証する。
 
-フォーム定義のスキーマを直接 import するのはバックエンド(`routes/sheet-import.ts`、`routes/form-definitions.ts`、`lib/form-definitions.ts`、`lib/sheet-to-form-definition.ts`)。フロントエンドの `SheetImportPanel.svelte` はスキーマを直接 import せず、`hc<AppType>()` のクライアント経由でリクエスト/レスポンスの型を受け取る(`@regional-quiz/shared` から import しているのは `TournamentType` と `TOURNAMENT_TYPE_LABELS` のみ)。
+フォーム定義のスキーマを直接 import するのはバックエンド(`routes/sheet-import.ts`、`routes/form-definitions.ts`、`lib/form-definitions.ts`、`lib/sheet-to-form-definition.ts`)。フロントエンドの `FormDefinitionEditor.svelte` はスキーマを直接 import せず、`hc<AppType>()` のクライアント経由でリクエスト/レスポンスの型を受け取る(`@regional-quiz/shared` から import しているのは `TournamentType` と `TOURNAMENT_TYPE_LABELS` のみ)。
 
 ## 11. トラブルシューティング
 

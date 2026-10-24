@@ -179,7 +179,7 @@ gh run watch <run id> --exit-status
 | 機能 | 呼び方 | route が無い間に使えたか |
 | --- | --- | --- |
 | レギュレーションの取り込み(`/admin/tournaments/[id]/regulations`) | SSR(`+page.server.ts`)から呼ぶ | 使える |
-| フォーム定義の取り込み(`SheetImportPanel`) | ブラウザから `createApiClient()` で直接 `/api/*` を呼ぶ | 使えない(404)。手順 9 の後はカスタムドメインから使える |
+| フォーム定義の取り込み(`FormDefinitionEditor`) | ブラウザから `createApiClient()` で直接 `/api/*` を呼ぶ | 使えない(404)。手順 9 の後はカスタムドメインから使える |
 
 取り込み API は統括スタッフのログインが必要です。Worker 経由でも確認する場合は、[`google-sheets-integration.md`](./google-sheets-integration.md) 9 章の curl 例の接続先を staging の Worker オリジンに変更し、有効な `staff_session` Cookie を付けて呼び出します。手順 4 はキー単体で Google Sheets にアクセスできることの確認であり、Worker へのキーの登録や取り込み API の疎通を確認するものではありません。
 

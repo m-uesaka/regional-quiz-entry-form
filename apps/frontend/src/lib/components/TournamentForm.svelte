@@ -67,15 +67,20 @@
   </div>
 
   <div class="flex flex-col gap-1.5">
-    <Label for="tournament-name">大会名</Label>
+    <Label for="tournament-name">大会名(任意)</Label>
+    <!-- Optional: almost every tournament is just called after its region
+         and type, which the API fills in when this is left blank. -->
     <Input
       id="tournament-name"
       class="w-full"
       type="text"
       name="name"
       value={values.name}
-      required
+      aria-describedby="tournament-name-hint"
     />
+    <p id="tournament-name-hint" class="text-sm text-muted-foreground">
+      空欄にすると「地域名＋種別」(例: 東京最強位)になります
+    </p>
   </div>
 
   <div class="flex flex-col gap-1.5">

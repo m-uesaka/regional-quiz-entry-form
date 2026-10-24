@@ -207,6 +207,7 @@ if ('yaml' in body) {
 | GET | `/api/tournaments/:id` | 統括スタッフ |
 | POST | `/api/tournaments` | 統括スタッフ |
 | PATCH | `/api/tournaments/:id` | 統括スタッフ |
+| DELETE | `/api/tournaments/:id` | 統括スタッフ |
 | GET | `/api/tournaments/:regionSlug/:tournamentSlug` | 期間中はなし / 期間外は担当スタッフ |
 | GET | `/api/tournaments/:tournamentId/regulations` | 期間中はなし / 期間外は担当スタッフ |
 | PUT | `/api/tournaments/:tournamentId/regulations` | 統括スタッフ |
@@ -387,7 +388,8 @@ if ('yaml' in body) {
 
 ### `POST /api/tournaments`
 
-- リクエスト: `TournamentSchema.omit({id: true})` — `{regionId, type, name, capacity, entryOpensAt, entryClosesAt}`
+- リクエスト: `TournamentCreateInputSchema` — `{regionId, type, name, capacity, entryOpensAt, entryClosesAt}`
+  - `name` は**任意**(#164)。省略・空文字・空白のみのときは、地域名と種別のラベルをつないだ `defaultTournamentName()`(`packages/shared`、例: `東京最強位`)を保存します。地域が存在しなければ下の `23503` と同じ 400 を返します。
   - `capacity` は `null` 可(定員無制限)。
   - `entryOpensAt` / `entryClosesAt` はオフセット付き ISO 8601 文字列。
 - `201`: 作成された `Tournament`
@@ -407,10 +409,23 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 
 - パス: `id` は UUID
 - リクエスト: 上記の全フィールドを部分適用(`.partial()`)
+  - `name` を省略すると現在の大会名のまま。**空文字(空白のみ)を送ると既定の大会名に戻します**。既定名は更新後の地域・種別から作るので、同じリクエストで `regionId` / `type` を変えていればそちらが使われます
 - `200`: 更新後の `Tournament`
 - `404`: 対象が存在しない(Supabase の `PGRST116` を 404 に変換)
 - `400`: Zod のバリデーションエラー、または上の `POST` と同じ既知の制約違反(日本語の `error`)
 - `500`: それ以外の更新失敗(`{"error": "internal server error"}`)
+
+### `DELETE /api/tournaments/:id`
+
+間違えて作成した大会を削除します(#164)。大会の `regulations`・`form_field_defs`・`mail_jobs` も一緒に消えます(`0023` で `on delete cascade`)。`entries` は cascade にしていないので、**エントリーが 1 件でもある大会(キャンセル済みのみでも)は削除できません**。エントリーは参加者の個人情報であり参加の記録でもあるため、大会の削除に巻き込まないためです。
+
+- パス: `id` は UUID
+- `204`: 削除した
+- `404`: `{"error": "tournament not found"}`
+- `409`: `{"error": "エントリーがある大会は削除できません"}` — `entries` の外部キー違反(`23503`)
+- `500`: `{"error": "internal server error"}`
+
+本文の無い DELETE なので CSRF の origin 検査(§1)の対象になります。管理画面からは大会編集画面の form action(`?/delete`)がサーバ側から呼ぶため、`Origin` は SvelteKit が付けます。
 
 ### `GET /api/tournaments/:regionSlug/:tournamentSlug`
 

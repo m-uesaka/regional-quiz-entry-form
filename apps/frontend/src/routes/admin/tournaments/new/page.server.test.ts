@@ -164,6 +164,19 @@ describe('admin tournament create action', () => {
     expect(calls[0].body).toMatchObject({capacity: null});
   });
 
+  // 大会名 is optional: the API names the tournament after its region and
+  // type when it is left blank.
+  it('passes a blank name on for the API to fill in', async () => {
+    const calls: ApiCall[] = [];
+    const event = buildActionEvent(
+      fakeFetch({calls}),
+      createFormData({name: ''}),
+    );
+
+    await expect(actions.default(event)).rejects.toMatchObject({status: 303});
+    expect(calls[0].body).toMatchObject({name: ''});
+  });
+
   it('refuses a form the API would reject, without asking it', async () => {
     const calls: ApiCall[] = [];
     const event = buildActionEvent(

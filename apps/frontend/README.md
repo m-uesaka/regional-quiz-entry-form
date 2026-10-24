@@ -121,10 +121,10 @@ else the page accumulated about the record it was showing goes with them —
 `TournamentEditor` also holds the "更新しました" notice, which would otherwise
 stand over a tournament that was never saved, and the type the API last
 confirmed. The child is where a component with state of its own goes too:
-`SheetImportPanel` keeps the YAML it previewed and uploads it under whatever
-`tournamentId` it is currently handed, so a preview built for one tournament
-and a prop that followed `data` to the next would file the first one's sheet
-rows as the second one's form definition. (Only between tournaments of the
+`FormDefinitionEditor` keeps the YAML being edited and uploads it under
+whatever `tournamentId` it is currently handed, so a draft built for one
+tournament and a prop that followed `data` to the next would file the first
+one's form definition as the second one's. (Only between tournaments of the
 same type: the API rejects a `tournamentSlug` that doesn't match its target,
 which is what turns the same mistake between differing types into an error
 message rather than a silent misfile.) See #98.

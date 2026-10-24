@@ -63,9 +63,10 @@ export function readTournamentFormValues(
  * @return The request body, or null when the form is not one the API would
  *     accept. The schema's own messages name the field in English, which is
  *     no use on this screen, so the caller reports a written-out refusal
- *     instead — every control here is either a select the page fills in or
- *     marked `required`, so a rejection means the browser's own checks were
- *     bypassed rather than that a staff member mistyped something.
+ *     instead — every control here is either a select the page fills in,
+ *     marked `required`, or free to leave blank (大会名), so a rejection
+ *     means the browser's own checks were bypassed rather than that a staff
+ *     member mistyped something.
  */
 export function parseTournamentFormValues(
   values: TournamentFormValues,
