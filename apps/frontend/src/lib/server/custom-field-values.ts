@@ -8,6 +8,22 @@ import {
 import {customFieldName} from '$lib/custom-field-name';
 
 /**
+ * Reads a text control from a submitted form with its line breaks as `\n`.
+ *
+ * A browser submits every line break in a `<textarea>` as CRLF, but its
+ * `maxlength` counts one as a single character. Read as submitted, an
+ * answer the browser let through at exactly the limit would come out over
+ * it -- one character over for every line break -- and be refused by the
+ * schema's own `max()`. Normalizing here makes the page, the schema, the
+ * API and the database all count the same string.
+ * @param formData The submitted form body.
+ * @param name The control's name.
+ */
+export function readFormText(formData: FormData, name: string): string {
+  return String(formData.get(name) ?? '').replace(/\r\n?/g, '\n');
+}
+
+/**
  * Rebuilds the `customFieldValues` map from a submitted form, driven by the
  * tournament's own field definitions rather than by whatever keys the
  * request happens to carry.
@@ -24,6 +40,8 @@ import {customFieldName} from '$lib/custom-field-name';
  * returned map is still keyed by the bare field key, which is the shape the
  * API stores.
  *
+ * A text answer's line breaks are read as `\n` (`readFormText()`).
+ *
  * Shared by the entry form and the mypage edit form, so an answer accepted
  * on one is read the same way on the other.
  * @param formData The submitted form body.
@@ -37,7 +55,7 @@ export function readCustomFieldValues(
   for (const fieldDef of fieldDefs) {
     const controlName = customFieldName(fieldDef.fieldKey);
     if (fieldDef.fieldType !== 'checkbox') {
-      values[fieldDef.fieldKey] = String(formData.get(controlName) ?? '');
+      values[fieldDef.fieldKey] = readFormText(formData, controlName);
       continue;
     }
     const checked = formData.getAll(controlName).map(String);
@@ -96,4 +114,33 @@ export function customFieldErrors(
     ];
   }
   return messages;
+}
+
+/**
+ * The schema's messages for a rejected entry, keyed by field as
+ * `ZodError.flatten().fieldErrors` keys them -- minus those raised by one
+ * custom field answer being too long.
+ *
+ * `findCustomFieldValuesErrors()` reports that same answer as `too-long`,
+ * and `customFieldErrors()` puts it under the control that caused it.
+ * Flattened, the schema's copy would land under `customFieldValues` as well,
+ * which the form shows as a line of its own; that line is kept for what
+ * only the schema checks, the combined length of all the answers.
+ * @param issues The `issues` of the schema's `ZodError`.
+ */
+export function entrySchemaFieldErrors(
+  issues: ReadonlyArray<{path: ReadonlyArray<PropertyKey>; message: string}>,
+): Record<string, string[] | undefined> {
+  const fieldErrors: Record<string, string[]> = {};
+  for (const issue of issues) {
+    const [field] = issue.path;
+    if (typeof field !== 'string') {
+      continue;
+    }
+    if (field === 'customFieldValues' && issue.path.length > 1) {
+      continue;
+    }
+    (fieldErrors[field] ??= []).push(issue.message);
+  }
+  return fieldErrors;
 }

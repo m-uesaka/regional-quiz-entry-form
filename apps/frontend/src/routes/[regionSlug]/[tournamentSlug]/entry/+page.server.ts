@@ -17,7 +17,9 @@ import {redirectToStaffLogin} from '$lib/server/staff-session';
 import {readTurnstileToken, TURNSTILE_TOKEN_FIELD} from '$lib/turnstile';
 import {
   customFieldErrors,
+  entrySchemaFieldErrors,
   readCustomFieldValues,
+  readFormText,
 } from '$lib/server/custom-field-values';
 import type {EntryFieldErrors, EntryFormValues} from '$lib/types/entry-form';
 import type {Actions, PageServerLoad, RequestEvent} from './$types';
@@ -260,7 +262,7 @@ export const actions = {
     // which is why it is read through a helper that refuses what a header
     // cannot carry.
     const turnstileToken = readTurnstileToken(formData);
-    const freeText = String(formData.get('freeText') ?? '');
+    const freeText = readFormText(formData, 'freeText');
     // Echoed back with every failure so a rejected submission re-renders
     // what the participant typed. The two password fields are deliberately
     // left out: re-rendering a password into the HTML would put it in the
@@ -353,7 +355,7 @@ export const actions = {
       const parsed = EntrySessionInputSchema.safeParse(entry);
       if (!parsed.success || customFieldValuesErrors.length > 0) {
         return invalid(
-          parsed.success ? {} : parsed.error.flatten().fieldErrors,
+          parsed.success ? {} : entrySchemaFieldErrors(parsed.error.issues),
         );
       }
       res = await api.api.tournaments[':tournamentId'].entries.session.$post(
@@ -369,7 +371,7 @@ export const actions = {
       });
       if (!parsed.success || customFieldValuesErrors.length > 0) {
         return invalid(
-          parsed.success ? {} : parsed.error.flatten().fieldErrors,
+          parsed.success ? {} : entrySchemaFieldErrors(parsed.error.issues),
         );
       }
       res = await api.api.tournaments[':tournamentId'].entries.$post(

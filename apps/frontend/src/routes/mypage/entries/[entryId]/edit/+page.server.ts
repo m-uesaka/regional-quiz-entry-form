@@ -8,7 +8,9 @@ import {
 import {createApiClient} from '$lib/api';
 import {
   customFieldErrors,
+  entrySchemaFieldErrors,
   readCustomFieldValues,
+  readFormText,
 } from '$lib/server/custom-field-values';
 import {redirectToParticipantLogin} from '$lib/server/participant-session';
 import type {EntryEditFormValues} from '$lib/types/entry-form';
@@ -89,7 +91,7 @@ export const actions = {
     const {formFieldDefs} = await detailRes.json();
 
     const formData = await request.formData();
-    const freeText = String(formData.get('freeText') ?? '');
+    const freeText = readFormText(formData, 'freeText');
     // Echoed back with every failure so a rejected submission re-renders
     // what the participant typed instead of resetting to the stored entry.
     const values: EntryEditFormValues = {
@@ -123,7 +125,7 @@ export const actions = {
     // with the schema's.
     if (!parsed.success || customFieldValuesErrors.length > 0) {
       const fieldErrors: EditFieldErrors = {
-        ...(parsed.success ? {} : parsed.error.flatten().fieldErrors),
+        ...(parsed.success ? {} : entrySchemaFieldErrors(parsed.error.issues)),
         ...customFieldErrors(customFieldValuesErrors, formFieldDefs),
       };
       return fail(400, {
