@@ -7,6 +7,13 @@
 -- `staff_password_reset_tokens (staff_account_id)`(0015)、
 -- `entry_regulations (regulation_id)`(0018)、
 -- `mail_jobs (tournament_id, created_at)`(0019)。
+--
+-- ロックについて: 素の `create index` は作成中、対象テーブルに SHARE ロックを
+-- 取り、その間の insert / update / delete を待たせる。`concurrently` なら
+-- 書き込みを止めずに済むが、トランザクション内では実行できず、Supabase の
+-- マイグレーションはファイルごとにトランザクションで流れるため使えない。
+-- 3 テーブルとも行数は小さい(エントリー数・参加者数・スタッフ数の規模)ので、
+-- ロックはすぐ外れる。
 
 -- メール送信に失敗したエントリーのロールバック(`lib/entries.ts` の
 -- `rollbackEntry()`)と、キャンセル時のトークン焼却
@@ -34,3 +41,27 @@ create index staff_accounts_region_id_idx on staff_accounts (region_id);
 -- - `entries (status)`: 4 値しかなく単独では選択度が低い。実際のクエリは
 --   必ず `tournament_id` と併用されるので、0005 の
 --   `(tournament_id, created_at)` で足りる。
+
+-- 計測(ローカル Supabase、2026-10-24):
+--
+-- 実データ規模ではプランナーが Seq Scan を選ぶため、1 トランザクション内で
+-- regulations 10,000 行(200 大会 × 50 件)、email_verification_tokens
+-- 10,000 行を投入して `analyze` した上で `explain analyze` を取り、最後に
+-- rollback した。`enable_seqscan` は変更していない。結果(抜粋):
+--
+-- select * from regulations where tournament_id = $1 order by display_order
+--   Sort (actual rows=50)
+--     ->  Bitmap Heap Scan on regulations (actual rows=50)
+--           ->  Bitmap Index Scan on regulations_tournament_id_display_order_idx
+--                 Index Cond: (tournament_id = '...'::uuid)
+--   Execution Time: 0.052 ms
+--
+-- delete from email_verification_tokens where entry_id = $1
+--   Delete on email_verification_tokens
+--     ->  Index Scan using email_verification_tokens_entry_id_idx
+--           Index Cond: (entry_id = '...'::uuid)
+--   Execution Time: 0.152 ms
+--
+-- 比較のため同じトランザクション内で email_verification_tokens_entry_id_idx を
+-- drop して取り直すと `Seq Scan on email_verification_tokens`
+-- (Rows Removed by Filter: 9999、Execution Time: 1.196 ms)になった。
