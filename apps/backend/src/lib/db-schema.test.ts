@@ -835,8 +835,9 @@ describe.skipIf(!dbReachable)(
      * Inserts `entry` and returns the SQLSTATE it was refused with, if any.
      * @param entry The columns to insert.
      * @param customFieldValues The `custom_field_values` to insert with it.
-     *     Passed as JSON text and cast in SQL, so the column gets an object
-     *     rather than a JSON string.
+     *     Bound as the object itself: Bun's SQL JSON-encodes a bound string
+     *     once more under `::jsonb`, so passing `JSON.stringify()` output
+     *     would store a JSON string rather than an object.
      */
     async function insertError(
       entry: Record<string, unknown>,
@@ -850,7 +851,7 @@ describe.skipIf(!dbReachable)(
           ) values (
             ${entry.participant_id}, ${entry.tournament_id}, ${entry.name},
             ${entry.furigana}, ${entry.display_name}, ${entry.free_text ?? null},
-            ${JSON.stringify(customFieldValues)}::jsonb
+            ${customFieldValues}::jsonb
           )
         `;
         return undefined;
