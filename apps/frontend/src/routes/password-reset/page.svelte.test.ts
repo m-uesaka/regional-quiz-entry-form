@@ -4,7 +4,7 @@ import Page from './+page.svelte';
 import type {ActionData} from './$types';
 
 function renderPage(options: {hasToken?: boolean; form?: ActionData} = {}) {
-  render(Page, {
+  return render(Page, {
     props: {
       params: {},
       data: {hasToken: options.hasToken ?? false},
@@ -41,7 +41,10 @@ describe('password reset +page.svelte', () => {
   });
 
   it('shows the error the action came back with', () => {
-    renderPage({hasToken: true, form: {error: 'パスワードが一致しません'}});
+    renderPage({
+      hasToken: true,
+      form: {error: 'パスワードが一致しません', tokenRejected: false},
+    });
 
     expect(screen.getByRole('alert')).toHaveTextContent(
       'パスワードが一致しません',
@@ -54,5 +57,27 @@ describe('password reset +page.svelte', () => {
     expect(
       screen.getByRole('link', {name: 'ログイン画面へ戻る'}),
     ).toHaveAttribute('href', '/mypage/login');
+  });
+
+  // The token stays in an httpOnly cookie (`$lib/server/reset-token.ts`):
+  // nothing in the page carries it (#120).
+  it('puts no token in the form', () => {
+    const {container} = renderPage({hasToken: true});
+
+    expect(container.querySelector('input[name="token"]')).toBeNull();
+  });
+
+  it('offers the request form again once the API has refused the token', () => {
+    renderPage({
+      hasToken: true,
+      form: {
+        error:
+          'このリンクは無効か、有効期限が切れています。もう一度パスワード再設定をやり直してください',
+        tokenRejected: true,
+      },
+    });
+
+    expect(screen.getByLabelText('メールアドレス')).toBeInTheDocument();
+    expect(screen.queryByLabelText('新しいパスワード')).not.toBeInTheDocument();
   });
 });

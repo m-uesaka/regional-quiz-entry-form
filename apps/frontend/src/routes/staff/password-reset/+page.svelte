@@ -22,15 +22,16 @@
     </Message>
   {/if}
 
-  {#if data.hasToken}
+  <!-- The token itself never reaches the page: `load` keeps it in an
+       httpOnly cookie (`$lib/server/reset-token.ts`), which the action reads.
+       Once the API has refused it, there is no form left to offer. -->
+  {#if data.hasToken && !form?.tokenRejected}
     <Card>
       <div class="flex flex-col gap-4">
         <p class="text-sm text-muted-foreground">
           スタッフアカウントで使用するパスワードを入力してください。
         </p>
 
-        <!-- No `action`: posting to the current URL keeps the `token` query
-             parameter the mailed link carried, which is what the action reads. -->
         <form method="POST" use:enhance class="flex flex-col gap-4">
           <div class="flex flex-col gap-1.5">
             <Label for="newPassword">パスワード</Label>

@@ -201,7 +201,7 @@ async function revokeSessions(
 ): Promise<Response> {
   return app.request(
     `/api/staff/accounts/${staffAccountId}/revoke-sessions`,
-    {method: 'POST', headers: {cookie}},
+    {method: 'POST', headers: {cookie, origin: BASE_ENV.FRONTEND_URL}},
     BASE_ENV,
   );
 }
@@ -264,7 +264,7 @@ describe('POST /staff/accounts/:id/revoke-sessions (mocked Supabase)', () => {
 
     const res = await app.request(
       `/api/staff/accounts/${TARGET_STAFF_ID}/revoke-sessions`,
-      {method: 'POST'},
+      {method: 'POST', headers: {origin: BASE_ENV.FRONTEND_URL}},
       BASE_ENV,
     );
 
@@ -438,7 +438,7 @@ describe.skipIf(!(await isDbReachable()))(
       sentMail = [];
       const res = await app.request(
         `/api/staff/accounts/${staffAccountId}/password-reset`,
-        {method: 'POST', headers: {cookie}},
+        {method: 'POST', headers: {cookie, origin: env.FRONTEND_URL}},
         env,
       );
       expect(res.status).toBe(200);
@@ -658,7 +658,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const res = await app.request(
         '/api/staff/accounts/33333333-3333-3333-3333-333333333333/password-reset',
-        {method: 'POST', headers: {cookie}},
+        {method: 'POST', headers: {cookie, origin: env.FRONTEND_URL}},
         env,
       );
       const body = (await res.json()) as Record<string, unknown>;
@@ -700,7 +700,13 @@ describe.skipIf(!(await isDbReachable()))(
 
       const res = await app.request(
         `/api/staff/accounts/${created.id}/revoke-sessions`,
-        {method: 'POST', headers: {cookie: await generalStaffCookie()}},
+        {
+          method: 'POST',
+          headers: {
+            cookie: await generalStaffCookie(),
+            origin: env.FRONTEND_URL,
+          },
+        },
         env,
       );
 
@@ -729,7 +735,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const res = await app.request(
         `/api/staff/accounts/${created.id}/revoke-sessions`,
-        {method: 'POST', headers: {cookie}},
+        {method: 'POST', headers: {cookie, origin: env.FRONTEND_URL}},
         env,
       );
 
@@ -763,7 +769,13 @@ describe.skipIf(!(await isDbReachable()))(
     it('returns 404 when revoking the sessions of an account that does not exist', async () => {
       const res = await app.request(
         '/api/staff/accounts/33333333-3333-3333-3333-333333333333/revoke-sessions',
-        {method: 'POST', headers: {cookie: await generalStaffCookie()}},
+        {
+          method: 'POST',
+          headers: {
+            cookie: await generalStaffCookie(),
+            origin: env.FRONTEND_URL,
+          },
+        },
         env,
       );
 

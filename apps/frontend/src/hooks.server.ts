@@ -9,6 +9,7 @@ import {
   forwardBackendCookies,
   rewriteApiRequest,
 } from '$lib/server/backend-fetch';
+import {applySecurityHeaders} from '$lib/server/security-headers';
 
 export const handle: Handle = async ({event, resolve}) => {
   // `$env/dynamic/private` first, for the same reason `handleFetch` below
@@ -28,7 +29,9 @@ export const handle: Handle = async ({event, resolve}) => {
     event.cookies.get(PARTICIPANT_SESSION_COOKIE),
     sessionSecret,
   );
-  return resolve(event);
+  const response = await resolve(event);
+  applySecurityHeaders(response.headers, event.url, event.request.method);
+  return response;
 };
 
 // `$env/dynamic/private` is read here rather than `event.platform.env` so the

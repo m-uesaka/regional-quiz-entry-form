@@ -80,7 +80,7 @@ describe('mypage routes (request validation)', () => {
   it('rejects a DELETE without a participant session with 401', async () => {
     const res = await app.request(
       `/api/mypage/entries/${ENTRY_ID}`,
-      {method: 'DELETE'},
+      {method: 'DELETE', headers: {origin: env.FRONTEND_URL}},
       env,
     );
 
@@ -501,7 +501,10 @@ describe.skipIf(!(await isDbReachable()))(
         `/api/mypage/entries/${entryId}`,
         {
           method: 'DELETE',
-          headers: {cookie: await participantCookie(participantId)},
+          headers: {
+            cookie: await participantCookie(participantId),
+            origin: env.FRONTEND_URL,
+          },
         },
         env,
       );

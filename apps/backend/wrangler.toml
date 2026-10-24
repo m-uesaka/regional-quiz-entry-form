@@ -34,6 +34,11 @@ workers_dev = true
 [vars]
 # 非機密の設定値のみここに記載し、機密情報は `wrangler secret put` で登録する
 MAIL_FROM_ADDRESS = "no-reply@mail.regional-quiz-project.app"
+# 本番の値のままにしておく: 上のとおり `--env` を付け忘れた `wrangler deploy` は
+# このブロックで本番 Worker を上書きするため、ここにローカル用の値を書くと
+# 本番のメールのリンクと `src/index.ts` の Origin 検証が localhost を向いてしまう。
+# ローカル開発の値(`vite dev` のオリジン)は `package.json` の `dev` スクリプトが
+# `--var` で渡し、E2E は `apps/e2e/playwright.config.ts` が同じく `--var` で渡す。
 FRONTEND_URL = "https://regional-quiz-project.app"
 # Turnstile の「常に成功する」テスト用シークレット(Cloudflare が公開している
 # 固定値)。ローカル開発と E2E はこれで通す。`[env.*.vars]` には**置かない**:

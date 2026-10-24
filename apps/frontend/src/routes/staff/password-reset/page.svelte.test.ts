@@ -25,7 +25,9 @@ describe('staff password reset +page.svelte', () => {
     expect(screen.getByLabelText('パスワード(確認用)')).toBeInTheDocument();
   });
 
-  it('posts to its own URL so the token query parameter survives', () => {
+  // The token stays in an httpOnly cookie (`$lib/server/reset-token.ts`):
+  // nothing in the page carries it (#120).
+  it('posts to its own URL with no token in the form', () => {
     const {container} = render(Page, {
       props: {
         params: {},
@@ -37,6 +39,19 @@ describe('staff password reset +page.svelte', () => {
     const form = container.querySelector('form');
     expect(form?.getAttribute('method')).toBe('POST');
     expect(form?.hasAttribute('action')).toBe(false);
+    expect(form?.querySelector('input[name="token"]')).toBeNull();
+  });
+
+  it('stops offering the form once the API has refused the token', () => {
+    renderPage({
+      form: {
+        error:
+          'このリンクは無効か、有効期限が切れています。管理スタッフにリンクの再発行を依頼してください',
+        tokenRejected: true,
+      },
+    });
+
+    expect(screen.queryByLabelText('パスワード')).not.toBeInTheDocument();
   });
 
   it('explains where to get a link instead of a form when there is no token', () => {
@@ -49,7 +64,9 @@ describe('staff password reset +page.svelte', () => {
   });
 
   it('shows the error the action came back with', () => {
-    renderPage({form: {error: 'パスワードが一致しません'}});
+    renderPage({
+      form: {error: 'パスワードが一致しません', tokenRejected: false},
+    });
 
     expect(screen.getByRole('alert')).toHaveTextContent(
       'パスワードが一致しません',
