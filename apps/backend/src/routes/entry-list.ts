@@ -11,7 +11,7 @@ import {
 } from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
-import {fetchPage} from '../lib/paged-select';
+import {fetchPage, toPageResponse} from '../lib/paged-select';
 import {internalError} from '../lib/errors';
 import {
   fetchTournamentBySlug,
@@ -83,12 +83,7 @@ async function respondWithEntryList(
   if (error) {
     return c.json(internalError('failed to read the entry list', error), 500);
   }
-  return c.json({
-    items: rows.map(rowToEntryListItem),
-    total,
-    limit: page.limit,
-    offset: page.offset,
-  });
+  return c.json(toPageResponse(rows.map(rowToEntryListItem), total, page));
 }
 
 export const entryListRoute = new Hono<Env>()

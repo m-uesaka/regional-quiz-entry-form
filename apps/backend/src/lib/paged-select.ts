@@ -1,3 +1,5 @@
+import type {Page, PageQuery} from '@regional-quiz/shared';
+
 // Supabase's Data API caps a single response at `max_rows` rows
 // (`supabase/config.toml`), and it does so silently: a query matching more
 // rows than the cap comes back truncated rather than failing. Any query
@@ -5,9 +7,10 @@
 // instead of selecting everything at once.
 
 /**
- * Rows requested per `range()` batch. Must stay strictly below the Data
- * API's `max_rows` (`supabase/config.toml`): `fetchAllRows()` ends on the
- * first short batch, which is only safe while the server never trims one.
+ * Rows requested per `range()` batch. Kept at or below the Data API's
+ * `max_rows` (`supabase/config.toml`) so a batch is normally one full
+ * request; `fetchAllRows()` stays correct even if a hosted project's
+ * `max_rows` is lower, since it only stops on an empty batch.
  */
 export const SELECT_PAGE_SIZE = 500;
 
@@ -55,18 +58,17 @@ export async function fetchAllRows<T>(
       return {rows: null, error};
     }
     const batch = data ?? [];
-    rows.push(...batch);
-    // A short batch is ambiguous in general: the range may have run past
-    // the last row, or the server may have trimmed it down to its own
-    // `max_rows`, and stopping on a trimmed page would drop rows exactly
-    // like the unpaginated query this replaces. But as long as the page
-    // size stays below `max_rows` in `supabase/config.toml`, trimming
-    // cannot happen, so a short batch is the last one and the paging ends
-    // without asking for the empty page after it.
-    // `paged-select.test.ts` pins that precondition by reading config.toml.
-    if (batch.length < pageSize) {
+    // A short batch is ambiguous: the range may have run past the last row,
+    // or the server may have trimmed it down to its own `max_rows`, and
+    // stopping on a trimmed batch would drop rows exactly like the
+    // unpaginated query this replaces. `max_rows` is set per project (the
+    // hosted ones in the dashboard, not in `supabase/config.toml`), so it
+    // cannot be pinned from here; only an empty batch ends the paging, at
+    // the cost of one extra request.
+    if (batch.length === 0) {
       return {rows, error: null};
     }
+    rows.push(...batch);
   }
 }
 
@@ -89,8 +91,8 @@ export type PageResult<T> =
  * @param selectPage Builds the query for the page, given the inclusive row
  *     offsets to pass to `range()`.
  * @param page The page to fetch.
- * @param page.limit Rows per page; at most `SELECT_PAGE_SIZE`, so the
- *     server's `max_rows` cannot trim the page.
+ * @param page.limit Rows per page; at most `SELECT_PAGE_SIZE`. A page the
+ *     server's `max_rows` trims anyway is reported as an error.
  * @param page.offset Rows to skip.
  */
 export async function fetchPage<T>(
@@ -120,8 +122,44 @@ export async function fetchPage<T>(
     }
     return {rows: [], total: probe.count ?? 0, error: null};
   }
-  const rows = data ?? [];
   // `count` only goes missing if the query was built without
-  // `{count: 'exact'}`; the rows seen so far are then the best lower bound.
-  return {rows, total: count ?? offset + rows.length, error: null};
+  // `{count: 'exact'}`. Guessing a total from the rows seen would make every
+  // later page unreachable without a trace, so the misbuilt query is
+  // reported instead.
+  if (count === null) {
+    return {
+      rows: null,
+      total: null,
+      error: {message: "page query was selected without {count: 'exact'}"},
+    };
+  }
+  const rows = data ?? [];
+  // Fewer rows than both the limit and the rows left means the server
+  // trimmed the page to its `max_rows`. The pager would then step past the
+  // trimmed rows, so that is reported rather than served as a full page.
+  if (rows.length < Math.min(limit, count - offset)) {
+    return {
+      rows: null,
+      total: null,
+      error: {
+        message: `page trimmed to ${rows.length} rows; max_rows is below the limit ${limit}`,
+      },
+    };
+  }
+  return {rows, total: count, error: null};
+}
+
+/**
+ * The response body for one page of a paginated list route, in the shape
+ * the shared `PageSchema` describes.
+ * @param items The page's items, already in their response shape.
+ * @param total The rows the whole list has.
+ * @param page The page the items are.
+ */
+export function toPageResponse<T>(
+  items: T[],
+  total: number,
+  page: PageQuery,
+): Page<T> {
+  return {items, total, limit: page.limit, offset: page.offset};
 }

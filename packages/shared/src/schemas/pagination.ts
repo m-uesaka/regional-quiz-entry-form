@@ -42,3 +42,6 @@ export const PageSchema = <T extends z.ZodTypeAny>(item: T) =>
     limit: z.number().int(),
     offset: z.number().int(),
   });
+
+/** One page of a list of `T`, in the shape `PageSchema` describes. */
+export type Page<T> = z.infer<ReturnType<typeof PageSchema<z.ZodType<T>>>>;

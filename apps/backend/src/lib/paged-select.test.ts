@@ -16,33 +16,40 @@ function pageOver(rows: number[]) {
 }
 
 describe('fetchAllRows', () => {
-  it('issues exactly one query for a result smaller than the page size', async () => {
+  it('asks for the empty page after a result smaller than the page size', async () => {
     const {ranges, selectPage} = pageOver([1, 2, 3]);
 
     const {rows, error} = await fetchAllRows(selectPage);
 
     expect(error).toBeNull();
     expect(rows).toEqual([1, 2, 3]);
-    expect(ranges).toEqual([{from: 0, to: SELECT_PAGE_SIZE - 1}]);
+    expect(ranges).toEqual([
+      {from: 0, to: SELECT_PAGE_SIZE - 1},
+      {from: 3, to: SELECT_PAGE_SIZE + 2},
+    ]);
   });
 
-  it('stops on a short page', async () => {
+  it('keeps going past a page the server trimmed below the page size', async () => {
+    // A hosted project's `max_rows` may be lower than the page size; the
+    // short pages it produces must not end the paging early.
+    const maxRows = 2;
     const all = Array.from({length: 7}, (_, index) => index);
-    const {ranges, selectPage} = pageOver(all);
+    const ranges: Array<{from: number; to: number}> = [];
+    const selectPage = (from: number, to: number) => {
+      ranges.push({from, to});
+      return Promise.resolve({
+        data: all.slice(from, Math.min(to + 1, from + maxRows)),
+        error: null,
+      });
+    };
 
     const {rows} = await fetchAllRows(selectPage, 3);
 
     expect(rows).toEqual(all);
-    // Two full pages, then the short one that ends the paging -- no
-    // further request for an empty page.
-    expect(ranges).toEqual([
-      {from: 0, to: 2},
-      {from: 3, to: 5},
-      {from: 6, to: 8},
-    ]);
+    expect(ranges.map(range => range.from)).toEqual([0, 2, 4, 6, 7]);
   });
 
-  it('returns an empty result without a second request', async () => {
+  it('returns an empty result after a single request', async () => {
     const {ranges, selectPage} = pageOver([]);
 
     const {rows, error} = await fetchAllRows(selectPage);
@@ -53,8 +60,6 @@ describe('fetchAllRows', () => {
   });
 
   it('asks for the empty page after an exactly full last page', async () => {
-    // A full page cannot tell that it was the last one, so the paging only
-    // ends with the empty page after it.
     const all = Array.from({length: 6}, (_, index) => index);
     const {ranges, selectPage} = pageOver(all);
 
@@ -103,17 +108,17 @@ describe('fetchAllRows', () => {
 });
 
 describe('SELECT_PAGE_SIZE', () => {
-  it('SELECT_PAGE_SIZE stays below the max_rows configured in supabase/config.toml', async () => {
-    // `fetchAllRows()` ends on the first short page, which is only safe
-    // while the Data API can never trim a page: lowering `max_rows` to or
-    // below the page size would make every list silently drop rows.
+  it('SELECT_PAGE_SIZE stays within the max_rows configured in supabase/config.toml', async () => {
+    // Not a correctness precondition any more (`fetchAllRows()` survives
+    // trimmed pages and `fetchPage()` reports them), but locally a batch
+    // or a list page should still fit in one untrimmed request.
     const configToml = await Bun.file(
       new URL('../../../../supabase/config.toml', import.meta.url),
     ).text();
     const parsed = Bun.TOML.parse(configToml) as {api: {max_rows: number}};
 
     expect(typeof parsed.api.max_rows).toBe('number');
-    expect(SELECT_PAGE_SIZE).toBeLessThan(parsed.api.max_rows);
+    expect(SELECT_PAGE_SIZE).toBeLessThanOrEqual(parsed.api.max_rows);
     // A single list page is one request, so it may not ask for more than
     // `fetchAllRows()` does per batch either.
     expect(PAGE_SIZE_MAX).toBeLessThanOrEqual(SELECT_PAGE_SIZE);
@@ -174,5 +179,38 @@ describe('fetchPage', () => {
     const result = await fetchPage(selectPage, {limit: 2, offset: 0});
 
     expect(result).toEqual({rows: null, total: null, error: {message: 'boom'}});
+  });
+
+  it('reports a query selected without an exact count', async () => {
+    const selectPage = () =>
+      Promise.resolve({data: [0, 1], count: null, error: null});
+
+    const result = await fetchPage(selectPage, {limit: 2, offset: 0});
+
+    expect(result.rows).toBeNull();
+    expect(result.error?.message).toContain("count: 'exact'");
+  });
+
+  it('reports a page the server trimmed below the limit', async () => {
+    // Five rows, but the server hands back at most two per request.
+    const selectPage = (from: number) =>
+      Promise.resolve({
+        data: [0, 1, 2, 3, 4].slice(from, from + 2),
+        count: 5,
+        error: null,
+      });
+
+    const result = await fetchPage(selectPage, {limit: 3, offset: 0});
+
+    expect(result.rows).toBeNull();
+    expect(result.error?.message).toContain('trimmed');
+  });
+
+  it('accepts a short last page', async () => {
+    const {selectPage} = countedPageOver([0, 1, 2, 3, 4]);
+
+    const result = await fetchPage(selectPage, {limit: 3, offset: 3});
+
+    expect(result).toEqual({rows: [3, 4], total: 5, error: null});
   });
 });

@@ -28,7 +28,12 @@ import {
   sortEntryRegulations,
   type EntryRegulationRow,
 } from '../lib/entry-regulations';
-import {fetchAllRows, fetchPage, type AllRowsResult} from '../lib/paged-select';
+import {
+  fetchAllRows,
+  fetchPage,
+  toPageResponse,
+  type AllRowsResult,
+} from '../lib/paged-select';
 import {internalError} from '../lib/errors';
 
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
@@ -153,12 +158,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
       if (error) {
         return c.json(internalError('failed to read the entries', error), 500);
       }
-      return c.json({
-        items: rows.map(rowToEntry),
-        total,
-        limit: page.limit,
-        offset: page.offset,
-      });
+      return c.json(toPageResponse(rows.map(rowToEntry), total, page));
     },
   )
   .get(

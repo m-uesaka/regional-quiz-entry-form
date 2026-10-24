@@ -122,13 +122,19 @@ const FORM_FIELD_DEF_ROWS = [
  * one for the route handler's own query; general staff skip the scope
  * lookup and only trigger the second. The single-entry detail route makes
  * one further call after that to fetch the tournament's form field defs.
+ * An array body also carries the `Content-Range` total PostgREST sends,
+ * which supabase-js only reads for an exact-count query such as the
+ * paginated list's.
  */
 function mockSequentialFetch(responses: unknown[]): void {
   let callIndex = 0;
   globalThis.fetch = staffSessionAwareFetch((() => {
     const body = responses[callIndex] ?? [];
     callIndex++;
-    return Promise.resolve(Response.json(body));
+    const headers: Record<string, string> = Array.isArray(body)
+      ? {'Content-Range': `0-${body.length - 1}/${body.length}`}
+      : {};
+    return Promise.resolve(Response.json(body, {headers}));
   }) as unknown as typeof fetch);
 }
 
@@ -361,6 +367,8 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
     mockSequentialFetch([
       [{region_id: REGION_ID, type: 'saikyoi'}],
       [CSV_ENTRY_ROW],
+      // The empty batch that ends `fetchAllRows()`'s paging.
+      [],
       FORM_FIELD_DEF_ROWS,
     ]);
     const cookie = await regionalStaffCookie();
@@ -404,9 +412,9 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
 
   it('GET /staff/.../entries.csv still exports every row', async () => {
     // Unlike the paginated list, the export pages through every entry:
-    // the route asks for 500 rows at a time, so a full first page has to be
-    // followed by another request, and the short page after it is the
-    // last.
+    // the route asks for 500 rows at a time and keeps asking until a batch
+    // comes back empty, so a short batch (possibly trimmed by the server's
+    // `max_rows`) never ends the export early.
     const firstPage = Array.from({length: 500}, (_, index) => ({
       ...CSV_ENTRY_ROW,
       name: `参加者${index}`,
@@ -414,6 +422,7 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
     mockSequentialFetch([
       firstPage,
       [{...CSV_ENTRY_ROW, name: '参加者500'}],
+      [],
       FORM_FIELD_DEF_ROWS,
     ]);
     const cookie = await generalStaffCookie();
