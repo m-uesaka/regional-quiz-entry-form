@@ -406,9 +406,12 @@ describe('GET /tournaments/:id and /:regionSlug/:tournamentSlug (queries)', () =
         ([key, value]) =>
           !value.startsWith('eq.') || known[key] === value.slice(3),
       );
-      // The region is embedded with no columns (`regions!inner()`), so
-      // PostgREST answers with the tournament's own columns alone.
-      return Promise.resolve(Response.json(matches ? [tournament] : []));
+      // The edit screen's by-id read embeds the tournament's form fields
+      // too; the fixture has none.
+      const row = url.searchParams.get('select')?.includes('form_field_defs')
+        ? {...tournament, form_field_defs: []}
+        : tournament;
+      return Promise.resolve(Response.json(matches ? [row] : []));
     }) as unknown as typeof fetch);
   }
 
@@ -437,7 +440,9 @@ describe('GET /tournaments/:id and /:regionSlug/:tournamentSlug (queries)', () =
     expect(res.status).toBe(200);
     expect(calls).toHaveLength(1);
     expect(calls[0].pathname).toEndWith('/rest/v1/tournaments');
-    expect(calls[0].searchParams.get('select')).toContain('regions!inner()');
+    expect(calls[0].searchParams.get('select')).toContain(
+      'regions!inner(name)',
+    );
     expect(calls[0].searchParams.get('regions.slug')).toBe('eq.tokyo');
   });
 
@@ -457,14 +462,38 @@ describe('GET /tournaments/:id and /:regionSlug/:tournamentSlug (queries)', () =
 
     expect(res.status).toBe(200);
     expect((await res.json()) as unknown).toEqual({
-      id: tournament.id,
-      regionId: tournament.region_id,
-      type: tournament.type,
-      name: tournament.name,
-      capacity: tournament.capacity,
-      entryOpensAt: tournament.entry_opens_at,
-      entryClosesAt: tournament.entry_closes_at,
+      tournament: {
+        id: tournament.id,
+        regionId: tournament.region_id,
+        type: tournament.type,
+        name: tournament.name,
+        capacity: tournament.capacity,
+        entryOpensAt: tournament.entry_opens_at,
+        entryClosesAt: tournament.entry_closes_at,
+      },
+      customName: tournament.name,
+      formFieldDefs: [],
     });
+  });
+
+  it('GET /tournaments/:id reads the form fields in the same query', async () => {
+    const calls: URL[] = [];
+    mockFilteringFetch(calls);
+
+    const res = await app.request(
+      `/api/tournaments/${tournament.id}`,
+      {
+        headers: {
+          cookie: await generalStaffCookie(),
+          origin: env.FRONTEND_URL,
+        },
+      },
+      env,
+    );
+
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].searchParams.get('select')).toContain('form_field_defs(');
   });
 
   it('GET /tournaments/:id returns 404 for an id that names no tournament', async () => {
@@ -717,6 +746,48 @@ describe.skipIf(!(await isDbReachable()))(
       expect(((await res.json()) as {name: string}).name).toBe(
         'テスト地域新人王',
       );
+    });
+
+    it('keeps a blank name following the region it is moved to and renamed', async () => {
+      const fromRegionId = await createTestRegion('move-from');
+      const toRegionId = await createTestRegion('move-to');
+      await sql`update regions set name = '移動先' where id = ${toRegionId}`;
+      const created = (await (
+        await postTournament(fromRegionId, {})
+      ).json()) as {
+        id: string;
+      };
+      const cookie = await generalStaffCookie();
+
+      // Only the region changes: the name is left alone, as the edit form
+      // leaves it when 大会名 was blank.
+      const moved = await app.request(
+        `/api/tournaments/${created.id}`,
+        {
+          method: 'PATCH',
+          headers: {cookie, 'content-type': 'application/json'},
+          body: JSON.stringify({regionId: toRegionId}),
+        },
+        env,
+      );
+      await sql`update regions set name = '改名後' where id = ${toRegionId}`;
+      const read = await app.request(
+        `/api/tournaments/${created.id}`,
+        {headers: {cookie, origin: env.FRONTEND_URL}},
+        env,
+      );
+
+      expect(moved.status).toBe(200);
+      expect(((await moved.json()) as {name: string}).name).toBe(
+        '移動先最強位',
+      );
+      expect(read.status).toBe(200);
+      expect(
+        (await read.json()) as unknown as {
+          tournament: {name: string};
+          customName: string | null;
+        },
+      ).toMatchObject({tournament: {name: '改名後最強位'}, customName: null});
     });
 
     it('deletes a tournament with its regulations and form fields', async () => {

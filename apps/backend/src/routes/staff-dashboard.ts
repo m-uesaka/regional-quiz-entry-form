@@ -8,11 +8,12 @@ import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
 import {createDbClient} from '../lib/db';
 import {internalError} from '../lib/errors';
+import {tournamentDisplayName} from '../lib/tournaments';
 
 /** Shape of a `tournament_entry_summary()` row (snake_case). */
 interface TournamentEntrySummaryRow {
   tournament_id: string;
-  tournament_name: string;
+  tournament_name: string | null;
   tournament_type: TournamentType;
   region_id: string;
   region_slug: string;
@@ -29,7 +30,11 @@ function rowToSummary(
 ): DashboardTournamentSummary {
   return DashboardTournamentSummarySchema.parse({
     tournamentId: row.tournament_id,
-    tournamentName: row.tournament_name,
+    tournamentName: tournamentDisplayName(
+      row.tournament_name,
+      row.region_name,
+      row.tournament_type,
+    ),
     tournamentType: row.tournament_type,
     regionId: row.region_id,
     regionSlug: row.region_slug,

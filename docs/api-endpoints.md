@@ -376,10 +376,12 @@ if ('yaml' in body) {
 
 ### `GET /api/tournaments/:id`
 
-大会を1件返します。大会編集画面用(以前は全件を取ってきてクライアント側で `find` していました、#123)。
+大会を1件返します。大会編集画面用(以前は全件を取ってきてクライアント側で `find` していました、#123)。編集画面に必要なフォーム定義も同じクエリで埋め込んで返します。`GET /api/form-definitions/:tournamentId` を別に呼ぶと、そちらの受付期間ゲートが大会をもう一度読むためです。
 
 - パス: `id` は UUID
-- `200`: `Tournament`
+- `200`: `{tournament: Tournament, customName: string | null, formFieldDefs: FormFieldDef[]}`
+  - `customName` はスタッフが入力した大会名で、空欄にしていれば `null`。`tournament.name` には既定名が入るので、編集フォームはこちらを初期値にして空欄を空欄のまま表示します
+  - `formFieldDefs` は `display_order` 順
 - `400`: `id` が UUID でない
 - `404`: `{"error": "tournament not found"}`
 - `500`: `{"error": "internal server error"}`
@@ -389,7 +391,7 @@ if ('yaml' in body) {
 ### `POST /api/tournaments`
 
 - リクエスト: `TournamentCreateInputSchema` — `{regionId, type, name, capacity, entryOpensAt, entryClosesAt}`
-  - `name` は**任意**(#164)。省略・空文字・空白のみのときは、地域名と種別のラベルをつないだ `defaultTournamentName()`(`packages/shared`、例: `東京最強位`)を保存します。地域が存在しなければ下の `23503` と同じ 400 を返します。
+  - `name` は**任意**(#164)。省略・空文字・空白のみのときは `null` を保存し、応答では地域名と種別のラベルをつないだ `defaultTournamentName()`(`packages/shared`、例: `東京最強位`)を返します。既定名は**読むたびに**その時点の地域名・種別から作る(`lib/tournaments.ts` の `tournamentDisplayName()`、`0024`)ので、地域名を変えたり大会の地域・種別を直したりすると大会名も追従します。
   - `capacity` は `null` 可(定員無制限)。
   - `entryOpensAt` / `entryClosesAt` はオフセット付き ISO 8601 文字列。
 - `201`: 作成された `Tournament`
@@ -409,7 +411,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 
 - パス: `id` は UUID
 - リクエスト: 上記の全フィールドを部分適用(`.partial()`)
-  - `name` を省略すると現在の大会名のまま。**空文字(空白のみ)を送ると既定の大会名に戻します**。既定名は更新後の地域・種別から作るので、同じリクエストで `regionId` / `type` を変えていればそちらが使われます
+  - `name` を省略すると現在の大会名のまま。**空文字(空白のみ)を送ると大会名を `null` に戻し**、以後は既定の大会名(その時点の地域・種別から作る)で表示します
 - `200`: 更新後の `Tournament`
 - `404`: 対象が存在しない(Supabase の `PGRST116` を 404 に変換)
 - `400`: Zod のバリデーションエラー、または上の `POST` と同じ既知の制約違反(日本語の `error`)

@@ -2,11 +2,9 @@ import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
 import {
-  defaultTournamentName,
   TournamentCreateInputSchema,
   TournamentTypeSchema,
   TournamentUpdateInputSchema,
-  type TournamentType,
 } from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
@@ -17,9 +15,13 @@ import {
 import {createDbClient} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {
-  fetchTournamentById,
+  FORM_FIELD_DEF_COLUMNS,
+  toFormFieldDef,
+  type FormFieldDefRow,
+} from '../lib/form-field-defs';
+import {
   rowToTournament,
-  tournamentLookupFailure,
+  TOURNAMENT_COLUMNS,
   type TournamentRow,
 } from '../lib/tournaments';
 
@@ -62,39 +64,6 @@ function tournamentWriteError(
 /** What a tournament delete answers when entries still point at it. */
 const TOURNAMENT_HAS_ENTRIES_MESSAGE = 'エントリーがある大会は削除できません';
 
-/**
- * Works out the name to store for a tournament whose 大会名 was left blank.
- * @param db The Supabase client to read the region with.
- * @param regionId The region the tournament is (or will be) in.
- * @param type The tournament's (new) type.
- * @return The name, or the body and status to refuse the write with.
- */
-async function readDefaultTournamentName(
-  db: ReturnType<typeof createDbClient>,
-  regionId: string,
-  type: TournamentType,
-): Promise<{name: string} | {body: {error: string}; status: 400 | 500}> {
-  const {data, error} = await db
-    .from('regions')
-    .select('name')
-    .eq('id', regionId)
-    .maybeSingle<{name: string}>();
-  if (error) {
-    return {
-      body: internalError('failed to read the region', error),
-      status: 500,
-    };
-  }
-  if (!data) {
-    // The same refusal the insert's foreign key would have produced.
-    return {
-      body: {error: TOURNAMENT_CONSTRAINT_MESSAGES['23503']},
-      status: 400,
-    };
-  }
-  return {name: defaultTournamentName(data.name, type)};
-}
-
 const TournamentBySlugParamSchema = z.object({
   regionSlug: z.string(),
   tournamentSlug: TournamentTypeSchema,
@@ -116,7 +85,9 @@ function toTournamentRow(
     row.type = input.type;
   }
   if (input.name !== undefined) {
-    row.name = input.name;
+    // Blank is stored as null, which reads back as the default name for the
+    // tournament's region and type at the time (0024).
+    row.name = input.name === '' ? null : input.name;
   }
   if (input.capacity !== undefined) {
     row.capacity = input.capacity;
@@ -140,34 +111,60 @@ function toTournamentRow(
 export const tournamentsRoute = new Hono<StaffEnv>()
   .get('/', requireGeneralStaff(), async c => {
     const db = createDbClient(c.env);
-    const {data, error} = await db.from('tournaments').select('*');
+    const {data, error} = await db
+      .from('tournaments')
+      .select(TOURNAMENT_COLUMNS)
+      .returns<TournamentRow[]>();
     if (error) {
       return c.json(
         internalError('failed to read the tournaments', error),
         500,
       );
     }
-    return c.json((data as TournamentRow[]).map(rowToTournament));
+    return c.json(data.map(rowToTournament));
   })
   // For the edit screen, which used to fetch the whole list above just to
   // `find` one tournament in it (#123). One segment, so it can't collide
   // with the two-segment `/:regionSlug/:tournamentSlug` read below, nor with
   // the `/:tournamentId/...` routes mounted beside this app.
+  //
+  // The form fields come along in the same query rather than from
+  // `GET /api/form-definitions/:tournamentId`, whose entry-period gate would
+  // read the tournament a second time. `customName` is the 大会名 as typed,
+  // null when it was left blank, so the form can show it blank again
+  // instead of the default name `tournament.name` carries.
   .get(
     '/:id',
     requireGeneralStaff(),
     zValidator('param', TournamentIdParamSchema),
     async c => {
-      let tournament: TournamentRow | null;
-      try {
-        tournament = await fetchTournamentById(c.env, c.req.valid('param').id);
-      } catch (e: unknown) {
-        return c.json(tournamentLookupFailure(e), 500);
+      const db = createDbClient(c.env);
+      const {data, error} = await db
+        .from('tournaments')
+        .select(
+          `${TOURNAMENT_COLUMNS}, form_field_defs(${FORM_FIELD_DEF_COLUMNS})`,
+        )
+        .eq('id', c.req.valid('param').id)
+        .order('display_order', {
+          referencedTable: 'form_field_defs',
+          ascending: true,
+        })
+        .returns<(TournamentRow & {form_field_defs: FormFieldDefRow[]})[]>()
+        .maybeSingle();
+      if (error) {
+        return c.json(
+          internalError('failed to read the tournament', error),
+          500,
+        );
       }
-      if (!tournament) {
+      if (!data) {
         return c.json({error: 'tournament not found'}, 404);
       }
-      return c.json(rowToTournament(tournament));
+      return c.json({
+        tournament: rowToTournament(data),
+        customName: data.name,
+        formFieldDefs: data.form_field_defs.map(toFormFieldDef),
+      });
     },
   )
   .post(
@@ -176,22 +173,11 @@ export const tournamentsRoute = new Hono<StaffEnv>()
     zValidator('json', TournamentCreateInputSchema),
     async c => {
       const db = createDbClient(c.env);
-      const input = c.req.valid('json');
-      if (input.name === '') {
-        const resolved = await readDefaultTournamentName(
-          db,
-          input.regionId,
-          input.type,
-        );
-        if (!('name' in resolved)) {
-          return c.json(resolved.body, resolved.status);
-        }
-        input.name = resolved.name;
-      }
       const {data, error} = await db
         .from('tournaments')
-        .insert(toTournamentRow(input))
-        .select()
+        .insert(toTournamentRow(c.req.valid('json')))
+        .select(TOURNAMENT_COLUMNS)
+        .returns<TournamentRow[]>()
         .single();
       if (error) {
         const {body, status} = tournamentWriteError(
@@ -200,7 +186,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         );
         return c.json(body, status);
       }
-      return c.json(rowToTournament(data as TournamentRow), 201);
+      return c.json(rowToTournament(data), 201);
     },
   )
   .patch(
@@ -211,36 +197,12 @@ export const tournamentsRoute = new Hono<StaffEnv>()
     async c => {
       const db = createDbClient(c.env);
       const {id} = c.req.valid('param');
-      const input = c.req.valid('json');
-      if (input.name === '') {
-        // The default follows the region and type the tournament ends up
-        // with, so whichever of them this request leaves alone is read off
-        // the stored row.
-        let {regionId, type} = input;
-        if (regionId === undefined || type === undefined) {
-          let current: TournamentRow | null;
-          try {
-            current = await fetchTournamentById(c.env, id);
-          } catch (e: unknown) {
-            return c.json(tournamentLookupFailure(e), 500);
-          }
-          if (!current) {
-            return c.json({error: 'tournament not found'}, 404);
-          }
-          regionId ??= current.region_id;
-          type ??= current.type;
-        }
-        const resolved = await readDefaultTournamentName(db, regionId, type);
-        if (!('name' in resolved)) {
-          return c.json(resolved.body, resolved.status);
-        }
-        input.name = resolved.name;
-      }
       const {data, error} = await db
         .from('tournaments')
-        .update(toTournamentRow(input))
+        .update(toTournamentRow(c.req.valid('json')))
         .eq('id', id)
-        .select()
+        .select(TOURNAMENT_COLUMNS)
+        .returns<TournamentRow[]>()
         .single();
       if (error) {
         // PGRST116: `.single()` found no matching row to update. Its
@@ -255,7 +217,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         );
         return c.json(body, status);
       }
-      return c.json(rowToTournament(data as TournamentRow));
+      return c.json(rowToTournament(data));
     },
   )
   // For a tournament created by mistake. Its regulations, form fields and

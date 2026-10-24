@@ -1,4 +1,5 @@
 import {
+  defaultTournamentName,
   TournamentSchema,
   type Tournament,
   type TournamentType,
@@ -12,15 +13,43 @@ export interface TournamentRow {
   id: string;
   region_id: string;
   type: TournamentType;
-  name: string;
+  /** What staff typed in 大会名, or null when they left it blank (0024). */
+  name: string | null;
   capacity: number | null;
   entry_opens_at: string;
   entry_closes_at: string;
+  // A to-one embed on a not-null foreign key, so always the region itself.
+  // Read for its name, which a blank 大会名 is made from.
+  regions: {name: string};
 }
 
-/** The columns of `TournamentRow`, for every select in this file. */
-const TOURNAMENT_COLUMNS =
+/** The columns of `tournaments` itself that `TournamentRow` carries. */
+const TOURNAMENT_OWN_COLUMNS =
   'id, region_id, type, name, capacity, entry_opens_at, entry_closes_at';
+
+/**
+ * The select that reads a `TournamentRow`, for every read of one -- and for
+ * the rows an insert or update hands back.
+ */
+export const TOURNAMENT_COLUMNS = `${TOURNAMENT_OWN_COLUMNS}, regions(name)`;
+
+/**
+ * The name a tournament is shown under: what staff typed in 大会名, or
+ * `defaultTournamentName()` when they left it blank.
+ *
+ * Worked out on every read rather than stored (0024), so a blank-named
+ * tournament follows its region's current name and its own current type.
+ * @param name The stored `tournaments.name`.
+ * @param regionName The name of the region the tournament is in.
+ * @param type The tournament's type.
+ */
+export function tournamentDisplayName(
+  name: string | null,
+  regionName: string,
+  type: TournamentType,
+): string {
+  return name ?? defaultTournamentName(regionName, type);
+}
 
 /** Turns a row into the camelCase shape the API answers with. */
 export function rowToTournament(row: TournamentRow): Tournament {
@@ -28,7 +57,7 @@ export function rowToTournament(row: TournamentRow): Tournament {
     id: row.id,
     regionId: row.region_id,
     type: row.type,
-    name: row.name,
+    name: tournamentDisplayName(row.name, row.regions.name, row.type),
     capacity: row.capacity,
     entryOpensAt: row.entry_opens_at,
     entryClosesAt: row.entry_closes_at,
@@ -93,8 +122,8 @@ export async function fetchTournamentById(
  * old two-step read -- the region's id from `regions`, then the tournament
  * -- cost every screen an extra round trip. `regions!inner` makes the embed
  * an inner join, so a missing region comes back as no row at all, the same
- * answer as a missing tournament. The embed selects no columns (`()`): it is
- * only there to filter on, so the row comes back as a plain `TournamentRow`.
+ * answer as a missing tournament. The embed is the same `regions(name)` every
+ * `TournamentRow` carries, made inner so it can also be filtered on.
  * @param env The Worker bindings.
  * @param regionSlug The region's slug.
  * @param tournamentSlug The tournament's type.
@@ -109,7 +138,7 @@ export async function fetchTournamentBySlug(
   const db = createDbClient(env);
   const {data, error} = await db
     .from('tournaments')
-    .select(`${TOURNAMENT_COLUMNS}, regions!inner()`)
+    .select(`${TOURNAMENT_OWN_COLUMNS}, regions!inner(name)`)
     .eq('regions.slug', regionSlug)
     .eq('type', tournamentSlug)
     .returns<TournamentRow[]>()

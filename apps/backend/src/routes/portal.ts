@@ -1,5 +1,6 @@
 import {Hono} from 'hono';
 import {
+  defaultTournamentName,
   PortalTournamentSchema,
   type PortalTournament,
   type TournamentType,
@@ -11,7 +12,7 @@ import {internalError} from '../lib/errors';
 /** A `tournaments` row with its region embedded, as selected below. */
 interface PortalTournamentRow {
   type: TournamentType;
-  name: string;
+  name: string | null;
   entry_opens_at: string;
   entry_closes_at: string;
   // `!inner` makes PostgREST drop a tournament without a region rather than
@@ -39,7 +40,10 @@ function rowToPortalTournament(
     regionSlug: row.regions?.slug,
     regionName: row.regions?.name,
     tournamentType: row.type,
-    tournamentName: row.name,
+    // Blank-named tournaments are named after their region on read (0024).
+    tournamentName:
+      row.name ??
+      (row.regions && defaultTournamentName(row.regions.name, row.type)),
     entryOpensAt: row.entry_opens_at,
     entryClosesAt: row.entry_closes_at,
   });

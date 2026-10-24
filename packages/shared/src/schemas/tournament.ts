@@ -19,8 +19,9 @@ export type Tournament = z.infer<typeof TournamentSchema>;
 // `zValidator` are the same rule rather than two that can drift apart.
 //
 // `name` may be left out or blank: the usual name is just the region's
-// name followed by the type's label, so the API stores
-// `defaultTournamentName()` in its place rather than making staff type it.
+// name followed by the type's label, so the API stores no name and answers
+// with `defaultTournamentName()` for the region and type at the time of each
+// read, rather than making staff type it.
 export const TournamentCreateInputSchema = TournamentSchema.omit({
   id: true,
 }).extend({name: z.string().trim().default('')});
@@ -28,9 +29,9 @@ export type TournamentCreateInput = z.infer<typeof TournamentCreateInputSchema>;
 
 // Request body of `PATCH /api/tournaments/:id`. Every field is optional
 // because this is a PATCH: an omitted one keeps the tournament's current
-// value. A blank `name` is not "keep": it resets the name to
-// `defaultTournamentName()` for the tournament's (possibly new) region and
-// type.
+// value. A blank `name` is not "keep": it clears the name, so the tournament
+// goes back to `defaultTournamentName()` for whatever region and type it
+// has.
 export const TournamentUpdateInputSchema =
   TournamentCreateInputSchema.partial();
 export type TournamentUpdateInput = z.infer<typeof TournamentUpdateInputSchema>;
