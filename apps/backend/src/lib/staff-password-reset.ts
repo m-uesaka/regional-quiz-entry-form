@@ -3,6 +3,11 @@ import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import {createMailSender} from './mailer';
 import {hashPassword} from './password';
+import {
+  buildSystemMail,
+  describeLinkLifetime,
+  systemMailSubject,
+} from './system-mail';
 import {generateToken, hashToken} from './token';
 
 // Longer than the participant reset link's hour. A staff link is normally an
@@ -95,11 +100,28 @@ export async function sendStaffPasswordLink(
 
   const mailer = createMailSender(env);
   try {
-    await mailer.send({
-      to: email,
-      subject: 'スタッフアカウントのパスワード設定',
-      html: `<a href="${env.FRONTEND_URL}/staff/password-reset?token=${token}">こちらをクリックしてパスワードを設定してください</a>`,
-    });
+    // Both a new account's invitation and a re-issued link come through
+    // here, so the wording fits either.
+    await mailer.send(
+      buildSystemMail(
+        email,
+        systemMailSubject('スタッフアカウントのパスワード設定'),
+        [
+          'このメールアドレスのスタッフアカウントについて、パスワード設定用のリンクが発行されました。下のリンクを開いて、パスワードを設定してください。',
+          {
+            label: 'パスワードを設定する',
+            url: `${env.FRONTEND_URL}/staff/password-reset?token=${token}`,
+          },
+          `${describeLinkLifetime(TOKEN_TTL_MS)}期限が切れた場合は、統括スタッフにリンクの再発行を依頼してください。`,
+          '設定したパスワードで、スタッフ用のログイン画面からログインできます。',
+          {
+            label: 'スタッフ用のログイン画面',
+            url: `${env.FRONTEND_URL}/staff/login`,
+          },
+          'このメールに心当たりがない場合は、このメールを破棄してください。',
+        ],
+      ),
+    );
   } catch (mailError) {
     // The token stays in place rather than being deleted: it is unguessable
     // and expires on its own, and the general staff member can re-send the

@@ -637,7 +637,16 @@ async function enterTournament(
   }
 
   try {
-    await sendVerificationEmail(env, entry.id, email);
+    await sendVerificationEmail(
+      env,
+      entry.id,
+      email,
+      tournamentDisplayName(
+        tournament.name,
+        tournament.regions.name,
+        tournament.type,
+      ),
+    );
   } catch (mailError) {
     // Rolled back because the participant never received a usable
     // verification link, so the entry they can't confirm must not stand in

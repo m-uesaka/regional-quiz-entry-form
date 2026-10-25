@@ -13,7 +13,7 @@ import {
 } from '@playwright/test';
 import {
   extractVerificationUrl,
-  VERIFICATION_MAIL_SUBJECT,
+  verificationMailSubject,
   waitForMail,
 } from './api';
 import {
@@ -277,7 +277,11 @@ export async function submitEntryForm(
   // The page answers before the entry is made (#117); the confirmation mail
   // is the last thing the background work does, so once it is in, the
   // account and the entry exist for whatever the spec does next.
-  await waitForMail(page.request, participant.email, VERIFICATION_MAIL_SUBJECT);
+  await waitForMail(
+    page.request,
+    participant.email,
+    verificationMailSubject(tournament),
+  );
   return participant;
 }
 
@@ -344,15 +348,21 @@ async function answerCustomField(
  * it lands on the same `vite dev` server the rest of the flow is on.
  * @param page The page to open it in.
  * @param request An API context, used to read the mail stub.
+ * @param tournament The tournament the entry was made to.
  * @param email The address the confirmation mail went to.
  * @return The link that was opened, so a spec can follow it a second time.
  */
 export async function openVerificationLink(
   page: Page,
   request: APIRequestContext,
+  tournament: TournamentFixture,
   email: string,
 ): Promise<string> {
-  const mail = await waitForMail(request, email, VERIFICATION_MAIL_SUBJECT);
+  const mail = await waitForMail(
+    request,
+    email,
+    verificationMailSubject(tournament),
+  );
   const link = extractVerificationUrl(mail.html);
   await page.goto(link);
   return link;

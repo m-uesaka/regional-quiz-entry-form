@@ -1,10 +1,20 @@
+import type {TournamentType} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import {createMailSender} from './mailer';
+import {buildSystemMail, systemMailSubject} from './system-mail';
+import {tournamentDisplayName} from './tournaments';
 
 interface PromotedEntryRow {
   entry_id: string;
   participant_email: string;
+}
+
+/** What the promotion mail needs to name the tournament. */
+interface PromotedTournamentRow {
+  name: string | null;
+  type: TournamentType;
+  regions: {name: string};
 }
 
 /**
@@ -45,10 +55,43 @@ export async function promoteNextWaitlistedEntry(
     return;
   }
 
-  const mailer = createMailSender(env);
-  await mailer.send({
-    to: promoted.participant_email,
-    subject: 'キャンセル待ちからの繰り上げについて',
-    html: '<p>キャンセルが発生したため、あなたのエントリーが確定しました。</p>',
-  });
+  // Read only once someone was promoted, so the common case of an empty
+  // queue costs no extra round trip. A failure here leaves the promotion
+  // standing without its mail; the caller logs it.
+  const {data: tournament, error: tournamentError} = await db
+    .from('tournaments')
+    .select('name, type, regions(name)')
+    .eq('id', tournamentId)
+    .returns<PromotedTournamentRow[]>()
+    .single();
+  if (tournamentError) {
+    throw new Error(tournamentError.message);
+  }
+  const tournamentName = tournamentDisplayName(
+    tournament.name,
+    tournament.regions.name,
+    tournament.type,
+  );
+
+  await createMailSender(env).send(
+    buildSystemMail(
+      promoted.participant_email,
+      waitlistPromotionSubject(tournamentName),
+      [
+        `キャンセル待ちをしていた「${tournamentName}」でキャンセルが出たため、あなたのエントリーが確定しました。`,
+        'エントリーの内容は、マイページから確認できます。参加できなくなった場合は、マイページからエントリーをキャンセルしてください。',
+        {label: 'マイページ', url: `${env.FRONTEND_URL}/mypage`},
+      ],
+    ),
+  );
+}
+
+/**
+ * The subject the promotion mail for `tournamentName` goes out under.
+ * @param tournamentName The tournament's display name.
+ */
+export function waitlistPromotionSubject(tournamentName: string): string {
+  return systemMailSubject(
+    `「${tournamentName}」のエントリーが確定しました(キャンセル待ちからの繰り上げ)`,
+  );
 }

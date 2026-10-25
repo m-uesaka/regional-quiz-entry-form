@@ -7,6 +7,8 @@ export interface SendMailInput {
   to: string;
   subject: string;
   html: string;
+  /** The plain-text alternative, for clients that don't render HTML. */
+  text?: string;
 }
 
 export interface MailSender {

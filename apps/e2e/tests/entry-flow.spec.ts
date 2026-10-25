@@ -1,7 +1,7 @@
 // エントリー登録 → 確認メールのリンクをクリック → マイページで確認
 
 import {expect, test} from '@playwright/test';
-import {ENTRY_NOTICE_SUBJECT, waitForMail} from '../support/api';
+import {entryNoticeSubject, waitForMail} from '../support/api';
 import {SAIKYOI, SHINJINOU} from '../support/fixtures';
 import {
   entryFormPath,
@@ -37,7 +37,7 @@ test('an entry is confirmed through its mailed link and shows up on mypage', asy
   await page.goto(entryListPath(SHINJINOU));
   await expect(page.getByText(participant.displayName)).toHaveCount(0);
 
-  await openVerificationLink(page, request, participant.email);
+  await openVerificationLink(page, request, SHINJINOU, participant.email);
   // The tournament is uncapped, so there is always a seat.
   await expect(page.getByText('エントリーが確定しました。')).toBeVisible();
   // The token is spent by the time the page renders: `/verify` carries the
@@ -84,7 +84,7 @@ test('refuses the second tournament of a region that disallows dual entry, by ma
   const notice = await waitForMail(
     page.request,
     participant.email,
-    ENTRY_NOTICE_SUBJECT,
+    entryNoticeSubject(SAIKYOI),
   );
   expect(notice.html).toContain(
     'この地域では、最強位と新人王のどちらか一方にのみエントリーできます',
@@ -119,7 +119,12 @@ test('a verification link cannot be followed twice', async ({
     displayName: '二度目さん',
   });
 
-  const link = await openVerificationLink(page, request, participant.email);
+  const link = await openVerificationLink(
+    page,
+    request,
+    SHINJINOU,
+    participant.email,
+  );
   await expect(page.getByText('エントリーが確定しました。')).toBeVisible();
 
   await page.goto(link);

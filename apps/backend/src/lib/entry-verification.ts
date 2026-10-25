@@ -1,6 +1,11 @@
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import {createMailSender} from './mailer';
+import {
+  buildSystemMail,
+  describeLinkLifetime,
+  systemMailSubject,
+} from './system-mail';
 import {generateToken, hashToken} from './token';
 
 const TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
@@ -11,11 +16,13 @@ const TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
  * @param env The Worker bindings.
  * @param entryId The `entries` row awaiting verification.
  * @param email The address to send the verification link to.
+ * @param tournamentName The display name of the tournament being entered.
  */
 export async function sendVerificationEmail(
   env: Bindings,
   entryId: string,
   email: string,
+  tournamentName: string,
 ): Promise<void> {
   const db = createDbClient(env);
   const token = generateToken();
@@ -30,10 +37,29 @@ export async function sendVerificationEmail(
     throw new Error(`failed to persist verification token: ${error.message}`);
   }
 
-  const mailer = createMailSender(env);
-  await mailer.send({
-    to: email,
-    subject: 'エントリー確認メール',
-    html: `<a href="${env.FRONTEND_URL}/verify?token=${token}">こちらをクリックしてエントリーを確定してください</a>`,
-  });
+  // The submitter's own name is left out on purpose: anyone can type
+  // someone else's address into the form, and whatever they typed as their
+  // name would otherwise land in the stranger's inbox under our domain.
+  await createMailSender(env).send(
+    buildSystemMail(email, verificationMailSubject(tournamentName), [
+      `「${tournamentName}」へのエントリーを受け付けました。エントリーはまだ確定していません。`,
+      '下のリンクを開いて、エントリーを確定してください。定員に達している場合は、キャンセル待ちとして受け付けます。',
+      {
+        label: 'エントリーを確定する',
+        url: `${env.FRONTEND_URL}/verify?token=${token}`,
+      },
+      describeLinkLifetime(TOKEN_TTL_MS),
+      'このエントリーに心当たりがない場合は、このメールを破棄してください。リンクを開かない限り、エントリーは確定しません。',
+    ]),
+  );
+}
+
+/**
+ * The subject the verification mail for `tournamentName` goes out under.
+ * @param tournamentName The display name of the tournament being entered.
+ */
+export function verificationMailSubject(tournamentName: string): string {
+  return systemMailSubject(
+    `「${tournamentName}」のエントリーを確定してください`,
+  );
 }

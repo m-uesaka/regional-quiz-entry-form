@@ -2,7 +2,8 @@ import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
 import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
 import {app} from '../index';
-import {ENTRY_NOTICE_SUBJECT} from '../lib/entry-notice';
+import {entryNoticeSubject} from '../lib/entry-notice';
+import {verificationMailSubject} from '../lib/entry-verification';
 import {hashPassword} from '../lib/password';
 import {legacyHashPassword} from '../test-support/password';
 import {
@@ -151,6 +152,7 @@ describe('POST /tournaments/:tournamentId/entries (request validation)', () => {
 // mails went out to whom.
 
 const TOURNAMENT_ID = '22222222-2222-2222-2222-222222222222';
+const TOURNAMENT_NAME = 'テスト大会';
 const REGION_ID = '33333333-3333-3333-3333-333333333333';
 const OTHER_REGION_ID = '44444444-4444-4444-4444-444444444444';
 const PARTICIPANT_ID = '55555555-5555-5555-5555-555555555555';
@@ -166,7 +168,7 @@ function tournamentRow(
 ): Record<string, unknown> {
   return {
     id: TOURNAMENT_ID,
-    name: 'テスト大会',
+    name: TOURNAMENT_NAME,
     region_id: REGION_ID,
     entry_opens_at: new Date(Date.now() - DAY_MS).toISOString(),
     entry_closes_at:
@@ -368,7 +370,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     expect(recorded.mails).toHaveLength(1);
     expect(recorded.mails[0]).toMatchObject({
       to: validBody.email,
-      subject: ENTRY_NOTICE_SUBJECT,
+      subject: entryNoticeSubject(TOURNAMENT_NAME),
     });
     expect(recorded.mails[0].html).toContain('パスワード');
     expect(recorded.calls).not.toContainEqual({
@@ -389,7 +391,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
 
     expect(res).toEqual({status: 202, body: JSON.stringify({ok: true})});
     expect(recorded.mails).toHaveLength(1);
-    expect(recorded.mails[0].subject).toBe(ENTRY_NOTICE_SUBJECT);
+    expect(recorded.mails[0].subject).toBe(entryNoticeSubject(TOURNAMENT_NAME));
     expect(recorded.mails[0].html).toContain('別の地域');
     expect(recorded.calls).not.toContainEqual({
       table: 'entries',
@@ -411,7 +413,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     expect(recorded.mails).toHaveLength(1);
     expect(recorded.mails[0]).toMatchObject({
       to: validBody.email,
-      subject: 'エントリー確認メール',
+      subject: verificationMailSubject(TOURNAMENT_NAME),
     });
   });
 
@@ -470,7 +472,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     expect(recorded.mails).toHaveLength(1);
     expect(recorded.mails[0]).toMatchObject({
       to: validBody.email,
-      subject: ENTRY_NOTICE_SUBJECT,
+      subject: entryNoticeSubject(TOURNAMENT_NAME),
     });
     expect(recorded.mails[0].html).toContain('よく使われている');
   });
@@ -508,7 +510,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     expect(recorded.mails).toHaveLength(1);
     expect(recorded.mails[0]).toMatchObject({
       to: validBody.email,
-      subject: ENTRY_NOTICE_SUBJECT,
+      subject: entryNoticeSubject(TOURNAMENT_NAME),
     });
     expect(recorded.mails[0].html).toContain('もう一度エントリーしてください');
   });
@@ -593,7 +595,7 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
     expect(recorded.mails).toHaveLength(1);
     expect(recorded.mails[0]).toMatchObject({
       to: validBody.email,
-      subject: 'エントリー確認メール',
+      subject: verificationMailSubject(TOURNAMENT_NAME),
     });
   });
 
