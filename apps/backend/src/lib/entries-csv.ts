@@ -7,14 +7,26 @@ import {
   type FormFieldDef,
 } from '@regional-quiz/shared';
 
-/** The columns every export starts with, before the custom fields. */
+/**
+ * The columns every export starts with, before the custom fields: every
+ * answer the entry form takes, and what became of the entry (#178). Staff
+ * work from the export, so whatever the staff detail page shows of an
+ * entry is in it too.
+ */
 const FIXED_HEADERS = [
   '氏名',
   'ふりがな',
   'エントリーリスト掲載名',
+  'メールアドレス',
   'ステータス',
+  'キャンセル待ち順位',
+  'エントリー日時',
   'レギュレーション',
+  '自由記述',
 ];
+
+/** Japan Standard Time, which has no daylight saving: always UTC+9. */
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 /**
  * Separator between the selected options of a multi-select checkbox, and
@@ -38,7 +50,13 @@ export interface EntriesCsvRow {
   name: string;
   furigana: string;
   displayName: string;
+  /** The participant's address; `null` if their account is gone. */
+  email: string | null;
   status: string;
+  /** The entry's place on the waitlist, `null` unless it is waitlisted. */
+  waitlistPosition: number | null;
+  /** When the entry was submitted, as stored (ISO 8601). */
+  createdAt: string;
   /**
    * Every regulation the entry claims, in the tournament's display order.
    * An entry may meet more than one condition, so these are joined into a
@@ -46,6 +64,7 @@ export interface EntriesCsvRow {
    * cover.
    */
   regulationLabels: string[];
+  freeText: string | null;
   customFieldValues: CustomFieldValues;
 }
 
@@ -73,8 +92,12 @@ export function buildEntriesCsv(
     entry.name,
     entry.furigana,
     entry.displayName,
+    entry.email ?? '',
     entry.status,
+    entry.waitlistPosition === null ? '' : String(entry.waitlistPosition),
+    formatJstDateTime(entry.createdAt),
     entry.regulationLabels.join(MULTI_VALUE_SEPARATOR),
+    entry.freeText ?? '',
     ...fieldDefs.map(fieldDef =>
       formatCustomFieldValue(
         fieldDef,
@@ -85,6 +108,16 @@ export function buildEntriesCsv(
   return [headers, ...rows]
     .map(row => row.map(renderCell).join(','))
     .join('\r\n');
+}
+
+/**
+ * Writes a stored timestamp as the Japan-time `YYYY-MM-DD HH:mm` staff read
+ * every other time on the site in, and a spreadsheet takes for a date-time.
+ * @param iso The timestamp as stored.
+ */
+function formatJstDateTime(iso: string): string {
+  const jst = new Date(Date.parse(iso) + JST_OFFSET_MS).toISOString();
+  return `${jst.slice(0, 10)} ${jst.slice(11, 16)}`;
 }
 
 /**

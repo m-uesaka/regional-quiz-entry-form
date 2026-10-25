@@ -48,7 +48,8 @@ const ENTRY_COLUMNS =
   ENTRY_REGULATIONS_COLUMNS;
 
 const ENTRY_CSV_COLUMNS =
-  'name, furigana, display_name, custom_field_values, status, ' +
+  'name, furigana, display_name, free_text, custom_field_values, status, ' +
+  'waitlist_position, created_at, participants(email), ' +
   ENTRY_REGULATIONS_COLUMNS;
 
 /** Shape of an `entries` row as selected for the CSV export. */
@@ -56,8 +57,12 @@ interface EntryCsvRow {
   name: string;
   furigana: string;
   display_name: string;
+  free_text: string | null;
   custom_field_values: CustomFieldValues;
   status: EntryStatus;
+  waitlist_position: number | null;
+  created_at: string;
+  participants: {email: string} | null;
   entry_regulations: EntryRegulationRow[];
 }
 
@@ -204,8 +209,12 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
           name: row.name,
           furigana: row.furigana,
           displayName: row.display_name,
+          email: row.participants?.email ?? null,
           status: ENTRY_STATUS_LABELS[row.status],
+          waitlistPosition: row.waitlist_position,
+          createdAt: row.created_at,
           regulationLabels: entryRegulationLabels(row.entry_regulations),
+          freeText: row.free_text,
           customFieldValues: row.custom_field_values,
         })),
       );
