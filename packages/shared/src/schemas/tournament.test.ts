@@ -2,6 +2,7 @@ import {describe, expect, it} from 'bun:test';
 import {
   defaultTournamentName,
   TournamentCreateInputSchema,
+  TournamentOrderInputSchema,
   TournamentUpdateInputSchema,
 } from './tournament';
 
@@ -34,6 +35,29 @@ describe('TournamentUpdateInputSchema', () => {
     expect(TournamentUpdateInputSchema.parse({capacity: 10})).toEqual({
       capacity: 10,
     });
+  });
+});
+
+describe('TournamentOrderInputSchema', () => {
+  const A = '00000000-0000-0000-0000-00000000000a';
+  const B = '00000000-0000-0000-0000-00000000000b';
+
+  it('accepts tournament ids in the order to show them', () => {
+    expect(
+      TournamentOrderInputSchema.safeParse({tournamentIds: [B, A]}).success,
+    ).toBe(true);
+  });
+
+  it('rejects an empty list', () => {
+    expect(
+      TournamentOrderInputSchema.safeParse({tournamentIds: []}).success,
+    ).toBe(false);
+  });
+
+  it('rejects the same tournament twice', () => {
+    expect(
+      TournamentOrderInputSchema.safeParse({tournamentIds: [A, A]}).success,
+    ).toBe(false);
   });
 });
 

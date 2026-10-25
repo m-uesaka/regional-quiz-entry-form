@@ -20,13 +20,6 @@ interface PortalTournamentRow {
   regions: {slug: string; name: string} | null;
 }
 
-// The order the two tournaments of one region are listed in, matching how
-// the event itself is named (最強位・新人王).
-const TOURNAMENT_TYPE_ORDER: Record<TournamentType, number> = {
-  saikyoi: 0,
-  shinjinou: 1,
-};
-
 /**
  * Turns a row into what the portal answers with, or `null` when the row
  * doesn't fit the schema. One unreadable tournament is logged and left out
@@ -57,23 +50,6 @@ function rowToPortalTournament(
   return result.data;
 }
 
-/**
- * Orders the portal by region name in Japanese collation (roughly by
- * reading, e.g. 東京 before 北海道), then 最強位 before 新人王 within a
- * region, so the page can group consecutive rows by region.
- */
-function comparePortalTournaments(
-  a: PortalTournament,
-  b: PortalTournament,
-): number {
-  return (
-    a.regionName.localeCompare(b.regionName, 'ja') ||
-    a.regionSlug.localeCompare(b.regionSlug) ||
-    TOURNAMENT_TYPE_ORDER[a.tournamentType] -
-      TOURNAMENT_TYPE_ORDER[b.tournamentType]
-  );
-}
-
 // Public on purpose, and not behind the entry-period gate
 // (`middleware/entry-period.ts`): the portal is where participants find the
 // forms, and listing the closed ones too is what lets it say when a form
@@ -93,13 +69,16 @@ export const portalRoute = new Hono<Env>().get('/tournaments', async c => {
     .select(
       'type, name, entry_opens_at, entry_closes_at, regions!inner(slug, name)',
     )
+    // The order general staff set (`reorder_tournaments()`, 0032); `id`
+    // only breaks a tie, which the column's sequence default never makes.
+    .order('display_order', {ascending: true})
+    .order('id', {ascending: true})
     .returns<PortalTournamentRow[]>();
   if (error) {
     return c.json(internalError('failed to read the tournaments', error), 500);
   }
   const tournaments = data
     .map(rowToPortalTournament)
-    .filter(tournament => tournament !== null)
-    .sort(comparePortalTournaments);
+    .filter(tournament => tournament !== null);
   return c.json(tournaments);
 });

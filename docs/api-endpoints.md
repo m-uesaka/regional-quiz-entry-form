@@ -211,6 +211,7 @@ if ('yaml' in body) {
 | POST | `/api/tournaments` | 統括スタッフ |
 | PATCH | `/api/tournaments/:id` | 統括スタッフ |
 | DELETE | `/api/tournaments/:id` | 統括スタッフ |
+| PUT | `/api/tournaments/order` | 統括スタッフ |
 | GET | `/api/tournaments/:regionSlug/:tournamentSlug` | 期間中はなし / 期間外は担当スタッフ |
 | GET | `/api/tournaments/:tournamentId/regulations` | 期間中はなし / 期間外は担当スタッフ |
 | PUT | `/api/tournaments/:tournamentId/regulations` | 統括スタッフ |
@@ -394,7 +395,7 @@ if ('yaml' in body) {
 
 ### `GET /api/tournaments`
 
-全大会を返します。
+全大会を、統括スタッフが決めた表示順(`tournaments.display_order`、`PUT /api/tournaments/order`)で返します。
 
 - `200`: `Tournament[]`
 - `500`: `{"error": <Supabase のメッセージ>}`
@@ -453,6 +454,18 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 - `500`: `{"error": "internal server error"}`
 
 本文の無い DELETE なので CSRF の origin 検査(§1)の対象になります。管理画面からは大会編集画面の form action(`?/delete`)がサーバ側から呼ぶため、`Origin` は SvelteKit が付けます。
+
+### `PUT /api/tournaments/order`
+
+大会の表示順を決めます。全大会の id を表示したい順に並べて送り、`reorder_tournaments()`(0032)がその順に `display_order` を 0 から振り直します。エントリーポータル(`GET /api/portal/tournaments`)・全地域ダッシュボード(`GET /api/staff/dashboard`)・`GET /api/tournaments` はこの順で返します。新しく作った大会(作成・一括登録とも)は末尾に付きます。
+
+1 件ずつの移動ではなく**全体の順番を送る**形にしているのは、画面に表示していた順がそのまま保存されるようにするためです。送った id が今ある大会とちょうど一致しない(並べ替え画面を開いた後に大会が作成・削除された)ときは何も書かずに 409 で断ります。
+
+- リクエスト: `TournamentOrderInput` — `{"tournamentIds": string[]}`(UUID、1 件以上、重複なし)
+- `204`: 保存した
+- `400`: Zod のバリデーションエラー
+- `409`: `{"error": "並べ替えの間に大会が追加または削除されました。ページを読み込み直してから、もう一度並べ替えてください"}` — SQLSTATE `P0003`
+- `500`: `{"error": "internal server error"}`
 
 ### `GET /api/tournaments/:regionSlug/:tournamentSlug`
 
@@ -877,7 +890,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 ### `GET /api/staff/dashboard`
 
-- `200`: `DashboardTournamentSummary[]`(地域名 → 大会種別の昇順)
+- `200`: `DashboardTournamentSummary[]`(大会の表示順。`PUT /api/tournaments/order`)
 - `401` / `403` / `500`
 
 | フィールド | 内容 |

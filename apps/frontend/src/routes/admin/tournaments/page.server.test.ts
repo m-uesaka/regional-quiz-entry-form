@@ -68,12 +68,12 @@ const fakeFetch = (async (input: RequestInfo | URL) =>
     : jsonResponse(TOURNAMENTS)) as typeof fetch;
 
 describe('admin tournament list +page.server load', () => {
-  it('lists every tournament with its region, by region and then type', async () => {
+  it('lists every tournament with its region, in the order the API set', async () => {
     const data = (await load(buildLoadEvent(fakeFetch))) as LoadData;
 
     expect(
       data.tournaments.map(t => `${t.regionName} ${t.type} ${t.id.slice(-1)}`),
-    ).toEqual(['愛知 saikyoi 2', '東京 saikyoi 3', '東京 shinjinou 1']);
+    ).toEqual(['東京 shinjinou 1', '愛知 saikyoi 2', '東京 saikyoi 3']);
     expect(data.deleted).toBe(false);
   });
 

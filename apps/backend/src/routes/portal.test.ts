@@ -52,19 +52,22 @@ describe('GET /portal/tournaments (mocked Supabase)', () => {
     requestedUrl = '';
   });
 
-  // The regions come out in Japanese collation order (東京 before 北海道,
-  // as in JIS kanji order), with 最強位 before 新人王 inside each.
-  it('lists every tournament without a session, region by region', async () => {
+  // The order is the database's (`display_order`, set by general staff),
+  // kept as it comes rather than re-sorted by region.
+  it('lists every tournament without a session, in the order staff set', async () => {
     mockTournamentsFetch([
+      row('tokyo', '東京', 'saikyoi'),
       row('tokyo', '東京', 'shinjinou'),
       row('hokkaido', '北海道', 'saikyoi'),
-      row('tokyo', '東京', 'saikyoi'),
     ]);
 
     const res = await app.request('/api/portal/tournaments', {}, env);
 
     expect(res.status).toBe(200);
     expect(requestedUrl).toContain('/rest/v1/tournaments');
+    expect(decodeURIComponent(requestedUrl)).toContain(
+      'order=display_order.asc,id.asc',
+    );
     expect((await res.json()) as unknown).toEqual([
       {
         regionSlug: 'tokyo',
