@@ -23,8 +23,9 @@
     </Message>
   {/if}
 
-  <p class="text-sm">
+  <p class="flex flex-wrap gap-x-4 text-sm">
     <Link href="/admin/tournaments/new">大会を作成</Link>
+    <Link href="/admin/tournaments/import">スプレッドシートから一括登録</Link>
   </p>
 
   {#if data.tournaments.length > 0}

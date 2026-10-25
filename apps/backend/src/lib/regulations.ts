@@ -91,22 +91,37 @@ export async function syncRegulations(
     p_regulations: regulations,
   });
   if (!error) return;
+  if (error.code === TOURNAMENT_NOT_FOUND_SQLSTATE) {
+    throw new TournamentNotFoundError(tournamentId);
+  }
+  throw regulationSyncFailure(error) ?? new Error(error.message);
+}
 
+/**
+ * The staff-facing error for a failure `sync_regulations()` raised that
+ * names something in the request -- a regulation that doesn't belong to the
+ * tournament, or one still in use -- whether it was called directly or from
+ * `import_tournament()` (#168). `null` for any other failure, which is the
+ * caller's to report.
+ * @param error The error supabase-js returned.
+ */
+export function regulationSyncFailure(error: {
+  code?: string;
+  details?: string | null;
+}): UnknownRegulationError | RegulationInUseError | null {
   switch (error.code) {
-    case TOURNAMENT_NOT_FOUND_SQLSTATE:
-      throw new TournamentNotFoundError(tournamentId);
     // The offending ids/labels travel in the exception's `detail`, so the
     // staff-facing sentence is built here rather than in the database.
     case UNKNOWN_REGULATION_SQLSTATE:
-      throw new UnknownRegulationError(error.details ?? '');
+      return new UnknownRegulationError(error.details ?? '');
     case REGULATION_IN_USE_SQLSTATE:
-      throw new RegulationInUseError(error.details ?? '');
+      return new RegulationInUseError(error.details ?? '');
     // No labels here: `details` is Postgres' own wording about the
     // constraint, which describes the database rather than anything the
     // staff member can act on.
     case FOREIGN_KEY_VIOLATION_SQLSTATE:
-      throw new RegulationInUseError('');
+      return new RegulationInUseError('');
     default:
-      throw new Error(error.message);
+      return null;
   }
 }

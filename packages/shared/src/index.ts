@@ -1,4 +1,5 @@
 export * from './schemas/tournament';
+export * from './schemas/tournament-import';
 export * from './schemas/entry';
 export * from './schemas/form-definition';
 export * from './schemas/region';

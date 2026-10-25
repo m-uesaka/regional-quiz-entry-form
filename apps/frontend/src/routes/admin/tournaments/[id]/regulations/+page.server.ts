@@ -3,7 +3,12 @@ import {
   RegulationSyncInputSchema,
   type Regulation,
 } from '@regional-quiz/shared';
-import {createApiClient, isNotFound, isUnauthorized} from '$lib/api';
+import {
+  createApiClient,
+  isNotFound,
+  isUnauthorized,
+  readErrorMessage,
+} from '$lib/api';
 import {fromJstDatetimeLocal} from '$lib/jst-datetime';
 import {
   emptyRegulationRow,
@@ -393,30 +398,4 @@ function rowPosition(index: number, row: RegulationRowValues): number {
   if (row.order.trim() === '') return index + 1;
   const requested = Number(row.order);
   return Number.isFinite(requested) ? requested : index + 1;
-}
-
-/**
- * Reads the `{error: string}` body the backend answers a refusal with.
- * @param res The failed API response.
- * @param fallback What to say when the body carries no message.
- */
-async function readErrorMessage(
-  res: {json(): Promise<unknown>},
-  fallback: string,
-): Promise<string> {
-  try {
-    const body: unknown = await res.json();
-    if (
-      typeof body === 'object' &&
-      body !== null &&
-      'error' in body &&
-      typeof body.error === 'string'
-    ) {
-      return body.error;
-    }
-  } catch {
-    // A non-JSON body (a proxy error page, say) leaves the fallback to
-    // speak for itself.
-  }
-  return fallback;
 }

@@ -40,3 +40,31 @@ export function isUnauthorized(res: {status: number}): boolean {
 export function isNotFound(res: {status: number}): boolean {
   return res.status === 404;
 }
+
+/**
+ * Reads the `{error: string}` body the backend answers a refusal with.
+ *
+ * @param res The failed API response.
+ * @param fallback What to answer when the body names no error, e.g. a
+ *     non-JSON proxy error page.
+ */
+export async function readErrorMessage(
+  res: {json(): Promise<unknown>},
+  fallback: string,
+): Promise<string> {
+  try {
+    const body: unknown = await res.json();
+    if (
+      typeof body === 'object' &&
+      body !== null &&
+      'error' in body &&
+      typeof body.error === 'string'
+    ) {
+      return body.error;
+    }
+  } catch {
+    // A non-JSON body (a proxy error page, say) leaves the fallback to
+    // speak for itself.
+  }
+  return fallback;
+}
