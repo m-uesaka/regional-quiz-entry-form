@@ -24,6 +24,8 @@ export interface PortalTournamentView {
   entryPeriodLabel: string;
   /** The entry form, `/<regionSlug>/<tournamentType>/entry`. */
   entryPath: string;
+  /** The published entry list, `/<regionSlug>/<tournamentType>/list`. */
+  entryListPath: string;
 }
 
 /** The tournaments of one region, in the order the API listed them. */
@@ -77,12 +79,14 @@ export function groupPortalTournaments(
       };
       regions.set(tournament.regionSlug, region);
     }
+    const tournamentPath = `/${encodeURIComponent(tournament.regionSlug)}/${tournament.tournamentType}`;
     region.tournaments.push({
       name: tournament.tournamentName,
       typeLabel: TOURNAMENT_TYPE_LABELS[tournament.tournamentType],
       status: portalStatus(tournament, now),
       entryPeriodLabel: `${formatJstDateTime(tournament.entryOpensAt)} 〜 ${formatJstDateTime(tournament.entryClosesAt)}`,
-      entryPath: `/${encodeURIComponent(tournament.regionSlug)}/${tournament.tournamentType}/entry`,
+      entryPath: `${tournamentPath}/entry`,
+      entryListPath: `${tournamentPath}/list`,
     });
   }
   return [...regions.values()];

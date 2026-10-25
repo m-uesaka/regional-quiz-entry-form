@@ -14,6 +14,7 @@ const REGIONS: PortalRegionView[] = [
         status: 'open',
         entryPeriodLabel: '2026年11月1日(日) 9:00 〜 2026年11月30日(月) 9:00',
         entryPath: '/tokyo/saikyoi/entry',
+        entryListPath: '/tokyo/saikyoi/list',
       },
       {
         name: '東京新人王',
@@ -21,6 +22,7 @@ const REGIONS: PortalRegionView[] = [
         status: 'upcoming',
         entryPeriodLabel: '2026年12月1日(火) 9:00 〜 2026年12月31日(木) 9:00',
         entryPath: '/tokyo/shinjinou/entry',
+        entryListPath: '/tokyo/shinjinou/list',
       },
     ],
   },
@@ -34,6 +36,7 @@ const REGIONS: PortalRegionView[] = [
         status: 'closed',
         entryPeriodLabel: '2026年9月1日(火) 9:00 〜 2026年9月30日(水) 9:00',
         entryPath: '/hokkaido/saikyoi/entry',
+        entryListPath: '/hokkaido/saikyoi/list',
       },
     ],
   },

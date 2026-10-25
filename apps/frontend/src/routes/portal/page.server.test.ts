@@ -43,6 +43,7 @@ describe('portal +page.server load', () => {
               entryPeriodLabel:
                 '2000年1月1日(土) 9:00 〜 2999年12月31日(火) 9:00',
               entryPath: '/tokyo/saikyoi/entry',
+              entryListPath: '/tokyo/saikyoi/list',
             },
           ],
         },

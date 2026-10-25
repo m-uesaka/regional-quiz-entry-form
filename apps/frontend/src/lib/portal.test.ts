@@ -75,6 +75,7 @@ describe('groupPortalTournaments', () => {
       typeLabel: '新人王',
       status: 'open',
       entryPath: '/tokyo/shinjinou/entry',
+      entryListPath: '/tokyo/shinjinou/list',
       entryPeriodLabel: '2026年11月1日(日) 9:00 〜 2026年11月30日(月) 9:00',
     });
   });
