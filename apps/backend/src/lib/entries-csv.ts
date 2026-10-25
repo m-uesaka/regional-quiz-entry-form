@@ -1,6 +1,7 @@
 import {
   BOOLEAN_CHECKBOX_LABELS,
   isBooleanCheckbox,
+  labelPlainText,
   type CustomFieldValues,
   type FormFieldDef,
 } from '@regional-quiz/shared';
@@ -51,7 +52,7 @@ export interface EntriesCsvRow {
  * Renders staff-facing entry rows as a CSV document.
  *
  * The tournament's custom form fields become extra columns headed by their
- * `label`, in the order `fieldDefs` is given (the caller is expected to pass
+ * `label` (as plain text, any `<a>` link reduced to its text), in the order `fieldDefs` is given (the caller is expected to pass
  * them in `display_order`), so a field renamed after entries were submitted
  * exports under its current label. Answers are looked up by `fieldKey`, and
  * a field a given entry has no answer for exports as an empty cell.
@@ -65,7 +66,10 @@ export function buildEntriesCsv(
   fieldDefs: FormFieldDef[],
   entries: EntriesCsvRow[],
 ): string {
-  const headers = [...FIXED_HEADERS, ...fieldDefs.map(f => f.label)];
+  const headers = [
+    ...FIXED_HEADERS,
+    ...fieldDefs.map(f => labelPlainText(f.label)),
+  ];
   const rows = entries.map(entry => [
     entry.name,
     entry.furigana,

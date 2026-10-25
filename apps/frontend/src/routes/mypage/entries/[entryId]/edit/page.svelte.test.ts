@@ -72,7 +72,7 @@ describe('mypage entry edit +page.svelte', () => {
 
     expect(screen.getByLabelText('氏名')).toHaveValue('山田太郎');
     expect(screen.getByLabelText('ふりがな')).toHaveValue('ヤマダタロウ');
-    expect(screen.getByLabelText('掲載名')).toHaveValue('太郎');
+    expect(screen.getByLabelText('エントリーリスト掲載名')).toHaveValue('太郎');
     expect(screen.getByLabelText('自由記述')).toHaveValue('自由記述');
   });
 

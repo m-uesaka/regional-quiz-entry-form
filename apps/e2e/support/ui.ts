@@ -179,7 +179,7 @@ export async function fillEntryForm(
     participant.furigana,
   );
   await fillField(
-    page.getByLabel('掲載名', {exact: true}),
+    page.getByLabel('エントリーリスト掲載名', {exact: true}),
     participant.displayName,
   );
   if (!input.loggedIn) {
@@ -313,6 +313,7 @@ async function answerCustomField(
   // carries a trailing "*"; the options inside it are matched exactly.
   switch (field.fieldType) {
     case 'textarea':
+    case 'textfield':
       await fillField(page.getByLabel(field.label), options[0]);
       return;
     case 'radio':

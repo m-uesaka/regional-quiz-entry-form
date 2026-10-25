@@ -267,7 +267,7 @@ describe('mypage entry edit form action', () => {
       data: {
         fieldErrors: {
           displayName: [
-            `掲載名は${ENTRY_NAME_MAX_LENGTH}文字以内で入力してください`,
+            `エントリーリスト掲載名は${ENTRY_NAME_MAX_LENGTH}文字以内で入力してください`,
           ],
         },
       },

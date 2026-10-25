@@ -66,7 +66,7 @@ describe('EntryInputSchema', () => {
       expect(result.error.flatten().fieldErrors).toEqual({
         name: ['氏名を入力してください'],
         furigana: ['ふりがなを入力してください'],
-        displayName: ['掲載名を入力してください'],
+        displayName: ['エントリーリスト掲載名を入力してください'],
         email: ['メールアドレスの形式が正しくありません'],
         password: ['パスワードは8文字以上で入力してください'],
         passwordConfirm: ['パスワードは8文字以上で入力してください'],

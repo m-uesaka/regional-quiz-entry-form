@@ -2,7 +2,13 @@ import {parse as parseYaml, stringify as stringifyYaml} from 'yaml';
 import {z} from 'zod';
 import {TournamentTypeSchema, type TournamentType} from './tournament';
 
-export const FormFieldTypeSchema = z.enum(['checkbox', 'radio', 'textarea']);
+export const FormFieldTypeSchema = z.enum([
+  'checkbox',
+  'radio',
+  'textarea',
+  'textfield',
+]);
+export type FormFieldType = z.infer<typeof FormFieldTypeSchema>;
 
 const BaseFormFieldDefYamlSchema = z.object({
   key: z.string().regex(/^[a-z][a-z0-9_]*$/),
@@ -21,8 +27,13 @@ export const FormFieldDefYamlSchema = z.discriminatedUnion('type', [
     type: z.literal('radio'),
     options: z.array(z.string()).min(1),
   }),
+  // Free text: `textarea` takes several lines, `textfield` one (#173).
   BaseFormFieldDefYamlSchema.extend({
     type: z.literal('textarea'),
+    options: z.array(z.string()).optional(),
+  }),
+  BaseFormFieldDefYamlSchema.extend({
+    type: z.literal('textfield'),
     options: z.array(z.string()).optional(),
   }),
 ]);
@@ -89,7 +100,7 @@ export interface FormFieldDefRow {
   tournamentId: string;
   fieldKey: string;
   label: string;
-  fieldType: z.infer<typeof FormFieldTypeSchema>;
+  fieldType: FormFieldType;
   required: boolean;
   options: string[] | null;
   displayOrder: number;

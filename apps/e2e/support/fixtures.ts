@@ -46,7 +46,7 @@ export interface FormFieldDefFixture {
   tournamentId: string;
   fieldKey: string;
   label: string;
-  fieldType: 'checkbox' | 'radio' | 'textarea';
+  fieldType: 'checkbox' | 'radio' | 'textarea' | 'textfield';
   required: boolean;
   options: string[] | null;
   displayOrder: number;

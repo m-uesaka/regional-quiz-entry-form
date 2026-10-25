@@ -4,6 +4,7 @@ import {
   type CustomFieldValuesError,
   type CustomFieldValuesErrorReason,
   type FormFieldDef,
+  labelPlainText,
 } from '@regional-quiz/shared';
 import {customFieldName} from '$lib/custom-field-name';
 
@@ -110,7 +111,7 @@ export function customFieldErrors(
       continue;
     }
     messages[customFieldName(fieldDef.fieldKey)] = [
-      CUSTOM_FIELD_ERROR_MESSAGES[error.reason](fieldDef.label),
+      CUSTOM_FIELD_ERROR_MESSAGES[error.reason](labelPlainText(fieldDef.label)),
     ];
   }
   return messages;

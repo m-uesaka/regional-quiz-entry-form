@@ -3,6 +3,7 @@
     BOOLEAN_CHECKBOX_LABELS,
     ENTRY_STATUS_LABELS,
     isBooleanCheckbox,
+    labelPlainText,
     type FormFieldDef,
   } from '@regional-quiz/shared';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
@@ -105,7 +106,7 @@
       {/if}
 
       {#each customFieldEntries as {fieldDef, value} (fieldDef.fieldKey)}
-        <dt class="font-medium text-muted-foreground sm:py-1.5">{fieldDef.label}</dt>
+        <dt class="font-medium text-muted-foreground sm:py-1.5">{labelPlainText(fieldDef.label)}</dt>
         <dd class="mb-3 break-words sm:mb-0 sm:py-1.5">
           {formatFieldValue(fieldDef, value)}
         </dd>

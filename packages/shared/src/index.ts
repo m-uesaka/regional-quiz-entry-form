@@ -18,3 +18,4 @@ export * from './logic/regulation-eligibility';
 export * from './logic/entry-period';
 export * from './logic/fill-rate';
 export * from './logic/staff-scope';
+export * from './logic/label-links';

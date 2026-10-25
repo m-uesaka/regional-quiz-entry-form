@@ -46,6 +46,24 @@ describe('buildEntriesCsv', () => {
     );
   });
 
+  it('heads a column whose label has a link with the link text only', () => {
+    const csv = buildEntriesCsv(
+      [
+        fieldDef({
+          fieldKey: 'agree',
+          label: '<a href="https://example.com/rules">規約</a>に同意する',
+          fieldType: 'checkbox',
+          options: null,
+        }),
+      ],
+      [],
+    );
+
+    expect(csv).toBe(
+      '氏名,ふりがな,掲載名,ステータス,レギュレーション,規約に同意する',
+    );
+  });
+
   it('renders one CRLF-separated row per entry', () => {
     const csv = buildEntriesCsv(
       [FIELD_DEFS[0]],

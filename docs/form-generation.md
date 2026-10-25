@@ -77,8 +77,8 @@ fields:
 | キー | 型 | 必須 | 説明 |
 | --- | --- | --- | --- |
 | `key` | string | ✅ | 正規表現 `^[a-z][a-z0-9_]*$`。`custom_field_values` の JSON キーになる |
-| `label` | string | ✅ | 画面表示用のラベル。日本語可 |
-| `type` | `checkbox` / `radio` / `textarea` | ✅ | 入力形式 |
+| `label` | string | ✅ | 画面表示用のラベル。日本語可。`<a href="https://...">文字</a>` でリンクを入れられる(後述) |
+| `type` | `checkbox` / `radio` / `textarea` / `textfield` | ✅ | 入力形式 |
 | `required` | boolean | | 省略時は `false` |
 | `options` | string[] | `radio` のみ✅ | 選択肢 |
 
@@ -86,7 +86,19 @@ fields:
 
 - `radio`: `options` は**必須かつ1件以上**。選択肢のないラジオボタンは選びようがないためです。
 - `checkbox`: `options` は任意で、**省略だけでなく空配列も許可されます**。描画側(`DynamicFormField.svelte`)は「指定されているか」ではなく `options.length > 0`、つまり**非空かどうか**で分岐します。したがって**1件以上あれば複数選択のチェックボックス群、省略時または空配列なら単独のブールチェックボックス**(「規約に同意します」など)になります。
-- `textarea`: `options` は任意ですが、実際には使いません(自由記述のため)。
+- `textarea` / `textfield`: `options` は任意ですが、実際には使いません(自由記述のため)。`textarea` は複数行の入力欄、`textfield` は一行の入力欄(`<input type="text">`)になります(#173)。回答の形式・検証は両者で同じです。
+
+### ラベル内のリンク
+
+`label` には `<a href="https://example.com/rules">規約</a>に同意する` のように**リンクを書けます**(#173。主に「規約に同意する」チェックボックスから規約ページへ飛ばすため)。描画は `FieldLabelText.svelte` が行い、リンクは新しいタブで開きます(入力途中のフォームを離れないため)。
+
+ラベルを HTML として流し込むことはしません。`parseLabelLinks()`(`packages/shared/src/logic/label-links.ts`)が次の形だけをリンクとして切り出し、それ以外はすべて文字のまま表示します。
+
+- `<a href="...">文字</a>`(`href` は `"` か `'` で囲む。属性は `href` だけ)
+- `href` は `http://` か `https://` で始まる URL
+- リンク文字の中にタグを含まない
+
+スタッフ向けのエントリー詳細・CSV の見出し・エラーメッセージでは、`labelPlainText()` でリンクを文字だけにして表示します。
 
 `key` の命名規則が厳しい(小文字英数字とアンダースコアのみ)のは、これが JSON のキーおよび HTML の `id` / `name` 属性としてそのまま使われるためです。
 
@@ -229,7 +241,7 @@ required={hydrated && field.required && !hasCheckboxSelection}
 補足:
 
 - キーが存在しない場合は「空の回答」として扱われ、必須項目のときだけエラーになります。
-- `textarea` は自由記述なので選択肢の照合をスキップします。長さの上限(`too-long`)だけは見ます。フォームの `<textarea>` にも同じ値の `maxlength` を付けています。
+- `textarea` / `textfield` は自由記述なので選択肢の照合をスキップします。長さの上限(`too-long`)だけは見ます。フォームの `<textarea>` / `<input>` にも同じ値の `maxlength` を付けています。
 - 単独ブールチェックボックス(`options` が**省略されているか空配列**の `checkbox`)は、「自分のキー1つだけを選択肢に持つ」ものとして照合されます。つまり `[field.key]` か `[]` 以外は弾かれます。
 - `checkbox` にスカラー値が来た場合は、選択肢の照合自体は通ってしまうものの弾いています。保存できてしまうと、エントリーを開き直したときに描画側(配列しか見ない)が選択を認識できず、回答が黙って消えたように見えるためです。
 
@@ -277,7 +289,7 @@ flowchart LR
 
 `sheetRowsToYaml()`(`apps/backend/src/lib/sheet-to-form-definition.ts`)が、`A2:E` の5列(`key`, `label`, `type`, `required`, `options`)を `FormFieldDefYamlSchema` で検証しながら YAML 文字列に変換します。
 
-- `type` 列は日本語ラベル(`チェックボックス` / `ラジオボタン` / `自由記述`)を内部の型に変換します。
+- `type` 列は日本語ラベル(`チェックボックス` / `ラジオボタン` / `自由記述` / `自由記述（一行）`)を内部の型に変換します。
 - `required` 列は `必須` という文字列のときだけ `true` になります。
 - `options` 列はカンマ区切りで、前後の空白は除去し、空要素は捨て、重複があればエラーにします。
 - `key` は**行の位置やラベルから自動生成せず、スタッフが A 列に手入力した値をそのまま使います**。行の並び替えや挿入をしてもキーが変わらないようにするためです。キーが変わると、既存エントリーの `custom_field_values` が別の項目の回答として黙って読み替えられてしまいます。

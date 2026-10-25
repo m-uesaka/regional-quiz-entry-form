@@ -4,7 +4,8 @@ import type {FormFieldDef} from '../schemas/form-definition';
 export type CustomFieldValues = Record<string, string | string[]>;
 
 /**
- * The longest a single custom field answer may be: a `textarea` answer, or
+ * The longest a single custom field answer may be: a `textarea` /
+ * `textfield` answer, or
  * one element of a `checkbox` answer. Without a bound one request could
  * store megabytes, which the staff list and the CSV export then carry in
  * full (#122).
@@ -40,7 +41,7 @@ export function customFieldValuesLength(values: CustomFieldValues): number {
  * The options a submitted value selects, normalized to a list so every field
  * type can be checked the same way. A `checkbox` answer is already a list
  * (a boolean checkbox stores `[fieldKey]` when checked); a `radio` /
- * `textarea` answer is a single string, and an empty one selects nothing.
+ * `textarea` / `textfield` answer is a single string, and an empty one selects nothing.
  */
 function selectedOptions(value: string | string[] | undefined): string[] {
   if (Array.isArray(value)) {
@@ -60,6 +61,17 @@ export function isBooleanCheckbox(fieldDef: FormFieldDef): boolean {
   return (
     fieldDef.fieldType === 'checkbox' &&
     (!fieldDef.options || fieldDef.options.length === 0)
+  );
+}
+
+/**
+ * Whether `fieldDef` takes free text (`textarea` or `textfield`) rather
+ * than a choice among options.
+ * @param fieldDef The form field definition to test.
+ */
+export function isFreeTextField(fieldDef: FormFieldDef): boolean {
+  return (
+    fieldDef.fieldType === 'textarea' || fieldDef.fieldType === 'textfield'
   );
 }
 
@@ -156,13 +168,13 @@ function findFieldError(
     return rejection('required', fieldDef.fieldKey);
   }
 
-  // A `textarea` answer is free text, so only fields offering a fixed set
-  // of choices can be checked against it. A boolean checkbox (no options)
+  // A `textarea` / `textfield` answer is free text, so only fields offering
+  // a fixed set of choices can be checked against it. A boolean checkbox (no options)
   // offers exactly one implicit choice: its own key.
   const allowed = isBooleanCheckbox(fieldDef)
     ? [fieldDef.fieldKey]
     : fieldDef.options;
-  if (fieldDef.fieldType === 'textarea' || !allowed) {
+  if (isFreeTextField(fieldDef) || !allowed) {
     return null;
   }
   for (const option of selected) {
