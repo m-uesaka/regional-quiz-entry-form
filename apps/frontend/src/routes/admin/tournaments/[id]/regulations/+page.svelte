@@ -1,5 +1,8 @@
 <script lang="ts">
-  import {REGULATION_SHEET_NAME} from '@regional-quiz/shared';
+  import {
+    REGULATION_LABEL_MAX_LENGTH,
+    REGULATION_SHEET_NAME,
+  } from '@regional-quiz/shared';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
   import Button from '$lib/components/ui/atoms/Button.svelte';
@@ -141,6 +144,7 @@
             class="w-full"
             name="regulations[{index}].label"
             type="text"
+            maxlength={REGULATION_LABEL_MAX_LENGTH}
             value={row.label}
           />
         </div>
