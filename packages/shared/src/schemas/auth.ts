@@ -21,9 +21,10 @@ import {TournamentTypeSchema} from './tournament';
 // types for a `regional` account, or `general` for a 統括スタッフ account,
 // which covers no type at all. It is a plain enum rather than a nullable
 // `tournamentType` so the login form can send it as an ordinary select.
+// Built from `TournamentTypeSchema` so a tournament type added there can be
+// logged in to without this list having to be remembered.
 export const StaffLoginScopeSchema = z.enum([
-  'saikyoi',
-  'shinjinou',
+  ...TournamentTypeSchema.options,
   'general',
 ]);
 export type StaffLoginScope = z.infer<typeof StaffLoginScopeSchema>;

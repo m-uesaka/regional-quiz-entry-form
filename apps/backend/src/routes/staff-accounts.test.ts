@@ -349,7 +349,8 @@ describe('POST /staff/accounts/:id/revoke-sessions (mocked Supabase)', () => {
 
 /**
  * Answers the session check for the caller's own (enabled) account, and the
- * disable endpoint's `disable_staff_account()` call with `rpc`.
+ * endpoint's RPC (`disable_staff_account()` / `enable_staff_account()`) with
+ * `rpc`.
  * @param rpc What the RPC answers: nothing for success, or the error
  *     PostgREST would send back.
  */
@@ -514,15 +515,9 @@ describe('POST /staff/accounts/:id/disable (mocked Supabase)', () => {
 });
 
 describe('POST /staff/accounts/:id/enable (mocked Supabase)', () => {
-  it('clears disabled_at and nothing else', async () => {
-    const accounts = new Map([
-      [GENERAL_STAFF_ID, TEST_SESSIONS_VALID_FROM],
-      [TARGET_STAFF_ID, TEST_SESSIONS_VALID_FROM],
-    ]);
-    const {requests} = fakeStaffAccounts(accounts);
-
-    const res = await app.request(
-      `/api/staff/accounts/${TARGET_STAFF_ID}/enable`,
+  async function enableAccount(staffAccountId: string): Promise<Response> {
+    return app.request(
+      `/api/staff/accounts/${staffAccountId}/enable`,
       {
         method: 'POST',
         headers: {
@@ -532,41 +527,45 @@ describe('POST /staff/accounts/:id/enable (mocked Supabase)', () => {
       },
       BASE_ENV,
     );
+  }
+
+  // The update and the dropping of the account's links happen together in
+  // `enable_staff_account()`, so neither can happen without the other.
+  it('hands the account to enable_staff_account()', async () => {
+    const {requests} = fakeDisableRpc();
+
+    const res = await enableAccount(TARGET_STAFF_ID);
 
     expect(res.status).toBe(200);
-    expect(requests[0].method).toBe('PATCH');
-    expect(requests[0].url.searchParams.get('id')).toBe(
-      `eq.${TARGET_STAFF_ID}`,
+    expect(requests).toHaveLength(1);
+    expect(requests[0].method).toBe('POST');
+    expect(requests[0].url.pathname).toEndWith(
+      '/rest/v1/rpc/enable_staff_account',
     );
-    // The sessions disabling ended stay ended: the owner logs in afresh.
-    expect(requests[0].body).toEqual({disabled_at: null});
-    // A link written by a re-send that raced the disable must not revive.
-    expect(requests).toHaveLength(2);
-    expect(requests[1].method).toBe('DELETE');
-    expect(requests[1].url.pathname).toEndWith(
-      '/rest/v1/staff_password_reset_tokens',
-    );
-    expect(requests[1].url.searchParams.get('staff_account_id')).toBe(
-      `eq.${TARGET_STAFF_ID}`,
-    );
+    expect(requests[0].body).toEqual({p_staff_account_id: TARGET_STAFF_ID});
   });
 
   it('returns 404 for an account that does not exist', async () => {
-    fakeStaffAccounts(new Map([[GENERAL_STAFF_ID, TEST_SESSIONS_VALID_FROM]]));
+    fakeDisableRpc({
+      status: 400,
+      body: {code: 'P0002', message: 'staff account not found'},
+    });
 
-    const res = await app.request(
-      `/api/staff/accounts/${TARGET_STAFF_ID}/enable`,
-      {
-        method: 'POST',
-        headers: {
-          cookie: await generalStaffCookie(),
-          origin: BASE_ENV.FRONTEND_URL,
-        },
-      },
-      BASE_ENV,
-    );
+    const res = await enableAccount(TARGET_STAFF_ID);
 
     expect(res.status).toBe(404);
+  });
+
+  it('returns 500 when the call fails', async () => {
+    const originalConsoleError = console.error;
+    console.error = () => {};
+    fakeDisableRpc({status: 500, body: {message: 'connection refused'}});
+
+    try {
+      expect((await enableAccount(TARGET_STAFF_ID)).status).toBe(500);
+    } finally {
+      console.error = originalConsoleError;
+    }
   });
 });
 
@@ -1214,6 +1213,98 @@ describe.skipIf(!(await isDbReachable()))(
       `;
 
       expect((await list()).status).toBe(401);
+    });
+
+    // PR #167 review: a 有効化 pressed on a stale screen must not throw away
+    // a link another general staff member has just sent.
+    it('leaves the links of an account that is already enabled alone', async () => {
+      const email = `${emailPrefix}-enable-enabled@example.com`;
+      const created = (await (
+        await createAccount({role: 'general', email})
+      ).json()) as {id: string};
+      const token = await reissueLink(created.id, await generalStaffCookie());
+
+      const res = await app.request(
+        `/api/staff/accounts/${created.id}/enable`,
+        {
+          method: 'POST',
+          headers: {
+            cookie: await generalStaffCookie(),
+            origin: env.FRONTEND_URL,
+          },
+        },
+        env,
+      );
+
+      expect(res.status).toBe(200);
+      expect((await confirmReset(token, 'still-valid-link')).status).toBe(200);
+    });
+
+    // The refusal comes from `issue_staff_password_link()` under the
+    // account's lock, so it holds however the disable and the re-send race.
+    it('writes no link for a disabled account', async () => {
+      const created = (await (
+        await createAccount(regionalAccountBody('link-disabled'))
+      ).json()) as {id: string};
+      await sql`select disable_staff_account(${created.id})`;
+
+      let errno: unknown;
+      try {
+        await sql`select issue_staff_password_link(
+          ${created.id}, 'race-token-hash', now() + interval '1 day'
+        )`;
+      } catch (e) {
+        errno = (e as {errno?: unknown}).errno;
+      }
+
+      expect(errno).toBe('P0005');
+      const tokens = await sql`
+        select 1 from staff_password_reset_tokens
+        where staff_account_id = ${created.id}
+      `;
+      expect(tokens).toHaveLength(0);
+    });
+
+    // Locking the target first and the other generals after would deadlock
+    // two general staff disabling each other at once; locking every general
+    // in id order queues them instead, and the second one is judged on what
+    // the first left behind.
+    it('serialises two general staff disabling each other', async () => {
+      const ids: string[] = [];
+      for (const suffix of ['mutual-a', 'mutual-b']) {
+        const res = await createAccount(generalAccountBody(suffix));
+        ids.push(((await res.json()) as {id: string}).id);
+      }
+      const first = new SQL(DB_URL);
+      const second = new SQL(DB_URL);
+      try {
+        const results = await Promise.allSettled([
+          first.begin(async tx => {
+            await tx`select disable_staff_account(${ids[1]})`;
+            await tx`select pg_sleep(0.2)`;
+          }),
+          second.begin(async tx => {
+            await tx`select pg_sleep(0.05)`;
+            await tx`select disable_staff_account(${ids[0]})`;
+          }),
+        ]);
+
+        for (const result of results) {
+          if (result.status === 'rejected') {
+            // Only the "last general" refusal is acceptable, never 40P01.
+            expect(result.reason).toMatchObject({errno: 'P0004'});
+          }
+        }
+        expect(results.some(r => r.status === 'fulfilled')).toBe(true);
+        const [{count}] = await sql`
+          select count(*)::int as count from staff_accounts
+          where role = 'general' and disabled_at is null
+        `;
+        expect(count).toBeGreaterThanOrEqual(1);
+      } finally {
+        await first.close();
+        await second.close();
+      }
     });
   },
 );

@@ -1,5 +1,6 @@
 <script lang="ts">
   import {untrack} from 'svelte';
+  import {TOURNAMENT_TYPE_LABELS, TournamentTypeSchema} from '@regional-quiz/shared';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
   import NativeSelect from '$lib/components/form/NativeSelect.svelte';
@@ -70,8 +71,9 @@
                first option that isn't, which would quietly preselect
                最強位. `required` refuses the empty value instead. -->
           <option value="">選択してください</option>
-          <option value="saikyoi">最強位の地域スタッフ</option>
-          <option value="shinjinou">新人王の地域スタッフ</option>
+          {#each TournamentTypeSchema.options as type (type)}
+            <option value={type}>{TOURNAMENT_TYPE_LABELS[type]}の地域スタッフ</option>
+          {/each}
           <option value="general">統括スタッフ</option>
         </NativeSelect>
       </div>

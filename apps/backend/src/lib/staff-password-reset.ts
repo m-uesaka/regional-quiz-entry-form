@@ -22,10 +22,19 @@ const TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 const INVALID_TOKEN_SQLSTATE = 'P0003';
 
 /**
- * The outcome of issuing a link. A failure carries the underlying message for
- * the caller's log, never for the response body.
+ * The SQLSTATE `issue_staff_password_link` (defined by
+ * `supabase/migrations/0027_staff_account_enable_and_link_locking.sql`)
+ * raises when the account is disabled (#156).
  */
-export type StaffPasswordLinkResult = {ok: true} | {ok: false; error: string};
+const ACCOUNT_DISABLED_SQLSTATE = 'P0005';
+
+/**
+ * The outcome of issuing a link. A failure carries the underlying message for
+ * the caller's log, never for the response body. `disabled` says the account
+ * was disabled when the link was about to be written, so none was.
+ */
+export type StaffPasswordLinkResult =
+  {ok: true} | {ok: false; disabled: boolean; error: string};
 
 export type StaffPasswordResetResult =
   {ok: true} | {ok: false; status: 400 | 500; error: string};
@@ -53,40 +62,35 @@ export async function sendStaffPasswordLink(
   staffAccountId: string,
   email: string,
 ): Promise<StaffPasswordLinkResult> {
-  const db = createDbClient(env);
-
   // Every link this account already has is dropped before the new one is
   // written, expired or not. `reset_staff_password` only burns an account's
   // other links once one of them has been *redeemed*, so without this an
   // invite sent to a mistyped address would stay usable for the rest of its
   // day-long TTL even after the general staff member noticed and re-issued
   // it to the right one -- and whoever holds the wrong link could redeem it
-  // first and take the account over. Clearing the whole account's rows also
-  // covers the pruning the expiry-only delete used to do, and this endpoint
-  // is general-staff-only, so the table can't be grown by an anonymous loop
-  // in the first place.
-  const {error: deleteError} = await db
-    .from('staff_password_reset_tokens')
-    .delete()
-    .eq('staff_account_id', staffAccountId);
-  if (deleteError) {
-    // Fail closed rather than mail a second live link: leaving two of them
-    // outstanding at once is exactly what this delete exists to prevent.
-    return {ok: false, error: deleteError.message};
-  }
-
+  // first and take the account over.
+  //
+  // `issue_staff_password_link` does the drop and the write in one
+  // transaction, under the account's row lock, and refuses a disabled
+  // account there (#156). Checking `disabled_at` here and writing afterwards
+  // would let a disable land in between and leave a link behind it.
   const token = generateToken();
-  const {error: insertError} = await db
-    .from('staff_password_reset_tokens')
-    .insert({
-      staff_account_id: staffAccountId,
-      token_hash: await hashToken(token),
-      expires_at: new Date(Date.now() + TOKEN_TTL_MS).toISOString(),
-    });
-  if (insertError) {
+  const {error: issueError} = await createDbClient(env).rpc(
+    'issue_staff_password_link',
+    {
+      p_staff_account_id: staffAccountId,
+      p_token_hash: await hashToken(token),
+      p_expires_at: new Date(Date.now() + TOKEN_TTL_MS).toISOString(),
+    },
+  );
+  if (issueError) {
     // Don't mail a link whose token was never persisted: the recipient would
     // click through to a token that can never be found.
-    return {ok: false, error: insertError.message};
+    return {
+      ok: false,
+      disabled: issueError.code === ACCOUNT_DISABLED_SQLSTATE,
+      error: issueError.message,
+    };
   }
 
   const mailer = createMailSender(env);
@@ -102,6 +106,7 @@ export async function sendStaffPasswordLink(
     // invite once the mail provider is back.
     return {
       ok: false,
+      disabled: false,
       error: mailError instanceof Error ? mailError.message : String(mailError),
     };
   }

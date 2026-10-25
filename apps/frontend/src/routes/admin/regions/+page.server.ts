@@ -6,6 +6,7 @@ import {
 import {createApiClient, isUnauthorized} from '$lib/api';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {Actions, PageServerLoad} from './$types';
+import {readString} from '$lib/form-data';
 
 /** Per-field validation messages, keyed by the control's name. */
 type RegionFieldErrors = Record<string, string[] | undefined>;
@@ -228,14 +229,4 @@ function updateFailure(
     fieldErrors,
     values,
   } satisfies RegionsActionResult);
-}
-
-/**
- * Reads one text control, which `FormData` types as possibly a file.
- * @param formData The submitted body.
- * @param name The control's name.
- */
-function readString(formData: FormData, name: string): string {
-  const value = formData.get(name);
-  return typeof value === 'string' ? value : '';
 }

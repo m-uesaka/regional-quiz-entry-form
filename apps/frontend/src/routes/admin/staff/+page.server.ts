@@ -7,9 +7,10 @@ import {
 import {createApiClient, isUnauthorized} from '$lib/api';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {Actions, PageServerLoad} from './$types';
+import {readString} from '$lib/form-data';
 
-/** The buttons on an account's row. */
-type RowIntent = 'resend' | 'revoke' | 'disable' | 'enable';
+/** The buttons on an account's row. Shared with `+page.svelte`. */
+export type RowIntent = 'resend' | 'revoke' | 'disable' | 'enable';
 
 /** Per-field validation messages, keyed by the control's name. */
 type StaffFieldErrors = Record<string, string[] | undefined>;
@@ -395,16 +396,6 @@ function rowFailure(
     fieldErrors: NO_FIELD_ERRORS,
     values: EMPTY_VALUES,
   } satisfies StaffActionResult);
-}
-
-/**
- * Reads one text control, which `FormData` types as possibly a file.
- * @param formData The submitted body.
- * @param name The control's name.
- */
-function readString(formData: FormData, name: string): string {
-  const value = formData.get(name);
-  return typeof value === 'string' ? value : '';
 }
 
 /**

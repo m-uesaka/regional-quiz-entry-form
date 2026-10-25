@@ -474,8 +474,20 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 スタッフアカウントを無効化します(#156、`0026`)。`disabled_at` と `sessions_valid_from` を `now()` にし、そのアカウントの `staff_password_reset_tokens` を削除します。
 
-- **有効な統括スタッフが 0 人になる無効化は `P0004` で拒否します。** API は自分自身の無効化を先に断りますが、それだけでは 2 人の統括スタッフが同時に互いを無効化すると 0 人になります。統括スタッフの行を id 順にすべて `for update` でロックしてから数えるので、同時の無効化はここで直列化され、後の方は先の方の結果を見て拒否されます。スタッフ行 → トークン行のロック順は `reset_staff_password()` と同じです。
+- **有効な統括スタッフが 0 人になる無効化は `P0004` で拒否します。** API は自分自身の無効化を先に断りますが、それだけでは 2 人の統括スタッフが同時に互いを無効化すると 0 人になります。対象が統括スタッフなら、統括スタッフの行を(対象を含めて)id 順にすべて `for update` でロックしてから数えるので、同時の無効化はここで直列化され、後の方は先の方の結果を見て拒否されます。対象を先にロックしてから残りをロックする順序にすると、互いを無効化する 2 つがそれぞれ自分の対象を持ったまま相手を待ってデッドロックするため、役割だけをロック無しで先に読みます(役割を変える経路はありません)。対象が地域スタッフなら対象の行だけをロックします(`0027` で再定義。`0026` は毎回すべての統括スタッフをロックしていました)。スタッフ行 → トークン行のロック順は `reset_staff_password()` と同じです。
 - アカウントが無ければ `P0002`。既に無効なら何もしません(`disabled_at` は最初の時刻のまま)。
+
+### enable_staff_account(p_staff_account_id)
+
+無効化したアカウントを有効に戻します(`0027`)。アカウント行を `for update` でロックし、無効なら `disabled_at` を null にして、そのアカウントの `staff_password_reset_tokens` を削除します。既に有効なら何もしません(リンクも消しません)。アカウントが無ければ `P0002`。
+
+- 更新とリンクの削除を同じトランザクションで行うのが要点です。API から 2 回に分けて呼んでいた頃(`0026`)は、更新だけが通って削除が失敗すると、無効な間に書かれたリンクが有効化で使えるようになり得ました。
+
+### issue_staff_password_link(p_staff_account_id, p_token_hash, p_expires_at)
+
+スタッフのパスワード設定リンクを発行します(`0027`。`lib/staff-password-reset.ts` の `sendStaffPasswordLink()` が呼びます)。アカウント行を `for update` でロックし、無効なら `P0005`(無ければ `P0002`)。有効なら、そのアカウントの既存のリンクをすべて削除してから新しいリンクを入れます。
+
+- 「無効でないか」の判定と書き込みが同じロックの下にあるので、無効化(`disable_staff_account()`)や有効化と同時に走っても、無効なアカウントに使えるリンクが残ることはありません。リンクが書かれるのは、書き込みの時点で有効なアカウントに対してだけです。
 
 ### tournament_entry_summary()
 
@@ -538,3 +550,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0024_tournament_default_name.sql` | `tournaments.name` を null 可にし、null を「既定名(地域名＋種別)を読み出し時に作る」とする(#164)。既定名と同じ名前・空文字の既存行は null に置き換える |
 | `0025_lowercase_emails.sql` | `participants.email` / `staff_accounts.email` を小文字に揃え、check 制約 `*_email_lowercase` を追加(#133)。大文字小文字違いの重複があれば失敗する |
 | `0026_staff_accounts_per_type_and_disable.sql` | `staff_accounts` の一意制約を `(email, tournament_type)` に変更(#166)、`disabled_at` と `disable_staff_account()` を追加し、`reset_staff_password()` を無効なアカウントを拒否するよう再定義(#156) |
+| `0027_staff_account_enable_and_link_locking.sql` | `disable_staff_account()` を対象が統括スタッフのときだけ全統括スタッフをロックするよう再定義し、`enable_staff_account()` と `issue_staff_password_link()` を追加(有効化とリンク発行をアカウント行のロック下で 1 トランザクションに) |

@@ -13,6 +13,7 @@
   import Input from '$lib/components/ui/atoms/Input.svelte';
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
+  import type {RowIntent} from './+page.server';
   import type {PageProps} from './$types';
 
   const {data, form}: PageProps = $props();
@@ -30,10 +31,7 @@
    * @param intent Which of the row's buttons.
    * @param accountId The row's account.
    */
-  function rowResult(
-    intent: 'resend' | 'revoke' | 'disable' | 'enable',
-    accountId: string,
-  ) {
+  function rowResult(intent: RowIntent, accountId: string) {
     return form?.intent === intent && form.accountId === accountId
       ? form
       : null;
