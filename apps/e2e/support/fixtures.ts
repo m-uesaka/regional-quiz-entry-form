@@ -6,7 +6,11 @@
 // fills the one-seat 最強位 tournament, and the other specs enter the
 // uncapped 新人王 one, so a spec never sees another spec's entries.
 
-import type {StaffRole, TournamentType} from '@regional-quiz/shared';
+import type {
+  StaffLoginScope,
+  StaffRole,
+  TournamentType,
+} from '@regional-quiz/shared';
 
 export interface TournamentFixture {
   id: string;
@@ -173,6 +177,15 @@ export const GENERAL_STAFF: StaffFixture = {
 };
 
 export const STAFF: readonly StaffFixture[] = [SHINJINOU_STAFF, GENERAL_STAFF];
+
+/**
+ * The 区分 a staff account is logged in under: its tournament type, or
+ * `general` for a general account, which has none (#166).
+ * @param staff The account to log in as.
+ */
+export function staffLoginScope(staff: StaffFixture): StaffLoginScope {
+  return staff.tournamentType ?? 'general';
+}
 
 /** The password every participant the tests create signs up with. */
 export const PARTICIPANT_PASSWORD = 'e2e-participant-password';

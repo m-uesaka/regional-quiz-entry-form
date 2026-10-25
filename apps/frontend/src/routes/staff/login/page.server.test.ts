@@ -59,11 +59,13 @@ function buildEvent(options: {
   fetch?: typeof fetch;
   cookies?: Cookies;
   email?: string;
+  scope?: string;
   password?: string;
   redirectTo?: string;
 }): Parameters<typeof actions.default>[0] {
   const body = new FormData();
   if (options.email !== undefined) body.set('email', options.email);
+  if (options.scope !== undefined) body.set('scope', options.scope);
   if (options.password !== undefined) body.set('password', options.password);
 
   const url = new URL('http://localhost/staff/login');
@@ -78,7 +80,11 @@ function buildEvent(options: {
   } as Parameters<typeof actions.default>[0];
 }
 
-const CREDENTIALS = {email: 'staff@example.com', password: 'correct-password'};
+const CREDENTIALS = {
+  email: 'staff@example.com',
+  scope: 'saikyoi',
+  password: 'correct-password',
+};
 
 describe('staff login action', () => {
   it("sends regional staff to their own tournament's entry list", async () => {
@@ -139,7 +145,8 @@ describe('staff login action', () => {
       status: 401,
       data: {
         email: CREDENTIALS.email,
-        error: 'メールアドレスまたはパスワードが正しくありません',
+        scope: CREDENTIALS.scope,
+        error: 'メールアドレス・区分・パスワードのいずれかが正しくありません',
       },
     });
   });
@@ -176,6 +183,49 @@ describe('staff login action', () => {
     );
 
     expect(set).toEqual([]);
+  });
+
+  // #166: the address alone no longer names one account.
+  it('sends the chosen 区分 along with the address', async () => {
+    let sent: unknown;
+    const event = buildEvent({
+      ...CREDENTIALS,
+      email: 'Staff@Example.com',
+      scope: 'shinjinou',
+      fetch: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        sent = JSON.parse(String(init?.body));
+        return Response.json(REGIONAL);
+      }) as typeof fetch,
+    });
+
+    await expect(actions.default(event)).rejects.toMatchObject({status: 303});
+    // Lowercased by the shared schema on the way out (#133).
+    expect(sent).toEqual({
+      email: 'staff@example.com',
+      scope: 'shinjinou',
+      password: CREDENTIALS.password,
+    });
+  });
+
+  it('refuses a login with no 区分 chosen without calling the API', async () => {
+    let called = false;
+    const event = buildEvent({
+      email: CREDENTIALS.email,
+      scope: '',
+      password: CREDENTIALS.password,
+      fetch: (async () => {
+        called = true;
+        return new Response('{}');
+      }) as typeof fetch,
+    });
+
+    const result = await actions.default(event);
+
+    expect(result).toMatchObject({
+      status: 400,
+      data: {email: CREDENTIALS.email, scope: ''},
+    });
+    expect(called).toBe(false);
   });
 
   it('rejects an empty form without calling the API', async () => {

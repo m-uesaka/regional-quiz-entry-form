@@ -20,6 +20,7 @@ const REGIONAL: StaffAccount = {
   regionName: TOKYO.name,
   tournamentType: 'shinjinou',
   passwordSet: true,
+  disabledAt: null,
 };
 
 const GENERAL: StaffAccount = {
@@ -31,6 +32,7 @@ const GENERAL: StaffAccount = {
   regionName: null,
   tournamentType: null,
   passwordSet: false,
+  disabledAt: null,
 };
 
 // Handed down by `routes/admin/+layout.server.ts`, which every screen under
@@ -197,6 +199,70 @@ describe('admin staff +page.svelte', () => {
       within(rowOf(REGIONAL.email)).queryByText(/この画面を含む/),
     ).toBeNull();
   });
+  // #156
+  it("offers to disable every account but the caller's own", () => {
+    const self: StaffAccount = {...GENERAL, id: STAFF.sub};
+    renderPage([self, REGIONAL]);
+
+    const form = within(rowOf(REGIONAL.email))
+      .getByRole('button', {name: 'アカウントを無効化'})
+      .closest('form');
+    expect(form).toHaveAttribute('action', '?/disable');
+    expect(
+      (form as HTMLFormElement).querySelector<HTMLInputElement>(
+        'input[name="id"]',
+      ),
+    ).toHaveValue(REGIONAL.id);
+    expect(
+      within(rowOf(self.email)).queryByRole('button', {
+        name: 'アカウントを無効化',
+      }),
+    ).toBeNull();
+  });
+
+  it('marks a disabled account and offers only to enable it', () => {
+    const disabled: StaffAccount = {
+      ...REGIONAL,
+      disabledAt: '2026-10-25T00:00:00.000+00:00',
+    };
+    renderPage([disabled]);
+
+    const row = rowOf(disabled.email);
+    expect(within(row).getByText('無効化済み')).toBeInTheDocument();
+    const form = within(row)
+      .getByRole('button', {name: '有効化'})
+      .closest('form');
+    expect(form).toHaveAttribute('action', '?/enable');
+    for (const name of [
+      'パスワード設定メールを再送',
+      'セッションを無効化',
+      'アカウントを無効化',
+    ]) {
+      expect(within(row).queryByRole('button', {name})).toBeNull();
+    }
+  });
+
+  describe('confirming a disable', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('names the account and does not submit when cancelled', async () => {
+      const confirm = vi.fn(() => false);
+      vi.stubGlobal('confirm', confirm);
+      renderPage([REGIONAL, GENERAL]);
+
+      const form = within(rowOf(REGIONAL.email))
+        .getByRole('button', {name: 'アカウントを無効化'})
+        .closest('form') as HTMLFormElement;
+
+      expect(await fireEvent.submit(form)).toBe(false);
+      expect(confirm).toHaveBeenCalledWith(
+        expect.stringContaining(REGIONAL.email),
+      );
+    });
+  });
+
   describe('confirming a revocation', () => {
     afterEach(() => {
       vi.unstubAllGlobals();

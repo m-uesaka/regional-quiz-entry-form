@@ -19,6 +19,7 @@ const ACCOUNT: StaffAccount = {
   regionName: TOKYO.name,
   tournamentType: 'saikyoi',
   passwordSet: false,
+  disabledAt: null,
 };
 
 /** One request an action put on the wire. */
@@ -191,8 +192,32 @@ describe('admin staff invite action', () => {
       status: 409,
       data: {
         intent: 'invite',
-        fieldErrors: {email: ['このメールアドレスは既に登録されています']},
+        // #166: the address may well have the other type's account, so
+        // the message names the type that clashed.
+        fieldErrors: {
+          email: [
+            'このメールアドレスの最強位のアカウントは既に登録されています',
+          ],
+        },
         values: {email: 'new-staff@example.com'},
+      },
+    });
+  });
+
+  it('names a general account as the one already registered', async () => {
+    const event = buildActionEvent(
+      fakeFetch({status: 409}),
+      inviteFormData({role: 'general'}),
+    );
+
+    await expect(actions.invite(event)).resolves.toMatchObject({
+      status: 409,
+      data: {
+        fieldErrors: {
+          email: [
+            'このメールアドレスの統括スタッフアカウントは既に登録されています',
+          ],
+        },
       },
     });
   });
@@ -391,6 +416,134 @@ describe('admin staff revoke action', () => {
         intent: 'revoke',
         accountId: ACCOUNT.id,
         error: 'セッションを無効化できませんでした',
+      },
+    });
+  });
+});
+
+describe('admin staff disable action', () => {
+  function rowFormData(accountId: string): FormData {
+    const formData = new FormData();
+    formData.set('id', accountId);
+    return formData;
+  }
+
+  it("asks the API to disable the row's account", async () => {
+    const calls: ApiCall[] = [];
+    const event = buildActionEvent(fakeFetch({calls}), rowFormData(ACCOUNT.id));
+
+    await expect(actions.disable(event)).resolves.toMatchObject({
+      intent: 'disable',
+      accountId: ACCOUNT.id,
+      saved: true,
+      error: null,
+    });
+    expect(calls).toEqual([
+      {
+        method: 'POST',
+        url: `/api/staff/accounts/${ACCOUNT.id}/disable`,
+        body: undefined,
+      },
+    ]);
+  });
+
+  it('explains a refusal to leave no general staff', async () => {
+    const event = buildActionEvent(
+      fakeFetch({
+        status: 409,
+        error: 'cannot disable the last general staff account',
+      }),
+      rowFormData(ACCOUNT.id),
+    );
+
+    await expect(actions.disable(event)).resolves.toMatchObject({
+      status: 409,
+      data: {
+        intent: 'disable',
+        accountId: ACCOUNT.id,
+        error:
+          '有効な統括スタッフがいなくなるため、このアカウントは無効化できません',
+      },
+    });
+  });
+
+  it("explains a refusal to disable the caller's own account", async () => {
+    const event = buildActionEvent(
+      fakeFetch({status: 409, error: 'cannot disable your own account'}),
+      rowFormData(CALLER_ID),
+    );
+
+    await expect(actions.disable(event)).resolves.toMatchObject({
+      status: 409,
+      data: {error: '自分自身のアカウントは無効化できません'},
+    });
+  });
+
+  it('reports any other failure beside the row', async () => {
+    const event = buildActionEvent(
+      fakeFetch({status: 500}),
+      rowFormData(ACCOUNT.id),
+    );
+
+    await expect(actions.disable(event)).resolves.toMatchObject({
+      status: 502,
+      data: {
+        intent: 'disable',
+        accountId: ACCOUNT.id,
+        error: 'アカウントを無効化できませんでした',
+      },
+    });
+  });
+});
+
+describe('admin staff enable action', () => {
+  it("asks the API to enable the row's account", async () => {
+    const calls: ApiCall[] = [];
+    const formData = new FormData();
+    formData.set('id', ACCOUNT.id);
+    const event = buildActionEvent(fakeFetch({calls}), formData);
+
+    await expect(actions.enable(event)).resolves.toMatchObject({
+      intent: 'enable',
+      accountId: ACCOUNT.id,
+      saved: true,
+    });
+    expect(calls).toEqual([
+      {
+        method: 'POST',
+        url: `/api/staff/accounts/${ACCOUNT.id}/enable`,
+        body: undefined,
+      },
+    ]);
+  });
+
+  it('attaches an unknown account to the row it came from', async () => {
+    const formData = new FormData();
+    formData.set('id', ACCOUNT.id);
+    const event = buildActionEvent(fakeFetch({status: 404}), formData);
+
+    await expect(actions.enable(event)).resolves.toMatchObject({
+      status: 404,
+      data: {intent: 'enable', error: 'スタッフアカウントが見つかりません'},
+    });
+  });
+});
+
+describe('admin staff re-send action (disabled account)', () => {
+  it('says to enable a disabled account first', async () => {
+    const formData = new FormData();
+    formData.set('id', ACCOUNT.id);
+    const event = buildActionEvent(
+      fakeFetch({status: 409, error: 'staff account disabled'}),
+      formData,
+    );
+
+    await expect(actions.resend(event)).resolves.toMatchObject({
+      status: 409,
+      data: {
+        intent: 'resend',
+        error:
+          '無効化されたアカウントにはパスワード設定メールを送れません。先に有効化してください',
       },
     });
   });

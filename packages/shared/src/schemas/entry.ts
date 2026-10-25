@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {emailAddressSchema} from './email';
 import {PasswordLengthSchema} from './password';
 import {isWithinEntryPeriod} from '../logic/entry-period';
 import {
@@ -64,9 +65,7 @@ export const EntryInputSchema = z
     name: nameFieldSchema('氏名'),
     furigana: nameFieldSchema('ふりがな'),
     displayName: nameFieldSchema('掲載名'),
-    email: z
-      .string()
-      .email({message: 'メールアドレスの形式が正しくありません'}),
+    email: emailAddressSchema('メールアドレスの形式が正しくありません'),
     // Length only: the same field is how a returning participant proves the
     // password they already have, which may predate the common-password
     // rule. The backend applies that rule when the address turns out to be

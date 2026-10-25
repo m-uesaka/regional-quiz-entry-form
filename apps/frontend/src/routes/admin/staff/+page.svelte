@@ -13,6 +13,7 @@
   import Input from '$lib/components/ui/atoms/Input.svelte';
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
+  import type {RowIntent} from './+page.server';
   import type {PageProps} from './$types';
 
   const {data, form}: PageProps = $props();
@@ -30,7 +31,7 @@
    * @param intent Which of the row's buttons.
    * @param accountId The row's account.
    */
-  function rowResult(intent: 'resend' | 'revoke', accountId: string) {
+  function rowResult(intent: RowIntent, accountId: string) {
     return form?.intent === intent && form.accountId === accountId
       ? form
       : null;
@@ -48,6 +49,18 @@
     const message = isSelf
       ? 'あなた自身のセッションを無効化します。この画面を含むすべての端末からログアウトします。よろしいですか?'
       : `${email} のセッションを無効化します。よろしいですか?`;
+    if (!confirm(message)) event.preventDefault();
+  }
+
+  /**
+   * Asks before an account is disabled, since its owner is logged out
+   * everywhere and can't log back in until someone enables it again.
+   * Cancelling keeps the form from submitting.
+   * @param event The disable form's submit event.
+   * @param email The account the form is for.
+   */
+  function confirmDisable(event: SubmitEvent, email: string) {
+    const message = `${email} を無効化します。このアカウントはすべての端末でログアウトされ、有効化するまでログインできなくなります。よろしいですか?`;
     if (!confirm(message)) event.preventDefault();
   }
 
@@ -173,7 +186,10 @@
         {#each data.accounts as account (account.id)}
           {@const result = rowResult('resend', account.id)}
           {@const revokeResult = rowResult('revoke', account.id)}
+          {@const disableResult = rowResult('disable', account.id)}
+          {@const enableResult = rowResult('enable', account.id)}
           {@const isSelf = account.id === data.staff.sub}
+          {@const disabled = account.disabledAt !== null}
           <li>
             <Card class="gap-3">
               <div class="flex flex-wrap items-start justify-between gap-2">
@@ -183,14 +199,18 @@
                     {ROLE_LABELS[account.role]} / {scopeLabel(account)}
                   </p>
                 </div>
-                <Chip
-                  variant={account.passwordSet ? 'success' : 'warning'}
-                  tone="soft"
-                >
-                  {account.passwordSet
-                    ? 'パスワード設定済み'
-                    : 'パスワード未設定(招待メールのリンク待ち)'}
-                </Chip>
+                {#if disabled}
+                  <Chip variant="danger" tone="soft">無効化済み</Chip>
+                {:else}
+                  <Chip
+                    variant={account.passwordSet ? 'success' : 'warning'}
+                    tone="soft"
+                  >
+                    {account.passwordSet
+                      ? 'パスワード設定済み'
+                      : 'パスワード未設定(招待メールのリンク待ち)'}
+                  </Chip>
+                {/if}
               </div>
 
               {#if result?.saved}
@@ -221,33 +241,95 @@
                 </Message>
               {/if}
 
-              <div class="flex flex-wrap gap-2">
-                <form method="POST" action="?/resend">
-                  <input type="hidden" name="id" value={account.id} />
-                  <Button type="submit" variant="secondary" size="small">
-                    パスワード設定メールを再送
-                  </Button>
-                </form>
+              {#if disableResult?.saved}
+                <Message variant="success">
+                  <p role="status" class="text-sm text-foreground">
+                    このアカウントを無効化しました
+                  </p>
+                </Message>
+              {/if}
+              {#if disableResult?.error}
+                <Message variant="danger">
+                  <p role="alert" class="text-sm text-foreground">
+                    {disableResult.error}
+                  </p>
+                </Message>
+              {/if}
 
-                <!-- Ends every session the account has open, e.g. on a lost
-                     device. The password stays as it is, so whoever knows it
-                     can log straight back in: this doesn't lock anyone out. -->
-                <form
-                  method="POST"
-                  action="?/revoke"
-                  onsubmit={event => confirmRevoke(event, account.email, isSelf)}
-                >
-                  <input type="hidden" name="id" value={account.id} />
-                  <Button type="submit" variant="danger" tone="ghost" size="small">
-                    セッションを無効化
-                  </Button>
-                </form>
-              </div>
-              <p class="text-xs text-muted-foreground">
-                {isSelf
-                  ? 'セッションを無効化すると、この画面を含むすべての端末からログアウトします。'
-                  : 'セッションを無効化すると、このアカウントはすべての端末でログアウトされます。パスワードは変わらないため、パスワードを知っていれば再びログインできます。'}
-              </p>
+              {#if enableResult?.saved}
+                <Message variant="success">
+                  <p role="status" class="text-sm text-foreground">
+                    このアカウントを有効化しました
+                  </p>
+                </Message>
+              {/if}
+              {#if enableResult?.error}
+                <Message variant="danger">
+                  <p role="alert" class="text-sm text-foreground">
+                    {enableResult.error}
+                  </p>
+                </Message>
+              {/if}
+
+              {#if disabled}
+                <!-- A disabled account has no session to cut and can't be
+                     sent a link, so enabling it is the only thing left. -->
+                <div class="flex flex-wrap gap-2">
+                  <form method="POST" action="?/enable">
+                    <input type="hidden" name="id" value={account.id} />
+                    <Button type="submit" variant="secondary" size="small">
+                      有効化
+                    </Button>
+                  </form>
+                </div>
+                <p class="text-xs text-muted-foreground">
+                  無効化されたアカウントはログインできません。有効化すると、無効化前のパスワードで再びログインできます。
+                </p>
+              {:else}
+                <div class="flex flex-wrap gap-2">
+                  <form method="POST" action="?/resend">
+                    <input type="hidden" name="id" value={account.id} />
+                    <Button type="submit" variant="secondary" size="small">
+                      パスワード設定メールを再送
+                    </Button>
+                  </form>
+
+                  <!-- Ends every session the account has open, e.g. on a lost
+                       device. The password stays as it is, so whoever knows it
+                       can log straight back in: this doesn't lock anyone out. -->
+                  <form
+                    method="POST"
+                    action="?/revoke"
+                    onsubmit={event => confirmRevoke(event, account.email, isSelf)}
+                  >
+                    <input type="hidden" name="id" value={account.id} />
+                    <Button type="submit" variant="danger" tone="ghost" size="small">
+                      セッションを無効化
+                    </Button>
+                  </form>
+
+                  <!-- Not offered on the caller's own row: the API refuses it,
+                       since a general staff member who locked themselves out
+                       could only be let back in by another one. -->
+                  {#if !isSelf}
+                    <form
+                      method="POST"
+                      action="?/disable"
+                      onsubmit={event => confirmDisable(event, account.email)}
+                    >
+                      <input type="hidden" name="id" value={account.id} />
+                      <Button type="submit" variant="danger" size="small">
+                        アカウントを無効化
+                      </Button>
+                    </form>
+                  {/if}
+                </div>
+                <p class="text-xs text-muted-foreground">
+                  {isSelf
+                    ? 'セッションを無効化すると、この画面を含むすべての端末からログアウトします。'
+                    : 'セッションを無効化すると、このアカウントはすべての端末でログアウトされます。パスワードは変わらないため、パスワードを知っていれば再びログインできます。退任などでログインさせたくない場合は、アカウントを無効化してください。'}
+                </p>
+              {/if}
             </Card>
           </li>
         {/each}

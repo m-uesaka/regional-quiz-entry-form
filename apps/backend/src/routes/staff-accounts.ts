@@ -18,7 +18,16 @@ const StaffAccountIdParamSchema = z.object({id: z.string().uuid()});
 
 const STAFF_ACCOUNT_COLUMNS =
   'id, email, password_hash, role, region_id, tournament_type, ' +
-  'regions(slug, name)';
+  'disabled_at, regions(slug, name)';
+
+/**
+ * The SQLSTATEs `disable_staff_account()` / `enable_staff_account()`
+ * (`supabase/migrations/0027_staff_account_enable_and_link_locking.sql`)
+ * raise when the account doesn't exist, and -- disable only -- when
+ * disabling it would leave no general staff account enabled.
+ */
+const ACCOUNT_NOT_FOUND_SQLSTATE = 'P0002';
+const LAST_GENERAL_STAFF_SQLSTATE = 'P0004';
 
 /** Shape of a `staff_accounts` row as selected above. */
 interface StaffAccountRow {
@@ -28,6 +37,7 @@ interface StaffAccountRow {
   role: StaffRole;
   region_id: string | null;
   tournament_type: TournamentType | null;
+  disabled_at: string | null;
   // The joined `regions` row, null for `general` staff, who have no region.
   regions: {slug: string; name: string} | null;
 }
@@ -47,6 +57,7 @@ function rowToStaffAccount(row: StaffAccountRow): StaffAccount {
     regionName: row.regions?.name ?? null,
     tournamentType: row.tournament_type,
     passwordSet: isPasswordHashUsable(row.password_hash),
+    disabledAt: row.disabled_at,
   };
 }
 
@@ -97,10 +108,14 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
         .returns<StaffAccountRow[]>()
         .single();
       if (error) {
-        // 23505 is the unique violation on `email`, and 23503 the foreign key
-        // on `region_id`. Both are input mistakes the staff member can fix
-        // from the form they just submitted, so they get an answer they can
-        // act on rather than a 500.
+        // 23505 is the unique violation on (`email`, `tournament_type`)
+        // (#166): the address already has a regional account of this type,
+        // or -- for a general invite -- a general one. A regional and a
+        // general account never clash, their types differ. 23503 is the
+        // foreign key on `region_id`. Both are input
+        // mistakes the staff member can fix from the form they just
+        // submitted, so they get an answer they can act on rather than a
+        // 500.
         if (error.code === '23505') {
           return c.json({error: 'email already in use'}, 409);
         }
@@ -173,6 +188,16 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
         account.email,
       );
       if (!mailResult.ok) {
+        // A disabled account is refused a link rather than mailed one that
+        // `reset_staff_password()` would refuse in turn: the general staff
+        // member is told why here, while the link's holder would only see
+        // an "invalid or expired" page. Enabling the account comes first.
+        // The refusal comes from `issue_staff_password_link()`, under the
+        // account's lock, so a disable racing this request can't slip a
+        // link past it.
+        if (mailResult.disabled) {
+          return c.json({error: 'staff account disabled'}, 409);
+        }
         return c.json(
           internalError(
             'failed to send the staff password reset mail',
@@ -192,7 +217,7 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
   // cookie copied off a lost laptop. It doesn't touch the password, so
   // anyone who knows it can log straight back in: it doesn't lock out
   // someone stepping down, or a password that leaked along with the cookie
-  // (disabling an account is #156).
+  // (that is what `/accounts/:id/disable` below is for).
   //
   // The caller may name their own account. That is deliberate (a staff
   // member who lost a device can cut its session themselves), and it ends
@@ -224,6 +249,86 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
       }
       if (!account) {
         return c.json({error: 'staff account not found'}, 404);
+      }
+      return c.json({ok: true});
+    },
+  )
+  // Shuts an account out (#156): it can no longer log in, every session it
+  // has open ends, and its outstanding password links are deleted. Unlike
+  // `revoke-sessions`, knowing the password no longer helps, which is what
+  // someone stepping down -- or a password that leaked -- calls for.
+  //
+  // Disabling rather than deleting keeps the row, its password and the
+  // record of who covered which tournament, and `/enable` undoes it. Nothing
+  // else in the schema references a staff account, so a deletion would have
+  // been possible, but not reversible.
+  //
+  // The caller may not name their own account: a general staff member who
+  // locked themselves out could only be let back in by another one, and if
+  // they were the last, by no one. `disable_staff_account()` refuses the
+  // last enabled general account as well, which also covers two general
+  // staff disabling each other at the same moment.
+  .post(
+    '/accounts/:id/disable',
+    requireGeneralStaff(),
+    zValidator('param', StaffAccountIdParamSchema),
+    async c => {
+      // Lowercased before comparing: the param schema and Postgres both
+      // accept a UUID in either case, while the claim is always lowercase,
+      // so `/ABC.../disable` would otherwise slip past this check.
+      const id = c.req.valid('param').id.toLowerCase();
+      if (id === c.get('staff').sub.toLowerCase()) {
+        return c.json({error: 'cannot disable your own account'}, 409);
+      }
+      const {error} = await createDbClient(c.env).rpc('disable_staff_account', {
+        p_staff_account_id: id,
+      });
+      if (error) {
+        if (error.code === ACCOUNT_NOT_FOUND_SQLSTATE) {
+          return c.json({error: 'staff account not found'}, 404);
+        }
+        if (error.code === LAST_GENERAL_STAFF_SQLSTATE) {
+          return c.json(
+            {error: 'cannot disable the last general staff account'},
+            409,
+          );
+        }
+        return c.json(
+          internalError('failed to disable the staff account', error),
+          500,
+        );
+      }
+      return c.json({ok: true});
+    },
+  )
+  // Lets a disabled account log in again with the password it already had.
+  // Its sessions stay ended: disabling moved `sessions_valid_from`, and
+  // nothing here moves it back, so the owner logs in afresh.
+  //
+  // `enable_staff_account()` also drops any password link the account
+  // holds, in the same transaction as the update. A link written while the
+  // account was disabled is refused for as long as it stays so, and must
+  // not come back to life now -- the account may have been disabled
+  // precisely because its mailbox was compromised. A fresh link can be sent
+  // once it is enabled. An account that is already enabled is left alone,
+  // links included, so a 有効化 pressed on a stale screen doesn't throw
+  // away a link another general staff member has just sent.
+  .post(
+    '/accounts/:id/enable',
+    requireGeneralStaff(),
+    zValidator('param', StaffAccountIdParamSchema),
+    async c => {
+      const {error} = await createDbClient(c.env).rpc('enable_staff_account', {
+        p_staff_account_id: c.req.valid('param').id,
+      });
+      if (error) {
+        if (error.code === ACCOUNT_NOT_FOUND_SQLSTATE) {
+          return c.json({error: 'staff account not found'}, 404);
+        }
+        return c.json(
+          internalError('failed to enable the staff account', error),
+          500,
+        );
       }
       return c.json({ok: true});
     },

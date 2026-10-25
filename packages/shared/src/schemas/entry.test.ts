@@ -32,6 +32,23 @@ describe('EntryInputSchema', () => {
     }
   });
 
+  // #133: an entry under `Taro@Example.com` must find the participant who
+  // registered as `taro@example.com`, not create a second one.
+  it('lowercases the address', () => {
+    const parsed = EntryInputSchema.parse({
+      name: '山田太郎',
+      furigana: 'ヤマダタロウ',
+      displayName: '太郎',
+      email: 'Taro@Example.com',
+      password: 'quiz-pass-one',
+      passwordConfirm: 'quiz-pass-one',
+      regulationIds: ['00000000-0000-0000-0000-000000000000'],
+      customFieldValues: {},
+    });
+
+    expect(parsed.email).toBe('taro@example.com');
+  });
+
   it('reports every field failure in Japanese', () => {
     const result = EntryInputSchema.safeParse({
       name: '',

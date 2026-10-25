@@ -1,8 +1,16 @@
 import {error, fail} from '@sveltejs/kit';
-import {StaffAccountCreateInputSchema} from '@regional-quiz/shared';
+import {
+  StaffAccountCreateInputSchema,
+  TOURNAMENT_TYPE_LABELS,
+  TournamentTypeSchema,
+} from '@regional-quiz/shared';
 import {createApiClient, isUnauthorized} from '$lib/api';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {Actions, PageServerLoad} from './$types';
+import {readString} from '$lib/form-data';
+
+/** The buttons on an account's row. Shared with `+page.svelte`. */
+export type RowIntent = 'resend' | 'revoke' | 'disable' | 'enable';
 
 /** Per-field validation messages, keyed by the control's name. */
 type StaffFieldErrors = Record<string, string[] | undefined>;
@@ -22,10 +30,10 @@ interface StaffInviteValues {
  */
 interface StaffActionResult {
   /** Which form the result belongs to. */
-  intent: 'invite' | 'resend' | 'revoke';
+  intent: 'invite' | RowIntent;
   /**
-   * The account a `resend` / `revoke` result belongs to; null for the
-   * invite form.
+   * The account a row button's result belongs to; null for the invite
+   * form.
    */
   accountId: string | null;
   saved: boolean;
@@ -113,8 +121,11 @@ export const actions = {
         redirectToStaffLogin(cookies, url);
       }
       if (res.status === 409) {
+        // Accounts are unique per address *and* tournament type (#166), so
+        // the address may well be in use for the other type; the message
+        // names the one that clashed rather than the address alone.
         return inviteFailure(409, values, INVALID_INPUT_MESSAGE, {
-          email: ['このメールアドレスは既に登録されています'],
+          email: [duplicateEmailMessage(values)],
         });
       }
       if (res.status === 400) {
@@ -173,6 +184,16 @@ export const actions = {
     if (!res.ok) {
       if (isUnauthorized(res)) {
         redirectToStaffLogin(cookies, url);
+      }
+      if (res.status === 409) {
+        // The one 409 is a disabled account (#156), which the list offers
+        // no resend button for -- so this is a page that went stale.
+        return rowFailure(
+          'resend',
+          409,
+          accountId,
+          '無効化されたアカウントにはパスワード設定メールを送れません。先に有効化してください',
+        );
       }
       return rowFailure(
         'resend',
@@ -236,7 +257,100 @@ export const actions = {
       values: EMPTY_VALUES,
     } satisfies StaffActionResult;
   },
+
+  // Shuts the account out (#156): no login, no session, no password link,
+  // even for someone who knows the password. The API refuses the caller's
+  // own account and the last general one; the list offers no button for
+  // the former, but the latter can only be found out by asking.
+  disable: async ({request, fetch, cookies, url}) => {
+    const formData = await request.formData();
+    const accountId = readString(formData, 'id');
+
+    const res = await createApiClient(fetch).api.staff.accounts[':id'][
+      'disable'
+    ].$post({param: {id: accountId}});
+    if (!res.ok) {
+      if (isUnauthorized(res)) {
+        redirectToStaffLogin(cookies, url);
+      }
+      if (res.status === 409) {
+        return rowFailure(
+          'disable',
+          409,
+          accountId,
+          (await readErrorMessage(res)) === 'cannot disable your own account'
+            ? '自分自身のアカウントは無効化できません'
+            : '有効な統括スタッフがいなくなるため、このアカウントは無効化できません',
+        );
+      }
+      return rowFailure(
+        'disable',
+        res.status === 404 ? 404 : 502,
+        accountId,
+        res.status === 404
+          ? 'スタッフアカウントが見つかりません'
+          : 'アカウントを無効化できませんでした',
+      );
+    }
+
+    return rowSuccess('disable', accountId);
+  },
+
+  enable: async ({request, fetch, cookies, url}) => {
+    const formData = await request.formData();
+    const accountId = readString(formData, 'id');
+
+    const res = await createApiClient(fetch).api.staff.accounts[':id'][
+      'enable'
+    ].$post({param: {id: accountId}});
+    if (!res.ok) {
+      if (isUnauthorized(res)) {
+        redirectToStaffLogin(cookies, url);
+      }
+      return rowFailure(
+        'enable',
+        res.status === 404 ? 404 : 502,
+        accountId,
+        res.status === 404
+          ? 'スタッフアカウントが見つかりません'
+          : 'アカウントを有効化できませんでした',
+      );
+    }
+
+    return rowSuccess('enable', accountId);
+  },
 } satisfies Actions;
+
+/**
+ * The message for an invite refused as a duplicate, naming the kind of
+ * account the address already has.
+ * @param values What was submitted.
+ */
+function duplicateEmailMessage(values: StaffInviteValues): string {
+  if (values.role === 'general') {
+    return 'このメールアドレスの統括スタッフアカウントは既に登録されています';
+  }
+  const type = TournamentTypeSchema.safeParse(values.tournamentType);
+  return type.success
+    ? `このメールアドレスの${TOURNAMENT_TYPE_LABELS[type.data]}のアカウントは既に登録されています`
+    : 'このメールアドレスは既に登録されています';
+}
+
+/**
+ * Reports that a row button did what it was pressed for.
+ * @param intent Which of the row's buttons was pressed.
+ * @param accountId The account the message belongs beside.
+ */
+function rowSuccess(intent: RowIntent, accountId: string) {
+  return {
+    intent,
+    accountId,
+    saved: true,
+    error: null,
+    fieldErrors: NO_FIELD_ERRORS,
+    values: EMPTY_VALUES,
+  } satisfies StaffActionResult;
+}
 
 /**
  * Refuses an invite, marking the offending controls.
@@ -269,7 +383,7 @@ function inviteFailure(
  * @param message The message to show.
  */
 function rowFailure(
-  intent: 'resend' | 'revoke',
+  intent: RowIntent,
   status: number,
   accountId: string,
   message: string,
@@ -282,16 +396,6 @@ function rowFailure(
     fieldErrors: NO_FIELD_ERRORS,
     values: EMPTY_VALUES,
   } satisfies StaffActionResult);
-}
-
-/**
- * Reads one text control, which `FormData` types as possibly a file.
- * @param formData The submitted body.
- * @param name The control's name.
- */
-function readString(formData: FormData, name: string): string {
-  const value = formData.get(name);
-  return typeof value === 'string' ? value : '';
 }
 
 /**

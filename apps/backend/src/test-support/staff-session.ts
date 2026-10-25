@@ -1,8 +1,8 @@
 // Fixtures for the session check every staff guard makes
 // (`isSessionCurrent()` in `middleware/staff-auth.ts`): before a staff
 // request reaches its handler, the guard reads the account's
-// `staff_accounts.sessions_valid_from` and compares it with the token's
-// `sessionsValidFrom` claim. Every test that sends a staff cookie through
+// `staff_accounts.sessions_valid_from` (and `disabled_at`) and compares it
+// with the token's `sessionsValidFrom` claim. Every test that sends a staff cookie through
 // one of those guards has to answer that read, whether or not revocation is
 // what the test is about.
 //
@@ -24,8 +24,20 @@ export function isStaffSessionCheck(url: string): boolean {
   const parsed = new URL(url);
   return (
     parsed.pathname.endsWith('/rest/v1/staff_accounts') &&
-    parsed.searchParams.get('select') === 'sessions_valid_from'
+    parsed.searchParams.get('select') === 'sessions_valid_from,disabled_at'
   );
+}
+
+/**
+ * The row the session check reads, for an account that is enabled and on
+ * generation `sessionsValidFrom`.
+ * @param sessionsValidFrom The account's `sessions_valid_from`.
+ */
+export function staffSessionRow(sessionsValidFrom: string): {
+  sessions_valid_from: string;
+  disabled_at: null;
+} {
+  return {sessions_valid_from: sessionsValidFrom, disabled_at: null};
 }
 
 /**
@@ -58,7 +70,7 @@ export function staffSessionAwareFetch(
         Response.json(
           sessionsValidFrom === null
             ? []
-            : [{sessions_valid_from: sessionsValidFrom}],
+            : [staffSessionRow(sessionsValidFrom)],
         ),
       );
     }

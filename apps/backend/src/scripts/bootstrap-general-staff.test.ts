@@ -36,6 +36,25 @@ describe('buildBootstrapSql', () => {
     expect(lockIndex).toBeLessThan(deleteIndex);
   });
 
+  // Accounts are unique per (address, tournament type) (#166), so the
+  // conflict target has to name both columns or Postgres refuses the
+  // statement for having no matching constraint.
+  it('reuses the general account at the address rather than a regional one', () => {
+    const sql = buildBootstrapSql('admin@example.com', 'abc123');
+
+    expect(sql).toContain('on conflict (email, tournament_type) do nothing');
+  });
+
+  // The break-glass path has to work for a general account that was
+  // disabled (#156), or the link it prints would recover nothing.
+  it('enables the account again', () => {
+    const sql = buildBootstrapSql('admin@example.com', 'abc123');
+
+    expect(sql).toContain(
+      'update staff_accounts set disabled_at = null where id = v_id',
+    );
+  });
+
   it('escapes single quotes in the address', () => {
     const sql = buildBootstrapSql("o'brien@example.com", 'abc123');
 

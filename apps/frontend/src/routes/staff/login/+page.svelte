@@ -1,7 +1,9 @@
 <script lang="ts">
   import {untrack} from 'svelte';
+  import {TOURNAMENT_TYPE_LABELS, TournamentTypeSchema} from '@regional-quiz/shared';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
+  import NativeSelect from '$lib/components/form/NativeSelect.svelte';
   import Button from '$lib/components/ui/atoms/Button.svelte';
   import Card from '$lib/components/ui/atoms/Card.svelte';
   import Input from '$lib/components/ui/atoms/Input.svelte';
@@ -15,6 +17,12 @@
   // "Form controls are bound, not rendered from an expression" in
   // `apps/frontend/README.md` for why this isn't `value={form?.email ?? ''}`.
   let email = $state(untrack(() => form?.email ?? ''));
+  // Left `undefined` rather than `''` when there is nothing to echo: that is
+  // the one case in which Svelte's select binding adopts the option the
+  // visitor already picked on the server-rendered page instead of resetting
+  // it while hydrating (`bind_select_value()`), which is what the
+  // `bind:value` on the inputs above get from `defaultValue` (#90).
+  let scope = $state(untrack(() => form?.scope));
 </script>
 
 <PageContainer size="narrow">
@@ -50,6 +58,24 @@
           required
           autocomplete="username"
         />
+      </div>
+      <!-- One address may hold a 最強位 and a 新人王 account (#166), so the
+           address alone doesn't say which one to log in to. There is no
+           default: a wrong guess would answer the same "incorrect" message
+           as a wrong password, which is harder to spot than an empty
+           select. -->
+      <div class="flex flex-col gap-1.5">
+        <Label for="scope">区分</Label>
+        <NativeSelect id="scope" name="scope" bind:value={scope} required>
+          <!-- Not `disabled`: with nothing selected, a browser picks the
+               first option that isn't, which would quietly preselect
+               最強位. `required` refuses the empty value instead. -->
+          <option value="">選択してください</option>
+          {#each TournamentTypeSchema.options as type (type)}
+            <option value={type}>{TOURNAMENT_TYPE_LABELS[type]}の地域スタッフ</option>
+          {/each}
+          <option value="general">統括スタッフ</option>
+        </NativeSelect>
       </div>
       <div class="flex flex-col gap-1.5">
         <Label for="password">パスワード</Label>

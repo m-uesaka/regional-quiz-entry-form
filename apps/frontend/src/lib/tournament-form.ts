@@ -5,6 +5,7 @@ import {
 } from '@regional-quiz/shared';
 import {fromJstDatetimeLocal, toJstDatetimeLocal} from '$lib/jst-datetime';
 import type {TournamentFormValues} from '$lib/types/tournament-form';
+import {readString} from '$lib/form-data';
 
 /** A form with nothing filled in, which is how a tournament is created. */
 export function emptyTournamentFormValues(): TournamentFormValues {
@@ -86,14 +87,4 @@ export function parseTournamentFormValues(
     entryClosesAt: fromJstDatetimeLocal(values.entryClosesAt),
   });
   return parsed.success ? parsed.data : null;
-}
-
-/**
- * Reads one text control, which `FormData` types as possibly a file.
- * @param formData The submitted body.
- * @param name The control's name.
- */
-function readString(formData: FormData, name: string): string {
-  const value = formData.get(name);
-  return typeof value === 'string' ? value : '';
 }

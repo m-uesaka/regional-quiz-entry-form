@@ -67,6 +67,7 @@ export async function readStaffClaims(
 
 interface StaffSessionRow {
   sessions_valid_from: string;
+  disabled_at: string | null;
 }
 
 /** What `isSessionCurrent()` found out, or that it couldn't find out. */
@@ -104,7 +105,7 @@ export async function isSessionCurrent(
 ): Promise<SessionCheck> {
   const {data, error} = await createDbClient(env)
     .from('staff_accounts')
-    .select('sessions_valid_from')
+    .select('sessions_valid_from, disabled_at')
     .eq('id', staff.sub)
     .returns<StaffSessionRow[]>()
     .maybeSingle();
@@ -115,11 +116,15 @@ export async function isSessionCurrent(
     return {ok: false};
   }
   // A missing row means the account was deleted after the cookie was issued,
-  // which is as much a dead session as a revoked one.
+  // which is as much a dead session as a revoked one. So is a disabled
+  // account's (#156): disabling also moves `sessions_valid_from`, so the
+  // generation check alone would already refuse it, but an account that is
+  // disabled must stay shut out even if that column is ever moved back.
   return {
     ok: true,
     current:
       data !== null &&
+      data.disabled_at === null &&
       Date.parse(data.sessions_valid_from) === staff.sessionsValidFrom,
   };
 }
