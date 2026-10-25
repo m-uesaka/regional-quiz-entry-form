@@ -355,11 +355,15 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
     name: '山田太郎',
     furigana: 'ヤマダタロウ',
     display_name: '太郎',
+    free_text: '会場までの道を\n教えてください',
     custom_field_values: {
       t_shirt_size: 'M',
       agree_to_rules: ['agree_to_rules'],
     },
     status: 'confirmed',
+    waitlist_position: null,
+    created_at: '2026-10-01T03:04:00+00:00',
+    participants: {email: 'taro@example.com'},
     entry_regulations: [
       {
         regulation_id: '77777777-7777-7777-7777-777777777777',
@@ -397,10 +401,10 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
     // Leading UTF-8 BOM, so Excel doesn't render the Japanese cells as
     // mojibake.
     expect(body.startsWith('\uFEFF')).toBe(true);
-    expect(body.slice(1).split('\r\n')).toEqual([
-      '氏名,ふりがな,エントリーリスト掲載名,ステータス,レギュレーション,Tシャツサイズ,規約に同意する',
-      '山田太郎,ヤマダタロウ,太郎,確定,一般の部;学生の部,M,はい',
-    ]);
+    expect(body.slice(1)).toBe(
+      '氏名,ふりがな,エントリーリスト掲載名,メールアドレス,ステータス,キャンセル待ち順位,エントリー日時,レギュレーション,自由記述,Tシャツサイズ,規約に同意する\r\n' +
+        '山田太郎,ヤマダタロウ,太郎,taro@example.com,確定,,2026-10-01 12:04,一般の部;学生の部,"会場までの道を\n教えてください",M,はい',
+    );
   });
 
   it('returns a header-only CSV when the tournament has no entries', async () => {
@@ -415,7 +419,7 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
 
     expect(res.status).toBe(200);
     expect(await res.text()).toBe(
-      '\uFEFF氏名,ふりがな,エントリーリスト掲載名,ステータス,レギュレーション,Tシャツサイズ,規約に同意する',
+      '\uFEFF氏名,ふりがな,エントリーリスト掲載名,メールアドレス,ステータス,キャンセル待ち順位,エントリー日時,レギュレーション,自由記述,Tシャツサイズ,規約に同意する',
     );
   });
 
