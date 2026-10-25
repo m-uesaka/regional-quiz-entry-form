@@ -89,6 +89,55 @@ export async function fetchSheetValues(
   return values ?? [];
 }
 
+interface SheetBatchValuesResponse {
+  valueRanges?: Array<{values?: unknown[][]}>;
+}
+
+/**
+ * Reads several ranges of one spreadsheet in a single `values:batchGet`
+ * request, so reading many spreadsheets in one go (the bulk tournament
+ * import, #168) costs one request against the Sheets API's per-minute quota
+ * per spreadsheet rather than one per range. Same authentication and
+ * failure modes as `fetchSheetValues()`; a range naming a tab that doesn't
+ * exist fails the whole request with a 400.
+ * @param spreadsheetId The Google Sheets spreadsheet ID.
+ * @param ranges The A1 ranges to read.
+ * @param apiKey The Google Sheets API key.
+ * @param query Extra `values:batchGet` query parameters (e.g. the render
+ *     options), which apply to every range.
+ * @return The rows of each range, in the order `ranges` named them.
+ */
+export async function fetchSheetBatch(
+  spreadsheetId: string,
+  ranges: string[],
+  apiKey: string,
+  query: Record<string, string> = {},
+): Promise<unknown[][][]> {
+  const params = new URLSearchParams({...query, key: apiKey});
+  for (const range of ranges) {
+    params.append('ranges', range);
+  }
+  const url =
+    'https://sheets.googleapis.com/v4/spreadsheets/' +
+    `${spreadsheetId}/values:batchGet?${params}`;
+  let res: Response;
+  try {
+    res = await fetch(url);
+  } catch (e: unknown) {
+    throw new SheetFetchError(
+      `Failed to reach Google Sheets: ${e instanceof Error ? e.message : 'network error'}`,
+    );
+  }
+  if (!res.ok) {
+    throw new SheetFetchError(
+      `Failed to fetch sheet: ${res.status}`,
+      res.status,
+    );
+  }
+  const {valueRanges} = (await res.json()) as SheetBatchValuesResponse;
+  return ranges.map((_, index) => valueRanges?.[index]?.values ?? []);
+}
+
 /**
  * Reads a region staff-filled spreadsheet's field-definition rows from its
  * first tab. Row 1 is a header row, skipped by starting the range at row 2.
@@ -102,17 +151,34 @@ export async function fetchSheetRows(
 ): Promise<SheetRow[]> {
   // Read with the default render options, under which every cell comes back
   // as the string the sheet displays.
-  const values = (await fetchSheetValues(
-    spreadsheetId,
-    'A2:E',
-    apiKey,
-  )) as string[][];
+  return sheetValuesToRows(
+    await fetchSheetValues(spreadsheetId, FORM_DEFINITION_RANGE, apiKey),
+  );
+}
+
+/**
+ * The range of the first tab the field-definition rows are read from: five
+ * columns, from row 2 down (row 1 is a header).
+ */
+export const FORM_DEFINITION_RANGE = 'A2:E';
+
+/**
+ * Turns the cells of `FORM_DEFINITION_RANGE` into rows. A cell the API left
+ * out (trailing and empty) stays `undefined`; any other cell becomes the
+ * string it holds, so the rows read the same whether the cells were fetched
+ * formatted (always strings) or unformatted (a number typed into the label
+ * column arrives as a number), as the bulk import (#168) fetches them.
+ * @param values The cells the API returned.
+ */
+export function sheetValuesToRows(values: unknown[][]): SheetRow[] {
+  const text = (cell: unknown) =>
+    (cell === undefined || cell === null ? undefined : String(cell)) as string;
   return values.map(([key, label, type, required, options]) => ({
-    key,
-    label,
-    type,
-    required,
-    options,
+    key: text(key),
+    label: text(label),
+    type: text(type),
+    required: text(required),
+    options: text(options),
   }));
 }
 

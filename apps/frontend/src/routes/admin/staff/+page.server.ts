@@ -4,7 +4,7 @@ import {
   TOURNAMENT_TYPE_LABELS,
   TournamentTypeSchema,
 } from '@regional-quiz/shared';
-import {createApiClient, isUnauthorized} from '$lib/api';
+import {createApiClient, isUnauthorized, readErrorMessage} from '$lib/api';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {Actions, PageServerLoad} from './$types';
 import {readString} from '$lib/form-data';
@@ -141,7 +141,7 @@ export const actions = {
             })
           : inviteFailure(400, values, INVALID_INPUT_MESSAGE, NO_FIELD_ERRORS);
       }
-      if ((await readErrorMessage(res)) === MAIL_NOT_SENT_ERROR) {
+      if ((await readErrorMessage(res, '')) === MAIL_NOT_SENT_ERROR) {
         return inviteFailure(
           500,
           // The account was created, so the form is cleared: re-submitting
@@ -278,7 +278,8 @@ export const actions = {
           'disable',
           409,
           accountId,
-          (await readErrorMessage(res)) === 'cannot disable your own account'
+          (await readErrorMessage(res, '')) ===
+            'cannot disable your own account'
             ? '自分自身のアカウントは無効化できません'
             : '有効な統括スタッフがいなくなるため、このアカウントは無効化できません',
         );
@@ -396,27 +397,4 @@ function rowFailure(
     fieldErrors: NO_FIELD_ERRORS,
     values: EMPTY_VALUES,
   } satisfies StaffActionResult);
-}
-
-/**
- * Reads the `{error: string}` body the backend answers a refusal with.
- * @param res The failed API response.
- */
-async function readErrorMessage(res: {
-  json(): Promise<unknown>;
-}): Promise<string> {
-  try {
-    const body: unknown = await res.json();
-    if (
-      typeof body === 'object' &&
-      body !== null &&
-      'error' in body &&
-      typeof body.error === 'string'
-    ) {
-      return body.error;
-    }
-  } catch {
-    // A non-JSON body (a proxy error page, say) names no case to handle.
-  }
-  return '';
 }

@@ -489,6 +489,16 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 - 「無効でないか」の判定と書き込みが同じロックの下にあるので、無効化(`disable_staff_account()`)や有効化と同時に走っても、無効なアカウントに使えるリンクが残ることはありません。リンクが書かれるのは、書き込みの時点で有効なアカウントに対してだけです。
 
+### import_tournament(p_region_id, p_type, p_entry_opens_at, p_entry_closes_at, p_form_fields, p_regulations)
+
+大会一覧のスプレッドシートからの一括登録(#168、`POST /api/sheet-import/tournaments`)で、1 大会ぶんを登録します(`0028`)。返り値は `(tournament_id, created)`。
+
+1. `tournaments` に `(region_id, type)` で upsert する。既にあればエントリー期間だけを上書きし、大会名・定員は触らない。新規なら大会名 null(既定名)・定員 null
+2. `sync_form_field_defs()` でフォーム定義を置き換える
+3. `p_regulations`(id なし)の各要素を、同じ大会の既存レギュレーションと**名前で**突き合わせて id を付けてから `sync_regulations()` に渡す。突き合わせないと既存の行はすべて削除扱いになり、エントリーが 1 件でもあると `P0004` で失敗するため
+
+- 3 つが 1 つの関数(= 1 トランザクション)なのが要点です。別々に呼ぶと、3 で失敗したときに大会とフォーム定義だけが上書きされて残り、「エラーが出た大会は登録しない」が成り立ちません。例外(`P0003` / `P0004` など)はそのまま呼び出し元に返り、その大会の変更はすべて取り消されます
+
 ### tournament_entry_summary()
 
 統括スタッフ向けダッシュボード(`GET /api/staff/dashboard`)のために、全大会 1 行ずつの集計を返します。
@@ -551,3 +561,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0025_lowercase_emails.sql` | `participants.email` / `staff_accounts.email` を小文字に揃え、check 制約 `*_email_lowercase` を追加(#133)。大文字小文字違いの重複があれば失敗する |
 | `0026_staff_accounts_per_type_and_disable.sql` | `staff_accounts` の一意制約を `(email, tournament_type)` に変更(#166)、`disabled_at` と `disable_staff_account()` を追加し、`reset_staff_password()` を無効なアカウントを拒否するよう再定義(#156) |
 | `0027_staff_account_enable_and_link_locking.sql` | `disable_staff_account()` を対象が統括スタッフのときだけ全統括スタッフをロックするよう再定義し、`enable_staff_account()` と `issue_staff_password_link()` を追加(有効化とリンク発行をアカウント行のロック下で 1 トランザクションに) |
+| `0028_import_tournament_fn.sql` | 大会一覧からの一括登録(#168)用の `import_tournament()`。大会の upsert・フォーム定義・レギュレーション(名前で既存と突き合わせ)を 1 トランザクションで |

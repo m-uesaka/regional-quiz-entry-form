@@ -220,6 +220,7 @@ if ('yaml' in body) {
 | PUT | `/api/form-definitions/:tournamentId` | 統括スタッフ |
 | POST | `/api/sheet-import/preview` | 統括スタッフ |
 | POST | `/api/sheet-import/regulations/preview` | 統括スタッフ |
+| POST | `/api/sheet-import/tournaments` | 統括スタッフ |
 | GET | `/api/staff/tournaments/:tournamentId/entries` | スタッフ(担当範囲) |
 | GET | `/api/staff/tournaments/:tournamentId/entries.csv` | スタッフ(担当範囲) |
 | GET | `/api/staff/entries/:entryId` | スタッフ(担当範囲) |
@@ -686,6 +687,35 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 | 503 | Google からのレート制限(429) |
 
 行に起因する 400 の `error` は `3行目: ...` の形でシートの行番号を含みます。詳細は [`google-sheets-integration.md`](./google-sheets-integration.md#6-レギュレーションシートのフォーマット規約) を参照。
+
+### `POST /api/sheet-import/tournaments`
+
+大会一覧のスプレッドシートから、記載された大会を**一括で登録します**(#168)。上の 2 つと違い、**このエンドポイントは DB に書き込みます**(プレビューの段階はありません)。画面は `/admin/tournaments/import`。
+
+- リクエスト: `TournamentBulkImportRequestSchema` — `{spreadsheetId: string}`。スプレッドシートの URL(`https://docs.google.com/spreadsheets/d/{id}/edit...`)を渡すと ID を取り出します
+- `200`: `TournamentBulkImportResponseSchema` — `{"results": TournamentImportResult[]}`。大会一覧の行ごとに 1 件、シートの行順。**何行失敗しても 200** で、行ごとの結果が答えです
+
+| `TournamentImportResult` のフィールド | 内容 |
+| --- | --- |
+| `row` | 大会一覧の行番号 |
+| `regionName` / `typeLabel` | 地域・種別のセルの値(書かれたまま) |
+| `outcome` | `created`(新規登録)/ `updated`(既存の大会を上書き)/ `failed`(登録していない) |
+| `tournamentId` / `type` / `entryOpensAt` / `entryClosesAt` | 登録した大会。`failed` では `null` |
+| `error` | `failed` の理由(日本語)。それ以外では `null` |
+
+| ステータス | 条件 |
+| --- | --- |
+| 400 | 大会一覧のシートが読めない(ID が不正・共有されていない)、1 行目に必要な列(地域・種別・実施日・スプレッドシートID)が無い |
+| 502 / 503 | 大会一覧を読むときの Google の障害 / レート制限 |
+
+1 行ぶんの登録(大会・フォーム定義・レギュレーション)は DB 関数 `import_tournament()`(`0028`)が **1 トランザクション**で行い、どこかで失敗すればその大会は何も書かれません。失敗した行は理由を返し、残りの行は登録を続けます。
+
+- **エントリー期間**: 開始はリクエストを処理した時刻、締切は実施日の前日 23:59(日本時間)。締切が既に過ぎている行は失敗
+- **既存の大会**(同じ地域・種別)は**上書き**: エントリー期間・フォーム定義・レギュレーションを置き換えます。大会名・定員はシートに無いので変えません。レギュレーションは名前で既存の行と突き合わせて id を引き継ぐので、名前が同じならエントリーの紐付けは保たれます。エントリーで使用中のレギュレーションがシートから消えている(名前が変わった)場合は、その行は失敗になります
+- 新規の大会は大会名が空欄(既定名)、定員なし
+- 行の失敗理由: 地域名が登録されていない・同名の地域が複数ある、種別が 最強位/新人王 以外、実施日が日付として読めない(`2026/12/26（土）` のように先頭が年/月/日なら読める)、スプレッドシートIDが空、同じ地域・種別の行が複数ある(どちらも登録しない)、入力シートが読めない・「レギュレーション」シートが無い、フォーム定義・レギュレーションの記入誤り(上の 2 つのプレビューと同じ検証)
+
+各行の入力シートは、フォーム定義(先頭のシート)とレギュレーションシートを `values:batchGet` の **1 リクエスト**で読みます(Sheets API の分間クォータを、大会数 × 2 ではなく大会数 + 1 に抑えるため)。同時に処理するのは 4 行までです。大会一覧の書式は [`google-sheets-integration.md`](./google-sheets-integration.md) を参照。
 
 ## 10. スタッフ向けエントリー閲覧・一斉メール送信
 

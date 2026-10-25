@@ -3,63 +3,26 @@ import {zValidator} from '@hono/zod-validator';
 import {
   RegulationSheetImportRequestSchema,
   SheetImportRequestSchema,
+  TournamentBulkImportRequestSchema,
+  type TournamentBulkImportResponse,
 } from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
+import {internalError} from '../lib/errors';
+import {classifySheetImportError} from '../lib/sheet-import-errors';
 import {
   fetchSheetRows,
-  sheetRowsToYaml,
   SheetFetchError,
+  sheetRowsToYaml,
 } from '../lib/sheet-to-form-definition';
 import {
   fetchRegulationSheetValues,
   sheetValuesToRegulations,
 } from '../lib/sheet-to-regulations';
-
-/** How a failed sheet import is answered. */
-interface SheetImportFailure {
-  status: 400 | 502 | 503;
-  error: string;
-}
-
-/**
- * Decides the response for an error thrown while reading or converting a
- * sheet, separating what the caller got wrong from what Google did.
- * @param e The thrown value.
- */
-function classifySheetImportError(e: unknown): SheetImportFailure {
-  if (e instanceof SheetFetchError) {
-    // A network failure (no status) or a 5xx from Google is an
-    // upstream/service fault, not something the caller did wrong.
-    if (e.status === undefined || e.status >= 500) {
-      console.error('failed to reach Google Sheets', e);
-      return {
-        status: 502,
-        error: 'Google スプレッドシートへの接続に失敗しました',
-      };
-    }
-    // A 429 means we're being rate-limited by Google, also not the
-    // caller's fault.
-    if (e.status === 429) {
-      console.error('Google Sheets API rate limit exceeded', e);
-      return {
-        status: 503,
-        error:
-          'Google スプレッドシートへのリクエストが制限されています。しばらくしてから再試行してください',
-      };
-    }
-    // Any other non-2xx (400/403/404/...) reflects a bad spreadsheet
-    // ID or an inaccessible sheet — a caller-input-shaped failure.
-    return {status: 400, error: e.message};
-  }
-  // A ZodError (malformed row data) or a plain Error from the converters
-  // (unknown type label, duplicate options, an unreadable date, ...) is
-  // also caller-input-shaped, not a server fault.
-  return {
-    status: 400,
-    error: e instanceof Error ? e.message : 'invalid sheet data',
-  };
-}
+import {
+  importTournaments,
+  TournamentIndexError,
+} from '../lib/tournament-bulk-import';
 
 export const sheetImportRoute = new Hono<StaffEnv>()
   .use('*', requireGeneralStaff())
@@ -103,5 +66,42 @@ export const sheetImportRoute = new Hono<StaffEnv>()
       }
 
       return c.json({regulations});
+    },
+  )
+  // Registers every tournament on a 大会一覧 spreadsheet (#168). Unlike the
+  // two previews above, this *does* write: each row's tournament, form
+  // definition and regulations are saved in one transaction per row, and a
+  // row that fails is reported and left alone while the rest go ahead.
+  // An existing tournament for the same region and type is overwritten.
+  //
+  // 200 whenever the sheet itself could be read, however many rows failed:
+  // the per-row outcomes are the answer. Only a sheet that can't be read or
+  // lacks a column fails the request as a whole.
+  .post(
+    '/tournaments',
+    zValidator('json', TournamentBulkImportRequestSchema),
+    async c => {
+      let results;
+      try {
+        results = await importTournaments(
+          c.env,
+          c.req.valid('json').spreadsheetId,
+          new Date(),
+        );
+      } catch (e: unknown) {
+        if (e instanceof TournamentIndexError) {
+          return c.json({error: e.message}, 400);
+        }
+        if (e instanceof SheetFetchError) {
+          const failure = classifySheetImportError(e);
+          return c.json({error: failure.error}, failure.status);
+        }
+        return c.json(
+          internalError('failed to import the tournaments', e),
+          500,
+        );
+      }
+      const body: TournamentBulkImportResponse = {results};
+      return c.json(body);
     },
   );

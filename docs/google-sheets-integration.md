@@ -36,7 +36,9 @@ flowchart LR
 | --- | --- |
 | `apps/backend/src/lib/sheet-to-form-definition.ts` | `fetchSheetRows()`(Sheets API v4 呼び出し)・`sheetRowsToYaml()`(行データ→YAML変換) |
 | `apps/backend/src/lib/sheet-to-regulations.ts` | `fetchRegulationSheetValues()`(「レギュレーション」シートの取得)・`sheetValuesToRegulations()`(行データ→レギュレーション配列) |
-| `apps/backend/src/routes/sheet-import.ts` | `POST /api/sheet-import/preview`(フォーム定義)と `POST /api/sheet-import/regulations/preview`(レギュレーション)。統括スタッフ限定 |
+| `apps/backend/src/routes/sheet-import.ts` | `POST /api/sheet-import/preview`(フォーム定義)・`POST /api/sheet-import/regulations/preview`(レギュレーション)・`POST /api/sheet-import/tournaments`(大会一覧からの一括登録、#168)。統括スタッフ限定 |
+| `apps/backend/src/lib/tournament-bulk-import.ts` | 大会一覧の読み取り(`parseTournamentIndex()`)・締切の既定値(`defaultEntryClosesAt()`)・行ごとの登録(`importTournaments()`) |
+| `apps/frontend/src/routes/admin/tournaments/import/` | 一括登録の画面 |
 | `apps/backend/src/routes/form-definitions.ts` | `PUT /api/form-definitions/:tournamentId`。プレビュー済み YAML をパース・検証して保存処理に渡す(Task 2-2)。統括スタッフ限定 |
 | `apps/backend/src/lib/form-definitions.ts` | `syncFormFieldDefs()`。大会種別の照合と `form_field_defs` の置き換え(`sync_form_field_defs` RPC) |
 | `apps/backend/src/types/env.ts` | `Bindings.GOOGLE_SHEETS_API_KEY` を定義 |
@@ -224,6 +226,25 @@ bunx wrangler secret put GOOGLE_SHEETS_API_KEY --env production
 4. YAML を確認し(必要ならその場で書き換え)、問題なければ「保存」を押す。シートを直した後の再読み込みも同じ手順で、保存済みの定義が置き換わる。シートを使わず YAML を直接書き換えて「保存」してもよい。
 5. レギュレーションを取り込む場合は、同じ画面の「レギュレーションを管理」リンクから `/admin/tournaments/{id}/regulations` を開く。「スプレッドシートから読み込む」に同じスプレッドシートIDを入力して読み込み、フォームの内容を確認して「保存」を押す。
 
+### 大会を一括登録する(#168)
+
+大会一覧のスプレッドシートから、記載されたすべての大会を一度に登録できる。各行の入力シートから、フォーム定義とレギュレーションもまとめて取り込む。
+
+1. 統括スタッフでログインし、管理メニューの「大会を一括登録」(`/admin/tournaments/import`)を開く。
+2. 大会一覧のスプレッドシートの URL(または ID)を貼り付けて「一括登録する」を押す。**プレビューの段階は無く、押すとすぐに登録される。**
+3. 結果に「登録した大会」と「登録できなかった大会(理由つき)」が並ぶ。登録できなかった大会は、理由を直して再実行するか、大会の画面から個別に登録する。再実行しても、登録済みの大会は上書きされるだけで重複はしない。
+
+大会一覧(先頭のシート)の書式:
+
+- 1 行目がヘッダー。列は**ヘッダー名で探す**ので順番は問わない。必要なのは `地域` / `種別` / `実施日` / `スプレッドシートID` の 4 列で、それ以外の列(表示用の日付・スプレッドシート名・URL など)は読まない。
+- `地域` は地域の画面で登録した**地域名と完全に一致**させる。
+- `種別` は `最強位` / `新人王` のどちらか。
+- `実施日` は `2026/12/26（土）` のように**先頭が年/月/日**の形(`2026-12-26` も可)。エントリーの締切はこの前日の 23:59(日本時間)、開始は登録した時刻になる。`調整中` など日付でない値の行は登録されない。
+- `スプレッドシートID` はその大会の入力シート(5 章・6 章の書式)。大会一覧と同じく「リンクを知っている全員が閲覧可」にしておくこと。
+- 同じ地域・種別の行が 2 つ以上あると、どちらが正しいか決められないので**どちらも登録しない**。
+
+既に登録されている大会(同じ地域・種別)は**上書き**される。エントリー期間・フォーム定義・レギュレーションが置き換わり、大会名・定員はそのまま残る。レギュレーションは名前で既存のものと突き合わせるので、名前を変えなければエントリーとの紐付けは保たれる。エントリーで使われているレギュレーションの名前を変えた(シートから消した)場合、その大会は登録できなかった大会として報告され、何も変更されない。エントリー受付中の大会を上書きするとエントリー開始も登録した時刻に置き換わる点にも注意。
+
 ### API を直接叩く場合
 
 ```bash
@@ -237,6 +258,12 @@ curl -X POST http://localhost:8787/api/sheet-import/regulations/preview \
   -H 'Content-Type: application/json' \
   -H 'Cookie: staff_session=<統括スタッフのJWT>' \
   -d '{"spreadsheetId": "<スプレッドシートID>"}'
+
+# 大会の一括登録(書き込む)
+curl -X POST http://localhost:8787/api/sheet-import/tournaments \
+  -H 'Content-Type: application/json' \
+  -H 'Cookie: staff_session=<統括スタッフのJWT>' \
+  -d '{"spreadsheetId": "<大会一覧のスプレッドシートID>"}'
 ```
 
 ## 10. 関連スキーマ(`packages/shared/src/schemas/`)

@@ -18,6 +18,9 @@
     <li>
       <Link href="/admin/tournaments/new" variant="secondary">大会を作成</Link>
     </li>
+    <li>
+      <Link href="/admin/tournaments/import" variant="secondary">大会を一括登録</Link>
+    </li>
   </ul>
 </SubNav>
 
