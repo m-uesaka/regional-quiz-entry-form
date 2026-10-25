@@ -216,7 +216,7 @@ describe('GET /form-definitions/:tournamentId (mocked Supabase)', () => {
     mockFormFieldDefsFetch([
       {
         field_key: 'agree_rules',
-        label: '規約に同意する',
+        label: '<a href="https://example.com/rules">規約</a>に同意する',
         field_type: 'checkbox',
         required: true,
         options: null,
@@ -243,7 +243,8 @@ describe('GET /form-definitions/:tournamentId (mocked Supabase)', () => {
     expect(body).toEqual([
       {
         fieldKey: 'agree_rules',
-        label: '規約に同意する',
+        label: '<a href="https://example.com/rules">規約</a>に同意する',
+        plainLabel: '規約に同意する',
         fieldType: 'checkbox',
         required: true,
         options: null,
@@ -252,6 +253,7 @@ describe('GET /form-definitions/:tournamentId (mocked Supabase)', () => {
       {
         fieldKey: 't_shirt_size',
         label: 'Tシャツサイズ',
+        plainLabel: 'Tシャツサイズ',
         fieldType: 'radio',
         required: false,
         options: ['S', 'M', 'L'],

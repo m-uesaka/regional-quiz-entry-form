@@ -41,6 +41,31 @@ describe('parseLabelLinks', () => {
   });
 });
 
+describe('parseLabelLinks character references', () => {
+  it('decodes references in an href and in text', () => {
+    expect(
+      parseLabelLinks(
+        '<a href="https://e.example/r?a=1&amp;b=2">A&amp;B</a>&lt;必須&gt;&#x3042;&#12354;',
+      ),
+    ).toEqual([
+      {kind: 'link', text: 'A&B', href: 'https://e.example/r?a=1&b=2'},
+      {kind: 'text', text: '<必須>ああ'},
+    ]);
+  });
+
+  it('shows an escaped <a> as text rather than a link', () => {
+    expect(
+      parseLabelLinks('&lt;a href="https://e.example"&gt;x&lt;/a&gt;'),
+    ).toEqual([{kind: 'text', text: '<a href="https://e.example">x</a>'}]);
+  });
+
+  it('keeps unknown or invalid references as written', () => {
+    expect(parseLabelLinks('R&D &foo; &#0; &#x110000;')).toEqual([
+      {kind: 'text', text: 'R&D &foo; &#0; &#x110000;'},
+    ]);
+  });
+});
+
 describe('labelPlainText', () => {
   it('replaces each link with its text', () => {
     expect(

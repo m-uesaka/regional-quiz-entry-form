@@ -425,6 +425,7 @@ describe('StaffEntryDetailSchema', () => {
         {
           fieldKey: 't_shirt_size',
           label: 'Tシャツサイズ',
+          plainLabel: 'Tシャツサイズ',
           fieldType: 'radio',
           required: true,
           options: ['S', 'M', 'L'],

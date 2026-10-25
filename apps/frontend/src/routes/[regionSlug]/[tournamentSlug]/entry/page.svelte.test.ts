@@ -40,6 +40,7 @@ const FORM_FIELD_DEFS: FormFieldDef[] = [
   {
     fieldKey: 't_shirt_size',
     label: 'Tシャツサイズ',
+    plainLabel: 'Tシャツサイズ',
     fieldType: 'radio',
     required: true,
     options: ['S', 'M', 'L'],
@@ -48,6 +49,7 @@ const FORM_FIELD_DEFS: FormFieldDef[] = [
   {
     fieldKey: 'agree_rules',
     label: '規約に同意する',
+    plainLabel: '規約に同意する',
     fieldType: 'checkbox',
     required: true,
     options: null,

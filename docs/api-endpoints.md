@@ -633,7 +633,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 
 エントリー期間中は公開、期間外は担当スタッフのみ(`requireOpenEntryPeriodOrStaff()`)。その大会の `form_field_defs` を `display_order` 昇順で返します。期間中に認証を課さないのは、エントリーフォームが未ログインの訪問者にも追加項目を描画する必要があり、フォーム定義が個人情報を含まないためです。期間外はこの定義こそが未公開フォームの中身なので、大会取得 API と同じゲートが掛かります。
 
-- `200`: `FormFieldDef[]` — `{fieldKey, label, fieldType, required, options, displayOrder}`
+- `200`: `FormFieldDef[]` — `{fieldKey, label, plainLabel, fieldType, required, options, displayOrder}`(`plainLabel` は `label` 内の `<a>` リンクを文字だけにしたもの。#173)
 - `400`: `:tournamentId` が UUID でない
 - `401`: `{"error": "staff session expired"}` — `staff_session` はあるが検証できない(期限切れ等)
 - `403`: `{"error": "entry period closed"}` — 期間外で、担当スタッフのセッションが無い
@@ -748,7 +748,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 | 項目 | 内容 |
 | --- | --- |
-| 列 | `氏名` / `ふりがな` / `掲載名` / `ステータス` / `レギュレーション` + 当該大会の追加項目(`form_field_defs` の `label` を見出しに、`display_order` 昇順) |
+| 列 | `氏名` / `ふりがな` / `エントリーリスト掲載名` / `ステータス` / `レギュレーション` + 当該大会の追加項目(`form_field_defs` の `label` からリンクを除いた文字(`plainLabel`)を見出しに、`display_order` 昇順) |
 | 改行 | CRLF(RFC 4180)。末尾に改行は付けません |
 | エンコーディング | UTF-8 + BOM。BOM がないと Excel(Windows)が日本語列を文字化けさせるため |
 | ステータス | `ENTRY_STATUS_LABELS`(共有)による日本語表記。スタッフ画面の表示と同じ文言です |

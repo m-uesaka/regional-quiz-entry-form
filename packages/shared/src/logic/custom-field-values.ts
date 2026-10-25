@@ -1,4 +1,7 @@
-import type {FormFieldDef} from '../schemas/form-definition';
+import {
+  isFreeTextFieldType,
+  type FormFieldDef,
+} from '../schemas/form-definition';
 
 /** The answers to a tournament's custom form fields, keyed by field key. */
 export type CustomFieldValues = Record<string, string | string[]>;
@@ -61,17 +64,6 @@ export function isBooleanCheckbox(fieldDef: FormFieldDef): boolean {
   return (
     fieldDef.fieldType === 'checkbox' &&
     (!fieldDef.options || fieldDef.options.length === 0)
-  );
-}
-
-/**
- * Whether `fieldDef` takes free text (`textarea` or `textfield`) rather
- * than a choice among options.
- * @param fieldDef The form field definition to test.
- */
-export function isFreeTextField(fieldDef: FormFieldDef): boolean {
-  return (
-    fieldDef.fieldType === 'textarea' || fieldDef.fieldType === 'textfield'
   );
 }
 
@@ -174,7 +166,7 @@ function findFieldError(
   const allowed = isBooleanCheckbox(fieldDef)
     ? [fieldDef.fieldKey]
     : fieldDef.options;
-  if (isFreeTextField(fieldDef) || !allowed) {
+  if (isFreeTextFieldType(fieldDef.fieldType) || !allowed) {
     return null;
   }
   for (const option of selected) {

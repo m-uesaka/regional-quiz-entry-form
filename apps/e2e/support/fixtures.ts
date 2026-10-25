@@ -7,6 +7,7 @@
 // uncapped 新人王 one, so a spec never sees another spec's entries.
 
 import type {
+  FormFieldType,
   StaffLoginScope,
   StaffRole,
   TournamentType,
@@ -46,7 +47,7 @@ export interface FormFieldDefFixture {
   tournamentId: string;
   fieldKey: string;
   label: string;
-  fieldType: 'checkbox' | 'radio' | 'textarea' | 'textfield';
+  fieldType: FormFieldType;
   required: boolean;
   options: string[] | null;
   displayOrder: number;

@@ -4,7 +4,6 @@ import {
   type CustomFieldValuesError,
   type CustomFieldValuesErrorReason,
   type FormFieldDef,
-  labelPlainText,
 } from '@regional-quiz/shared';
 import {customFieldName} from '$lib/custom-field-name';
 
@@ -71,7 +70,7 @@ export function readCustomFieldValues(
 
 /**
  * The wording each rejection reason gets in front of a participant, given
- * the field's own label. Only `required` and `too-long` describe something
+ * the field's own label as plain text (`plainLabel`). Only `required` and `too-long` describe something
  * the rendered form lets them do — the others mean the body didn't come
  * from the form, so they say no more than "check this field".
  */
@@ -111,7 +110,7 @@ export function customFieldErrors(
       continue;
     }
     messages[customFieldName(fieldDef.fieldKey)] = [
-      CUSTOM_FIELD_ERROR_MESSAGES[error.reason](labelPlainText(fieldDef.label)),
+      CUSTOM_FIELD_ERROR_MESSAGES[error.reason](fieldDef.plainLabel),
     ];
   }
   return messages;

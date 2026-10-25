@@ -119,6 +119,7 @@ describe('FormFieldDefSchema', () => {
     const result = FormFieldDefSchema.safeParse({
       fieldKey: 'agree_to_rules',
       label: '規約に同意する',
+      plainLabel: '規約に同意する',
       fieldType: 'checkbox',
       required: true,
       options: null,
@@ -132,6 +133,7 @@ describe('FormFieldDefSchema', () => {
     const result = FormFieldDefSchema.safeParse({
       fieldKey: 'agree_to_rules',
       label: '規約に同意する',
+      plainLabel: '規約に同意する',
       fieldType: 'not-a-real-type',
       required: true,
       options: null,
@@ -147,6 +149,7 @@ describe('toFormFieldDefYaml', () => {
     const yaml = toFormFieldDefYaml({
       fieldKey: 't_shirt_size',
       label: 'Tシャツサイズ',
+      plainLabel: 'Tシャツサイズ',
       fieldType: 'radio',
       required: true,
       options: ['S', 'M', 'L'],
@@ -166,6 +169,7 @@ describe('toFormFieldDefYaml', () => {
     const yaml = toFormFieldDefYaml({
       fieldKey: 'agree_to_rules',
       label: '規約に同意する',
+      plainLabel: '規約に同意する',
       fieldType: 'checkbox',
       required: false,
       options: null,
@@ -188,6 +192,7 @@ describe('formFieldDefsToYaml', () => {
       {
         fieldKey: 'agree_to_rules',
         label: '規約に同意する',
+        plainLabel: '規約に同意する',
         fieldType: 'checkbox',
         required: false,
         options: null,
@@ -196,6 +201,7 @@ describe('formFieldDefsToYaml', () => {
       {
         fieldKey: 't_shirt_size',
         label: 'Tシャツサイズ',
+        plainLabel: 'Tシャツサイズ',
         fieldType: 'radio',
         required: true,
         options: ['S', 'M', 'L'],

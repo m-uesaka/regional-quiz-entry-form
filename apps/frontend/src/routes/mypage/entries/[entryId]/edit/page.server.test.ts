@@ -39,6 +39,7 @@ const ENTRY: MypageEntryDetail = {
     {
       fieldKey: 't_shirt_size',
       label: 'Tシャツサイズ',
+      plainLabel: 'Tシャツサイズ',
       fieldType: 'radio',
       required: true,
       options: ['S', 'M', 'L'],
@@ -47,6 +48,7 @@ const ENTRY: MypageEntryDetail = {
     {
       fieldKey: 'agree_to_rules',
       label: '規約に同意する',
+      plainLabel: '規約に同意する',
       fieldType: 'checkbox',
       required: true,
       options: null,
@@ -421,6 +423,7 @@ describe('mypage entry edit form action', () => {
         {
           fieldKey: 'message',
           label: 'メッセージ',
+          plainLabel: 'メッセージ',
           fieldType: 'textarea',
           required: false,
           options: null,

@@ -125,7 +125,7 @@ test('staff sign in, read their tournament roster, and export it as CSV', async 
   expect(rows[0]).toEqual([
     '氏名',
     'ふりがな',
-    '掲載名',
+    'エントリーリスト掲載名',
     'ステータス',
     'レギュレーション',
     'Tシャツサイズ',

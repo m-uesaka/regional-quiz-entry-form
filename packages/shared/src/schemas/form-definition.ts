@@ -10,6 +10,20 @@ export const FormFieldTypeSchema = z.enum([
 ]);
 export type FormFieldType = z.infer<typeof FormFieldTypeSchema>;
 
+/** The field types that take free text rather than a choice among options. */
+export const FREE_TEXT_FIELD_TYPES = ['textarea', 'textfield'] as const;
+
+/**
+ * Whether a field of `type` takes free text (`textarea` is several lines,
+ * `textfield` one, #173) rather than a choice among options.
+ * @param type The field type to test.
+ */
+export function isFreeTextFieldType(
+  type: FormFieldType,
+): type is (typeof FREE_TEXT_FIELD_TYPES)[number] {
+  return (FREE_TEXT_FIELD_TYPES as readonly FormFieldType[]).includes(type);
+}
+
 const BaseFormFieldDefYamlSchema = z.object({
   key: z.string().regex(/^[a-z][a-z0-9_]*$/),
   label: z.string(),
@@ -29,11 +43,7 @@ export const FormFieldDefYamlSchema = z.discriminatedUnion('type', [
   }),
   // Free text: `textarea` takes several lines, `textfield` one (#173).
   BaseFormFieldDefYamlSchema.extend({
-    type: z.literal('textarea'),
-    options: z.array(z.string()).optional(),
-  }),
-  BaseFormFieldDefYamlSchema.extend({
-    type: z.literal('textfield'),
+    type: z.enum(FREE_TEXT_FIELD_TYPES),
     options: z.array(z.string()).optional(),
   }),
 ]);
@@ -116,6 +126,14 @@ export interface FormFieldDefRow {
 export const FormFieldDefSchema = z.object({
   fieldKey: z.string(),
   label: z.string(),
+  /**
+   * `label` as plain text, any `<a>` link staff wrote into it reduced to
+   * its text (`labelPlainText()`), for every place the label is read
+   * rather than clicked: the staff entry detail, the CSV header, error
+   * messages. Derived by `toFormFieldDef()` in the backend so no such
+   * screen can forget to strip the markup.
+   */
+  plainLabel: z.string(),
   fieldType: FormFieldTypeSchema,
   required: z.boolean(),
   options: z.array(z.string()).nullable(),

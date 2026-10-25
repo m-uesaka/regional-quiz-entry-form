@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     CUSTOM_FIELD_VALUE_MAX_LENGTH,
+    isFreeTextFieldType,
     type FormFieldDefYaml,
   } from '@regional-quiz/shared';
   import {customFieldName} from '$lib/custom-field-name';
@@ -83,7 +84,7 @@
 <!-- The options stay native inputs inside their own `<label>`: a native
      radio/checkbox is what `bind:group` and the server-rendered `required`
      rely on, and the wrapping label is what names each option. -->
-{#if field.type === 'textarea' || field.type === 'textfield'}
+{#if isFreeTextFieldType(field.type)}
   <div class="flex flex-col gap-1.5">
     <Label for={controlName}>
       <FieldLabelText label={field.label} />
@@ -126,7 +127,7 @@
           required={field.required}
           bind:group={value}
         />
-        {option}
+        <FieldLabelText label={option} />
       </label>
     {/each}
     {@render errorMessage()}
@@ -148,7 +149,7 @@
             required={hydrated && field.required && !hasCheckboxSelection}
             bind:group={value}
           />
-          {option}
+          <FieldLabelText label={option} />
         </label>
       {/each}
       {@render errorMessage()}

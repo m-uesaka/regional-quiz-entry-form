@@ -1,11 +1,13 @@
 import {describe, expect, it} from 'bun:test';
-import type {FormFieldDef} from '@regional-quiz/shared';
+import {labelPlainText, type FormFieldDef} from '@regional-quiz/shared';
 import {buildEntriesCsv, type EntriesCsvRow} from './entries-csv';
 
 function fieldDef(overrides: Partial<FormFieldDef> = {}): FormFieldDef {
+  const label = overrides.label ?? 'Tシャツサイズ';
   return {
     fieldKey: 't_shirt_size',
-    label: 'Tシャツサイズ',
+    label,
+    plainLabel: labelPlainText(label),
     fieldType: 'radio',
     required: false,
     options: ['S', 'M', 'L'],
@@ -42,7 +44,7 @@ describe('buildEntriesCsv', () => {
     const csv = buildEntriesCsv(FIELD_DEFS, []);
 
     expect(csv).toBe(
-      '氏名,ふりがな,掲載名,ステータス,レギュレーション,Tシャツサイズ,アレルギー',
+      '氏名,ふりがな,エントリーリスト掲載名,ステータス,レギュレーション,Tシャツサイズ,アレルギー',
     );
   });
 
@@ -60,7 +62,7 @@ describe('buildEntriesCsv', () => {
     );
 
     expect(csv).toBe(
-      '氏名,ふりがな,掲載名,ステータス,レギュレーション,規約に同意する',
+      '氏名,ふりがな,エントリーリスト掲載名,ステータス,レギュレーション,規約に同意する',
     );
   });
 
@@ -80,7 +82,7 @@ describe('buildEntriesCsv', () => {
     );
 
     expect(csv.split('\r\n')).toEqual([
-      '氏名,ふりがな,掲載名,ステータス,レギュレーション,Tシャツサイズ',
+      '氏名,ふりがな,エントリーリスト掲載名,ステータス,レギュレーション,Tシャツサイズ',
       '山田太郎,ヤマダタロウ,太郎,確定,一般の部,M',
       '鈴木花子,スズキハナコ,花子,キャンセル待ち,一般の部,S',
     ]);
@@ -191,6 +193,38 @@ describe('buildEntriesCsv', () => {
 
     expect(csv.split('\r\n')[1]).toBe(
       '山田太郎,ヤマダタロウ,太郎,確定,一般の部,土曜;日曜',
+    );
+  });
+
+  it('exports a chosen option with a link as its text only', () => {
+    const csv = buildEntriesCsv(
+      [
+        fieldDef({
+          fieldKey: 'events',
+          label: '企画',
+          fieldType: 'checkbox',
+          options: ['<a href="https://e.example/a">A</a>企画', 'B企画'],
+        }),
+        fieldDef({
+          fieldKey: 'note',
+          label: '備考',
+          fieldType: 'textfield',
+          options: null,
+        }),
+      ],
+      [
+        entryRow({
+          customFieldValues: {
+            events: ['<a href="https://e.example/a">A</a>企画', 'B企画'],
+            note: '<a href="https://e.example">x</a>',
+          },
+        }),
+      ],
+    );
+
+    expect(csv.split('\r\n')[1]).toBe(
+      '山田太郎,ヤマダタロウ,太郎,確定,一般の部,A企画;B企画,' +
+        '"<a href=""https://e.example"">x</a>"',
     );
   });
 

@@ -197,9 +197,41 @@ describe('DynamicFormField', () => {
     const link = screen.getByRole('link', {name: /規約/});
     expect(link).toHaveAttribute('href', 'https://example.com/rules');
     expect(link).toHaveAttribute('target', '_blank');
-    expect(
-      screen.getByRole('checkbox', {name: /規約\s*に同意する/}),
-    ).toBeInTheDocument();
+    // The label's segments stay in one element, so the checkbox row's flex
+    // layout sees the input and one run of text rather than spacing each
+    // segment apart.
+    const checkbox = screen.getByRole('checkbox', {name: /規約\s*に同意する/});
+    const row = checkbox.closest('label');
+    expect(Array.from(row?.children ?? [], child => child.tagName)).toEqual([
+      'INPUT',
+      'SPAN',
+    ]);
+    expect(link.parentElement).toBe(row?.children[1]);
+  });
+
+  it('renders an <a> in a choice as a link, keeping the raw value', () => {
+    const field: FormFieldDefYaml = {
+      type: 'radio',
+      key: 'event',
+      label: '<a href="https://example.com/events">企画</a>の希望',
+      required: true,
+      options: ['<a href="https://example.com/a">A</a>企画', 'B企画'],
+    };
+
+    render(DynamicFormField, {props: {field, value: ''}});
+
+    expect(screen.getByRole('link', {name: /^企画/})).toHaveAttribute(
+      'href',
+      'https://example.com/events',
+    );
+    expect(screen.getByRole('link', {name: /^A/})).toHaveAttribute(
+      'href',
+      'https://example.com/a',
+    );
+    expect(screen.getByRole('radio', {name: /A\s*企画/})).toHaveAttribute(
+      'value',
+      '<a href="https://example.com/a">A</a>企画',
+    );
   });
 
   it('shows markup other than an http(s) link as text', () => {

@@ -1,4 +1,8 @@
-import {FormFieldDefSchema, type FormFieldDef} from '@regional-quiz/shared';
+import {
+  FormFieldDefSchema,
+  labelPlainText,
+  type FormFieldDef,
+} from '@regional-quiz/shared';
 
 /**
  * The `form_field_defs` columns every API response exposing a tournament's
@@ -22,13 +26,15 @@ export interface FormFieldDefRow {
 
 /**
  * Converts a selected `form_field_defs` row into the camelCase API shape,
- * validating it against `FormFieldDefSchema`.
+ * validating it against `FormFieldDefSchema`. `plainLabel` is derived here
+ * from the stored label, so every API response carries it.
  * @param row The row as selected with `FORM_FIELD_DEF_COLUMNS`.
  */
 export function toFormFieldDef(row: FormFieldDefRow): FormFieldDef {
   return FormFieldDefSchema.parse({
     fieldKey: row.field_key,
     label: row.label,
+    plainLabel: labelPlainText(row.label),
     fieldType: row.field_type,
     required: row.required,
     options: row.options,

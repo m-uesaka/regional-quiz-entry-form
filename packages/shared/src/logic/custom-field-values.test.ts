@@ -11,6 +11,7 @@ const FIELD_DEFS: FormFieldDef[] = [
   {
     fieldKey: 't_shirt_size',
     label: 'Tシャツサイズ',
+    plainLabel: 'Tシャツサイズ',
     fieldType: 'radio',
     required: true,
     options: ['S', 'M', 'L'],
@@ -19,6 +20,7 @@ const FIELD_DEFS: FormFieldDef[] = [
   {
     fieldKey: 'allergies',
     label: 'アレルギー',
+    plainLabel: 'アレルギー',
     fieldType: 'checkbox',
     required: false,
     options: ['卵', '乳'],
@@ -27,6 +29,7 @@ const FIELD_DEFS: FormFieldDef[] = [
   {
     fieldKey: 'agree_to_rules',
     label: '規約に同意する',
+    plainLabel: '規約に同意する',
     fieldType: 'checkbox',
     required: true,
     options: null,
@@ -35,6 +38,7 @@ const FIELD_DEFS: FormFieldDef[] = [
   {
     fieldKey: 'note',
     label: '備考',
+    plainLabel: '備考',
     fieldType: 'textarea',
     required: false,
     options: null,

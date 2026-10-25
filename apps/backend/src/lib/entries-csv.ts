@@ -1,6 +1,7 @@
 import {
   BOOLEAN_CHECKBOX_LABELS,
   isBooleanCheckbox,
+  isFreeTextFieldType,
   labelPlainText,
   type CustomFieldValues,
   type FormFieldDef,
@@ -10,7 +11,7 @@ import {
 const FIXED_HEADERS = [
   '氏名',
   'ふりがな',
-  '掲載名',
+  'エントリーリスト掲載名',
   'ステータス',
   'レギュレーション',
 ];
@@ -52,8 +53,9 @@ export interface EntriesCsvRow {
  * Renders staff-facing entry rows as a CSV document.
  *
  * The tournament's custom form fields become extra columns headed by their
- * `label` (as plain text, any `<a>` link reduced to its text), in the order `fieldDefs` is given (the caller is expected to pass
- * them in `display_order`), so a field renamed after entries were submitted
+ * `plainLabel` (the label with any `<a>` link reduced to its text), in the
+ * order `fieldDefs` is given (the caller is expected to pass them in
+ * `display_order`), so a field renamed after entries were submitted
  * exports under its current label. Answers are looked up by `fieldKey`, and
  * a field a given entry has no answer for exports as an empty cell.
  *
@@ -66,10 +68,7 @@ export function buildEntriesCsv(
   fieldDefs: FormFieldDef[],
   entries: EntriesCsvRow[],
 ): string {
-  const headers = [
-    ...FIXED_HEADERS,
-    ...fieldDefs.map(f => labelPlainText(f.label)),
-  ];
+  const headers = [...FIXED_HEADERS, ...fieldDefs.map(f => f.plainLabel)];
   const rows = entries.map(entry => [
     entry.name,
     entry.furigana,
@@ -114,10 +113,15 @@ function formatCustomFieldValue(
       ? BOOLEAN_CHECKBOX_LABELS.checked
       : BOOLEAN_CHECKBOX_LABELS.unchecked;
   }
+  // A chosen option is stored as staff wrote it, which may include an
+  // `<a>` link; a free-text answer is the participant's own and is kept
+  // as typed.
+  const plain = (option: string) =>
+    isFreeTextFieldType(fieldDef.fieldType) ? option : labelPlainText(option);
   if (Array.isArray(value)) {
-    return value.join(MULTI_VALUE_SEPARATOR);
+    return value.map(plain).join(MULTI_VALUE_SEPARATOR);
   }
-  return value ?? '';
+  return value === undefined ? '' : plain(value);
 }
 
 /**
