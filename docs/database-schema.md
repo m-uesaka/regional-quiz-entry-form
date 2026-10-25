@@ -491,9 +491,9 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 ### import_tournament(p_region_id, p_type, p_entry_opens_at, p_entry_closes_at, p_form_fields, p_regulations)
 
-大会一覧のスプレッドシートからの一括登録(#168、`POST /api/sheet-import/tournaments`)で、1 大会ぶんを登録します(`0028`)。返り値は `(tournament_id, created)`。
+大会一覧のスプレッドシートからの一括登録(#168、`POST /api/sheet-import/tournaments`)で、1 大会ぶんを登録します(`0028`)。返り値は `(tournament_id, created, entry_opens_at)`。
 
-1. `tournaments` に `(region_id, type)` で upsert する。既にあればエントリー期間だけを上書きし、大会名・定員は触らない。新規なら大会名 null(既定名)・定員 null
+1. `tournaments` に `(region_id, type)` で upsert する。既にあればエントリーの**締切だけ**を上書きし、開始・大会名・定員は触らない(流し直しで開始が動かないように)。新規なら開始 `p_entry_opens_at`・大会名 null(既定名)・定員 null
 2. `sync_form_field_defs()` でフォーム定義を置き換える
 3. `p_regulations`(id なし)の各要素を、同じ大会の既存レギュレーションと**名前で**突き合わせて id を付けてから `sync_regulations()` に渡す。突き合わせないと既存の行はすべて削除扱いになり、エントリーが 1 件でもあると `P0004` で失敗するため
 

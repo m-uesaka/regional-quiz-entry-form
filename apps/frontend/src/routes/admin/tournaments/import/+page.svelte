@@ -23,7 +23,9 @@
 
   // A few dozen spreadsheets take several seconds to read, so the button
   // says it is working and can't be pressed twice in the meantime. A plain
-  // form post replaces the page when the answer arrives, which resets it.
+  // form post replaces the page when the answer arrives, which resets it;
+  // `pageshow` resets it when the page comes back without being replaced
+  // instead (Back pressed mid-request, restored from the bfcache).
   let submitting = $state(false);
 
   const results = $derived(form?.results ?? null);
@@ -38,6 +40,12 @@
   );
 </script>
 
+<svelte:window
+  onpageshow={() => {
+    submitting = false;
+  }}
+/>
+
 <PageContainer size="wide">
   <PageHeader title="大会を一括登録" />
 
@@ -47,9 +55,11 @@
         大会一覧のスプレッドシートから、記載されているすべての大会を登録します。各行の入力シート(スプレッドシートID)から、フォームの追加項目とレギュレーションも読み込みます。
       </p>
       <ul class="list-disc pl-5 text-muted-foreground">
-        <li>エントリー期間は、開始が登録した時点、締切が実施日の前日 23:59 になります。</li>
         <li>
-          同じ地域・種別の大会が既にある場合は、エントリー期間・追加項目・レギュレーションを上書きします(大会名・定員はそのまま)。
+          新しく登録する大会のエントリー期間は、開始が登録した時点、締切が実施日の前日 23:59 になります。
+        </li>
+        <li>
+          同じ地域・種別の大会が既にある場合は、締切・追加項目・レギュレーションを上書きします(エントリー開始・大会名・定員はそのまま)。
         </li>
         <li>
           エラーが出た大会は登録されません。理由を確認し、大会の画面から個別に登録してください。

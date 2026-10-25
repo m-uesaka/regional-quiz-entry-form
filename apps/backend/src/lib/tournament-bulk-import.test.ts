@@ -128,11 +128,38 @@ const env: Bindings = {
   SESSION_SECRET: 'test-session-secret',
 };
 
+/**
+ * A cell the stub below serves: a string or number is both what the sheet
+ * displays and its value; `{shown, value}` is a cell whose display differs
+ * from its value, e.g. a percentage.
+ */
+type FakeCell = string | number | {shown: string; value: number} | undefined;
+
 /** An entry-form spreadsheet as the stub below serves it. */
 interface FakeEntrySheet {
-  formRows: unknown[][];
+  formRows: FakeCell[][];
   /** `undefined` for a spreadsheet with no regulation tab. */
-  regulationRows?: unknown[][];
+  regulationRows?: FakeCell[][];
+}
+
+/** A `spreadsheets.get` grid row for `cells`. */
+function gridRow(cells: FakeCell[]) {
+  return {
+    values: cells.map(cell => {
+      if (cell === undefined) return {};
+      if (typeof cell === 'object') {
+        return {
+          formattedValue: cell.shown,
+          effectiveValue: {numberValue: cell.value},
+        };
+      }
+      return {
+        formattedValue: String(cell),
+        effectiveValue:
+          typeof cell === 'number' ? {numberValue: cell} : {stringValue: cell},
+      };
+    }),
+  };
 }
 
 describe.skipIf(!(await isDbReachable()))(
@@ -151,8 +178,10 @@ describe.skipIf(!(await isDbReachable()))(
     const originalFetch = globalThis.fetch;
     let indexValues: unknown[][] = [];
     let entrySheets: Record<string, FakeEntrySheet> = {};
+    let requestedSheetIds: string[] = [];
 
     function stubSheets(): void {
+      requestedSheetIds = [];
       globalThis.fetch = (async (
         input: RequestInfo | URL,
         init?: RequestInit,
@@ -163,18 +192,29 @@ describe.skipIf(!(await isDbReachable()))(
         if (url.hostname !== 'sheets.googleapis.com') {
           return originalFetch(input as RequestInfo, init);
         }
-        const id = /\/spreadsheets\/([^/]+)\/values/.exec(url.pathname)?.[1];
+        const id = decodeURIComponent(
+          /\/spreadsheets\/([^/?]+)/.exec(url.pathname)?.[1] ?? '',
+        );
         if (id === 'index') {
           return Response.json({values: indexValues});
         }
-        const sheet = id === undefined ? undefined : entrySheets[id];
+        requestedSheetIds.push(id);
+        const sheet = entrySheets[id];
         if (!sheet || sheet.regulationRows === undefined) {
           return Response.json({error: 'not found'}, {status: 400});
         }
+        // `spreadsheets.get` with grid data: the form tab first, as the
+        // spreadsheet orders its tabs.
         return Response.json({
-          valueRanges: [
-            {values: sheet.formRows},
-            {values: sheet.regulationRows},
+          sheets: [
+            {
+              properties: {title: 'フォーム定義'},
+              data: [{rowData: sheet.formRows.map(gridRow)}],
+            },
+            {
+              properties: {title: 'レギュレーション'},
+              data: [{rowData: sheet.regulationRows.map(gridRow)}],
+            },
           ],
         });
       }) as unknown as typeof fetch;
@@ -336,15 +376,18 @@ describe.skipIf(!(await isDbReachable()))(
 
       const [result] = await importTournaments(env, 'index', later);
 
+      // A re-run must not move an opening already set: the one from the
+      // first run (or one staff scheduled since) stays.
       expect(result).toMatchObject({
         outcome: 'updated',
         tournamentId: before?.id,
+        entryOpensAt: NOW.toISOString(),
         entryClosesAt: '2026-12-26T14:59:00.000Z',
       });
       const after = await tournamentOf(regionA, 'saikyoi');
       expect(after?.name).toBe('手で付けた名前');
       expect(after?.capacity).toBe(40);
-      expect(after?.entry_opens_at.toISOString()).toBe(later.toISOString());
+      expect(after?.entry_opens_at.toISOString()).toBe(NOW.toISOString());
       const fields = await sql`
         select field_key from form_field_defs where tournament_id = ${before?.id}
       `;
@@ -474,6 +517,96 @@ describe.skipIf(!(await isDbReachable()))(
 
       expect(result.outcome).toBe('failed');
       expect(result.error).toContain('プルダウン');
+      expect(await tournamentOf(regionB, 'shinjinou')).toBeUndefined();
+    });
+
+    // The form tab is read as displayed, as the edit screen's import reads
+    // it; its value would turn `10%` into `0.1`.
+    it('keeps form cells as the sheet displays them', async () => {
+      indexValues = [HEADER, indexRow(regionB, '新人王', '2026/12/26', 's1')];
+      entrySheets = {
+        s1: {
+          formRows: [
+            [
+              'discount',
+              '割引',
+              'ラジオボタン',
+              '必須',
+              {shown: '10%', value: 0.1},
+            ],
+          ],
+          regulationRows: REGULATION_ROWS,
+        },
+      };
+      stubSheets();
+
+      const [result] = await importTournaments(env, 'index', NOW);
+
+      expect(result.outcome).toBe('created');
+      const [field] = await sql`
+        select options from form_field_defs
+        where tournament_id = ${result.tournamentId}
+      `;
+      expect(field.options).toEqual(['10%']);
+      await sql`delete from tournaments where id = ${result.tournamentId}`;
+    });
+
+    // Staff paste URLs into the column as readily as IDs.
+    it('reads the entry sheet a URL in the ID column names', async () => {
+      indexValues = [
+        HEADER,
+        indexRow(
+          regionB,
+          '新人王',
+          '2026/12/26',
+          'https://docs.google.com/spreadsheets/d/s1/edit?gid=0#gid=0',
+        ),
+      ];
+      entrySheets = {
+        s1: {formRows: FORM_ROWS, regulationRows: REGULATION_ROWS},
+      };
+      stubSheets();
+
+      const [result] = await importTournaments(env, 'index', NOW);
+
+      expect(result.outcome).toBe('created');
+      expect(requestedSheetIds).toEqual(['s1']);
+      await sql`delete from tournaments where id = ${result.tournamentId}`;
+    });
+
+    it('names the form row a mistake is on, in Japanese', async () => {
+      const cases: Array<[FakeCell[][], string]> = [
+        [
+          [FORM_ROWS[0], ['Bad Key', '備考', '自由記述', '任意']],
+          'フォーム定義 3行目: A列(key)「Bad Key」',
+        ],
+        [
+          [FORM_ROWS[0], [], FORM_ROWS[1]],
+          'フォーム定義 3行目: C列(type)が空です',
+        ],
+        [
+          [['size', 'サイズ', 'ラジオボタン', '必須', 'S, S']],
+          'フォーム定義 2行目: E列(options)に同じ選択肢が複数あります',
+        ],
+        [
+          [['size', 'サイズ', 'ラジオボタン', '必須']],
+          'フォーム定義 2行目: ラジオボタンには E列(options)',
+        ],
+        [
+          [FORM_ROWS[1], FORM_ROWS[1]],
+          'フォーム定義: A列(key)「notes」が複数の行で使われています',
+        ],
+      ];
+      for (const [formRows, message] of cases) {
+        indexValues = [HEADER, indexRow(regionB, '新人王', '2026/12/26', 's1')];
+        entrySheets = {s1: {formRows, regulationRows: REGULATION_ROWS}};
+        stubSheets();
+
+        const [result] = await importTournaments(env, 'index', NOW);
+
+        expect(result.outcome).toBe('failed');
+        expect(result.error).toStartWith(message);
+      }
       expect(await tournamentOf(regionB, 'shinjinou')).toBeUndefined();
     });
   },

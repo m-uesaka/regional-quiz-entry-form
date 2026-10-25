@@ -8,30 +8,32 @@
 // `import_tournament()` in one transaction, or not at all: a row that fails
 // anywhere is reported back with the reason and left for staff to register
 // by hand, while the rest go ahead.
+import {ZodError} from 'zod';
 import {
   parseFormDefinitionYaml,
   REGULATION_SHEET_NAME,
+  spreadsheetIdFromInput,
   TOURNAMENT_TYPE_LABELS,
   TournamentTypeSchema,
+  type FormFieldDefYaml,
   type TournamentImportResult,
   type TournamentType,
 } from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import {formFieldDefSyncRows} from './form-definitions';
-import {
-  RegulationInUseError,
-  regulationSyncError,
-  UnknownRegulationError,
-} from './regulations';
+import {regulationSyncFailure} from './regulations';
 import {classifySheetImportError} from './sheet-import-errors';
 import {
-  fetchSheetBatch,
+  DuplicateOptionError,
+  fetchEntrySheet,
   fetchSheetValues,
-  FORM_DEFINITION_RANGE,
   SheetFetchError,
   sheetRowsToYaml,
   sheetValuesToRows,
+  TYPE_LABELS,
+  UnknownFieldTypeError,
+  type SheetRow,
 } from './sheet-to-form-definition';
 import {sheetValuesToRegulations} from './sheet-to-regulations';
 
@@ -168,7 +170,8 @@ export function defaultEntryClosesAt(eventDate: string): string | null {
  * Registers every tournament on the 大会一覧 spreadsheet `spreadsheetId`.
  * @param env The Worker bindings.
  * @param spreadsheetId The 大会一覧 spreadsheet.
- * @param now The moment entry opens for every tournament registered.
+ * @param now The moment entry opens for every tournament newly created.
+ *     A tournament that is overwritten keeps the opening it had.
  * @return One result per row, in sheet order.
  * @throws {SheetFetchError} If the 大会一覧 sheet can't be read.
  * @throws {TournamentIndexError} If it lacks one of the columns.
@@ -187,7 +190,9 @@ export async function importTournaments(
     ),
   );
 
-  const {data: regions, error} = await createDbClient(env)
+  // One client for the whole run rather than one per row.
+  const db = createDbClient(env);
+  const {data: regions, error} = await db
     .from('regions')
     .select('id, name')
     .returns<Array<{id: string; name: string}>>();
@@ -217,29 +222,38 @@ export async function importTournaments(
       rowsByTournament.get(`${row.regionName}\u0000${row.typeLabel}`) ?? []
     ).filter(other => other !== row.row);
 
-  return mapWithConcurrency(rows, CONCURRENCY, row => {
+  return mapWithConcurrency(rows, CONCURRENCY, async row => {
     const others = duplicateOf(row);
     if (others.length > 0) {
-      return Promise.resolve(
-        failed(
-          row,
-          `同じ地域・種別の大会が${others.map(n => `${n}行目`).join('・')}にもあります`,
-        ),
+      return failed(
+        row,
+        `同じ地域・種別の大会が${others.map(n => `${n}行目`).join('・')}にもあります`,
       );
     }
-    return importRow(env, row, regionIds, now);
+    // Whatever goes wrong with one row stays that row's failure. Letting it
+    // reject would fail the whole request and lose the results of the rows
+    // already committed, so staff would re-run them without knowing they
+    // had gone through.
+    try {
+      return await importRow(env, db, row, regionIds, now);
+    } catch (e: unknown) {
+      console.error('failed to import a tournament', {row: row.row, error: e});
+      return failed(row, '登録に失敗しました。時間をおいて再度お試しください');
+    }
   });
 }
 
 /**
  * Registers the tournament one row of the 大会一覧 sheet describes.
  * @param env The Worker bindings.
+ * @param db The Supabase client to write with.
  * @param row The row.
  * @param regionIds The ids of the regions of each name.
- * @param now The moment entry opens.
+ * @param now The moment entry opens, if the tournament is new.
  */
 async function importRow(
   env: Bindings,
+  db: ReturnType<typeof createDbClient>,
   row: TournamentIndexRow,
   regionIds: Map<string, string[]>,
   now: Date,
@@ -272,68 +286,70 @@ async function importRow(
       `実施日「${row.eventDate}」を日付として読み取れません(例: 2026/12/26)`,
     );
   }
-  const entryOpensAt = now.toISOString();
   if (Date.parse(entryClosesAt) <= now.getTime()) {
     return failed(
       row,
       'エントリーの締切(実施日の前日 23:59)が既に過ぎています',
     );
   }
-  if (row.spreadsheetId === '') {
+  // The column may well hold the sheet's URL rather than its ID, as the
+  // import form itself accepts either.
+  const spreadsheetId = spreadsheetIdFromInput(row.spreadsheetId);
+  if (spreadsheetId === '') {
     return failed(row, 'スプレッドシートIDが空です');
   }
 
   let formFields: Array<Record<string, unknown>>;
   let regulations: unknown;
   try {
-    // One request for both tabs (see `fetchSheetBatch()`). Unformatted so
-    // a date-time cell on the regulation tab arrives as a serial number,
-    // which is what `sheetValuesToRegulations()` reads.
-    const [formValues, regulationValues] = await fetchSheetBatch(
-      row.spreadsheetId,
-      [FORM_DEFINITION_RANGE, `'${REGULATION_SHEET_NAME}'!A2:C`],
+    // One request for both tabs, the form tab as displayed and the
+    // regulation tab unformatted (see `fetchEntrySheet()`).
+    const {formValues, regulationValues} = await fetchEntrySheet(
+      spreadsheetId,
       env.GOOGLE_SHEETS_API_KEY,
-      {
-        valueRenderOption: 'UNFORMATTED_VALUE',
-        dateTimeRenderOption: 'SERIAL_NUMBER',
-      },
+      REGULATION_SHEET_NAME,
     );
-    formFields = formFieldDefSyncRows(
-      parseFormDefinitionYaml(
-        sheetRowsToYaml(type, sheetValuesToRows(formValues)),
-      ),
-    );
+    formFields = formFieldDefSyncRows({
+      tournamentSlug: type,
+      fields: formRowsToFields(type, sheetValuesToRows(formValues)),
+    });
     regulations = sheetValuesToRegulations(regulationValues);
   } catch (e: unknown) {
+    if (e instanceof FormSheetError) {
+      return failed(row, e.message);
+    }
     if (e instanceof SheetFetchError && e.status === 400) {
       return failed(
         row,
         `入力シートを読み取れません。スプレッドシートIDと、「${REGULATION_SHEET_NAME}」シートがあるかを確認してください`,
       );
     }
-    return failed(row, `入力シート: ${classifySheetImportError(e).error}`);
+    // The regulation tab's own errors already name the row in Japanese.
+    return failed(
+      row,
+      `レギュレーション: ${classifySheetImportError(e).error}`,
+    );
   }
 
-  const {data, error} = await createDbClient(env)
+  const {data, error} = await db
     .rpc('import_tournament', {
       p_region_id: regionId,
       p_type: type,
-      p_entry_opens_at: entryOpensAt,
+      p_entry_opens_at: now.toISOString(),
       p_entry_closes_at: entryClosesAt,
       p_form_fields: formFields,
       p_regulations: regulations,
     })
-    .returns<Array<{tournament_id: string; created: boolean}>>()
+    .returns<
+      Array<{tournament_id: string; created: boolean; entry_opens_at: string}>
+    >()
     .single();
   if (error) {
     // A regulation still in use is something staff can act on: put the
     // regulation back on the sheet, or register the tournament by hand.
-    const syncError = regulationSyncError(error, '');
-    if (
-      syncError instanceof RegulationInUseError ||
-      syncError instanceof UnknownRegulationError
-    ) {
-      return failed(row, syncError.message);
+    const syncFailure = regulationSyncFailure(error);
+    if (syncFailure) {
+      return failed(row, syncFailure.message);
     }
     console.error('failed to import a tournament', {
       row: row.row,
@@ -348,10 +364,96 @@ async function importRow(
     outcome: data.created ? 'created' : 'updated',
     tournamentId: data.tournament_id,
     type,
-    entryOpensAt,
+    // As stored: an overwritten tournament keeps the opening it had.
+    entryOpensAt: new Date(data.entry_opens_at).toISOString(),
     entryClosesAt,
     error: null,
   };
+}
+
+/**
+ * A mistake on the form-definition tab of a row's entry sheet, worded for
+ * staff and naming the sheet row it is on.
+ */
+class FormSheetError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'FormSheetError';
+  }
+}
+
+// What each column of the form tab is called in a message.
+const FORM_COLUMN_NAMES: Record<string, string> = {
+  key: 'A列(key)',
+  label: 'B列(label)',
+  type: 'C列(type)',
+  required: 'D列(required)',
+  options: 'E列(options)',
+};
+
+/**
+ * The fields the form tab defines, checked one row at a time so a mistake
+ * is reported with its sheet row in Japanese rather than as the converter's
+ * English message or a dump of Zod issues.
+ * @param type The tournament's type.
+ * @param rows The form tab's rows, from row 2.
+ * @throws {FormSheetError} For the first row that is wrong, or for a key
+ *     used twice.
+ */
+function formRowsToFields(
+  type: TournamentType,
+  rows: SheetRow[],
+): FormFieldDefYaml[] {
+  const fields = rows.map((row, index) => {
+    const at = `フォーム定義 ${index + 2}行目`;
+    try {
+      // `sheetRowsToYaml()` is the conversion the edit screen's import uses,
+      // so both read a sheet the same way; it is run per row here only to
+      // know which row a failure belongs to.
+      const [field] = parseFormDefinitionYaml(
+        sheetRowsToYaml(type, [row]),
+      ).fields;
+      return field;
+    } catch (e: unknown) {
+      if (e instanceof UnknownFieldTypeError) {
+        throw new FormSheetError(
+          e.label === undefined || e.label === ''
+            ? `${at}: C列(type)が空です。途中に空行がある場合は行を詰めてください`
+            : `${at}: C列(type)「${e.label}」は${Object.keys(TYPE_LABELS).join('・')}のいずれでもありません`,
+        );
+      }
+      if (e instanceof DuplicateOptionError) {
+        throw new FormSheetError(
+          `${at}: E列(options)に同じ選択肢が複数あります`,
+        );
+      }
+      if (e instanceof ZodError) {
+        const column = String(e.issues[0]?.path[0] ?? '');
+        if (column === 'key') {
+          throw new FormSheetError(
+            `${at}: A列(key)「${row.key ?? ''}」は小文字の英字で始まり、小文字の英数字と _ だけにしてください`,
+          );
+        }
+        if (column === 'options') {
+          throw new FormSheetError(
+            `${at}: ラジオボタンには E列(options)に選択肢が1つ以上必要です`,
+          );
+        }
+        throw new FormSheetError(
+          `${at}: ${FORM_COLUMN_NAMES[column] ?? column}の値が正しくありません`,
+        );
+      }
+      throw e;
+    }
+  });
+  const keys = fields.map(field => field.key);
+  const duplicate = keys.find((key, index) => keys.indexOf(key) !== index);
+  if (duplicate !== undefined) {
+    throw new FormSheetError(
+      `フォーム定義: A列(key)「${duplicate}」が複数の行で使われています`,
+    );
+  }
+  return fields;
 }
 
 /** The result for a row that was not registered. */

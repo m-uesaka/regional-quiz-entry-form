@@ -91,22 +91,25 @@ export async function syncRegulations(
     p_regulations: regulations,
   });
   if (!error) return;
-  throw regulationSyncError(error, tournamentId);
+  if (error.code === TOURNAMENT_NOT_FOUND_SQLSTATE) {
+    throw new TournamentNotFoundError(tournamentId);
+  }
+  throw regulationSyncFailure(error) ?? new Error(error.message);
 }
 
 /**
- * The error to throw for a failure `sync_regulations()` raised, whether it
- * was called directly or from `import_tournament()` (#168).
+ * The staff-facing error for a failure `sync_regulations()` raised that
+ * names something in the request -- a regulation that doesn't belong to the
+ * tournament, or one still in use -- whether it was called directly or from
+ * `import_tournament()` (#168). `null` for any other failure, which is the
+ * caller's to report.
  * @param error The error supabase-js returned.
- * @param tournamentId The tournament being synced.
  */
-export function regulationSyncError(
-  error: {code?: string; details?: string | null; message: string},
-  tournamentId: string,
-): Error {
+export function regulationSyncFailure(error: {
+  code?: string;
+  details?: string | null;
+}): UnknownRegulationError | RegulationInUseError | null {
   switch (error.code) {
-    case TOURNAMENT_NOT_FOUND_SQLSTATE:
-      return new TournamentNotFoundError(tournamentId);
     // The offending ids/labels travel in the exception's `detail`, so the
     // staff-facing sentence is built here rather than in the database.
     case UNKNOWN_REGULATION_SQLSTATE:
@@ -119,6 +122,6 @@ export function regulationSyncError(
     case FOREIGN_KEY_VIOLATION_SQLSTATE:
       return new RegulationInUseError('');
     default:
-      return new Error(error.message);
+      return null;
   }
 }

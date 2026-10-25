@@ -1,5 +1,5 @@
 import type {ComponentProps} from 'svelte';
-import {render, screen, within} from '@testing-library/svelte';
+import {fireEvent, render, screen, within} from '@testing-library/svelte';
 import {describe, expect, it} from 'vitest';
 import type {StaffClaims, TournamentImportResult} from '@regional-quiz/shared';
 import Page from './+page.svelte';
@@ -62,6 +62,22 @@ describe('admin tournament import +page.svelte', () => {
     expect(
       screen.getByRole('button', {name: '一括登録する'}),
     ).toBeInTheDocument();
+  });
+
+  it('frees the button again when the page is shown again', async () => {
+    renderPage();
+    const form = screen
+      .getByRole('button', {name: '一括登録する'})
+      .closest('form') as HTMLFormElement;
+    // The test environment doesn't submit, so the handler's effect is all
+    // that is observed.
+    form.addEventListener('submit', event => event.preventDefault());
+
+    await fireEvent.submit(form);
+    expect(screen.getByRole('button', {name: '登録中…'})).toBeDisabled();
+
+    await fireEvent(window, new Event('pageshow'));
+    expect(screen.getByRole('button', {name: '一括登録する'})).toBeEnabled();
   });
 
   it('sums up the outcome and lists the rows that failed with why', () => {
