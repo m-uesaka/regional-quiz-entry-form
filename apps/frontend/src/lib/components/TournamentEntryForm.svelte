@@ -4,6 +4,8 @@
   import {
     ENTRY_FREE_TEXT_MAX_LENGTH,
     ENTRY_NAME_MAX_LENGTH,
+    PASSWORD_MAX_LENGTH,
+    PASSWORD_MIN_LENGTH,
     toFormFieldDefYaml,
     type FormFieldDef,
     type Regulation,
@@ -190,7 +192,8 @@
         id="password"
         name="password"
         type="password"
-        minlength={8}
+        minlength={PASSWORD_MIN_LENGTH}
+        maxlength={PASSWORD_MAX_LENGTH}
         autocomplete="new-password"
         isError={!!fieldError('password')}
         bind:value={password}
@@ -208,7 +211,8 @@
         id="passwordConfirm"
         name="passwordConfirm"
         type="password"
-        minlength={8}
+        minlength={PASSWORD_MIN_LENGTH}
+        maxlength={PASSWORD_MAX_LENGTH}
         autocomplete="new-password"
         isError={!!fieldError('passwordConfirm')}
         bind:value={passwordConfirm}

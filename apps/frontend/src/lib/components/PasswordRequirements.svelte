@@ -11,8 +11,29 @@ loaded with a dynamic `import()` once this component is on a page in a
 browser, as a chunk of its own. Until then -- and in the server-rendered
 HTML, or with JS off -- only the sentence describing the rules is shown.
 -->
+<script module lang="ts">
+  type CommonPasswordCheck = (password: string) => boolean;
+
+  // One load shared by every instance on the page. A failed load (a deploy
+  // that replaced the chunk, a dropped connection) is forgotten, so the next
+  // instance to ask tries again rather than inheriting the failure.
+  let pendingCheck: Promise<CommonPasswordCheck> | undefined;
+
+  function loadCommonPasswordCheck(): Promise<CommonPasswordCheck> {
+    pendingCheck ??= import('@regional-quiz/shared/common-passwords').then(
+      module => module.isCommonPassword,
+      (error: unknown) => {
+        pendingCheck = undefined;
+        throw error;
+      },
+    );
+    return pendingCheck;
+  }
+</script>
+
 <script lang="ts">
   import Check from '@lucide/svelte/icons/check';
+  import TriangleAlert from '@lucide/svelte/icons/triangle-alert';
   import X from '@lucide/svelte/icons/x';
   import {PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH} from '@regional-quiz/shared';
 
@@ -24,60 +45,111 @@ HTML, or with JS off -- only the sentence describing the rules is shown.
     /**
      * Whether the rules only apply to a new account. True on the entry form,
      * where the same field is how a registered participant proves the
-     * password they already have, which may predate the rules.
+     * password they already have, which may predate the rules -- so a
+     * common password there is a caution, not a failure.
      */
     newAccountOnly?: boolean;
   }
 
   let {password, confirmation, newAccountOnly = false}: Props = $props();
 
-  let isCommonPassword = $state<((password: string) => boolean) | null>(null);
+  /**
+   * How a rule stands: met, broken, broken but only for a new account
+   * (`warn`), or not decided yet (`pending`, shown neutrally).
+   */
+  type RuleStatus = 'ok' | 'fail' | 'warn' | 'pending';
+
+  // `loading` until the list arrives; `unavailable` if it never does, in
+  // which case the server's answer is the only one there will be.
+  let commonPasswordCheck = $state<
+    CommonPasswordCheck | 'loading' | 'unavailable'
+  >('loading');
   $effect(() => {
-    let cancelled = false;
-    void import('@regional-quiz/shared/common-passwords').then(module => {
-      if (!cancelled) {
-        isCommonPassword = module.isCommonPassword;
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
+    loadCommonPasswordCheck().then(
+      check => {
+        commonPasswordCheck = check;
+      },
+      () => {
+        commonPasswordCheck = 'unavailable';
+      },
+    );
   });
 
-  const lengthOk = $derived(
+  // No running character count: it would change on every keystroke, and
+  // `password.length` counts UTF-16 code units -- what the server checks,
+  // but not what anyone typing an emoji would call a character.
+  const lengthStatus = $derived<RuleStatus>(
     password.length >= PASSWORD_MIN_LENGTH &&
-      password.length <= PASSWORD_MAX_LENGTH,
+      password.length <= PASSWORD_MAX_LENGTH
+      ? 'ok'
+      : 'fail',
   );
-  // `null` while the list is still loading: neither a tick nor a cross.
-  const notCommon = $derived(
-    isCommonPassword === null ? null : !isCommonPassword(password),
+  const commonStatus = $derived.by<RuleStatus>(() => {
+    if (typeof commonPasswordCheck !== 'function') {
+      return 'pending';
+    }
+    if (!commonPasswordCheck(password)) {
+      return 'ok';
+    }
+    return newAccountOnly ? 'warn' : 'fail';
+  });
+  // Nothing to say while the confirmation is empty, or still on its way to
+  // matching (a prefix of the password): only a finished mismatch is one.
+  const matchStatus = $derived.by<RuleStatus | null>(() => {
+    if (!confirmation) {
+      return null;
+    }
+    if (confirmation === password) {
+      return 'ok';
+    }
+    return password.startsWith(confirmation) ? null : 'fail';
+  });
+
+  const commonLabel = $derived(
+    {
+      ok: 'よく使われているパスワードではない',
+      fail: 'よく使われているパスワードのため使えません',
+      warn: 'よく使われているパスワードのため、新規登録では使えません(登録済みのアカウントのパスワードであれば、そのまま使えます)',
+      pending:
+        commonPasswordCheck === 'unavailable'
+          ? 'よく使われているパスワードかどうかは、送信時に確認されます'
+          : 'よく使われているパスワードかどうかを確認しています',
+    }[commonStatus],
   );
-  const matches = $derived(
-    confirmation === undefined || confirmation === ''
-      ? null
-      : confirmation === password,
-  );
+
+  /** What a screen reader hears before each rule, for the icon it can't see. */
+  const STATUS_PREFIXES: Record<RuleStatus, string> = {
+    ok: '満たしています:',
+    fail: '満たしていません:',
+    warn: '注意:',
+    pending: '',
+  };
 </script>
 
-{#snippet rule(ok: boolean | null, label: string)}
+{#snippet rule(status: RuleStatus, label: string)}
   <li
     class={[
-      'flex items-center gap-1.5',
-      ok === true && 'text-success',
-      ok === false && 'text-destructive',
-      ok === null && 'text-muted-foreground',
+      'flex items-start gap-1.5',
+      status === 'ok' && 'text-success',
+      status === 'fail' && 'text-destructive',
+      status === 'warn' && 'text-warning',
+      status === 'pending' && 'text-muted-foreground',
     ]}
   >
-    {#if ok === true}
-      <Check class="size-4 shrink-0" aria-hidden="true" />
-      <span class="sr-only">満たしています:</span>
-    {:else if ok === false}
-      <X class="size-4 shrink-0" aria-hidden="true" />
-      <span class="sr-only">満たしていません:</span>
+    {#if status === 'ok'}
+      <Check class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+    {:else if status === 'fail'}
+      <X class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+    {:else if status === 'warn'}
+      <TriangleAlert class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
     {:else}
       <span class="size-4 shrink-0" aria-hidden="true"></span>
     {/if}
-    {label}
+    <span>
+      {#if STATUS_PREFIXES[status]}<span class="sr-only"
+          >{STATUS_PREFIXES[status]}</span
+        >{/if}{label}
+    </span>
   </li>
 {/snippet}
 
@@ -88,33 +160,28 @@ HTML, or with JS off -- only the sentence describing the rules is shown.
       (登録済みのアカウントでエントリーする場合は、登録済みのパスワードをそのまま入力してください。)
     {/if}
   </p>
-  <!-- Shown once something is typed, so an empty field isn't greeted with
-       a row of crosses. Announced politely, so a screen reader hears a rule
-       change without being interrupted on every keystroke. -->
-  {#if password !== ''}
-    <ul aria-live="polite" class="flex flex-col gap-0.5">
+  <!-- The live region is always in the page and only its contents come and
+       go: most screen readers don't announce a region that arrives already
+       filled. Its text changes only when a rule's standing does, so it is
+       announced then rather than on every keystroke. The rules appear once
+       something is typed, so an empty field isn't greeted with crosses. -->
+  <ul aria-live="polite" class="flex flex-col gap-0.5">
+    {#if password !== ''}
       {@render rule(
-        lengthOk,
+        lengthStatus,
         password.length > PASSWORD_MAX_LENGTH
           ? `${PASSWORD_MAX_LENGTH}文字以内`
-          : `${PASSWORD_MIN_LENGTH}文字以上(現在${password.length}文字)`,
+          : `${PASSWORD_MIN_LENGTH}文字以上`,
       )}
-      {@render rule(
-        notCommon,
-        notCommon === null
-          ? 'よく使われているパスワードかどうかを確認しています'
-          : notCommon
-            ? 'よく使われているパスワードではない'
-            : newAccountOnly
-              ? 'よく使われているパスワードのため、新規登録では使えません'
-              : 'よく使われているパスワードのため使えません',
-      )}
-      {#if matches !== null}
+      {@render rule(commonStatus, commonLabel)}
+      {#if matchStatus !== null}
         {@render rule(
-          matches,
-          matches ? '確認用と一致している' : '確認用と一致していません',
+          matchStatus,
+          matchStatus === 'ok'
+            ? '確認用と一致している'
+            : '確認用と一致していません',
         )}
       {/if}
-    </ul>
-  {/if}
+    {/if}
+  </ul>
 </div>

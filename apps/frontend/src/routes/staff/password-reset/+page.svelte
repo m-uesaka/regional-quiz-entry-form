@@ -1,6 +1,11 @@
 <script lang="ts">
   import {enhance} from '$app/forms';
-  import {TOURNAMENT_TYPE_LABELS, TournamentTypeSchema} from '@regional-quiz/shared';
+  import {
+    PASSWORD_MAX_LENGTH,
+    PASSWORD_MIN_LENGTH,
+    TOURNAMENT_TYPE_LABELS,
+    TournamentTypeSchema,
+  } from '@regional-quiz/shared';
   import NativeSelect from '$lib/components/form/NativeSelect.svelte';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
@@ -48,7 +53,8 @@
               name="newPassword"
               type="password"
               autocomplete="new-password"
-              minlength={8}
+              minlength={PASSWORD_MIN_LENGTH}
+              maxlength={PASSWORD_MAX_LENGTH}
               bind:value={newPassword}
               aria-describedby="password-requirements"
               required
@@ -62,7 +68,8 @@
               name="newPasswordConfirm"
               type="password"
               autocomplete="new-password"
-              minlength={8}
+              minlength={PASSWORD_MIN_LENGTH}
+              maxlength={PASSWORD_MAX_LENGTH}
               bind:value={newPasswordConfirm}
               required
             />
