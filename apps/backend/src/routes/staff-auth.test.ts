@@ -9,7 +9,10 @@ import type {Bindings} from '../types/env';
 import {
   PERMISSIVE_PLATFORM_BINDINGS,
   refusingRateLimiter,
+  TURNSTILE_TEST_TOKEN,
+  turnstileAwareFetch,
 } from '../test-support/bindings';
+import {TURNSTILE_TOKEN_HEADER} from '../middleware/turnstile';
 import {
   collectingExecutionContext,
   legacyHashPassword,
@@ -402,6 +405,226 @@ describe('POST /login', () => {
       expect(res.status).toBe(200);
       expect(updates).toEqual([]);
     });
+  });
+});
+
+describe('POST /password-reset/request', () => {
+  const originalFetch = globalThis.fetch;
+  // Every request the route made, with the body of each, so a test can tell
+  // what ran on the response path from what was deferred, and read the
+  // link the mail carried.
+  let requests: Array<{url: URL; body: string}> = [];
+  let backgroundWork: Array<Promise<unknown>> = [];
+  const executionCtx = {
+    waitUntil(promise: Promise<unknown>): void {
+      backgroundWork.push(promise);
+    },
+    passThroughOnException(): void {},
+  } as unknown as ExecutionContext;
+
+  /** Runs the deferred work, the way the Workers runtime would. */
+  async function settle(): Promise<void> {
+    const pending = backgroundWork;
+    backgroundWork = [];
+    await Promise.all(pending);
+  }
+
+  /**
+   * Answers the account lookup with `account`, naming it for the mail as a
+   * regional 最強位 account of the 東京 region, and accepts the link write
+   * and the Resend call.
+   * @param account The account the lookup finds, or `null` for none.
+   */
+  function mockResetFetch(account: {id: string} | null): void {
+    requests = [];
+    globalThis.fetch = turnstileAwareFetch((async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      requests.push({url, body: String(init?.body ?? '')});
+      if (url.hostname === 'api.resend.com') {
+        return new Response(null, {status: 200});
+      }
+      if (url.pathname.endsWith('/rpc/add_staff_password_link')) {
+        return Response.json(null);
+      }
+      if (url.searchParams.get('select') === 'id') {
+        return Response.json(account ? [account] : []);
+      }
+      return Response.json([
+        {
+          role: 'regional',
+          tournament_type: 'saikyoi',
+          regions: {
+            name: '東京',
+            tournaments: [{name: null, type: 'saikyoi'}],
+          },
+        },
+      ]);
+    }) as unknown as typeof fetch);
+  }
+
+  async function request(
+    body: unknown,
+    options: {env?: Bindings; turnstileToken?: string | null} = {},
+  ): Promise<Response> {
+    const {env = ENV, turnstileToken = TURNSTILE_TEST_TOKEN} = options;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (turnstileToken !== null) {
+      headers[TURNSTILE_TOKEN_HEADER] = turnstileToken;
+    }
+    return staffAuthRoute.request(
+      '/password-reset/request',
+      {method: 'POST', headers, body: JSON.stringify(body)},
+      env,
+      executionCtx,
+    );
+  }
+
+  afterEach(async () => {
+    await settle();
+    globalThis.fetch = originalFetch;
+  });
+
+  it('answers a registered and an unregistered address the same way', async () => {
+    mockResetFetch({id: STAFF_ID});
+    const registered = await request({
+      email: 'staff@example.com',
+      scope: 'saikyoi',
+    });
+    await settle();
+    mockResetFetch(null);
+    const unregistered = await request({
+      email: 'nobody@example.com',
+      scope: 'saikyoi',
+    });
+    await settle();
+
+    expect(registered.status).toBe(200);
+    expect(unregistered.status).toBe(200);
+    expect(await registered.json()).toEqual(await unregistered.json());
+    expect(requests.some(r => r.url.hostname === 'api.resend.com')).toBe(false);
+  });
+
+  it('does none of the reset work before answering', async () => {
+    mockResetFetch({id: STAFF_ID});
+
+    const res = await request({email: 'staff@example.com', scope: 'saikyoi'});
+
+    expect(res.status).toBe(200);
+    expect(requests).toEqual([]);
+  });
+
+  it('mails an hour-long reset link for the account the address and scope name', async () => {
+    mockResetFetch({id: STAFF_ID});
+
+    await request({email: 'Staff@Example.com', scope: 'saikyoi'});
+    await settle();
+
+    const lookup = requests.find(
+      r => r.url.searchParams.get('select') === 'id',
+    );
+    expect(lookup?.url.searchParams.get('email')).toBe('eq.staff@example.com');
+    expect(lookup?.url.searchParams.get('tournament_type')).toBe('eq.saikyoi');
+    expect(lookup?.url.searchParams.get('disabled_at')).toBe('is.null');
+
+    const issue = requests.find(r =>
+      r.url.pathname.endsWith('/rpc/add_staff_password_link'),
+    );
+    const {p_staff_account_id, p_expires_at} = JSON.parse(issue!.body) as {
+      p_staff_account_id: string;
+      p_expires_at: string;
+    };
+    expect(p_staff_account_id).toBe(STAFF_ID);
+    // Added beside the account's other links rather than replacing them,
+    // so a request from anyone can't throw away an invitation (#175).
+    expect(
+      requests.some(r =>
+        r.url.pathname.endsWith('/rpc/issue_staff_password_link'),
+      ),
+    ).toBe(false);
+    const ttl = Date.parse(p_expires_at) - Date.now();
+    expect(ttl).toBeGreaterThan(55 * 60 * 1000);
+    expect(ttl).toBeLessThanOrEqual(60 * 60 * 1000);
+
+    const mail = requests.find(r => r.url.hostname === 'api.resend.com');
+    const sent = JSON.parse(mail!.body) as {
+      to: string[] | string;
+      subject: string;
+      text: string;
+    };
+    expect(sent.subject).toContain(
+      '「東京最強位」のスタッフアカウントのパスワード再設定',
+    );
+    expect(sent.text).toContain(
+      'https://entry.example.com/staff/password-reset?token=',
+    );
+    expect(sent.text).toContain('パスワード再設定のお申し込みを受け付けました');
+  });
+
+  it('looks a general account up by its null tournament type', async () => {
+    mockResetFetch(null);
+
+    await request({email: 'staff@example.com', scope: 'general'});
+    await settle();
+
+    expect(requests[0].url.searchParams.get('tournament_type')).toBe('is.null');
+  });
+
+  it('returns 429 with Retry-After when the rate limiter refuses', async () => {
+    mockResetFetch({id: STAFF_ID});
+
+    const res = await request(
+      {email: 'staff@example.com', scope: 'saikyoi'},
+      {env: {...ENV, MAIL_TRIGGER_IP_RATE_LIMITER: refusingRateLimiter()}},
+    );
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe('60');
+    await settle();
+    expect(requests).toEqual([]);
+  });
+
+  it('counts the per-address limit under a key naming this endpoint', async () => {
+    mockResetFetch(null);
+    const keys: string[] = [];
+    const recording: RateLimit = {
+      limit: ({key}) => {
+        keys.push(key ?? '');
+        return Promise.resolve({success: true});
+      },
+    };
+
+    await request(
+      {email: 'Shared@Example.com', scope: 'saikyoi'},
+      {env: {...ENV, MAIL_TRIGGER_EMAIL_RATE_LIMITER: recording}},
+    );
+
+    expect(keys).toEqual(['staff-password-reset:email:shared@example.com']);
+  });
+
+  it('returns 400 when the Turnstile token is missing', async () => {
+    mockResetFetch({id: STAFF_ID});
+
+    const res = await request(
+      {email: 'staff@example.com', scope: 'saikyoi'},
+      {turnstileToken: null},
+    );
+
+    expect(res.status).toBe(400);
+    await settle();
+    expect(requests).toEqual([]);
+  });
+
+  it('returns 400 without a scope', async () => {
+    mockResetFetch({id: STAFF_ID});
+
+    const res = await request({email: 'staff@example.com'});
+
+    expect(res.status).toBe(400);
   });
 });
 

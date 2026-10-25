@@ -102,7 +102,7 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 
 ### レート制限と Turnstile
 
-未認証で叩ける 4 本には、Cloudflare の Rate Limiting binding によるレート制限が掛かっています(#116 / [Task 11-1](../tasks/task-11-1.md))。**IP(`CF-Connecting-IP`)とメールアドレスの 2 つの鍵**で別々に数えます。1 つの IP から多数のアカウントを試す攻撃は IP 鍵でしか、多数の IP から 1 アカウントを試す攻撃はメール鍵でしか止まらないためです。メール鍵はバリデーション通過後に数えるので、スキーマに合わない本文で他人のメール枠を減らすことはできません。また鍵に載せる前に**小文字化**します(`middleware/rate-limit.ts` の `emailKey()`)。`Victim@example.com` と `victim@example.com` は同じ受信箱なので、そのまま数えるとバケツが分かれ、大文字小文字を変えた分だけ上限を取り直せてしまうためです。
+未認証で叩ける 5 本には、Cloudflare の Rate Limiting binding によるレート制限が掛かっています(#116 / [Task 11-1](../tasks/task-11-1.md))。**IP(`CF-Connecting-IP`)とメールアドレスの 2 つの鍵**で別々に数えます。1 つの IP から多数のアカウントを試す攻撃は IP 鍵でしか、多数の IP から 1 アカウントを試す攻撃はメール鍵でしか止まらないためです。メール鍵はバリデーション通過後に数えるので、スキーマに合わない本文で他人のメール枠を減らすことはできません。また鍵に載せる前に**小文字化**します(`middleware/rate-limit.ts` の `emailKey()`)。`Victim@example.com` と `victim@example.com` は同じ受信箱なので、そのまま数えるとバケツが分かれ、大文字小文字を変えた分だけ上限を取り直せてしまうためです。
 
 **鍵ごとに別の limiter に載せています。** Rate Limiting binding は上限を binding 単位でしか持てないので、IP 鍵とメール鍵に別々の数字を与えるには binding を分けるしかありません。
 
@@ -117,10 +117,12 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 | `POST /api/tournaments/:tournamentId/entries/session` | `ip:` | `MAIL_TRIGGER_IP_RATE_LIMITER` | 20 回 / 60 秒 | **必須** |
 | `POST /api/auth/participant/password-reset/request` | `ip:` | `MAIL_TRIGGER_IP_RATE_LIMITER` | 20 回 / 60 秒 | **必須** |
 | `POST /api/auth/participant/password-reset/request` | `email:` | `MAIL_TRIGGER_EMAIL_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
+| `POST /api/auth/staff/password-reset/request` | `ip:` | `MAIL_TRIGGER_IP_RATE_LIMITER` | 20 回 / 60 秒 | **必須** |
+| `POST /api/auth/staff/password-reset/request` | `staff-password-reset:email:` | `MAIL_TRIGGER_EMAIL_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
 
-メール送信 2 本では、**厳しい数字は宛先(メール鍵)の側だけ**に置いています。抑えたいのは「1 つの受信箱をどれだけ消費できるか」だからです。IP 鍵の方を緩くしてあるのは、IP が 1 人とは限らないためです — エントリー開始時刻に部活動や学校の NAT・キャリアの CGNAT の裏から複数人が申し込むのは普通のことで、しかも IP 制限は Turnstile とバリデーションより**前**に評価されるので、メールを送るはずのなかった試行まで枠を消費します。3 回 / 60 秒だと 4 人目以降が「本人にはどうしようもない 429」を踏みます。スクリプトが実際に越えなければならないのはこの数字ではなく前段の Turnstile です。
+メール送信の各エンドポイントでは、**厳しい数字は宛先(メール鍵)の側だけ**に置いています。抑えたいのは「1 つの受信箱をどれだけ消費できるか」だからです。IP 鍵の方を緩くしてあるのは、IP が 1 人とは限らないためです — エントリー開始時刻に部活動や学校の NAT・キャリアの CGNAT の裏から複数人が申し込むのは普通のことで、しかも IP 制限は Turnstile とバリデーションより**前**に評価されるので、メールを送るはずのなかった試行まで枠を消費します。3 回 / 60 秒だと 4 人目以降が「本人にはどうしようもない 429」を踏みます。スクリプトが実際に越えなければならないのはこの数字ではなく前段の Turnstile です。
 
-ログインの IP 鍵は**エンドポイント名を含みません**。これが抑えているのは「その発信元が Worker に踏ませる PBKDF2 の量」であり、2 本のどちらを叩こうと同じ CPU だからです。一方**メール鍵にはエンドポイント名を入れます**(`participant-login:` / `staff-login:`)。同じアドレスを参加者とスタッフの両方が持ち得るので、共有すると未認証で叩ける参加者ログインからスタッフの枠を削れてしまいます。
+ログインの IP 鍵は**エンドポイント名を含みません**。これが抑えているのは「その発信元が Worker に踏ませる PBKDF2 の量」であり、2 本のどちらを叩こうと同じ CPU だからです。一方**メール鍵にはエンドポイント名を入れます**(`participant-login:` / `staff-login:`。パスワード再設定ではスタッフ側だけ `staff-password-reset:`)。同じアドレスを参加者とスタッフの両方が持ち得るので、共有すると未認証で叩ける参加者ログインからスタッフの枠を削れてしまいます。
 
 超過時は **`429` と `Retry-After: 60`**、本文は `{"error": "too many requests"}` です。フロントエンドは「送信が集中しています。しばらく待ってから再度お試しください」と表示します。
 
@@ -194,6 +196,7 @@ if ('yaml' in body) {
 | --- | --- | --- |
 | GET | `/api/healthz` | なし |
 | POST | `/api/auth/staff/login` | なし(レート制限) |
+| POST | `/api/auth/staff/password-reset/request` | なし(レート制限 + Turnstile) |
 | POST | `/api/auth/staff/password-reset/confirm` | なし(トークン) |
 | POST | `/api/auth/staff/logout` | なし(Cookie を消すだけ) |
 | POST | `/api/auth/participant/login` | なし(レート制限) |
@@ -269,16 +272,29 @@ if ('yaml' in body) {
 
 `regionSlug` / `tournamentType` は `regional` スタッフの担当範囲で、`general` スタッフでは両方 `null` です。スタッフ画面は `/staff/{regionSlug}/{tournamentType}/entries` のように**スラッグ**で引くため、JWT クレームが持つ `regionId` ではなく `regions` を join したスラッグを返しています。ログイン画面(`/staff/login`)はこれを見て、`general` を `/staff/dashboard` へ、`regional` を担当大会のエントリー一覧へリダイレクトします。
 
+### `POST /api/auth/staff/password-reset/request`
+
+パスワードを忘れたスタッフが、自分で再設定リンクを申し込みます(#175)。参加者側の `POST /api/auth/participant/password-reset/request` のスタッフ版で、防御(レート制限 + Turnstile、`waitUntil()` による応答時間の平準化、登録の有無によらず同じ応答)も同じです。
+
+- リクエスト: `StaffPasswordResetRequestInputSchema` — `{email: string(email), scope: 'saikyoi' | 'shinjinou' | 'general'}`、および `cf-turnstile-response` ヘッダ。1 つのアドレスが最強位・新人王の 2 アカウントを持ち得るため(#166)、ログインと同じく `scope` でアカウントを指定します
+- `200`: `{"ok": true}`
+- `400`: 本文が不正(zValidator)、または `{"error": "turnstile verification failed"}`
+- `429`: `{"error": "too many requests"}`(`Retry-After: 60`)
+
+`lib/staff-password-reset.ts` の `requestStaffPasswordReset()` が、該当する**無効化されていない**アカウントがあれば `sendStaffPasswordLink()` で有効期限 **1 時間**のリンクを `FRONTEND_URL/staff/password-reset?token=...` 宛てに送ります(統括スタッフが発行する招待・再発行リンクは 24 時間。本人が待っているリンクなので参加者側と同じ長さにしています)。招待済みでまだパスワードを設定していないアカウントも対象で、新しいリンクを自分で取り直せます。アカウントの検索はログインと同じ `findStaffAccountByScope()`(`lib/staff-account-lookup.ts`)です。
+
+リンクの書き込みは、統括スタッフの発行(`issue_staff_password_link()`。既存のリンクをすべて消してから書く)とは別の `add_staff_password_link()`(`0031`)が行い、**既存の有効なリンクは消さずに書き足します**。この申し込みは未認証で誰でも行えるので、既存のリンクを消すと、アドレスと区分を知っている人が申し込みを繰り返すだけで、統括スタッフが送ったばかりの 24 時間の招待を 1 時間のリンクに置き換え続けられてしまうためです。どのリンクを使っても、パスワードを設定した時点で `reset_staff_password()` が残りをすべて使用済みにします。申し込みのたびに 1 行増えるので、そのアカウントの期限切れのリンクは同じ関数で削除します。
+
+フロントエンドの `/staff/password-reset` は、トークンの Cookie(招待に合わせて 24 時間)が無効になったリンクのものでも区別できないため、`?request` で開くと Cookie を消して申し込みフォームを表示します。スタッフログイン画面の「パスワードを忘れた場合」と、パスワード入力フォームの「新しいリンクを申し込む」はこの URL を開きます。
+
 ### `POST /api/auth/staff/password-reset/confirm`
 
-スタッフが招待メール(`POST /api/staff/accounts`)またはリンク再発行(`POST /api/staff/accounts/:id/password-reset`)で受け取ったトークンを使い、自分のパスワードを設定します。
+スタッフが招待メール(`POST /api/staff/accounts`)・リンク再発行(`POST /api/staff/accounts/:id/password-reset`)・本人の申し込み(上記 `/request`)で受け取ったトークンを使い、自分のパスワードを設定します。
 
 - リクエスト: `StaffPasswordResetConfirmInputSchema` — `{token: string(min 1), newPassword: PasswordSchema}`(`PasswordSchema` は `packages/shared/src/password-policy.ts`。8 文字以上 256 文字以内で、よく使われるパスワードの一覧(約 3,300 件、大文字小文字を区別しない)に載っていないこと。記号必須などの文字種の強制はしません。よく使われるパスワードの一覧は約 30 KB あるため、ブラウザのバンドルに入らないようパッケージの `index.ts` からは export せず、サーバー側のコードだけが `@regional-quiz/shared/password-policy` から import します)
 - `200`: `{"ok": true}`
 - `400`: `{"error": "invalid or expired token"}`(未知・使用済み・期限切れのトークン)
 - `500`: `{"error": "internal server error"}`
-
-**参加者側と違い `/request` はありません。** スタッフ向けのリンクは必ず統括スタッフが特定のアカウントに対して発行するため、このエンドポイントはメールアドレスを受け取らず、「どのアドレスが登録済みか」を問い合わせる手段にもなりません。
 
 トークンは参加者用の `password_reset_tokens` ではなく `staff_password_reset_tokens` に入ります(`participant_id` が not null の FK なので相乗りできません)。検証・パスワード更新・残りリンクの焼き捨ては DB 関数 `reset_staff_password()` が 1 トランザクションで行い、参加者側と同じくスタッフ行を先にロックしてからトークン行を読み直します(`supabase/migrations/0015_staff_accounts_scope_and_password_reset.sql`)。
 
@@ -563,7 +579,8 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 | 401 | `unauthorized` | セッションが無い / 無効 |
 | 400 / 403 | (上と同じ) | 大会・期間・優先期間・追加項目の検証 |
 | 409 | `already registered in another region` | アカウントが別地域のもの |
-| 409 | `already entered` | 同じ大会にキャンセル以外のエントリーが既にある |
+| 409 | `already entered` | 同じ大会に確定済み・キャンセル待ちのエントリーが既にある |
+| 409 | `entry pending verification` | 同じ大会に確定待ちのエントリーがあり、その確認リンクがまだ有効(#172) |
 | 409 | `regulation no longer available` | フォームを開いている間に `PUT .../regulations` が対象のレギュレーションを削除した(エントリー行はロールバックされる) |
 | 409 | `already entered another tournament in this region` | `regions.allows_dual_entry` が false の地域で、同一地域の**別の**大会にキャンセル以外のエントリーが既にある |
 | 500 | `internal server error` | エントリーの作成や確認メールの送信に失敗 |
@@ -575,13 +592,20 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 1. 大会とそのレギュレーション群を取得し、エントリー期間・優先期間を検証。
 2. その大会の `form_field_defs` を取得し、`customFieldValues` を `findCustomFieldValuesError()` で照合(未定義キー、選択肢にない値、必須項目の空欄、型の不一致を 400 で弾く)。
 3. 未ログインならメールアドレスから participant を検索し、既存なら**パスワード照合**、無ければ新規作成(PBKDF2 でハッシュ化)。ログイン中ならセッションの participant を使う。
-4. 同じ大会の既存エントリーを確認。`cancelled` なら**その行を再利用**して上書き(`unique (participant_id, tournament_id)` があるため2行目は作れない)、それ以外なら 409。
-5. 地域が重複参加を許していなければ(`regions.allows_dual_entry` が false)、同一地域の**別**大会に有効なエントリーが無いことを確認。
-6. 確認メールを送信。
+4. その participant の確定待ちエントリーのうち、**確認リンクの期限が切れたもの**を `cancelled` にする(DB 関数 `lapse_expired_pending_entries()`、#172。後述)。
+5. 同じ大会の既存エントリーを確認。`cancelled` なら**その行を再利用**して上書き(`unique (participant_id, tournament_id)` があるため2行目は作れない)、確認リンクが有効な確定待ちなら `entry pending verification`、それ以外なら `already entered` で 409。
+6. 地域が重複参加を許していなければ(`regions.allows_dual_entry` が false)、同一地域の**別**大会に有効なエントリーが無いことを確認。
+7. 確認メールを送信。
 
 `customFieldValues` の照合を participant の検索・作成より前に置いているのは、フォームからは生成し得ない回答を弾いた結果としてアカウントだけが作られる、という副作用を残さないためです。編集 API(`PATCH /api/mypage/entries/:entryId`)と同じ `findCustomFieldValuesError()` を使うので、新規と編集で通る回答は一致します。
 
-重複参加の判定で数えるのは `pending_verification` / `confirmed` / `waitlisted` で、**`cancelled` は数えません**。キャンセルしたなら他方に出られるべきだからです。逆に `pending_verification` を数えるのは、メール確認前の枠取りで両方を押さえるのを防ぐためです。判定対象から**この大会自身は除いて**いるので、キャンセル後に同じ大会へ再エントリーする経路(上の 4.)はそのまま通ります。
+重複参加の判定で数えるのは `pending_verification` / `confirmed` / `waitlisted` で、**`cancelled` は数えません**。キャンセルしたなら他方に出られるべきだからです。逆に `pending_verification` を数えるのは、メール確認前の枠取りで両方を押さえるのを防ぐためです。判定対象から**この大会自身は除いて**いるので、キャンセル後に同じ大会へ再エントリーする経路(上の 5.)はそのまま通ります。
+
+**確認メールの期限切れ(#172)。** 確認リンク(24 時間)を開かないまま期限が切れたエントリーは、もう確定できないのに `pending_verification` のまま残り、同じ大会への再エントリーを `already entered` で、重複参加を許さない地域ではもう一方の大会へのエントリーも断っていました。そこで 4. で、その参加者の確定待ちエントリーのうち**確認トークンが 1 つ以上あり、そのどれもが使用済みか期限切れのもの**を `cancelled` にし(残っていたトークンも使用済みにする)、以後は参加者自身のキャンセルと同じ扱いにしています。同じ大会なら行が再利用されて新しい確認メールが届き、もう一方の大会の枠も空きます。リンクがまだ有効な確定待ちは今までどおり断り、未ログインの経路では不受理通知(`pending-verification`)で「確認メールのリンクを開く / 見当たらなければマイページでキャンセルしてから再エントリー」を案内します。
+
+トークンが 1 つも無い確定待ちは取り消しません。同じ参加者の別の送信が行を書き込み、まだ確認トークンを書いていない途中のエントリーだからです(確認メールの送信に失敗した行はロールバックで消すか元に戻すので、トークン無しのまま残ることはありません)。キャンセル済みの行を再利用するときは、更新の前にその行の**使用済み・期限切れのトークンを消す**ので、再利用中の行もトークン無しの状態を経て新しいトークンが書かれます(同時に同じ行を再利用した別の送信の、有効なトークンは消しません)。
+
+`lapse_expired_pending_entries()`(`supabase/migrations/0030_lapse_expired_pending_entries.sql`)は、候補をロック無しで絞り込んでから(期限内のリンクがある確定待ちにはロックを取らない)、候補ごとに `confirm_entry_by_token()` / `cancel_own_entry()` と同じ順(確認トークン → 大会の行)でロックを取り、状態とトークンを大会のロックの下で読み直します。確認と同時に走っても、確認が先ならもう確定待ちではないので触らず、こちらが先なら確認側は期限切れトークンとして断ります。候補は大会 id 順に処理するので、別々の参加者の呼び出しが大会の行を逆順に取り合ってデッドロックすることもありません。定期的な掃除(Cron)にしていないのは、期限切れの確定待ちが邪魔をするのは同じ参加者の次のエントリーだけだからです。
 
 メール送信に失敗した場合はエントリーを**ロールバック**します。放置すると、参加者は使えるリンクを受け取っていないのに一意制約や「already entered」で再試行を永久に阻まれるためです。ロールバックは「確認トークンの削除 → 新規行なら削除 / 再利用行なら元の値へ復元」の順に行います(トークンが FK で参照している間はエントリーを削除できないため)。再利用行は削除ではなく**キャンセル状態へ復元**することで、元のエントリーの記録が消えないようにしています。
 

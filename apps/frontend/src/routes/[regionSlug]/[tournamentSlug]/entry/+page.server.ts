@@ -69,6 +69,10 @@ const ENTRY_ERROR_MESSAGES: Record<string, string> = {
   'already registered in another region':
     'このアカウントは別の地域で登録済みのため、この大会にはエントリーできません',
   'already entered': 'この大会には既にエントリー済みです',
+  // An earlier entry whose verification link is still valid (#172). Once
+  // that link expires, entering again goes through.
+  'entry pending verification':
+    'この大会へのエントリーは確定待ちです。確認メールのリンクを開いて確定してください。メールが見当たらない場合は、マイページでこのエントリーをキャンセルしてから、もう一度エントリーしてください',
   // The regulations changed while the form was open, so what the page
   // offered no longer exists. Reloading is what fixes it.
   'regulation no longer available':

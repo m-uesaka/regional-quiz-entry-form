@@ -99,6 +99,12 @@ const INVALID_PASSWORD = 'invalid password';
 const ALREADY_REGISTERED_IN_ANOTHER_REGION =
   'already registered in another region';
 const ALREADY_ENTERED = 'already entered';
+/**
+ * An entry for the tournament is waiting on a verification link that is
+ * still valid. Told apart from `ALREADY_ENTERED` so the participant is sent
+ * to that mail rather than to an entry that isn't confirmed yet (#172).
+ */
+const ENTRY_PENDING_VERIFICATION = 'entry pending verification';
 const COMMON_PASSWORD = 'password too common';
 
 /**
@@ -499,8 +505,9 @@ async function createEntryAfterCheck(
 /**
  * Enters a participant whose identity is already settled -- by password in
  * `createEntryAfterCheck()`, or by session in `createEntryForParticipant()`
- * -- into a checked tournament: reuses their own cancelled entry if there is
- * one, enforces the region's dual-entry rule, writes the entry and its
+ * -- into a checked tournament: lapses their entries whose verification
+ * link expired unused, reuses their own cancelled entry if there is one,
+ * enforces the region's dual-entry rule, writes the entry and its
  * regulations and mails the verification link.
  * @param env The Worker bindings.
  * @param tournament The checked tournament.
@@ -518,6 +525,21 @@ async function enterTournament(
   const db = createDbClient(env);
   const tournamentId = tournament.id;
 
+  // An entry whose verification link expired unused can never be confirmed,
+  // yet it would still refuse a re-entry below as `already entered` and, in
+  // a region without dual entry, hold the region's other tournament too
+  // (#172). Cancelling those first lets both checks below treat them like
+  // any cancellation: this tournament's row is reused with a fresh link, and
+  // the other tournament's no longer counts. Entries whose link is still
+  // valid are left alone. Done here rather than by a scheduled sweep, since
+  // only a new entry from the same participant is ever held up by one.
+  const {error: lapseError} = await db.rpc('lapse_expired_pending_entries', {
+    p_participant_id: participantId,
+  });
+  if (lapseError) {
+    return {ok: false, status: 500, error: lapseError.message};
+  }
+
   // A participant who cancelled may enter the same tournament again with the
   // same credentials. The unique (participant_id, tournament_id) constraint
   // means that has to reuse the cancelled row instead of inserting a second
@@ -533,7 +555,15 @@ async function enterTournament(
     return {ok: false, status: 500, error: existingEntryError.message};
   }
   if (existingEntry && existingEntry.status !== 'cancelled') {
-    return {ok: false, status: 409, error: ALREADY_ENTERED};
+    return {
+      ok: false,
+      status: 409,
+      // Still pending after the lapse above means its link is still valid.
+      error:
+        existingEntry.status === 'pending_verification'
+          ? ENTRY_PENDING_VERIFICATION
+          : ALREADY_ENTERED,
+    };
   }
 
   // requirements.md only says that regions allowing both 最強位 and 新人王
@@ -555,7 +585,8 @@ async function enterTournament(
       // list silently and re-open double entry. `pending_verification`
       // counts on purpose — it is a seat held before the mail was
       // confirmed, and skipping it would let a participant hold both
-      // tournaments by simply never following the link.
+      // tournaments by simply never following the link. One whose link
+      // expired was cancelled above, so only a still-valid link holds it.
       .neq('status', 'cancelled');
     if (dualEntryError) {
       return {ok: false, status: 500, error: dualEntryError.message};
@@ -585,6 +616,26 @@ async function enterTournament(
     email_verified_at: null,
     cancelled_at: null,
   };
+
+  if (existingEntry) {
+    // The cancelled row still carries the tokens of the entry it was
+    // cancelled from, all burnt or expired (`cancel_own_entry()` and
+    // `lapse_expired_pending_entries()` burn what was left). Dropped before the row goes back
+    // to `pending_verification`, so that until its new link is written it
+    // has no tokens at all -- which is what tells
+    // `lapse_expired_pending_entries()` in a concurrent submission of the
+    // same participant's that this entry is being made, not one whose link
+    // ran out. Only dead tokens go: a concurrent re-entry of this same row
+    // may already have written a live one, which must survive.
+    const {error: tokensError} = await db
+      .from('email_verification_tokens')
+      .delete()
+      .eq('entry_id', existingEntry.id)
+      .or(`used_at.not.is.null,expires_at.lt.${new Date().toISOString()}`);
+    if (tokensError) {
+      return {ok: false, status: 500, error: tokensError.message};
+    }
+  }
 
   const {data: entry, error} = existingEntry
     ? await db
@@ -676,6 +727,7 @@ const ENTRY_NOTICE_REASONS: Record<string, EntryNoticeReason> = {
   [INVALID_PASSWORD]: 'password-mismatch',
   [ALREADY_REGISTERED_IN_ANOTHER_REGION]: 'other-region',
   [ALREADY_ENTERED]: 'already-entered',
+  [ENTRY_PENDING_VERIFICATION]: 'pending-verification',
   [COMMON_PASSWORD]: 'common-password',
   [ALREADY_ENTERED_ANOTHER_TOURNAMENT]: 'dual-entry',
   [REGULATION_NO_LONGER_AVAILABLE]: 'regulation-unavailable',

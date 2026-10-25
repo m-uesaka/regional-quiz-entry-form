@@ -1,6 +1,8 @@
 import {fail, redirect} from '@sveltejs/kit';
+import {StaffPasswordResetRequestInputSchema} from '@regional-quiz/shared';
 import {StaffPasswordResetConfirmInputSchema} from '@regional-quiz/shared/password-policy';
 import {createApiClient} from '$lib/api';
+import {readTurnstileToken, TURNSTILE_TOKEN_FIELD} from '$lib/turnstile';
 import {
   clearResetToken,
   readResetToken,
@@ -9,24 +11,42 @@ import {
 } from '$lib/server/reset-token';
 import type {Actions, PageServerLoad} from './$types';
 
-// Shown for a token the API refused as well as for a page opened without one:
-// a staff member can't ask for a link themselves, so either way the only way
-// forward is a general staff member re-issuing it.
+// Shown for a token the API refused. The page offers the request form again
+// once the token is gone, so asking for a new link is the way forward.
 const NEEDS_A_NEW_LINK_MESSAGE =
-  'このリンクは無効か、有効期限が切れています。管理スタッフにリンクの再発行を依頼してください';
+  'このリンクは無効か、有効期限が切れています。もう一度パスワード再設定を申し込むか、統括スタッフにリンクの再発行を依頼してください';
 
 /**
- * The page the invite mail sent by `POST /api/staff/accounts` links to, and
- * the one a link re-issued from `/api/staff/accounts/:id/password-reset`
- * points at as well (see `apps/backend/src/lib/staff-password-reset.ts`).
+ * Shown for a 429 from the API, as on the participant screen: the request
+ * half mails a link to whatever address it is given, so it is rate limited
+ * per IP and per address.
+ */
+const TOO_MANY_REQUESTS_MESSAGE =
+  '送信が集中しています。しばらく待ってから再度お試しください';
+
+/** The query parameter that asks for the request form (see `load`). */
+const REQUEST_PARAM = 'request';
+
+/**
+ * The page the invite mail sent by `POST /api/staff/accounts` links to, the
+ * one a link re-issued from `/api/staff/accounts/:id/password-reset` points
+ * at, and the one a staff member's own reset request mails (see
+ * `apps/backend/src/lib/staff-password-reset.ts`).
  *
- * Unlike the participant screen at `/password-reset` there is no "mail me a
- * link" half to fall back on: staff links are only ever issued by a general
- * staff member for an account they named, which is why the backend has no
- * `/request` sibling for them, so a visit without a token has nothing to
- * offer but an explanation.
+ * Like the participant screen at `/password-reset`, a token means "choose a
+ * password" and its absence means "mail me a link" (#175).
+ *
+ * The token cookie outlives a link that has since been burnt or has expired
+ * (it lasts as long as an invitation, a day), and there is no telling from
+ * here whether it still works. So `?request` -- what the login screen's
+ * "forgot password" link and the password form's own "ask again" link open
+ * -- drops it and shows the request form whatever the browser held.
  */
 export const load: PageServerLoad = ({cookies, url}) => {
+  if (url.searchParams.has(REQUEST_PARAM)) {
+    clearResetToken(cookies, url, STAFF_RESET_TOKEN_COOKIE);
+    redirect(303, url.pathname);
+  }
   // The token itself stays in its httpOnly cookie; the page only needs to
   // know whether there is one (`$lib/server/reset-token.ts`).
   return {
@@ -42,11 +62,60 @@ export const load: PageServerLoad = ({cookies, url}) => {
 export const actions = {
   default: async ({cookies, fetch, request, url}) => {
     const formData = await request.formData();
+    const api = createApiClient(fetch);
+    // Told apart by what was submitted rather than by the token cookie: the
+    // request form is the one with an address in it, and it must reach the
+    // request API even if a stale token cookie was left in this browser.
+    if (formData.has('email')) {
+      const parsed = StaffPasswordResetRequestInputSchema.safeParse({
+        email: String(formData.get('email') ?? ''),
+        scope: String(formData.get('scope') ?? ''),
+      });
+      if (!parsed.success) {
+        return fail(400, {
+          error: 'メールアドレスと区分を正しく入力してください',
+          tokenRejected: false,
+        });
+      }
+
+      // Forwarded as a header, as on the participant screen.
+      const turnstileToken = readTurnstileToken(formData);
+      const res = await api.api.auth.staff['password-reset'].request.$post(
+        {json: parsed.data},
+        {headers: {[TURNSTILE_TOKEN_FIELD]: turnstileToken}},
+      );
+      if (!res.ok) {
+        if (res.status === 429) {
+          return fail(429, {
+            error: TOO_MANY_REQUESTS_MESSAGE,
+            tokenRejected: false,
+          });
+        }
+        if (res.status === 400) {
+          // The body was checked above, so the only 400 left is the
+          // challenge in front of the endpoint refusing the token.
+          return fail(400, {
+            error:
+              '「私はロボットではありません」の確認に失敗しました。ページを再読み込みして、もう一度お試しください',
+            tokenRejected: false,
+          });
+        }
+        return fail(502, {
+          error: '再設定メールの送信に失敗しました',
+          tokenRejected: false,
+        });
+      }
+      // Reported identically whether or not the account exists: the API
+      // answers the same way for both on purpose.
+      return {sent: true};
+    }
+
     const token = readResetToken(cookies, STAFF_RESET_TOKEN_COOKIE);
     if (token === null) {
-      // Unreachable from the rendered page, which only shows the form when
-      // `load` saw a token; a hand-made POST lands here.
-      return fail(400, {error: NEEDS_A_NEW_LINK_MESSAGE, tokenRejected: false});
+      // The page only shows the password form when `load` saw a token, so a
+      // hand-made POST -- or a cookie that expired while the form was open
+      // -- lands here.
+      return fail(400, {error: NEEDS_A_NEW_LINK_MESSAGE, tokenRejected: true});
     }
 
     const newPassword = String(formData.get('newPassword') ?? '');
@@ -72,7 +141,6 @@ export const actions = {
       });
     }
 
-    const api = createApiClient(fetch);
     const res = await api.api.auth.staff['password-reset'].confirm.$post({
       json: parsed.data,
     });

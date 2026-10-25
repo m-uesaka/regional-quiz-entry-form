@@ -914,6 +914,87 @@ describe.skipIf(!dbReachable)(
 // that 0022 deliberately doesn't repeat). Checked by leading column rather
 // than by name, since what matters is whether `where <column> = ?` can use
 // one.
+describe.skipIf(!dbReachable)(
+  'add_staff_password_link (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const testEmail = 'db-schema-add-link-test@example.com';
+
+    async function cleanup() {
+      await sql`delete from staff_accounts where email = ${testEmail}`;
+    }
+
+    beforeEach(cleanup);
+    afterAll(async () => {
+      await cleanup();
+      await sql.close();
+    });
+
+    async function seedGeneralAccount(disabled = false): Promise<string> {
+      const [account] = await sql`
+        insert into staff_accounts (email, password_hash, role, disabled_at)
+        values (
+          ${testEmail}, 'invalid', 'general',
+          ${disabled ? new Date().toISOString() : null}
+        )
+        returning id
+      `;
+      return account.id as string;
+    }
+
+    async function tokenHashes(accountId: string): Promise<string[]> {
+      const rows = await sql`
+        select token_hash from staff_password_reset_tokens
+        where staff_account_id = ${accountId}
+        order by token_hash
+      `;
+      return rows.map((row: {token_hash: string}) => row.token_hash);
+    }
+
+    // #175: a request anyone can make must not throw away the invitation a
+    // general staff member sent; only links that ran out are pruned.
+    it('keeps live links and drops expired ones', async () => {
+      const accountId = await seedGeneralAccount();
+      await sql`
+        insert into staff_password_reset_tokens
+          (staff_account_id, token_hash, expires_at)
+        values
+          (${accountId}, 'live-invite', now() + interval '1 day'),
+          (${accountId}, 'expired-link', now() - interval '1 minute')
+      `;
+
+      await sql`
+        select add_staff_password_link(
+          ${accountId}, 'requested-link', now() + interval '1 hour'
+        )
+      `;
+
+      expect(await tokenHashes(accountId)).toEqual([
+        'live-invite',
+        'requested-link',
+      ]);
+    });
+
+    it('refuses a disabled account without writing a link', async () => {
+      const accountId = await seedGeneralAccount(true);
+
+      let code: string | undefined;
+      try {
+        await sql`
+          select add_staff_password_link(
+            ${accountId}, 'requested-link', now() + interval '1 hour'
+          )
+        `;
+      } catch (e) {
+        code = (e as {errno?: string}).errno;
+      }
+
+      expect(code).toBe('P0005');
+      expect(await tokenHashes(accountId)).toEqual([]);
+    });
+  },
+);
+
 describe.skipIf(!dbReachable)('indexes (local Supabase integration)', () => {
   const sql = new SQL(DB_URL);
 

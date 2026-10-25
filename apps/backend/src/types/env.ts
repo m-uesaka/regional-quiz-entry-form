@@ -44,14 +44,19 @@ export interface Bindings {
   //     because its number has to be far looser: a limit keyed on an email
   //     address is also a way to lock its owner out, and the tighter it is
   //     the cheaper that is to do (`wrangler.toml` has the numbers).
-  //   - `MAIL_TRIGGER_EMAIL_RATE_LIMITER` caps how much of one inbox the two
-  //     endpoints that send mail to an address the caller chose can spend.
-  //     This is the tight one: it is the mail bomb it stops.
-  //   - `MAIL_TRIGGER_IP_RATE_LIMITER` caps the same two endpoints per
-  //     source address. Split off for the same reason as the login pair, and
-  //     looser than it looks like it should be: an IP is not one person, and
-  //     this limit is spent before the challenge and the schema have had a
-  //     say (`wrangler.toml` has the numbers).
+  //   - `MAIL_TRIGGER_EMAIL_RATE_LIMITER` caps how much of one inbox the
+  //     endpoints that send mail to an address the caller chose can spend:
+  //     the entry form, and the participant and staff reset requests (the
+  //     staff one under a key of its own, so the two reset forms don't spend
+  //     each other's budget). This is the tight one: it is the mail bomb it
+  //     stops.
+  //   - `MAIL_TRIGGER_IP_RATE_LIMITER` caps the same endpoints, and the
+  //     logged-in entry, per source address. All of them share one bucket
+  //     per IP, so participants and staff behind one network (a venue's,
+  //     say) spend it together. Split off for the same reason as the login
+  //     pair, and looser than it looks like it should be: an IP is not one
+  //     person, and this limit is spent before the challenge and the schema
+  //     have had a say (`wrangler.toml` has the numbers).
   LOGIN_IP_RATE_LIMITER: RateLimit;
   LOGIN_EMAIL_RATE_LIMITER: RateLimit;
   MAIL_TRIGGER_IP_RATE_LIMITER: RateLimit;

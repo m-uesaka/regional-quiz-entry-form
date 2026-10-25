@@ -31,6 +31,7 @@ function fakeCookies(initial: Record<string, string> = {}): {
 interface FetchLog {
   urls: string[];
   bodies: unknown[];
+  turnstileTokens?: Array<string | null>;
 }
 
 /** Builds a fake `fetch` answering the confirm POST with the given status. */
@@ -41,6 +42,9 @@ function fakeFetch(
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     log.urls.push(String(input));
     log.bodies.push(JSON.parse(String(init?.body)));
+    log.turnstileTokens?.push(
+      new Headers(init?.headers).get('cf-turnstile-response'),
+    );
     return new Response(status === 200 ? JSON.stringify({ok: true}) : '{}', {
       status,
       headers: {'Content-Type': 'application/json'},
@@ -68,6 +72,14 @@ function buildActionEvent(
     cookies,
     request: {formData: async () => formData},
   } as Parameters<typeof actions.default>[0];
+}
+
+function requestForm(email = 'staff@example.com', scope = 'saikyoi'): FormData {
+  const formData = new FormData();
+  formData.set('email', email);
+  formData.set('scope', scope);
+  formData.set('cf-turnstile-response', 'a-turnstile-token');
+  return formData;
 }
 
 function passwordForm(
@@ -110,8 +122,24 @@ describe('staff password reset +page.server load', () => {
     });
   });
 
-  it('has nothing to offer when the page is opened without a token', () => {
+  it('asks for an address when the page is opened without a token', () => {
     expect(load(buildLoadEvent(NO_TOKEN_URL))).toEqual({hasToken: false});
+  });
+
+  // A day-long cookie can outlive the link it was set for, so the login
+  // screen's "forgot password" link asks for the request form outright.
+  it('drops the token cookie and shows the request form for ?request', () => {
+    const {cookies, jar} = fakeCookies({[TOKEN_COOKIE]: TOKEN});
+
+    expect(() =>
+      load(buildLoadEvent(`${NO_TOKEN_URL}?request`, cookies)),
+    ).toThrow(
+      expect.objectContaining({
+        status: 303,
+        location: '/staff/password-reset',
+      }) as Error,
+    );
+    expect(jar.has(TOKEN_COOKIE)).toBe(false);
   });
 
   it('treats an empty token as no token at all', () => {
@@ -152,7 +180,31 @@ describe('staff password reset +page.server action', () => {
     expect(jar.get('staff_session')).toBe('someone-elses-session');
   });
 
-  it('fails with 400 without calling the API when there is no token', async () => {
+  it('asks the API to mail a reset link when there is no token', async () => {
+    const log: FetchLog = {urls: [], bodies: [], turnstileTokens: []};
+    const event = buildActionEvent(
+      fakeFetch(200, log),
+      requestForm('Staff@Example.com', 'general'),
+      fakeCookies().cookies,
+    );
+
+    await expect(actions.default(event)).resolves.toEqual({sent: true});
+    expect(log.urls[0]).toContain('/api/auth/staff/password-reset/request');
+    expect(log.bodies).toEqual([
+      {email: 'staff@example.com', scope: 'general'},
+    ]);
+    expect(log.turnstileTokens).toEqual(['a-turnstile-token']);
+  });
+
+  it('sends the request form to the request API even with a stale token cookie', async () => {
+    const log: FetchLog = {urls: [], bodies: []};
+    const event = buildActionEvent(fakeFetch(200, log), requestForm());
+
+    await expect(actions.default(event)).resolves.toEqual({sent: true});
+    expect(log.urls[0]).toContain('/api/auth/staff/password-reset/request');
+  });
+
+  it('refuses the password form without calling the API when there is no token', async () => {
     const log: FetchLog = {urls: [], bodies: []};
     const event = buildActionEvent(
       fakeFetch(200, log),
@@ -160,8 +212,61 @@ describe('staff password reset +page.server action', () => {
       fakeCookies().cookies,
     );
 
+    await expect(actions.default(event)).resolves.toMatchObject({
+      status: 400,
+      data: {tokenRejected: true},
+    });
+    expect(log.urls).toEqual([]);
+  });
+
+  it('fails with 400 without calling the API when the scope is missing', async () => {
+    const log: FetchLog = {urls: [], bodies: []};
+    const event = buildActionEvent(
+      fakeFetch(200, log),
+      requestForm('staff@example.com', ''),
+      fakeCookies().cookies,
+    );
+
     await expect(actions.default(event)).resolves.toMatchObject({status: 400});
     expect(log.urls).toEqual([]);
+  });
+
+  it('asks the staff member to wait when the API rate limits the request', async () => {
+    const event = buildActionEvent(
+      fakeFetch(429),
+      requestForm(),
+      fakeCookies().cookies,
+    );
+
+    await expect(actions.default(event)).resolves.toMatchObject({
+      status: 429,
+      data: {
+        error: '送信が集中しています。しばらく待ってから再度お試しください',
+      },
+    });
+  });
+
+  it('reports a refused Turnstile token as something to retry', async () => {
+    const event = buildActionEvent(
+      fakeFetch(400),
+      requestForm(),
+      fakeCookies().cookies,
+    );
+
+    await expect(actions.default(event)).resolves.toMatchObject({
+      status: 400,
+      data: {error: expect.stringContaining('私はロボットではありません')},
+    });
+  });
+
+  it('fails with 502 when the request cannot be sent', async () => {
+    const event = buildActionEvent(
+      fakeFetch(500),
+      requestForm(),
+      fakeCookies().cookies,
+    );
+
+    await expect(actions.default(event)).resolves.toMatchObject({status: 502});
   });
 
   it('fails with 400 without calling the API when the two passwords differ', async () => {
@@ -203,7 +308,7 @@ describe('staff password reset +page.server action', () => {
     expect(log.urls).toEqual([]);
   });
 
-  it('points at the general staff and drops the token when the link is no longer usable', async () => {
+  it('points at a new request and drops the token when the link is no longer usable', async () => {
     const {cookies, jar} = fakeCookies({[TOKEN_COOKIE]: TOKEN});
     const event = buildActionEvent(fakeFetch(400), passwordForm(), cookies);
 
@@ -211,7 +316,7 @@ describe('staff password reset +page.server action', () => {
       status: 400,
       data: {
         error:
-          'このリンクは無効か、有効期限が切れています。管理スタッフにリンクの再発行を依頼してください',
+          'このリンクは無効か、有効期限が切れています。もう一度パスワード再設定を申し込むか、統括スタッフにリンクの再発行を依頼してください',
         tokenRejected: true,
       },
     });

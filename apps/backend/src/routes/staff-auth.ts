@@ -4,8 +4,10 @@ import {sign} from 'hono/jwt';
 import {deleteCookie, setCookie} from 'hono/cookie';
 import {
   StaffLoginInputSchema,
+  StaffPasswordResetRequestInputSchema,
   type StaffClaims,
   type StaffLoginInput,
+  type StaffPasswordResetRequestInput,
   type StaffLoginResponse,
   type StaffRole,
   type TournamentType,
@@ -15,9 +17,14 @@ import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
 import {verifyAccountPassword} from '../lib/password-rehash';
 import {internalError} from '../lib/errors';
-import {confirmStaffPasswordReset} from '../lib/staff-password-reset';
+import {findStaffAccountByScope} from '../lib/staff-account-lookup';
+import {
+  confirmStaffPasswordReset,
+  requestStaffPasswordReset,
+} from '../lib/staff-password-reset';
 import {STAFF_SESSION_COOKIE} from '../middleware/staff-auth';
 import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
+import {requireTurnstile} from '../middleware/turnstile';
 
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
 // The attributes the session cookie is issued under, shared with `/logout`
@@ -52,6 +59,10 @@ interface StaffAccountRow {
 // Matches the period both login limiters count over (`wrangler.toml`).
 const LOGIN_LIMIT_PERIOD_SECONDS = 60;
 
+// Matches the period both mail-trigger limiters count over
+// (`wrangler.toml`).
+const MAIL_TRIGGER_LIMIT_PERIOD_SECONDS = 60;
+
 export const staffAuthRoute = new Hono<Env>()
   .post(
     '/login',
@@ -71,32 +82,18 @@ export const staffAuthRoute = new Hono<Env>()
     ),
     async c => {
       const {email, scope, password} = c.req.valid('json');
-      const db = createDbClient(c.env);
-      // The address alone may name two accounts -- a region's 最強位 and
-      // 新人王 run from one mailbox (#166) -- so `scope` picks the one: a
-      // tournament type for regional staff, or none at all for general
-      // staff, whose rows carry a null type. The unique constraint on
-      // (email, tournament_type) leaves at most one row either way.
-      //
-      // A disabled account (#156) is simply not looked for, so it gets the
-      // same 401 -- after the same PBKDF2 work -- as an address that was
-      // never registered: whoever holds its password learns nothing from
-      // trying it.
-      const query = db
-        .from('staff_accounts')
-        .select(
+      // `scope` picks one of the address's accounts, and a disabled one
+      // (#156) isn't looked for, so it gets the same 401 -- after the same
+      // PBKDF2 work -- as an address that was never registered: whoever
+      // holds its password learns nothing from trying it.
+      const {data: staff, error} =
+        await findStaffAccountByScope<StaffAccountRow>(
+          createDbClient(c.env),
+          email,
+          scope,
           'id, password_hash, role, region_id, tournament_type, ' +
             'sessions_valid_from, regions(slug)',
-        )
-        .eq('email', email)
-        .is('disabled_at', null);
-      const {data: staff, error} = await (
-        scope === 'general'
-          ? query.is('tournament_type', null)
-          : query.eq('tournament_type', scope)
-      )
-        .returns<StaffAccountRow[]>()
-        .maybeSingle();
+        );
 
       if (error) {
         return c.json({error: 'internal server error'}, 500);
@@ -153,12 +150,39 @@ export const staffAuthRoute = new Hono<Env>()
       return c.json(body);
     },
   )
-  // The counterpart to the invite mail `POST /api/staff/accounts` sends, and
-  // to the link a general staff member re-issues from
-  // `/api/staff/accounts/:id/password-reset`. There is no `/request` sibling:
-  // staff links are always issued by a general staff member for a named
-  // account, so this endpoint never has to take an address -- and can't be
-  // used to find out which ones are registered.
+  // A staff member who forgot their password asks for a link here (#175),
+  // the staff counterpart of `POST /api/auth/participant/password-reset/
+  // request`, with the same defences for the same reason: it is
+  // unauthenticated and mails an address of the caller's choosing. The
+  // email limiter's key is named after this endpoint, as at login, so the
+  // two reset forms don't spend each other's budget.
+  .post(
+    '/password-reset/request',
+    rateLimit(
+      env => env.MAIL_TRIGGER_IP_RATE_LIMITER,
+      c => `ip:${clientIp(c)}`,
+      MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
+    ),
+    requireTurnstile(),
+    zValidator('json', StaffPasswordResetRequestInputSchema),
+    rateLimit<{out: {json: StaffPasswordResetRequestInput}}>(
+      env => env.MAIL_TRIGGER_EMAIL_RATE_LIMITER,
+      c => `staff-password-reset:${emailKey(c.req.valid('json').email)}`,
+      MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
+    ),
+    c => {
+      // Handed to `waitUntil()` rather than awaited, so whether the address
+      // names an account can't be read off the response time any more than
+      // off its body (see `requestStaffPasswordReset()`).
+      const {email, scope} = c.req.valid('json');
+      c.executionCtx.waitUntil(requestStaffPasswordReset(c.env, email, scope));
+      return c.json({ok: true});
+    },
+  )
+  // The counterpart to the invite mail `POST /api/staff/accounts` sends, to
+  // the link a general staff member re-issues from
+  // `/api/staff/accounts/:id/password-reset`, and to the one `/request`
+  // above mails.
   .post(
     '/password-reset/confirm',
     zValidator('json', StaffPasswordResetConfirmInputSchema),
