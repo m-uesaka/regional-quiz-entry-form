@@ -198,12 +198,30 @@ describe('buildEntriesCsv', () => {
     );
   });
 
-  it('leaves the address empty when the account is gone', () => {
-    const csv = buildEntriesCsv([], [entryRow({email: null})]);
-
-    expect(csv.split('\r\n')[1]).toBe(
-      '山田太郎,ヤマダタロウ,太郎,,確定,,2026-10-01 12:04,一般の部,',
+  // A form may well ask its own question under a fixed column's name; two
+  // columns under one heading would be read as one by anything keyed on
+  // headings.
+  it('tells a custom field apart from a column already under its label', () => {
+    const csv = buildEntriesCsv(
+      [
+        fieldDef({
+          fieldKey: 'comment',
+          label: '自由記述',
+          fieldType: 'textarea',
+          options: null,
+        }),
+        fieldDef({fieldKey: 'size_a', label: 'サイズ'}),
+        fieldDef({fieldKey: 'size_b', label: 'サイズ'}),
+      ],
+      [],
     );
+
+    expect(csv.split(',').slice(-4)).toEqual([
+      '自由記述',
+      '自由記述(comment)',
+      'サイズ',
+      'サイズ(size_b)',
+    ]);
   });
 
   it('joins multiple regulation labels into one cell', () => {

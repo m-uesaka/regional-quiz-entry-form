@@ -22,6 +22,7 @@ import {
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import {formFieldDefSyncRows} from './form-definitions';
+import {JST_OFFSET_MS} from './jst';
 import {regulationSyncFailure} from './regulations';
 import {classifySheetImportError} from './sheet-import-errors';
 import {
@@ -56,10 +57,6 @@ const INDEX_RANGE = 'A1:Z';
 // hits either, while still finishing a few dozen rows in seconds rather
 // than one round trip after another.
 const CONCURRENCY = 4;
-
-// Japan Standard Time has no daylight saving, so a fixed offset turns a
-// wall-clock time into an instant.
-const JST_OFFSET_HOURS = 9;
 
 // `2026/12/26（土）`, `2026/12/26`, `2026-12-26`: the date first, whatever
 // follows it (the day of the week, in either width of brackets).
@@ -160,9 +157,9 @@ export function defaultEntryClosesAt(eventDate: string): string | null {
   ) {
     return null;
   }
-  // The day before, at 23:59 JST: day - 1 in UTC terms, 9 hours earlier.
+  // The day before, at 23:59 JST: that wall-clock time, 9 hours earlier.
   return new Date(
-    Date.UTC(year, month - 1, day - 1, 23 - JST_OFFSET_HOURS, 59),
+    Date.UTC(year, month - 1, day - 1, 23, 59) - JST_OFFSET_MS,
   ).toISOString();
 }
 

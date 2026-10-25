@@ -6,12 +6,13 @@ import {
   type CustomFieldValues,
   type FormFieldDef,
 } from '@regional-quiz/shared';
+import {formatJstDateTime} from './jst';
 
 /**
  * The columns every export starts with, before the custom fields: every
- * answer the entry form takes, and what became of the entry (#178). Staff
- * work from the export, so whatever the staff detail page shows of an
- * entry is in it too.
+ * answer the entry form takes (the custom fields' answers follow), the
+ * account's address, and what became of the entry and when it was made
+ * (#178). Staff work from the export rather than from the detail page.
  */
 const FIXED_HEADERS = [
   '氏名',
@@ -24,9 +25,6 @@ const FIXED_HEADERS = [
   'レギュレーション',
   '自由記述',
 ];
-
-/** Japan Standard Time, which has no daylight saving: always UTC+9. */
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 /**
  * Separator between the selected options of a multi-select checkbox, and
@@ -50,8 +48,8 @@ export interface EntriesCsvRow {
   name: string;
   furigana: string;
   displayName: string;
-  /** The participant's address; `null` if their account is gone. */
-  email: string | null;
+  /** The address of the participant's account. */
+  email: string;
   status: string;
   /** The entry's place on the waitlist, `null` unless it is waitlisted. */
   waitlistPosition: number | null;
@@ -87,12 +85,12 @@ export function buildEntriesCsv(
   fieldDefs: FormFieldDef[],
   entries: EntriesCsvRow[],
 ): string {
-  const headers = [...FIXED_HEADERS, ...fieldDefs.map(f => f.plainLabel)];
+  const headers = [...FIXED_HEADERS, ...customFieldHeaders(fieldDefs)];
   const rows = entries.map(entry => [
     entry.name,
     entry.furigana,
     entry.displayName,
-    entry.email ?? '',
+    entry.email,
     entry.status,
     entry.waitlistPosition === null ? '' : String(entry.waitlistPosition),
     formatJstDateTime(entry.createdAt),
@@ -111,13 +109,22 @@ export function buildEntriesCsv(
 }
 
 /**
- * Writes a stored timestamp as the Japan-time `YYYY-MM-DD HH:mm` staff read
- * every other time on the site in, and a spreadsheet takes for a date-time.
- * @param iso The timestamp as stored.
+ * The custom fields' column headings: each field's `plainLabel`, with its
+ * key added to any label that is already a heading -- a fixed column's (a
+ * field labelled 自由記述 or メールアドレス, say) or an earlier field's.
+ * Two columns under one heading would have a spreadsheet lookup or an
+ * import keyed on headings read the wrong one without a word.
+ * @param fieldDefs The custom fields, in column order.
  */
-function formatJstDateTime(iso: string): string {
-  const jst = new Date(Date.parse(iso) + JST_OFFSET_MS).toISOString();
-  return `${jst.slice(0, 10)} ${jst.slice(11, 16)}`;
+function customFieldHeaders(fieldDefs: FormFieldDef[]): string[] {
+  const taken = new Set(FIXED_HEADERS);
+  return fieldDefs.map(fieldDef => {
+    const heading = taken.has(fieldDef.plainLabel)
+      ? `${fieldDef.plainLabel}(${fieldDef.fieldKey})`
+      : fieldDef.plainLabel;
+    taken.add(heading);
+    return heading;
+  });
 }
 
 /**

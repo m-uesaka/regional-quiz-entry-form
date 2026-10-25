@@ -6,7 +6,6 @@ import {
   EntrySchema,
   StaffEntryDetailSchema,
   StaffEntryListQuerySchema,
-  type CustomFieldValues,
   type Entry,
   type EntryStatus,
 } from '@regional-quiz/shared';
@@ -47,24 +46,13 @@ const ENTRY_COLUMNS =
   // `entry_regulations` join table rather than off the entry itself.
   ENTRY_REGULATIONS_COLUMNS;
 
-const ENTRY_CSV_COLUMNS =
-  'name, furigana, display_name, free_text, custom_field_values, status, ' +
-  'waitlist_position, created_at, participants(email), ' +
-  ENTRY_REGULATIONS_COLUMNS;
+// Everything the list reads, and when the entry was made: the export is
+// the list's rows in full (#178), so it is built from the same select and
+// can't fall behind it when the entry gains a field.
+const ENTRY_CSV_COLUMNS = `${ENTRY_COLUMNS}, created_at`;
 
 /** Shape of an `entries` row as selected for the CSV export. */
-interface EntryCsvRow {
-  name: string;
-  furigana: string;
-  display_name: string;
-  free_text: string | null;
-  custom_field_values: CustomFieldValues;
-  status: EntryStatus;
-  waitlist_position: number | null;
-  created_at: string;
-  participants: {email: string} | null;
-  entry_regulations: EntryRegulationRow[];
-}
+type EntryCsvRow = EntryRow & {created_at: string};
 
 // Excel on Windows reads a BOM-less file as the system's legacy encoding,
 // which turns every Japanese cell into mojibake, so the export is served
@@ -107,7 +95,9 @@ interface EntryRow {
   custom_field_values: Record<string, string | string[]>;
   status: EntryStatus;
   waitlist_position: number | null;
-  participants: {email: string} | null;
+  // To-one and always there: `entries.participant_id` is a not-null
+  // foreign key.
+  participants: {email: string};
   entry_regulations: EntryRegulationRow[];
 }
 
@@ -119,7 +109,7 @@ function rowToEntry(row: EntryRow): Entry {
     name: row.name,
     furigana: row.furigana,
     displayName: row.display_name,
-    email: row.participants?.email,
+    email: row.participants.email,
     regulationIds: regulations.map(regulation => regulation.regulation_id),
     regulationLabels: regulations.map(
       regulation => regulation.regulations.label,
@@ -209,7 +199,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
           name: row.name,
           furigana: row.furigana,
           displayName: row.display_name,
-          email: row.participants?.email ?? null,
+          email: row.participants.email,
           status: ENTRY_STATUS_LABELS[row.status],
           waitlistPosition: row.waitlist_position,
           createdAt: row.created_at,
