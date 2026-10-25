@@ -253,6 +253,9 @@ function mockSupabase(options: {
       // The rehash of a registered participant's legacy hash.
       case 'PATCH participants':
         return new Response(null, {status: 204});
+      // Nothing of this participant's has a lapsed verification link.
+      case 'POST rpc/lapse_expired_pending_entries':
+        return Response.json([]);
       case 'GET entries':
         return rows([]);
       case 'POST entries':

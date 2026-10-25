@@ -32,6 +32,15 @@ describe('staff login +page.svelte', () => {
     expect(screen.getByRole('button', {name: 'ログイン'})).toBeInTheDocument();
   });
 
+  // #175: a staff member who forgot their password can ask for a link.
+  it('links to the password reset request form', () => {
+    renderPage();
+
+    expect(
+      screen.getByRole('link', {name: 'パスワードを忘れた場合'}),
+    ).toHaveAttribute('href', '/staff/password-reset');
+  });
+
   it('posts to its own URL so the redirectTo parameter survives', () => {
     const {container} = render(Page, {
       props: {

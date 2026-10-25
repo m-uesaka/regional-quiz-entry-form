@@ -30,7 +30,9 @@ describe('verify +page.svelte', () => {
 
     expect(screen.getByText('この確認リンクは無効です。')).toBeInTheDocument();
     expect(
-      screen.getByText(/あらためてエントリーしてください/),
+      screen.getByText(
+        /もう一度エントリーすると取り消され、新しい確認メールが届きます/,
+      ),
     ).toBeInTheDocument();
   });
 

@@ -42,25 +42,40 @@ describe('staff password reset +page.svelte', () => {
     expect(form?.querySelector('input[name="token"]')).toBeNull();
   });
 
-  it('stops offering the form once the API has refused the token', () => {
+  it('offers the request form again once the API has refused the token', () => {
     renderPage({
       form: {
         error:
-          'このリンクは無効か、有効期限が切れています。管理スタッフにリンクの再発行を依頼してください',
+          'このリンクは無効か、有効期限が切れています。もう一度パスワード再設定を申し込むか、統括スタッフにリンクの再発行を依頼してください',
         tokenRejected: true,
       },
     });
 
     expect(screen.queryByLabelText('パスワード')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('メールアドレス')).toBeInTheDocument();
   });
 
-  it('explains where to get a link instead of a form when there is no token', () => {
+  it('asks for the address and the account type when there is no token', () => {
     renderPage({hasToken: false});
 
     expect(screen.queryByLabelText('パスワード')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('メールアドレス')).toHaveAttribute(
+      'name',
+      'email',
+    );
+    expect(screen.getByLabelText('区分')).toHaveAttribute('name', 'scope');
     expect(
-      screen.getByText(/管理スタッフにリンクの再発行を依頼/),
+      screen.getByRole('button', {name: '再設定用リンクを送信する'}),
     ).toBeInTheDocument();
+  });
+
+  it('replaces the request form with a neutral confirmation once sent', () => {
+    renderPage({hasToken: false, form: {sent: true}});
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'パスワード再設定用のリンクをメールで送信しました',
+    );
+    expect(screen.queryByLabelText('メールアドレス')).not.toBeInTheDocument();
   });
 
   it('shows the error the action came back with', () => {

@@ -65,6 +65,10 @@ type Policy =
 const ROUTE_POLICIES: Readonly<Record<string, Policy>> = {
   'GET /api/healthz': {access: 'public', reason: 'ヘルスチェック'},
   'POST /api/auth/staff/login': {access: 'public', reason: 'ログイン'},
+  'POST /api/auth/staff/password-reset/request': {
+    access: 'public',
+    reason: 'レート制限 + Turnstile。応答は登録の有無によらず同じ',
+  },
   'POST /api/auth/staff/password-reset/confirm': {
     access: 'public',
     reason: 'トークンで認可する',

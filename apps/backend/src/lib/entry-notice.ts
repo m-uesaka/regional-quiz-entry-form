@@ -17,6 +17,7 @@ export type EntryNoticeReason =
   | 'password-mismatch'
   | 'other-region'
   | 'already-entered'
+  | 'pending-verification'
   | 'common-password'
   | 'dual-entry'
   | 'regulation-unavailable'
@@ -64,6 +65,13 @@ function reasonBlocks(
       return [
         'このメールアドレスでは、この大会に既にエントリー済みです。',
         'エントリーの内容は、マイページのログイン画面からログインして確認できます。',
+        mypageLogin,
+      ];
+    case 'pending-verification':
+      return [
+        'このメールアドレスでは、この大会へのエントリーを受け付け済みですが、まだ確定していません。',
+        '先にお送りした確認メールのリンクを開いて、エントリーを確定してください。リンクの有効期限が切れた後は、エントリーフォームからもう一度エントリーできます。',
+        '確認メールが見当たらない場合は、マイページのログイン画面からログインしてこのエントリーをキャンセルしたうえで、もう一度エントリーしてください。',
         mypageLogin,
       ];
     case 'common-password':

@@ -899,6 +899,128 @@ describe.skipIf(!(await isDbReachable()))(
       );
     });
 
+    /** Lets every verification link of `entryId` expire. */
+    async function expireVerificationLinks(entryId: string): Promise<void> {
+      await sql`
+        update email_verification_tokens
+        set expires_at = now() - interval '1 minute'
+        where entry_id = ${entryId}
+      `;
+    }
+
+    it('refuses re-entry while the verification link is still valid', async () => {
+      const fixture = await createFixture('pending-valid');
+      const input = validInput({regulationIds: [fixture.regulationId]});
+      const firstResult = await createEntry(env, fixture.tournamentId, input);
+      expect(firstResult.ok).toBe(true);
+
+      const result = await createEntry(env, fixture.tournamentId, input);
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.status).toBe(409);
+      expect(!result.ok && result.error).toBe('entry pending verification');
+    });
+
+    it('createEntryUnauthenticated tells the owner the entry is still pending', async () => {
+      const fixture = await createFixture('unauth-pending-valid');
+      const input = validInput({regulationIds: [fixture.regulationId]});
+      expect((await createEntry(env, fixture.tournamentId, input)).ok).toBe(
+        true,
+      );
+      mailSendCount = 0;
+
+      const outcome = await enterUnauthenticated(fixture.tournamentId, input);
+
+      expect(outcome).toEqual({
+        kind: 'notified',
+        reason: 'pending-verification',
+      });
+      expect(mailSendCount).toBe(1);
+    });
+
+    it('reuses an entry whose verification link expired, with a new link', async () => {
+      const fixture = await createFixture('pending-expired');
+      const input = validInput({regulationIds: [fixture.regulationId]});
+      const firstResult = await createEntry(env, fixture.tournamentId, input);
+      expect(firstResult.ok).toBe(true);
+      if (!firstResult.ok) return;
+      await expireVerificationLinks(firstResult.entry.id);
+      mailSendCount = 0;
+
+      const result = await createEntry(env, fixture.tournamentId, {
+        ...input,
+        displayName: '再エントリー太郎',
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.ok && result.entry.id).toBe(firstResult.entry.id);
+      expect(mailSendCount).toBe(1);
+      const [row] = await sql`
+        select status, display_name, cancelled_at from entries
+        where id = ${firstResult.entry.id}
+      `;
+      expect(row.status).toBe('pending_verification');
+      expect(row.display_name).toBe('再エントリー太郎');
+      expect(row.cancelled_at).toBeNull();
+      // The expired link is burnt and exactly one usable one is left.
+      const tokens: Array<{used_at: Date | null; live: boolean}> = await sql`
+        select used_at, expires_at > now() as live
+        from email_verification_tokens where entry_id = ${firstResult.entry.id}
+      `;
+      expect(tokens.filter(t => t.used_at === null && t.live).length).toBe(1);
+      expect(tokens.filter(t => t.used_at === null && !t.live).length).toBe(0);
+    });
+
+    it('frees the region once the other tournament entry link expired', async () => {
+      const {saikyoi, shinjinou} = await createRegionPair(
+        'dual-off-pending-expired',
+        false,
+      );
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      const firstResult = await createEntry(
+        env,
+        saikyoi.tournamentId,
+        validInput({email, regulationIds: [saikyoi.regulationId]}),
+      );
+      expect(firstResult.ok).toBe(true);
+      if (!firstResult.ok) return;
+      await expireVerificationLinks(firstResult.entry.id);
+
+      const result = await createEntry(
+        env,
+        shinjinou.tournamentId,
+        validInput({email, regulationIds: [shinjinou.regulationId]}),
+      );
+
+      expect(result.ok).toBe(true);
+      const [firstRow] = await sql`
+        select status, cancelled_at from entries where id = ${firstResult.entry.id}
+      `;
+      expect(firstRow.status).toBe('cancelled');
+      expect(firstRow.cancelled_at).not.toBeNull();
+    });
+
+    it('leaves a confirmed entry alone when its link has expired', async () => {
+      const fixture = await createFixture('confirmed-expired');
+      const input = validInput({regulationIds: [fixture.regulationId]});
+      const firstResult = await createEntry(env, fixture.tournamentId, input);
+      expect(firstResult.ok).toBe(true);
+      if (!firstResult.ok) return;
+      await sql`
+        update entries set status = 'confirmed', email_verified_at = now()
+        where id = ${firstResult.entry.id}
+      `;
+      await expireVerificationLinks(firstResult.entry.id);
+
+      const result = await createEntry(env, fixture.tournamentId, input);
+
+      expect(!result.ok && result.error).toBe('already entered');
+      const [row] = await sql`
+        select status from entries where id = ${firstResult.entry.id}
+      `;
+      expect(row.status).toBe('confirmed');
+    });
+
     it('still allows re-entering the same tournament after cancelling', async () => {
       // The dual-entry check looks at the region's *other* tournaments, so
       // it must not stand in the way of the reuse path above — the entry

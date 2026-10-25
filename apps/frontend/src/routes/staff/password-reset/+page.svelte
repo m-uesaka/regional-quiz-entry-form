@@ -1,7 +1,10 @@
 <script lang="ts">
   import {enhance} from '$app/forms';
+  import {TOURNAMENT_TYPE_LABELS, TournamentTypeSchema} from '@regional-quiz/shared';
+  import NativeSelect from '$lib/components/form/NativeSelect.svelte';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
+  import Turnstile from '$lib/components/Turnstile.svelte';
   import Button from '$lib/components/ui/atoms/Button.svelte';
   import Card from '$lib/components/ui/atoms/Card.svelte';
   import Input from '$lib/components/ui/atoms/Input.svelte';
@@ -11,6 +14,7 @@
   import type {PageProps} from './$types';
 
   let {data, form}: PageProps = $props();
+  let turnstile = $state<ReturnType<typeof Turnstile>>();
 </script>
 
 <PageContainer size="narrow">
@@ -24,7 +28,7 @@
 
   <!-- The token itself never reaches the page: `load` keeps it in an
        httpOnly cookie (`$lib/server/reset-token.ts`), which the action reads.
-       Once the API has refused it, there is no form left to offer. -->
+       Once the API has refused it, the request form is offered again. -->
   {#if data.hasToken && !form?.tokenRejected}
     <Card>
       <div class="flex flex-col gap-4">
@@ -61,12 +65,59 @@
         </form>
       </div>
     </Card>
-  {:else}
-    <Message variant="warning">
-      <p class="text-sm">
-        このURLにはパスワード設定用のリンクが含まれていません。メールに記載されたリンクを開き直すか、管理スタッフにリンクの再発行を依頼してください。
+  {:else if form?.sent}
+    <Message variant="success">
+      <p role="status" class="text-sm">
+        パスワード再設定用のリンクをメールで送信しました。メールをご確認ください。
       </p>
     </Message>
+  {:else}
+    <Card class="gap-4">
+      <p class="text-sm text-muted-foreground">
+        スタッフアカウントのメールアドレスと区分を入力してください。パスワード再設定用のリンクを送信します。
+      </p>
+
+      <!-- The `enhance` callback hands the challenge back after a refusal, as
+           on the participant screen (see `Turnstile.svelte`). -->
+      <form
+        method="POST"
+        class="flex flex-col gap-4"
+        use:enhance={() => {
+          return async ({update}) => {
+            await update();
+            turnstile?.reset();
+          };
+        }}
+      >
+        <div class="flex flex-col gap-1.5">
+          <Label for="email">メールアドレス</Label>
+          <Input
+            id="email"
+            name="email"
+            type="email"
+            autocomplete="username"
+            required
+          />
+        </div>
+
+        <!-- One address may hold a 最強位 and a 新人王 account (#166), so the
+             request names one the same way the login does. -->
+        <div class="flex flex-col gap-1.5">
+          <Label for="scope">区分</Label>
+          <NativeSelect id="scope" name="scope" required>
+            <option value="">選択してください</option>
+            {#each TournamentTypeSchema.options as type (type)}
+              <option value={type}>{TOURNAMENT_TYPE_LABELS[type]}の地域スタッフ</option>
+            {/each}
+            <option value="general">統括スタッフ</option>
+          </NativeSelect>
+        </div>
+
+        <Turnstile bind:this={turnstile} />
+
+        <Button type="submit" class="w-full">再設定用リンクを送信する</Button>
+      </form>
+    </Card>
   {/if}
 
   <p class="text-sm">

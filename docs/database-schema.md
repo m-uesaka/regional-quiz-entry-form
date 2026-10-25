@@ -445,6 +445,14 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 - `waitlisted` な行をキャンセルした場合は、後続の `waitlist_position` を1つずつ詰めます。
 - すでに `cancelled` の行に対しては何もせず、`cancelled` を返します(冪等)。
 
+### lapse_expired_pending_entries(p_participant_id)
+
+参加者の確定待ち(`pending_verification`)エントリーのうち、**未使用かつ期限内の確認トークンが 1 つも無いもの**を `cancelled` にし、取り消したエントリーの id を返します(`0030`、#172)。エントリー処理(`enterTournament()`)が最初に呼びます。
+
+- 期限が切れたエントリーは確定できないのに、同じ大会への再エントリーと、重複参加を許さない地域のもう一方の大会へのエントリーを断っていました。キャンセル扱いにすることで、同じ大会なら行が再利用され(新しい確認メールが届く)、もう一方の大会の枠も空きます。
+- 残っていたトークンは使用済みにします。
+- ロック取得順は `confirm_entry_by_token()` / `cancel_own_entry()` と同じ「トークン行 → 大会行」。状態とトークンは大会行ロックの下で読み直すので、確認と同時に走っても二重に動きません。複数のエントリーは id 順に処理します。
+
 ### reset_participant_password(p_token_hash, p_password_hash)
 
 再設定トークンのハッシュと、アプリ側で計算済みの PBKDF2 パスワードハッシュを受け取り、対応する参加者のパスワードを更新します。
@@ -563,3 +571,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0027_staff_account_enable_and_link_locking.sql` | `disable_staff_account()` を対象が統括スタッフのときだけ全統括スタッフをロックするよう再定義し、`enable_staff_account()` と `issue_staff_password_link()` を追加(有効化とリンク発行をアカウント行のロック下で 1 トランザクションに) |
 | `0028_import_tournament_fn.sql` | 大会一覧からの一括登録(#168)用の `import_tournament()`。大会の upsert・フォーム定義・レギュレーション(名前で既存と突き合わせ)を 1 トランザクションで |
 | `0029_form_field_textfield.sql` | `form_field_defs.field_type` の check 制約を張り替え、一行の自由記述 `textfield` を許す(#173) |
+| `0030_lapse_expired_pending_entries.sql` | 確認リンクの期限が切れた参加者の確定待ちエントリーを `cancelled` にする `lapse_expired_pending_entries()`(#172)。エントリー処理の最初に呼ぶ |

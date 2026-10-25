@@ -54,7 +54,10 @@ export async function sendVerificationEmail(
         label: 'エントリーを確定する',
         url: `${env.FRONTEND_URL}/verify?token=${token}`,
       },
-      describeLinkLifetime(TOKEN_TTL_MS),
+      // An expired link's entry is cancelled by the next entry the
+      // participant submits (`lapse_expired_pending_entries()`, #172), so
+      // entering again is all it takes.
+      `${describeLinkLifetime(TOKEN_TTL_MS)}期限が切れた場合は、エントリーフォームからもう一度エントリーしてください。`,
       'このエントリーに心当たりがない場合は、このメールを破棄してください。リンクを開かない限り、エントリーは確定しません。',
     ]),
   );

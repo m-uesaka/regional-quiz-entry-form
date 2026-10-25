@@ -49,6 +49,17 @@ export type PasswordResetRequestInput = z.infer<
   typeof PasswordResetRequestInputSchema
 >;
 
+// A staff member asking for a reset link themselves (#175). Named by the
+// same address-and-scope pair as the login, since the address alone may
+// hold two accounts.
+export const StaffPasswordResetRequestInputSchema = z.object({
+  email: emailAddressSchema(),
+  scope: StaffLoginScopeSchema,
+});
+export type StaffPasswordResetRequestInput = z.infer<
+  typeof StaffPasswordResetRequestInputSchema
+>;
+
 // The answer to a successful staff login. `regionSlug` and `tournamentType`
 // name the single tournament a `regional` account is scoped to, so the login
 // screen can send it straight to that tournament's entry list; both are null

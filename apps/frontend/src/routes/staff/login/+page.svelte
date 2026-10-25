@@ -8,6 +8,7 @@
   import Card from '$lib/components/ui/atoms/Card.svelte';
   import Input from '$lib/components/ui/atoms/Input.svelte';
   import Label from '$lib/components/ui/atoms/Label.svelte';
+  import Link from '$lib/components/ui/atoms/Link.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
   import type {PageProps} from './$types';
 
@@ -90,4 +91,8 @@
       <Button type="submit" class="w-full">ログイン</Button>
     </form>
   </Card>
+
+  <div class="text-center text-sm">
+    <Link href="/staff/password-reset">パスワードを忘れた場合</Link>
+  </div>
 </PageContainer>

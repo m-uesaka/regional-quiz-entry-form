@@ -39,9 +39,12 @@
         </p>
         <!-- Which tournament the token belonged to isn't recoverable from an
              invalid token, so re-entry is guided through mypage rather than a
-             direct link to the entry form. -->
+             direct link to the entry form. An entry left pending by an expired
+             link is cancelled by the participant's next entry
+             (`lapse_expired_pending_entries()`, #172), so entering again is
+             all it takes. -->
         <p>
-          すでにエントリーが確定している場合もあるため、まずはマイページにログインしてエントリー状況をご確認ください。エントリーが残っていない場合は、大会のエントリーフォームからあらためてエントリーしてください。
+          すでにエントリーが確定している場合もあるため、まずはマイページにログインしてエントリー状況をご確認ください。エントリーが確定していない場合は、大会のエントリーフォームからもう一度エントリーしてください。期限切れで確定しなかったエントリーは、もう一度エントリーすると取り消され、新しい確認メールが届きます。
         </p>
       </div>
     </Message>
