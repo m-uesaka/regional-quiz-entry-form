@@ -1,9 +1,16 @@
+import type {StaffRole, TournamentType} from '@regional-quiz/shared';
 import type {StaffPasswordResetConfirmInput} from '@regional-quiz/shared/password-policy';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import {createMailSender} from './mailer';
 import {hashPassword} from './password';
+import {
+  buildSystemMail,
+  describeLinkLifetime,
+  systemMailSubject,
+} from './system-mail';
 import {generateToken, hashToken} from './token';
+import {tournamentDisplayName} from './tournaments';
 
 // Longer than the participant reset link's hour. A staff link is normally an
 // invitation the recipient did not ask for and is not sitting waiting for, so
@@ -44,6 +51,63 @@ interface ResetTokenRow {
 }
 
 /**
+ * The scope of a staff account, as the setup mail names it. The region's
+ * tournaments are embedded whole because `staff_accounts` has no foreign
+ * key to `tournaments`; the one of the account's type is picked out below.
+ */
+interface StaffAccountScopeRow {
+  role: StaffRole;
+  tournament_type: TournamentType | null;
+  // Null for `general` staff, who have no region.
+  regions: {
+    name: string;
+    tournaments: Array<{name: string | null; type: TournamentType}>;
+  } | null;
+}
+
+/**
+ * Names the account a setup mail is for. One address may hold a 最強位 and a
+ * 新人王 account at once (#166), so 「スタッフアカウント」 alone wouldn't say
+ * which of its two mails sets which password.
+ *
+ * A regional account is named after its tournament: `(region_id, type)` is
+ * unique, so there is at most one. An account may be created before that
+ * tournament is, in which case it takes the name the tournament would get
+ * by default.
+ * @param env The Worker bindings.
+ * @param staffAccountId The account to name.
+ * @return E.g. 「「東京最強位」のスタッフアカウント」, or the read's error.
+ */
+async function describeStaffAccount(
+  env: Bindings,
+  staffAccountId: string,
+): Promise<{ok: true; label: string} | {ok: false; error: string}> {
+  const {data, error} = await createDbClient(env)
+    .from('staff_accounts')
+    .select('role, tournament_type, regions(name, tournaments(name, type))')
+    .eq('id', staffAccountId)
+    .returns<StaffAccountScopeRow[]>()
+    .maybeSingle();
+  if (error) {
+    return {ok: false, error: error.message};
+  }
+  if (!data) {
+    return {ok: false, error: 'staff account not found'};
+  }
+  if (data.role === 'general' || !data.regions || !data.tournament_type) {
+    return {ok: true, label: '統括スタッフアカウント'};
+  }
+  const type = data.tournament_type;
+  const tournament = data.regions.tournaments.find(t => t.type === type);
+  const name = tournamentDisplayName(
+    tournament?.name ?? null,
+    data.regions.name,
+    type,
+  );
+  return {ok: true, label: `「${name}」のスタッフアカウント`};
+}
+
+/**
  * Issues a one-time password link for a staff account and mails it to that
  * account's address.
  *
@@ -74,6 +138,13 @@ export async function sendStaffPasswordLink(
   // transaction, under the account's row lock, and refuses a disabled
   // account there (#156). Checking `disabled_at` here and writing afterwards
   // would let a disable land in between and leave a link behind it.
+  //
+  // The account is named first, so a failed read leaves no link behind
+  // that no mail carries.
+  const account = await describeStaffAccount(env, staffAccountId);
+  if (!account.ok) {
+    return {ok: false, disabled: false, error: account.error};
+  }
   const token = generateToken();
   const {error: issueError} = await createDbClient(env).rpc(
     'issue_staff_password_link',
@@ -95,11 +166,24 @@ export async function sendStaffPasswordLink(
 
   const mailer = createMailSender(env);
   try {
-    await mailer.send({
-      to: email,
-      subject: 'スタッフアカウントのパスワード設定',
-      html: `<a href="${env.FRONTEND_URL}/staff/password-reset?token=${token}">こちらをクリックしてパスワードを設定してください</a>`,
-    });
+    // Both a new account's invitation and a re-issued link come through
+    // here, so the wording fits either.
+    await mailer.send(
+      buildSystemMail(email, staffPasswordMailSubject(account.label), [
+        `このメールアドレスの${account.label}について、パスワード設定用のリンクが発行されました。下のリンクを開いて、パスワードを設定してください。`,
+        {
+          label: 'パスワードを設定する',
+          url: `${env.FRONTEND_URL}/staff/password-reset?token=${token}`,
+        },
+        `${describeLinkLifetime(TOKEN_TTL_MS)}期限が切れた場合は、統括スタッフにリンクの再発行を依頼してください。`,
+        '設定したパスワードで、スタッフ用のログイン画面からログインできます。',
+        {
+          label: 'スタッフ用のログイン画面',
+          url: `${env.FRONTEND_URL}/staff/login`,
+        },
+        'このメールに心当たりがない場合は、このメールを破棄してください。',
+      ]),
+    );
   } catch (mailError) {
     // The token stays in place rather than being deleted: it is unguessable
     // and expires on its own, and the general staff member can re-send the
@@ -111,6 +195,15 @@ export async function sendStaffPasswordLink(
     };
   }
   return {ok: true};
+}
+
+/**
+ * The subject a setup mail for the account `accountLabel` names goes out
+ * under.
+ * @param accountLabel The account, as `describeStaffAccount()` names it.
+ */
+export function staffPasswordMailSubject(accountLabel: string): string {
+  return systemMailSubject(`${accountLabel}のパスワード設定`);
 }
 
 /**

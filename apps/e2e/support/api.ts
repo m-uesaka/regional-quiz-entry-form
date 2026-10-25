@@ -56,14 +56,38 @@ export interface EntryOverrides {
   customFieldValues?: Record<string, string | string[]>;
 }
 
-/** The subject `sendVerificationEmail()` sends the confirmation link under. */
-export const VERIFICATION_MAIL_SUBJECT = 'エントリー確認メール';
+// What `systemMailSubject()` prefixes every system mail's subject with
+// (#170).
+const SYSTEM_MAIL_SUBJECT_PREFIX = '【地域クイズ最強位・新人王】';
+
+/**
+ * The subject `sendVerificationEmail()` sends the confirmation link for
+ * `tournament` under.
+ * @param tournament The tournament being entered.
+ */
+export function verificationMailSubject(tournament: TournamentFixture): string {
+  return `${SYSTEM_MAIL_SUBJECT_PREFIX}「${tournament.name}」のエントリーを確定してください`;
+}
 
 /**
  * The subject `sendEntryNoticeEmail()` tells an address's owner, instead of
- * the submitter, why an anonymous entry wasn't made (#117).
+ * the submitter, why an anonymous entry to `tournament` wasn't made (#117).
+ * @param tournament The tournament the submission tried to enter.
  */
-export const ENTRY_NOTICE_SUBJECT = 'エントリーを受け付けられませんでした';
+export function entryNoticeSubject(tournament: TournamentFixture): string {
+  return `${SYSTEM_MAIL_SUBJECT_PREFIX}「${tournament.name}」へのエントリーを受け付けられませんでした`;
+}
+
+/**
+ * The subject `promoteNextWaitlistedEntry()` tells a participant their
+ * waitlisted entry to `tournament` was promoted under.
+ * @param tournament The tournament the entry was waitlisted for.
+ */
+export function waitlistPromotionSubject(
+  tournament: TournamentFixture,
+): string {
+  return `${SYSTEM_MAIL_SUBJECT_PREFIX}「${tournament.name}」のエントリーが確定しました(キャンセル待ちからの繰り上げ)`;
+}
 
 const MAIL_WAIT_TIMEOUT_MS = 10_000;
 const MAIL_POLL_INTERVAL_MS = 100;
@@ -125,7 +149,7 @@ export async function submitEntry(
   // `waitUntil()`. The confirmation mail is the last thing that work does,
   // so waiting for it is what makes the entry safe for the spec to rely on.
   expect(response.status(), await response.text()).toBe(202);
-  await waitForMail(request, email, VERIFICATION_MAIL_SUBJECT);
+  await waitForMail(request, email, verificationMailSubject(tournament));
   return {
     email,
     password: PARTICIPANT_PASSWORD,
@@ -210,15 +234,21 @@ export function extractVerificationUrl(html: string): string {
  * Only the arrangement in `staff-csv.spec.ts` uses this; the flow of
  * following the link in a browser is `openVerificationLink()` in `./ui.ts`.
  * @param request The API context to confirm through.
+ * @param tournament The tournament the entry was made to.
  * @param email The address the confirmation mail went to.
  * @return The status the entry landed in: `confirmed` when the tournament
  *     had a free seat, `waitlisted` when it did not.
  */
 export async function verifyEntry(
   request: APIRequestContext,
+  tournament: TournamentFixture,
   email: string,
 ): Promise<EntryStatus> {
-  const mail = await waitForMail(request, email, VERIFICATION_MAIL_SUBJECT);
+  const mail = await waitForMail(
+    request,
+    email,
+    verificationMailSubject(tournament),
+  );
   const response = await request.get(
     `${BACKEND_URL}${extractVerificationPath(mail.html)}`,
   );
@@ -249,7 +279,7 @@ export async function enterAndVerify(
   overrides: EntryOverrides = {},
 ): Promise<EnteredParticipant & {status: EntryStatus}> {
   const participant = await submitEntry(request, tournament, overrides);
-  const status = await verifyEntry(request, participant.email);
+  const status = await verifyEntry(request, tournament, participant.email);
   return {...participant, status};
 }
 

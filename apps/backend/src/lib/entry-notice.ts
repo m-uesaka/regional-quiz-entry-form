@@ -1,6 +1,10 @@
 import type {Bindings} from '../types/env';
-import {escapeHtml} from './html';
 import {createMailSender} from './mailer';
+import {
+  buildSystemMail,
+  systemMailSubject,
+  type SystemMailBlock,
+} from './system-mail';
 
 /**
  * Why an unauthenticated entry submission was not entered. Only the owner
@@ -18,26 +22,39 @@ export type EntryNoticeReason =
   | 'regulation-unavailable'
   | 'processing-failed';
 
-/** The subject every entry notice is sent under. */
-export const ENTRY_NOTICE_SUBJECT = 'エントリーを受け付けられませんでした';
+/**
+ * The subject the entry notice for `tournamentName` goes out under, whatever
+ * the reason.
+ * @param tournamentName The tournament the submission tried to enter.
+ */
+export function entryNoticeSubject(tournamentName: string): string {
+  return systemMailSubject(
+    `「${tournamentName}」へのエントリーを受け付けられませんでした`,
+  );
+}
 
 /**
- * The paragraphs that explain each reason. Written for the owner of the
+ * The blocks that explain each reason. Written for the owner of the
  * address, who may not be the person who submitted the form: anyone can
  * type someone else's address, which is why the closing paragraph tells
  * them they can ignore a notice they don't recognise.
  */
-function reasonParagraphs(
+function reasonBlocks(
   reason: EntryNoticeReason,
   frontendUrl: string,
-): string[] {
-  const mypageLogin = `<a href="${frontendUrl}/mypage/login">マイページのログイン画面</a>`;
+): SystemMailBlock[] {
+  const mypageLogin = {
+    label: 'マイページのログイン画面',
+    url: `${frontendUrl}/mypage/login`,
+  };
   switch (reason) {
     case 'password-mismatch':
       return [
         'このメールアドレスは登録済みですが、入力されたパスワードが登録済みのものと一致しませんでした。',
-        `エントリーするには、${mypageLogin}から登録済みのパスワードでログインしたうえで、エントリーフォームからもう一度エントリーしてください。`,
-        `パスワードを忘れた場合は、<a href="${frontendUrl}/password-reset">パスワード再設定</a>から再設定できます。`,
+        'エントリーするには、マイページのログイン画面から登録済みのパスワードでログインしたうえで、エントリーフォームからもう一度エントリーしてください。',
+        mypageLogin,
+        'パスワードを忘れた場合は、パスワード再設定の画面から再設定できます。',
+        {label: 'パスワード再設定', url: `${frontendUrl}/password-reset`},
       ];
     case 'other-region':
       return [
@@ -46,7 +63,8 @@ function reasonParagraphs(
     case 'already-entered':
       return [
         'このメールアドレスでは、この大会に既にエントリー済みです。',
-        `エントリーの内容は、${mypageLogin}からログインして確認できます。`,
+        'エントリーの内容は、マイページのログイン画面からログインして確認できます。',
+        mypageLogin,
       ];
     case 'common-password':
       return [
@@ -56,7 +74,8 @@ function reasonParagraphs(
     case 'dual-entry':
       return [
         'この地域では、最強位と新人王のどちらか一方にのみエントリーできます。このメールアドレスでは、既にもう一方の大会にエントリーしています。',
-        `エントリーの内容は、${mypageLogin}からログインして確認できます。`,
+        'エントリーの内容は、マイページのログイン画面からログインして確認できます。',
+        mypageLogin,
       ];
     case 'regulation-unavailable':
       return [
@@ -87,14 +106,11 @@ export async function sendEntryNoticeEmail(
   tournamentName: string,
   reason: EntryNoticeReason,
 ): Promise<void> {
-  const paragraphs = [
-    `「${escapeHtml(tournamentName)}」へのエントリーを受け付けられませんでした。`,
-    ...reasonParagraphs(reason, env.FRONTEND_URL),
-    'このエントリーに心当たりがない場合は、このメールを破棄してください。',
-  ];
-  await createMailSender(env).send({
-    to: email,
-    subject: ENTRY_NOTICE_SUBJECT,
-    html: paragraphs.map(paragraph => `<p>${paragraph}</p>`).join(''),
-  });
+  await createMailSender(env).send(
+    buildSystemMail(email, entryNoticeSubject(tournamentName), [
+      `「${tournamentName}」へのエントリーを受け付けられませんでした。`,
+      ...reasonBlocks(reason, env.FRONTEND_URL),
+      'このエントリーに心当たりがない場合は、このメールを破棄してください。',
+    ]),
+  );
 }

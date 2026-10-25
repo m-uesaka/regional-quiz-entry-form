@@ -3,6 +3,11 @@ import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import {createMailSender} from './mailer';
 import {hashPassword} from './password';
+import {
+  buildSystemMail,
+  describeLinkLifetime,
+  systemMailSubject,
+} from './system-mail';
 import {generateToken, hashToken} from './token';
 
 // Deliberately shorter than the entry verification link's 24 hours: a reset
@@ -109,11 +114,17 @@ export async function requestPasswordReset(
 
   const mailer = createMailSender(env);
   try {
-    await mailer.send({
-      to: email,
-      subject: 'パスワード再設定',
-      html: `<a href="${env.FRONTEND_URL}/password-reset?token=${token}">こちらをクリックしてパスワードを再設定してください</a>`,
-    });
+    await mailer.send(
+      buildSystemMail(email, systemMailSubject('パスワードの再設定'), [
+        'パスワード再設定のお申し込みを受け付けました。下のリンクを開いて、新しいパスワードを設定してください。',
+        {
+          label: 'パスワードを再設定する',
+          url: `${env.FRONTEND_URL}/password-reset?token=${token}`,
+        },
+        `${describeLinkLifetime(TOKEN_TTL_MS)}期限が切れた場合は、パスワード再設定の画面からもう一度お申し込みください。`,
+        'パスワードの再設定を申し込んだ覚えがない場合は、このメールを破棄してください。リンクを開かない限り、パスワードは変更されません。',
+      ]),
+    );
   } catch (mailError) {
     // The token stays in place rather than being deleted: it is unguessable
     // and expires on its own, and a delete here could just as well fail.

@@ -1,6 +1,7 @@
 import {afterEach, describe, expect, it} from 'bun:test';
 import type {Bindings} from '../types/env';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {MAIL_FROM_NAME} from './mailer';
 import {
   MAIL_QUEUE_MAX_ATTEMPTS,
   handleBulkMailQueue,
@@ -162,13 +163,13 @@ describe('handleBulkMailQueue', () => {
 
     expect(log.mails).toEqual([
       {
-        from: ENV.MAIL_FROM_ADDRESS,
+        from: `${MAIL_FROM_NAME} <${ENV.MAIL_FROM_ADDRESS}>`,
         to: 'taro@example.com',
         subject: '大会のご案内',
         html: '<p>大会のご案内</p>',
       },
       {
-        from: ENV.MAIL_FROM_ADDRESS,
+        from: `${MAIL_FROM_NAME} <${ENV.MAIL_FROM_ADDRESS}>`,
         to: 'hanako@example.com',
         subject: '大会のご案内',
         html: '<p>大会のご案内</p>',

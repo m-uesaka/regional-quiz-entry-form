@@ -113,4 +113,25 @@ describe('createMailSender', () => {
       'http://127.0.0.1:8788/emails',
     );
   });
+
+  it('sends from the bound address under the site’s display name', async () => {
+    let body: {from?: string} = {};
+    globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body));
+      return Promise.resolve(new Response(null, {status: 200}));
+    }) as unknown as typeof fetch;
+
+    await createMailSender({
+      MAIL_API_KEY: 'test-api-key',
+      MAIL_FROM_ADDRESS: 'entry@example.com',
+    } as Bindings).send({
+      to: 'user@example.com',
+      subject: 'Hi',
+      html: '<p>Hi</p>',
+    });
+
+    expect(body.from).toBe(
+      '地域クイズ最強位・新人王 エントリー <entry@example.com>',
+    );
+  });
 });

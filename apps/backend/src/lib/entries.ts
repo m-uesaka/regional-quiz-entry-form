@@ -61,6 +61,8 @@ export interface EntryTournamentRow {
   name: string | null;
   type: TournamentType;
   region_id: string;
+  // Null for an uncapped tournament, which can never waitlist anyone.
+  capacity: number | null;
   entry_opens_at: string;
   entry_closes_at: string;
   // A to-one embed, so PostgREST answers with the region object itself
@@ -337,7 +339,7 @@ export async function checkEntrySubmission(
   const {data: tournament, error: tournamentError} = await db
     .from('tournaments')
     .select(
-      'id, name, type, region_id, entry_opens_at, entry_closes_at, ' +
+      'id, name, type, region_id, capacity, entry_opens_at, entry_closes_at, ' +
         'regions(allows_dual_entry, name), ' +
         'regulations(id, priority_starts_at, priority_ends_at)',
     )
@@ -637,7 +639,17 @@ async function enterTournament(
   }
 
   try {
-    await sendVerificationEmail(env, entry.id, email);
+    await sendVerificationEmail(
+      env,
+      entry.id,
+      email,
+      tournamentDisplayName(
+        tournament.name,
+        tournament.regions.name,
+        tournament.type,
+      ),
+      tournament.capacity !== null,
+    );
   } catch (mailError) {
     // Rolled back because the participant never received a usable
     // verification link, so the entry they can't confirm must not stand in

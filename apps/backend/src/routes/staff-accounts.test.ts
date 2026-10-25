@@ -13,6 +13,7 @@ import type {Bindings} from '../types/env';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
 import {app} from '../index';
 import {isPasswordHashUsable} from '../lib/password';
+import {staffPasswordMailSubject} from '../lib/staff-password-reset';
 import {
   isStaffSessionCheck,
   staffSessionAwareFetch,
@@ -598,6 +599,10 @@ describe.skipIf(!(await isDbReachable()))(
 
     async function deleteTestRows(): Promise<void> {
       await sql`delete from staff_accounts where email like ${emailPrefix + '%'}`;
+      await sql`
+        delete from tournaments
+        where region_id in (select id from regions where slug = ${regionSlug})
+      `;
       await sql`delete from regions where slug = ${regionSlug}`;
     }
 
@@ -627,6 +632,16 @@ describe.skipIf(!(await isDbReachable()))(
         returning id
       `;
       regionId = region.id;
+      // The region's 新人王 only, so the 最強位 accounts below show the name
+      // a tournament not created yet would get by default.
+      await sql`
+        insert into tournaments (
+          region_id, type, name, entry_opens_at, entry_closes_at
+        ) values (
+          ${regionId}, 'shinjinou', 'スタッフ管理テスト新人王決定戦',
+          '2020-01-01T00:00:00Z', '2099-01-01T00:00:00Z'
+        )
+      `;
     });
 
     afterAll(async () => {
@@ -731,6 +746,50 @@ describe.skipIf(!(await isDbReachable()))(
       expect(sentMail[0].to).toBe(`${emailPrefix}-regional@example.com`);
       expect(sentMail[0].html).toContain(
         `${env.FRONTEND_URL}/staff/password-reset?token=`,
+      );
+      // No 最強位 tournament exists in the region yet, so the account is
+      // named by the default the tournament would get.
+      expect(sentMail[0].subject).toBe(
+        staffPasswordMailSubject(
+          '「スタッフ管理テスト地域最強位」のスタッフアカウント',
+        ),
+      );
+      expect(sentMail[0].html).toContain(
+        'このメールアドレスの「スタッフ管理テスト地域最強位」のスタッフアカウントについて',
+      );
+    });
+
+    // #170: one address may hold both types' accounts (#166), so each mail
+    // has to say which one it sets the password for.
+    it("names a regional account's setup mail after its tournament", async () => {
+      sentMail = [];
+
+      const res = await createAccount({
+        ...regionalAccountBody('regional-shinjinou'),
+        tournamentType: 'shinjinou',
+      });
+
+      expect(res.status).toBe(201);
+      expect(sentMail).toHaveLength(1);
+      expect(sentMail[0].subject).toBe(
+        staffPasswordMailSubject(
+          '「スタッフ管理テスト新人王決定戦」のスタッフアカウント',
+        ),
+      );
+    });
+
+    it("names a general account's setup mail as such", async () => {
+      sentMail = [];
+
+      const res = await createAccount(generalAccountBody('general-mail'));
+
+      expect(res.status).toBe(201);
+      expect(sentMail).toHaveLength(1);
+      expect(sentMail[0].subject).toBe(
+        staffPasswordMailSubject('統括スタッフアカウント'),
+      );
+      expect(sentMail[0].html).toContain(
+        'このメールアドレスの統括スタッフアカウントについて',
       );
     });
 
