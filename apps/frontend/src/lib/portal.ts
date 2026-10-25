@@ -2,6 +2,7 @@ import {
   isWithinEntryPeriod,
   TOURNAMENT_TYPE_LABELS,
   type PortalTournament,
+  type TournamentType,
 } from '@regional-quiz/shared';
 import {formatJstDateTime} from '$lib/jst-datetime';
 
@@ -33,6 +34,20 @@ export interface PortalRegionView {
   regionSlug: string;
   regionName: string;
   tournaments: PortalTournamentView[];
+}
+
+/**
+ * A tournament's public pages sit under `/<regionSlug>/<tournamentType>`:
+ * the entry form at `/entry`, the published entry list at `/list`. Every
+ * link to them is built here, so they all agree on the encoding.
+ * @param regionSlug The tournament's region slug.
+ * @param tournamentType The tournament's type, used as the URL slug.
+ */
+export function tournamentPublicPath(
+  regionSlug: string,
+  tournamentType: TournamentType,
+): string {
+  return `/${encodeURIComponent(regionSlug)}/${tournamentType}`;
 }
 
 /**
@@ -79,7 +94,10 @@ export function groupPortalTournaments(
       };
       regions.set(tournament.regionSlug, region);
     }
-    const tournamentPath = `/${encodeURIComponent(tournament.regionSlug)}/${tournament.tournamentType}`;
+    const tournamentPath = tournamentPublicPath(
+      tournament.regionSlug,
+      tournament.tournamentType,
+    );
     region.tournaments.push({
       name: tournament.tournamentName,
       typeLabel: TOURNAMENT_TYPE_LABELS[tournament.tournamentType],

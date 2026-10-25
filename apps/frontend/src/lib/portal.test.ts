@@ -1,6 +1,10 @@
 import {describe, expect, it} from 'vitest';
 import type {PortalTournament} from '@regional-quiz/shared';
-import {groupPortalTournaments, portalStatus} from './portal';
+import {
+  groupPortalTournaments,
+  portalStatus,
+  tournamentPublicPath,
+} from './portal';
 
 const OPENS_AT = '2026-11-01T00:00:00Z';
 const CLOSES_AT = '2026-11-30T00:00:00Z';
@@ -18,6 +22,18 @@ function tournament(
     ...overrides,
   };
 }
+
+describe('tournamentPublicPath', () => {
+  it('puts the region slug and the tournament type in the path', () => {
+    expect(tournamentPublicPath('tokyo', 'saikyoi')).toBe('/tokyo/saikyoi');
+  });
+
+  it('encodes a region slug that would otherwise change the URL', () => {
+    expect(tournamentPublicPath('a?b#c', 'shinjinou')).toBe(
+      '/a%3Fb%23c/shinjinou',
+    );
+  });
+});
 
 describe('portalStatus', () => {
   it('is upcoming before the window opens', () => {

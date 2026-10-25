@@ -10,6 +10,7 @@
   import Table from '$lib/components/ui/atoms/Table.svelte';
   import TableData from '$lib/components/ui/atoms/TableData.svelte';
   import TableHead from '$lib/components/ui/atoms/TableHead.svelte';
+  import {tournamentPublicPath} from '$lib/portal';
   import type {PageProps} from './$types';
 
   let {data}: PageProps = $props();
@@ -47,20 +48,6 @@
    */
   function entriesHref(regionSlug: string, tournamentType: string): string {
     return `/staff/${regionSlug}/${tournamentType}/entries`;
-  }
-
-  /**
-   * The entry list participants see, so staff can check what is published
-   * and copy the URL to share. It is a page outside the staff screens, so it
-   * opens in a new tab and leaves the dashboard where it was.
-   * @param regionSlug The tournament's region slug.
-   * @param tournamentType The tournament's type, used as the URL slug.
-   */
-  function publicEntryListHref(
-    regionSlug: string,
-    tournamentType: string,
-  ): string {
-    return `/${regionSlug}/${tournamentType}/list`;
   }
 </script>
 
@@ -129,11 +116,15 @@
                   >
                     エントリー一覧
                   </Link>
+                  <!-- The list participants see, for checking what is
+                       published and copying the URL to share. It is outside
+                       the staff screens, so it opens in a new tab and leaves
+                       the dashboard where it was. -->
                   <Link
-                    href={publicEntryListHref(
+                    href="{tournamentPublicPath(
                       summary.regionSlug,
                       summary.tournamentType,
-                    )}
+                    )}/list"
                     target="_blank"
                     aria-label="{summary.regionName} {summary.tournamentName}の公開エントリーリスト(新しいタブで開きます)"
                   >

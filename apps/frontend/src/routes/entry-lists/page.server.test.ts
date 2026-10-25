@@ -1,4 +1,5 @@
 import {describe, expect, it} from 'vitest';
+import type {HttpError} from '@sveltejs/kit';
 import type {PortalTournament} from '@regional-quiz/shared';
 import {load} from './+page.server';
 
@@ -24,16 +25,16 @@ const TOURNAMENT: PortalTournament = {
   entryClosesAt: '2000-01-31T00:00:00Z',
 };
 
-describe('top +page.server load', () => {
+describe('entry-lists +page.server load', () => {
   it('reads the tournaments with the links to their entry lists', async () => {
     const result = await load(buildEvent(fakeFetch(200, [TOURNAMENT])));
 
     expect(result?.regions).toEqual([
       expect.objectContaining({
-        regionSlug: 'tokyo',
+        regionName: '東京',
         tournaments: [
           expect.objectContaining({
-            status: 'closed',
+            name: '東京最強位',
             entryListPath: '/tokyo/saikyoi/list',
           }),
         ],
@@ -41,19 +42,9 @@ describe('top +page.server load', () => {
     ]);
   });
 
-  it('answers no regions rather than failing when the API errors', async () => {
-    const result = await load(buildEvent(fakeFetch(500, {})));
-
-    expect(result).toEqual({regions: null});
-  });
-
-  it('answers no regions rather than failing when the API is unreachable', async () => {
-    const unreachable = (async () => {
-      throw new TypeError('fetch failed');
-    }) as typeof fetch;
-
-    const result = await load(buildEvent(unreachable));
-
-    expect(result).toEqual({regions: null});
+  it('answers 502 when the backend cannot list the tournaments', async () => {
+    await expect(
+      load(buildEvent(fakeFetch(500, {error: 'boom'}))),
+    ).rejects.toMatchObject({status: 502} satisfies Partial<HttpError>);
   });
 });
