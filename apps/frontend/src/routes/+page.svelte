@@ -11,7 +11,7 @@
     description="エントリーは、エントリーポータルにある各地域のエントリーフォームから行ってください。"
   />
 
-  <div class="grid gap-4 sm:grid-cols-2">
+  <div class="grid gap-4 md:grid-cols-3">
     <Card class="justify-between gap-4">
       <div class="flex flex-col gap-1">
         <h2 class="text-lg font-bold">参加者の方</h2>
@@ -33,6 +33,21 @@
           マイページ
         </a>
       </div>
+    </Card>
+
+    <Card class="justify-between gap-4">
+      <div class="flex flex-col gap-1">
+        <h2 class="text-lg font-bold">エントリーリスト</h2>
+        <p class="text-sm text-muted-foreground">
+          各大会にエントリーした方の一覧はこちらから。
+        </p>
+      </div>
+      <a
+        href="/entry-lists"
+        class={buttonVariants({variant: 'secondary', tone: 'solid', size: 'medium'})}
+      >
+        エントリーリスト一覧
+      </a>
     </Card>
 
     <Card class="justify-between gap-4">

@@ -15,6 +15,14 @@ describe('top +page.svelte', () => {
     );
   });
 
+  it("leads to the index of every tournament's entry list", () => {
+    render(Page);
+
+    expect(
+      screen.getByRole('link', {name: 'エントリーリスト一覧'}),
+    ).toHaveAttribute('href', '/entry-lists');
+  });
+
   it('leads staff to their login screen', () => {
     render(Page);
 

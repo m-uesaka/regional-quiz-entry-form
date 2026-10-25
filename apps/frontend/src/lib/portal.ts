@@ -2,6 +2,7 @@ import {
   isWithinEntryPeriod,
   TOURNAMENT_TYPE_LABELS,
   type PortalTournament,
+  type TournamentType,
 } from '@regional-quiz/shared';
 import {formatJstDateTime} from '$lib/jst-datetime';
 
@@ -24,6 +25,8 @@ export interface PortalTournamentView {
   entryPeriodLabel: string;
   /** The entry form, `/<regionSlug>/<tournamentType>/entry`. */
   entryPath: string;
+  /** The published entry list, `/<regionSlug>/<tournamentType>/list`. */
+  entryListPath: string;
 }
 
 /** The tournaments of one region, in the order the API listed them. */
@@ -31,6 +34,33 @@ export interface PortalRegionView {
   regionSlug: string;
   regionName: string;
   tournaments: PortalTournamentView[];
+}
+
+/**
+ * A tournament's public pages sit under `/<regionSlug>/<tournamentType>`:
+ * the entry form at `/entry`, the published entry list at `/list`. Every
+ * link to them is built from here, so they all agree on the encoding.
+ * @param regionSlug The tournament's region slug.
+ * @param tournamentType The tournament's type, used as the URL slug.
+ */
+export function tournamentPublicPath(
+  regionSlug: string,
+  tournamentType: TournamentType,
+): string {
+  return `/${encodeURIComponent(regionSlug)}/${tournamentType}`;
+}
+
+/**
+ * The tournament's published entry list,
+ * `/<regionSlug>/<tournamentType>/list`.
+ * @param regionSlug The tournament's region slug.
+ * @param tournamentType The tournament's type, used as the URL slug.
+ */
+export function tournamentEntryListPath(
+  regionSlug: string,
+  tournamentType: TournamentType,
+): string {
+  return `${tournamentPublicPath(regionSlug, tournamentType)}/list`;
 }
 
 /**
@@ -82,7 +112,11 @@ export function groupPortalTournaments(
       typeLabel: TOURNAMENT_TYPE_LABELS[tournament.tournamentType],
       status: portalStatus(tournament, now),
       entryPeriodLabel: `${formatJstDateTime(tournament.entryOpensAt)} 〜 ${formatJstDateTime(tournament.entryClosesAt)}`,
-      entryPath: `/${encodeURIComponent(tournament.regionSlug)}/${tournament.tournamentType}/entry`,
+      entryPath: `${tournamentPublicPath(tournament.regionSlug, tournament.tournamentType)}/entry`,
+      entryListPath: tournamentEntryListPath(
+        tournament.regionSlug,
+        tournament.tournamentType,
+      ),
     });
   }
   return [...regions.values()];

@@ -1,6 +1,11 @@
 import {describe, expect, it} from 'vitest';
 import type {PortalTournament} from '@regional-quiz/shared';
-import {groupPortalTournaments, portalStatus} from './portal';
+import {
+  groupPortalTournaments,
+  portalStatus,
+  tournamentEntryListPath,
+  tournamentPublicPath,
+} from './portal';
 
 const OPENS_AT = '2026-11-01T00:00:00Z';
 const CLOSES_AT = '2026-11-30T00:00:00Z';
@@ -18,6 +23,26 @@ function tournament(
     ...overrides,
   };
 }
+
+describe('tournamentPublicPath', () => {
+  it('puts the region slug and the tournament type in the path', () => {
+    expect(tournamentPublicPath('tokyo', 'saikyoi')).toBe('/tokyo/saikyoi');
+  });
+
+  it('encodes a region slug that would otherwise change the URL', () => {
+    expect(tournamentPublicPath('a?b#c', 'shinjinou')).toBe(
+      '/a%3Fb%23c/shinjinou',
+    );
+  });
+});
+
+describe('tournamentEntryListPath', () => {
+  it('points at the list page under the tournament', () => {
+    expect(tournamentEntryListPath('tokyo', 'saikyoi')).toBe(
+      '/tokyo/saikyoi/list',
+    );
+  });
+});
 
 describe('portalStatus', () => {
   it('is upcoming before the window opens', () => {
@@ -75,6 +100,7 @@ describe('groupPortalTournaments', () => {
       typeLabel: '新人王',
       status: 'open',
       entryPath: '/tokyo/shinjinou/entry',
+      entryListPath: '/tokyo/shinjinou/list',
       entryPeriodLabel: '2026年11月1日(日) 9:00 〜 2026年11月30日(月) 9:00',
     });
   });
