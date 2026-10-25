@@ -88,6 +88,14 @@ describe('staff password reset +page.svelte', () => {
     );
   });
 
+  it('offers to ask for a new link beside the password form', () => {
+    renderPage();
+
+    expect(
+      screen.getByRole('link', {name: '新しいリンクを申し込む'}),
+    ).toHaveAttribute('href', '/staff/password-reset?request');
+  });
+
   it('links back to the staff login page', () => {
     renderPage();
 

@@ -17,6 +17,7 @@ import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
 import {verifyAccountPassword} from '../lib/password-rehash';
 import {internalError} from '../lib/errors';
+import {findStaffAccountByScope} from '../lib/staff-account-lookup';
 import {
   confirmStaffPasswordReset,
   requestStaffPasswordReset,
@@ -81,32 +82,18 @@ export const staffAuthRoute = new Hono<Env>()
     ),
     async c => {
       const {email, scope, password} = c.req.valid('json');
-      const db = createDbClient(c.env);
-      // The address alone may name two accounts -- a region's 最強位 and
-      // 新人王 run from one mailbox (#166) -- so `scope` picks the one: a
-      // tournament type for regional staff, or none at all for general
-      // staff, whose rows carry a null type. The unique constraint on
-      // (email, tournament_type) leaves at most one row either way.
-      //
-      // A disabled account (#156) is simply not looked for, so it gets the
-      // same 401 -- after the same PBKDF2 work -- as an address that was
-      // never registered: whoever holds its password learns nothing from
-      // trying it.
-      const query = db
-        .from('staff_accounts')
-        .select(
+      // `scope` picks one of the address's accounts, and a disabled one
+      // (#156) isn't looked for, so it gets the same 401 -- after the same
+      // PBKDF2 work -- as an address that was never registered: whoever
+      // holds its password learns nothing from trying it.
+      const {data: staff, error} =
+        await findStaffAccountByScope<StaffAccountRow>(
+          createDbClient(c.env),
+          email,
+          scope,
           'id, password_hash, role, region_id, tournament_type, ' +
             'sessions_valid_from, regions(slug)',
-        )
-        .eq('email', email)
-        .is('disabled_at', null);
-      const {data: staff, error} = await (
-        scope === 'general'
-          ? query.is('tournament_type', null)
-          : query.eq('tournament_type', scope)
-      )
-        .returns<StaffAccountRow[]>()
-        .maybeSingle();
+        );
 
       if (error) {
         return c.json({error: 'internal server error'}, 500);

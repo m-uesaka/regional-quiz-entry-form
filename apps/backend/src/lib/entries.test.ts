@@ -962,11 +962,12 @@ describe.skipIf(!(await isDbReachable()))(
       expect(row.status).toBe('pending_verification');
       expect(row.display_name).toBe('再エントリー太郎');
       expect(row.cancelled_at).toBeNull();
-      // The expired link is burnt and exactly one usable one is left.
+      // The expired link is dropped and exactly one usable one is left.
       const tokens: Array<{used_at: Date | null; live: boolean}> = await sql`
         select used_at, expires_at > now() as live
         from email_verification_tokens where entry_id = ${firstResult.entry.id}
       `;
+      expect(tokens.length).toBe(1);
       expect(tokens.filter(t => t.used_at === null && t.live).length).toBe(1);
       expect(tokens.filter(t => t.used_at === null && !t.live).length).toBe(0);
     });
@@ -998,6 +999,40 @@ describe.skipIf(!(await isDbReachable()))(
       `;
       expect(firstRow.status).toBe('cancelled');
       expect(firstRow.cancelled_at).not.toBeNull();
+    });
+
+    // An entry whose row is written but whose link isn't yet (a submission
+    // of the same participant's still in flight) has no tokens at all, and
+    // must not be taken for one whose link ran out.
+    it('leaves a pending entry that has no link yet alone', async () => {
+      const {saikyoi, shinjinou} = await createRegionPair(
+        'dual-off-pending-no-token',
+        true,
+      );
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      const firstResult = await createEntry(
+        env,
+        saikyoi.tournamentId,
+        validInput({email, regulationIds: [saikyoi.regulationId]}),
+      );
+      expect(firstResult.ok).toBe(true);
+      if (!firstResult.ok) return;
+      await sql`
+        delete from email_verification_tokens
+        where entry_id = ${firstResult.entry.id}
+      `;
+
+      const result = await createEntry(
+        env,
+        shinjinou.tournamentId,
+        validInput({email, regulationIds: [shinjinou.regulationId]}),
+      );
+
+      expect(result.ok).toBe(true);
+      const [row] = await sql`
+        select status from entries where id = ${firstResult.entry.id}
+      `;
+      expect(row.status).toBe('pending_verification');
     });
 
     it('leaves a confirmed entry alone when its link has expired', async () => {

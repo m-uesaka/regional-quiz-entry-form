@@ -93,6 +93,8 @@
   </Card>
 
   <div class="text-center text-sm">
-    <Link href="/staff/password-reset">パスワードを忘れた場合</Link>
+    <!-- `?request` shows the request form even if this browser still holds
+         the token of an old invitation (see the page's `load`). -->
+    <Link href="/staff/password-reset?request">パスワードを忘れた場合</Link>
   </div>
 </PageContainer>

@@ -24,6 +24,9 @@ const NEEDS_A_NEW_LINK_MESSAGE =
 const TOO_MANY_REQUESTS_MESSAGE =
   '送信が集中しています。しばらく待ってから再度お試しください';
 
+/** The query parameter that asks for the request form (see `load`). */
+const REQUEST_PARAM = 'request';
+
 /**
  * The page the invite mail sent by `POST /api/staff/accounts` links to, the
  * one a link re-issued from `/api/staff/accounts/:id/password-reset` points
@@ -32,8 +35,18 @@ const TOO_MANY_REQUESTS_MESSAGE =
  *
  * Like the participant screen at `/password-reset`, a token means "choose a
  * password" and its absence means "mail me a link" (#175).
+ *
+ * The token cookie outlives a link that has since been burnt or has expired
+ * (it lasts as long as an invitation, a day), and there is no telling from
+ * here whether it still works. So `?request` -- what the login screen's
+ * "forgot password" link and the password form's own "ask again" link open
+ * -- drops it and shows the request form whatever the browser held.
  */
 export const load: PageServerLoad = ({cookies, url}) => {
+  if (url.searchParams.has(REQUEST_PARAM)) {
+    clearResetToken(cookies, url, STAFF_RESET_TOKEN_COOKIE);
+    redirect(303, url.pathname);
+  }
   // The token itself stays in its httpOnly cookie; the page only needs to
   // know whether there is one (`$lib/server/reset-token.ts`).
   return {
@@ -50,10 +63,10 @@ export const actions = {
   default: async ({cookies, fetch, request, url}) => {
     const formData = await request.formData();
     const api = createApiClient(fetch);
-    // The two forms this page can render are told apart by the token, the
-    // same way the page itself picks which one to show.
-    const token = readResetToken(cookies, STAFF_RESET_TOKEN_COOKIE);
-    if (token === null) {
+    // Told apart by what was submitted rather than by the token cookie: the
+    // request form is the one with an address in it, and it must reach the
+    // request API even if a stale token cookie was left in this browser.
+    if (formData.has('email')) {
       const parsed = StaffPasswordResetRequestInputSchema.safeParse({
         email: String(formData.get('email') ?? ''),
         scope: String(formData.get('scope') ?? ''),
@@ -95,6 +108,14 @@ export const actions = {
       // Reported identically whether or not the account exists: the API
       // answers the same way for both on purpose.
       return {sent: true};
+    }
+
+    const token = readResetToken(cookies, STAFF_RESET_TOKEN_COOKIE);
+    if (token === null) {
+      // The page only shows the password form when `load` saw a token, so a
+      // hand-made POST -- or a cookie that expired while the form was open
+      // -- lands here.
+      return fail(400, {error: NEEDS_A_NEW_LINK_MESSAGE, tokenRejected: true});
     }
 
     const newPassword = String(formData.get('newPassword') ?? '');

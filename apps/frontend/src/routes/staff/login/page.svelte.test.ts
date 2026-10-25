@@ -38,7 +38,7 @@ describe('staff login +page.svelte', () => {
 
     expect(
       screen.getByRole('link', {name: 'パスワードを忘れた場合'}),
-    ).toHaveAttribute('href', '/staff/password-reset');
+    ).toHaveAttribute('href', '/staff/password-reset?request');
   });
 
   it('posts to its own URL so the redirectTo parameter survives', () => {

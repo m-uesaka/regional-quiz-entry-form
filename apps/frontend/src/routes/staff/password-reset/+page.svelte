@@ -63,6 +63,15 @@
 
           <Button type="submit" class="w-full">パスワードを設定する</Button>
         </form>
+
+        <!-- The page can't tell whether the link this browser opened still
+             works; a staff member who got here some other way can ask for a
+             new one instead. -->
+        <p class="text-center text-sm">
+          <Link href="/staff/password-reset?request" variant="secondary"
+            >新しいリンクを申し込む</Link
+          >
+        </p>
       </div>
     </Card>
   {:else if form?.sent}

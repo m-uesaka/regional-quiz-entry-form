@@ -446,7 +446,7 @@ describe('POST /password-reset/request', () => {
       if (url.hostname === 'api.resend.com') {
         return new Response(null, {status: 200});
       }
-      if (url.pathname.endsWith('/rpc/issue_staff_password_link')) {
+      if (url.pathname.endsWith('/rpc/add_staff_password_link')) {
         return Response.json(null);
       }
       if (url.searchParams.get('select') === 'id') {
@@ -532,13 +532,20 @@ describe('POST /password-reset/request', () => {
     expect(lookup?.url.searchParams.get('disabled_at')).toBe('is.null');
 
     const issue = requests.find(r =>
-      r.url.pathname.endsWith('/rpc/issue_staff_password_link'),
+      r.url.pathname.endsWith('/rpc/add_staff_password_link'),
     );
     const {p_staff_account_id, p_expires_at} = JSON.parse(issue!.body) as {
       p_staff_account_id: string;
       p_expires_at: string;
     };
     expect(p_staff_account_id).toBe(STAFF_ID);
+    // Added beside the account's other links rather than replacing them,
+    // so a request from anyone can't throw away an invitation (#175).
+    expect(
+      requests.some(r =>
+        r.url.pathname.endsWith('/rpc/issue_staff_password_link'),
+      ),
+    ).toBe(false);
     const ttl = Date.parse(p_expires_at) - Date.now();
     expect(ttl).toBeGreaterThan(55 * 60 * 1000);
     expect(ttl).toBeLessThanOrEqual(60 * 60 * 1000);

@@ -6,6 +6,7 @@ import type {
 import type {StaffPasswordResetConfirmInput} from '@regional-quiz/shared/password-policy';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
+import {findStaffAccountByScope} from './staff-account-lookup';
 import {createMailSender} from './mailer';
 import {hashPassword} from './password';
 import {
@@ -48,8 +49,9 @@ const INVALID_TOKEN_SQLSTATE = 'P0003';
 
 /**
  * The SQLSTATE `issue_staff_password_link` (defined by
- * `supabase/migrations/0027_staff_account_enable_and_link_locking.sql`)
- * raises when the account is disabled (#156).
+ * `supabase/migrations/0027_staff_account_enable_and_link_locking.sql`) and
+ * `add_staff_password_link` (`0031_add_staff_password_link_fn.sql`) raise
+ * when the account is disabled (#156).
  */
 const ACCOUNT_DISABLED_SQLSTATE = 'P0005';
 
@@ -146,8 +148,8 @@ export async function sendStaffPasswordLink(
   email: string,
   kind: StaffPasswordLinkKind = 'issued',
 ): Promise<StaffPasswordLinkResult> {
-  // Every link this account already has is dropped before the new one is
-  // written, expired or not. `reset_staff_password` only burns an account's
+  // A link a general staff member issues drops every link this account
+  // already has before the new one is written, expired or not. `reset_staff_password` only burns an account's
   // other links once one of them has been *redeemed*, so without this an
   // invite sent to a mistyped address would stay usable for the rest of its
   // day-long TTL even after the general staff member noticed and re-issued
@@ -159,6 +161,12 @@ export async function sendStaffPasswordLink(
   // account there (#156). Checking `disabled_at` here and writing afterwards
   // would let a disable land in between and leave a link behind it.
   //
+  // A link the staff member requested themselves (#175) is added beside
+  // the others instead (`add_staff_password_link`): that request is open to
+  // anyone who knows the address, and dropping the others there would let
+  // them keep replacing a fresh day-long invite with an hour-long link.
+  // Whichever link is redeemed, `reset_staff_password` burns the rest.
+  //
   // The account is named first, so a failed read leaves no link behind
   // that no mail carries.
   const account = await describeStaffAccount(env, staffAccountId);
@@ -168,7 +176,9 @@ export async function sendStaffPasswordLink(
   const ttlMs = kind === 'requested' ? REQUESTED_TOKEN_TTL_MS : TOKEN_TTL_MS;
   const token = generateToken();
   const {error: issueError} = await createDbClient(env).rpc(
-    'issue_staff_password_link',
+    kind === 'requested'
+      ? 'add_staff_password_link'
+      : 'issue_staff_password_link',
     {
       p_staff_account_id: staffAccountId,
       p_token_hash: await hashToken(token),
@@ -190,22 +200,25 @@ export async function sendStaffPasswordLink(
     label: 'パスワードを設定する',
     url: `${env.FRONTEND_URL}/staff/password-reset?token=${token}`,
   };
+  // A new account's invitation and a re-issued link share the `issued`
+  // wording, so it fits either; only the opening and the expiry advice
+  // differ for a link the staff member asked for.
+  const [opening, afterExpiry] =
+    kind === 'requested'
+      ? [
+          'パスワード再設定のお申し込みを受け付けました。下のリンクを開いて、新しいパスワードを設定してください。',
+          'スタッフ用のログイン画面の「パスワードを忘れた場合」からもう一度お申し込みください。',
+        ]
+      : [
+          'パスワード設定用のリンクが発行されました。下のリンクを開いて、パスワードを設定してください。',
+          'スタッフ用のログイン画面の「パスワードを忘れた場合」から再設定を申し込むか、統括スタッフにリンクの再発行を依頼してください。',
+        ];
   try {
-    // A new account's invitation and a re-issued link share the `issued`
-    // wording, so it fits either.
     await mailer.send(
       buildSystemMail(email, staffPasswordMailSubject(account.label, kind), [
-        ...(kind === 'requested'
-          ? [
-              `このメールアドレスの${account.label}について、パスワード再設定のお申し込みを受け付けました。下のリンクを開いて、新しいパスワードを設定してください。`,
-              link,
-              `${describeLinkLifetime(ttlMs)}期限が切れた場合は、スタッフ用のログイン画面の「パスワードを忘れた場合」からもう一度お申し込みください。`,
-            ]
-          : [
-              `このメールアドレスの${account.label}について、パスワード設定用のリンクが発行されました。下のリンクを開いて、パスワードを設定してください。`,
-              link,
-              `${describeLinkLifetime(ttlMs)}期限が切れた場合は、スタッフ用のログイン画面の「パスワードを忘れた場合」から再設定を申し込むか、統括スタッフにリンクの再発行を依頼してください。`,
-            ]),
+        `このメールアドレスの${account.label}について、${opening}`,
+        link,
+        `${describeLinkLifetime(ttlMs)}期限が切れた場合は、${afterExpiry}`,
         '設定したパスワードで、スタッフ用のログイン画面からログインできます。',
         {
           label: 'スタッフ用のログイン画面',
@@ -258,12 +271,13 @@ interface StaffAccountIdRow {
  * route answers before any of it runs, so the time it takes doesn't give
  * the answer away either -- it must not be awaited on the response path.
  *
- * A disabled account (#156) is not looked for, as at login; and
- * `issue_staff_password_link` refuses one anyway, should it be disabled in
- * between. An invited account whose owner never set a password is found
- * like any other, so its owner can get a fresh invite this way too. The new
- * link burns every one the account had, an invitation included: the
- * replacement goes to the same mailbox.
+ * The account is found the way the login finds it
+ * (`findStaffAccountByScope()`), so a disabled one (#156) is not looked for;
+ * and `add_staff_password_link` refuses one anyway, should it be disabled
+ * in between. An invited account whose owner never set a password is found
+ * like any other, so its owner can get a fresh link this way too. The new
+ * link is added beside the account's others rather than replacing them
+ * (see `sendStaffPasswordLink()`).
  * @param env The Worker bindings.
  * @param email The address a link was requested for.
  * @param scope Which of the address's accounts, as at login.
@@ -273,18 +287,13 @@ export async function requestStaffPasswordReset(
   email: string,
   scope: StaffLoginScope,
 ): Promise<void> {
-  const query = createDbClient(env)
-    .from('staff_accounts')
-    .select('id')
-    .eq('email', email)
-    .is('disabled_at', null);
-  const {data: account, error} = await (
-    scope === 'general'
-      ? query.is('tournament_type', null)
-      : query.eq('tournament_type', scope)
-  )
-    .returns<StaffAccountIdRow[]>()
-    .maybeSingle();
+  const {data: account, error} =
+    await findStaffAccountByScope<StaffAccountIdRow>(
+      createDbClient(env),
+      email,
+      scope,
+      'id',
+    );
   if (error) {
     console.error('failed to look up the staff account to reset', {
       error: error.message,

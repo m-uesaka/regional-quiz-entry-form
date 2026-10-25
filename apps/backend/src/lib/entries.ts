@@ -617,6 +617,26 @@ async function enterTournament(
     cancelled_at: null,
   };
 
+  if (existingEntry) {
+    // The cancelled row still carries the tokens of the entry it was
+    // cancelled from, all burnt or expired (`cancel_own_entry()` and
+    // `lapse_expired_pending_entries()` burn what was left). Dropped before the row goes back
+    // to `pending_verification`, so that until its new link is written it
+    // has no tokens at all -- which is what tells
+    // `lapse_expired_pending_entries()` in a concurrent submission of the
+    // same participant's that this entry is being made, not one whose link
+    // ran out. Only dead tokens go: a concurrent re-entry of this same row
+    // may already have written a live one, which must survive.
+    const {error: tokensError} = await db
+      .from('email_verification_tokens')
+      .delete()
+      .eq('entry_id', existingEntry.id)
+      .or(`used_at.not.is.null,expires_at.lt.${new Date().toISOString()}`);
+    if (tokensError) {
+      return {ok: false, status: 500, error: tokensError.message};
+    }
+  }
+
   const {data: entry, error} = existingEntry
     ? await db
         .from('entries')

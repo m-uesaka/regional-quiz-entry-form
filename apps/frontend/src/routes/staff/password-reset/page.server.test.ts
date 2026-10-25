@@ -126,6 +126,22 @@ describe('staff password reset +page.server load', () => {
     expect(load(buildLoadEvent(NO_TOKEN_URL))).toEqual({hasToken: false});
   });
 
+  // A day-long cookie can outlive the link it was set for, so the login
+  // screen's "forgot password" link asks for the request form outright.
+  it('drops the token cookie and shows the request form for ?request', () => {
+    const {cookies, jar} = fakeCookies({[TOKEN_COOKIE]: TOKEN});
+
+    expect(() =>
+      load(buildLoadEvent(`${NO_TOKEN_URL}?request`, cookies)),
+    ).toThrow(
+      expect.objectContaining({
+        status: 303,
+        location: '/staff/password-reset',
+      }) as Error,
+    );
+    expect(jar.has(TOKEN_COOKIE)).toBe(false);
+  });
+
   it('treats an empty token as no token at all', () => {
     const {cookies, jar} = fakeCookies();
 
@@ -178,6 +194,29 @@ describe('staff password reset +page.server action', () => {
       {email: 'staff@example.com', scope: 'general'},
     ]);
     expect(log.turnstileTokens).toEqual(['a-turnstile-token']);
+  });
+
+  it('sends the request form to the request API even with a stale token cookie', async () => {
+    const log: FetchLog = {urls: [], bodies: []};
+    const event = buildActionEvent(fakeFetch(200, log), requestForm());
+
+    await expect(actions.default(event)).resolves.toEqual({sent: true});
+    expect(log.urls[0]).toContain('/api/auth/staff/password-reset/request');
+  });
+
+  it('refuses the password form without calling the API when there is no token', async () => {
+    const log: FetchLog = {urls: [], bodies: []};
+    const event = buildActionEvent(
+      fakeFetch(200, log),
+      passwordForm(),
+      fakeCookies().cookies,
+    );
+
+    await expect(actions.default(event)).resolves.toMatchObject({
+      status: 400,
+      data: {tokenRejected: true},
+    });
+    expect(log.urls).toEqual([]);
   });
 
   it('fails with 400 without calling the API when the scope is missing', async () => {

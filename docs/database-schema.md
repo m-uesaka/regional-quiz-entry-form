@@ -447,11 +447,13 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 ### lapse_expired_pending_entries(p_participant_id)
 
-参加者の確定待ち(`pending_verification`)エントリーのうち、**未使用かつ期限内の確認トークンが 1 つも無いもの**を `cancelled` にし、取り消したエントリーの id を返します(`0030`、#172)。エントリー処理(`enterTournament()`)が最初に呼びます。
+参加者の確定待ち(`pending_verification`)エントリーのうち、**確認トークンが 1 つ以上あり、そのどれもが使用済みか期限切れのもの**を `cancelled` にし、取り消したエントリーの id を返します(`0030`、#172)。エントリー処理(`enterTournament()`)が最初に呼びます。
 
 - 期限が切れたエントリーは確定できないのに、同じ大会への再エントリーと、重複参加を許さない地域のもう一方の大会へのエントリーを断っていました。キャンセル扱いにすることで、同じ大会なら行が再利用され(新しい確認メールが届く)、もう一方の大会の枠も空きます。
+- トークンが 1 つも無い確定待ちは、同じ参加者の別の送信が作っている途中のエントリーなので触りません。
 - 残っていたトークンは使用済みにします。
-- ロック取得順は `confirm_entry_by_token()` / `cancel_own_entry()` と同じ「トークン行 → 大会行」。状態とトークンは大会行ロックの下で読み直すので、確認と同時に走っても二重に動きません。複数のエントリーは id 順に処理します。
+- 候補はロック無しで先に絞り込み、期限内のリンクがある確定待ちにはロックを取りません。
+- 候補ごとのロック取得順は `confirm_entry_by_token()` / `cancel_own_entry()` と同じ「トークン行 → 大会行」。状態とトークンは大会行ロックの下で読み直すので、確認と同時に走っても二重に動きません。複数の候補は大会 id 順に処理し、別々の参加者の呼び出し同士のデッドロックを避けます。
 
 ### reset_participant_password(p_token_hash, p_password_hash)
 
@@ -572,3 +574,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0028_import_tournament_fn.sql` | 大会一覧からの一括登録(#168)用の `import_tournament()`。大会の upsert・フォーム定義・レギュレーション(名前で既存と突き合わせ)を 1 トランザクションで |
 | `0029_form_field_textfield.sql` | `form_field_defs.field_type` の check 制約を張り替え、一行の自由記述 `textfield` を許す(#173) |
 | `0030_lapse_expired_pending_entries.sql` | 確認リンクの期限が切れた参加者の確定待ちエントリーを `cancelled` にする `lapse_expired_pending_entries()`(#172)。エントリー処理の最初に呼ぶ |
+| `0031_add_staff_password_link_fn.sql` | スタッフ本人の再設定申し込み(#175)用に、既存の有効なリンクを消さずに書き足す `add_staff_password_link()`。期限切れのリンクは削除し、無効なアカウントは断る |
