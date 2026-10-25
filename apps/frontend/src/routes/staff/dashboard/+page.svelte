@@ -48,6 +48,20 @@
   function entriesHref(regionSlug: string, tournamentType: string): string {
     return `/staff/${regionSlug}/${tournamentType}/entries`;
   }
+
+  /**
+   * The entry list participants see, so staff can check what is published
+   * and copy the URL to share. It is a page outside the staff screens, so it
+   * opens in a new tab and leaves the dashboard where it was.
+   * @param regionSlug The tournament's region slug.
+   * @param tournamentType The tournament's type, used as the URL slug.
+   */
+  function publicEntryListHref(
+    regionSlug: string,
+    tournamentType: string,
+  ): string {
+    return `/${regionSlug}/${tournamentType}/list`;
+  }
 </script>
 
 <PageContainer size="wide">
@@ -105,12 +119,27 @@
                 {summary.pendingVerificationCount}
               </TableData>
               <TableData size="small" class="whitespace-nowrap">
-                <Link
-                  href={entriesHref(summary.regionSlug, summary.tournamentType)}
-                  aria-label="{summary.regionName} {summary.tournamentName}のエントリー一覧"
-                >
-                  エントリー一覧
-                </Link>
+                <div class="flex flex-col gap-1">
+                  <Link
+                    href={entriesHref(
+                      summary.regionSlug,
+                      summary.tournamentType,
+                    )}
+                    aria-label="{summary.regionName} {summary.tournamentName}のエントリー一覧"
+                  >
+                    エントリー一覧
+                  </Link>
+                  <Link
+                    href={publicEntryListHref(
+                      summary.regionSlug,
+                      summary.tournamentType,
+                    )}
+                    target="_blank"
+                    aria-label="{summary.regionName} {summary.tournamentName}の公開エントリーリスト(新しいタブで開きます)"
+                  >
+                    公開エントリーリスト
+                  </Link>
+                </div>
               </TableData>
             </tr>
           {/each}
