@@ -164,12 +164,13 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** A tournament taking entries, as `checkEntrySubmission()` selects it. */
 function tournamentRow(
-  overrides: {entryClosesAt?: string} = {},
+  overrides: {entryClosesAt?: string; capacity?: number | null} = {},
 ): Record<string, unknown> {
   return {
     id: TOURNAMENT_ID,
     name: TOURNAMENT_NAME,
     region_id: REGION_ID,
+    capacity: overrides.capacity ?? null,
     entry_opens_at: new Date(Date.now() - DAY_MS).toISOString(),
     entry_closes_at:
       overrides.entryClosesAt ?? new Date(Date.now() + DAY_MS).toISOString(),
@@ -415,6 +416,23 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
       to: validBody.email,
       subject: verificationMailSubject(TOURNAMENT_NAME),
     });
+    // The tournament is uncapped, so there is no waitlist to mention.
+    expect(recorded.mails[0].html).not.toContain('キャンセル待ち');
+  });
+
+  it('mentions the waitlist in the verification mail of a capped tournament', async () => {
+    const recorded = mockSupabase({
+      tournament: tournamentRow({capacity: 10}),
+      participant: null,
+    });
+
+    await postWithContext(TOURNAMENT_PATH, validBody);
+    await settleBackgroundWork();
+
+    expect(recorded.mails).toHaveLength(1);
+    expect(recorded.mails[0].html).toContain(
+      '定員に達している場合は、キャンセル待ちとして受け付けます。',
+    );
   });
 
   it('rehashes a legacy password when entering under a registered address', async () => {

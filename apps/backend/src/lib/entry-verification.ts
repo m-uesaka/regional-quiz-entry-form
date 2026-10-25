@@ -17,12 +17,15 @@ const TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
  * @param entryId The `entries` row awaiting verification.
  * @param email The address to send the verification link to.
  * @param tournamentName The display name of the tournament being entered.
+ * @param capped Whether the tournament has a capacity, i.e. whether the
+ *     entry could end up waitlisted.
  */
 export async function sendVerificationEmail(
   env: Bindings,
   entryId: string,
   email: string,
   tournamentName: string,
+  capped: boolean,
 ): Promise<void> {
   const db = createDbClient(env);
   const token = generateToken();
@@ -43,7 +46,10 @@ export async function sendVerificationEmail(
   await createMailSender(env).send(
     buildSystemMail(email, verificationMailSubject(tournamentName), [
       `「${tournamentName}」へのエントリーを受け付けました。エントリーはまだ確定していません。`,
-      '下のリンクを開いて、エントリーを確定してください。定員に達している場合は、キャンセル待ちとして受け付けます。',
+      '下のリンクを開いて、エントリーを確定してください。' +
+        (capped
+          ? '定員に達している場合は、キャンセル待ちとして受け付けます。'
+          : ''),
       {
         label: 'エントリーを確定する',
         url: `${env.FRONTEND_URL}/verify?token=${token}`,

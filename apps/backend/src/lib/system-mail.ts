@@ -1,14 +1,14 @@
 import {escapeHtml} from './html';
-import {MAIL_FROM_NAME, type SendMailInput} from './mailer';
+import {MAIL_FROM_NAME, SITE_NAME, type SendMailInput} from './mailer';
 
 /**
  * What every system mail's subject is prefixed with, so it can be told
- * apart in an inbox at a glance (#170). The frontend's `<title>` names the
- * site the same way.
+ * apart in an inbox at a glance (#170).
  */
-const SUBJECT_PREFIX = '【地域クイズ最強位・新人王】';
+const SUBJECT_PREFIX = `【${SITE_NAME}】`;
 
-const HOUR_MS = 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
 
 const FOOTER_NOTE =
   'このメールは送信専用のアドレスから送信しています。ご返信いただいてもお答えできません。';
@@ -39,11 +39,18 @@ export function systemMailSubject(title: string): string {
 }
 
 /**
- * How long a mailed link stays usable, in the words its mail states it in.
- * @param ttlMs The link's lifetime; a whole number of hours.
+ * How long a mailed link stays usable, in the words its mail states it in:
+ * in hours when it is a whole number of them, in minutes otherwise, so a
+ * lifetime that isn't never reads as 「1.5時間」. Minutes round down, so the
+ * mail never promises longer than the link actually lasts.
+ * @param ttlMs The link's lifetime.
  */
 export function describeLinkLifetime(ttlMs: number): string {
-  return `このリンクの有効期限は、メールの送信から${ttlMs / HOUR_MS}時間です。`;
+  const lifetime =
+    ttlMs % HOUR_MS === 0
+      ? `${ttlMs / HOUR_MS}時間`
+      : `${Math.floor(ttlMs / MINUTE_MS)}分`;
+  return `このリンクの有効期限は、メールの送信から${lifetime}です。`;
 }
 
 function blockToHtml(block: SystemMailBlock): string {

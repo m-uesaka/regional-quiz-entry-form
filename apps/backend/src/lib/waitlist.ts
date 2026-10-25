@@ -55,30 +55,17 @@ export async function promoteNextWaitlistedEntry(
     return;
   }
 
-  // Read only once someone was promoted, so the common case of an empty
-  // queue costs no extra round trip. A failure here leaves the promotion
-  // standing without its mail; the caller logs it.
-  const {data: tournament, error: tournamentError} = await db
-    .from('tournaments')
-    .select('name, type, regions(name)')
-    .eq('id', tournamentId)
-    .returns<PromotedTournamentRow[]>()
-    .single();
-  if (tournamentError) {
-    throw new Error(tournamentError.message);
-  }
-  const tournamentName = tournamentDisplayName(
-    tournament.name,
-    tournament.regions.name,
-    tournament.type,
-  );
-
+  const tournamentName = await readTournamentName(env, tournamentId);
+  const promotedTo =
+    tournamentName === undefined
+      ? 'キャンセル待ちをしていた大会'
+      : `キャンセル待ちをしていた「${tournamentName}」`;
   await createMailSender(env).send(
     buildSystemMail(
       promoted.participant_email,
       waitlistPromotionSubject(tournamentName),
       [
-        `キャンセル待ちをしていた「${tournamentName}」でキャンセルが出たため、あなたのエントリーが確定しました。`,
+        `${promotedTo}でキャンセルが出たため、あなたのエントリーが確定しました。`,
         'エントリーの内容は、マイページから確認できます。参加できなくなった場合は、マイページからエントリーをキャンセルしてください。',
         {label: 'マイページ', url: `${env.FRONTEND_URL}/mypage`},
       ],
@@ -87,11 +74,49 @@ export async function promoteNextWaitlistedEntry(
 }
 
 /**
- * The subject the promotion mail for `tournamentName` goes out under.
- * @param tournamentName The tournament's display name.
+ * Reads the display name the promotion mail names the tournament by.
+ *
+ * Read only once someone was promoted, so the common case of an empty queue
+ * costs no extra round trip -- but by then the promotion is committed, and
+ * the mail is the participant's only word of it. So a failed read is logged
+ * and the mail goes out without the name, rather than not at all.
+ * @return The name, or `undefined` when it couldn't be read.
  */
-export function waitlistPromotionSubject(tournamentName: string): string {
+async function readTournamentName(
+  env: Bindings,
+  tournamentId: string,
+): Promise<string | undefined> {
+  const {data: tournament, error} = await createDbClient(env)
+    .from('tournaments')
+    .select('name, type, regions(name)')
+    .eq('id', tournamentId)
+    .returns<PromotedTournamentRow[]>()
+    .maybeSingle();
+  if (error || !tournament) {
+    console.error('failed to read the tournament for the promotion mail', {
+      tournamentId,
+      error: error?.message ?? 'tournament not found',
+    });
+    return undefined;
+  }
+  return tournamentDisplayName(
+    tournament.name,
+    tournament.regions.name,
+    tournament.type,
+  );
+}
+
+/**
+ * The subject the promotion mail goes out under.
+ * @param tournamentName The tournament's display name, or `undefined` when
+ *     it couldn't be read.
+ */
+export function waitlistPromotionSubject(
+  tournamentName: string | undefined,
+): string {
   return systemMailSubject(
-    `「${tournamentName}」のエントリーが確定しました(キャンセル待ちからの繰り上げ)`,
+    tournamentName === undefined
+      ? 'キャンセル待ちからの繰り上げでエントリーが確定しました'
+      : `「${tournamentName}」のエントリーが確定しました(キャンセル待ちからの繰り上げ)`,
   );
 }

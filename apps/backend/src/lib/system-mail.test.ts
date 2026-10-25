@@ -19,6 +19,15 @@ describe('describeLinkLifetime', () => {
       'このリンクの有効期限は、メールの送信から24時間です。',
     );
   });
+
+  it('falls back to minutes, rounded down, for a lifetime of part hours', () => {
+    expect(describeLinkLifetime(90 * 60 * 1000)).toBe(
+      'このリンクの有効期限は、メールの送信から90分です。',
+    );
+    expect(describeLinkLifetime(90 * 60 * 1000 + 30 * 1000)).toBe(
+      'このリンクの有効期限は、メールの送信から90分です。',
+    );
+  });
 });
 
 describe('buildSystemMail', () => {
