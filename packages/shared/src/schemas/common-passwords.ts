@@ -1,5 +1,5 @@
 // The most common passwords of eight characters or more, lowercased, in
-// descending order of frequency. `isCommonPassword()` (`../password-policy.ts`)
+// descending order of frequency. `isCommonPassword()` (`../common-passwords.ts`)
 // refuses any password whose lowercased form is in this set.
 //
 // Source: `Passwords/Common-Credentials/xato-net-10-million-passwords-10000.txt`

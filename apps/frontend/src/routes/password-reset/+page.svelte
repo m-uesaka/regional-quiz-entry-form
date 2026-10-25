@@ -1,7 +1,9 @@
 <script lang="ts">
   import {enhance} from '$app/forms';
+  import {PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH} from '@regional-quiz/shared';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
+  import PasswordRequirements from '$lib/components/PasswordRequirements.svelte';
   import Turnstile from '$lib/components/Turnstile.svelte';
   import Button from '$lib/components/ui/atoms/Button.svelte';
   import Card from '$lib/components/ui/atoms/Card.svelte';
@@ -12,6 +14,9 @@
   import type {PageProps} from './$types';
 
   let {data, form}: PageProps = $props();
+  // Bound so `PasswordRequirements` can check them as they are typed (#177).
+  let newPassword = $state('');
+  let newPasswordConfirm = $state('');
   let turnstile = $state<ReturnType<typeof Turnstile>>();
 </script>
 
@@ -41,7 +46,10 @@
             name="newPassword"
             type="password"
             autocomplete="new-password"
-            minlength={8}
+            minlength={PASSWORD_MIN_LENGTH}
+            maxlength={PASSWORD_MAX_LENGTH}
+            bind:value={newPassword}
+            aria-describedby="password-requirements"
             required
           />
         </div>
@@ -53,8 +61,17 @@
             name="newPasswordConfirm"
             type="password"
             autocomplete="new-password"
-            minlength={8}
+            minlength={PASSWORD_MIN_LENGTH}
+            maxlength={PASSWORD_MAX_LENGTH}
+            bind:value={newPasswordConfirm}
             required
+          />
+        </div>
+
+        <div id="password-requirements">
+          <PasswordRequirements
+            password={newPassword}
+            confirmation={newPasswordConfirm}
           />
         </div>
 

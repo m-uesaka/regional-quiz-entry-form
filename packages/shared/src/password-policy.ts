@@ -5,19 +5,14 @@
 // `schemas/common-passwords.ts` is ~30 KB, and anything the barrel exports
 // ends up in the browser bundle of every page that imports anything from
 // `@regional-quiz/shared`. Import it as `@regional-quiz/shared/password-policy`
-// and only from server code (the backend, `+page.server.ts`).
+// and only from server code (the backend, `+page.server.ts`). A browser that
+// needs the common-password check alone loads
+// `@regional-quiz/shared/common-passwords` lazily instead (#177).
 import {z} from 'zod';
-import {COMMON_PASSWORDS} from './schemas/common-passwords';
+import {isCommonPassword} from './common-passwords';
 import {PasswordLengthSchema} from './schemas/password';
 
-/**
- * Whether `password` is one of the passwords everyone else uses, compared
- * case-insensitively (`Password1` is no better than `password1`).
- * @param password The password being set.
- */
-export function isCommonPassword(password: string): boolean {
-  return COMMON_PASSWORDS.has(password.toLowerCase());
-}
+export {isCommonPassword};
 
 /**
  * The rules for a password being *set*: on a reset, when staff choose theirs
