@@ -422,7 +422,7 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 1. 統括スタッフ(8.1)でログインし、`/admin/staff` から自分が受け取れる別のアドレスを招待する
 2. 次を確かめる
    - メールが届く(迷惑メールフォルダも確認する)
-   - 差出人が `MAIL_FROM_ADDRESS` になっている
+   - 差出人が「地域クイズ最強位・新人王 エントリー」で、アドレスが `MAIL_FROM_ADDRESS` になっている(表示名は `src/lib/mailer.ts` の `MAIL_FROM_NAME` がコード側で付ける)
    - 本文のリンクが `https://<FRONTEND_HOST>/staff/password-reset?token=...` で、開くとパスワード設定画面が表示される
    - メールのソースで SPF / DKIM / DMARC が `PASS` になっている
 3. 届かないときは、Resend の `Logs` で送信履歴を確認し、送信されていなければ `bunx wrangler tail --env staging` を実行した状態で、`/admin/staff` の一覧から手順 1 のアカウントの「パスワード設定メールを再送」を押して、Worker のエラーを確認する。送信に失敗してもアカウントは作成済みなので、同じアドレスを**もう一度招待しても 409 になるだけで、メールの送信までは進まない**

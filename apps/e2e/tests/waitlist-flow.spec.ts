@@ -5,7 +5,7 @@
 
 import {expect, test} from '@playwright/test';
 import {waitForMail, waitlistPromotionSubject} from '../support/api';
-import {FRONTEND_URL} from '../support/env';
+import {FRONTEND_URL, MAIL_FROM_ADDRESS} from '../support/env';
 import {SAIKYOI} from '../support/fixtures';
 import {
   cancelEntryThroughMypage,
@@ -81,6 +81,9 @@ test('a cancellation promotes the waitlisted entry behind it', async ({
       waitlistPromotionSubject(SAIKYOI),
     );
     expect(notification.html).toContain('エントリーが確定しました');
+    expect(notification.from).toBe(
+      `地域クイズ最強位・新人王 エントリー <${MAIL_FROM_ADDRESS}>`,
+    );
 
     // The cancelled entry keeps its row but loses its name, and the
     // promoted one no longer shows a queue position.

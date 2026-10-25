@@ -1,5 +1,5 @@
 import {escapeHtml} from './html';
-import type {SendMailInput} from './mailer';
+import {MAIL_FROM_NAME, type SendMailInput} from './mailer';
 
 /**
  * What every system mail's subject is prefixed with, so it can be told
@@ -7,9 +7,6 @@ import type {SendMailInput} from './mailer';
  * site the same way.
  */
 const SUBJECT_PREFIX = '【地域クイズ最強位・新人王】';
-
-/** The site the footer signs every system mail with. */
-const SERVICE_NAME = '地域クイズ最強位・新人王 エントリー';
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -76,9 +73,9 @@ export function buildSystemMail(
 ): SendMailInput {
   const html =
     blocks.map(blockToHtml).join('') +
-    `<hr><p>${escapeHtml(SERVICE_NAME)}<br>${escapeHtml(FOOTER_NOTE)}</p>`;
+    `<hr><p>${escapeHtml(MAIL_FROM_NAME)}<br>${escapeHtml(FOOTER_NOTE)}</p>`;
   const text =
     blocks.map(blockToText).join('\n\n') +
-    `\n\n----\n${SERVICE_NAME}\n${FOOTER_NOTE}\n`;
+    `\n\n----\n${MAIL_FROM_NAME}\n${FOOTER_NOTE}\n`;
   return {to, subject, html, text};
 }

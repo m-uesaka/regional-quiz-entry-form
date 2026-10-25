@@ -3,6 +3,14 @@ import type {Bindings} from '../types/env';
 /** The Resend API origin every send goes to unless overridden. */
 const RESEND_API_BASE_URL = 'https://api.resend.com';
 
+/**
+ * The display name every mail is sent under, so an inbox shows the site
+ * rather than a bare `no-reply@` address (#170). It is put together with
+ * `MAIL_FROM_ADDRESS` here rather than written into that binding, which
+ * stays the bare address whose domain the mail provider has verified.
+ */
+export const MAIL_FROM_NAME = '地域クイズ最強位・新人王 エントリー';
+
 export interface SendMailInput {
   to: string;
   subject: string;
@@ -123,7 +131,7 @@ export function createMailSender(env: Bindings): MailSender {
   const baseUrl = env.MAIL_API_BASE_URL?.trim();
   return new ResendMailSender(
     env.MAIL_API_KEY,
-    env.MAIL_FROM_ADDRESS,
+    `${MAIL_FROM_NAME} <${env.MAIL_FROM_ADDRESS}>`,
     baseUrl || undefined,
   );
 }
