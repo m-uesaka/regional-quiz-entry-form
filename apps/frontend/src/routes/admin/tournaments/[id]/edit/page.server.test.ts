@@ -24,6 +24,7 @@ const FORM_FIELD_DEFS: FormFieldDef[] = [
   {
     fieldKey: 'note',
     label: '備考',
+    plainLabel: '備考',
     fieldType: 'textarea',
     required: false,
     options: null,

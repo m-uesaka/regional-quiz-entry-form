@@ -104,7 +104,7 @@
   </div>
 
   <div class="flex flex-col gap-1.5">
-    <Label for="displayName">掲載名</Label>
+    <Label for="displayName">エントリーリスト掲載名</Label>
     <Input
       id="displayName"
       name="displayName"

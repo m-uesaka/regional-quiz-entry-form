@@ -3,6 +3,8 @@
     BOOLEAN_CHECKBOX_LABELS,
     ENTRY_STATUS_LABELS,
     isBooleanCheckbox,
+    isFreeTextFieldType,
+    labelPlainText,
     type FormFieldDef,
   } from '@regional-quiz/shared';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
@@ -43,7 +45,14 @@
         ? BOOLEAN_CHECKBOX_LABELS.checked
         : BOOLEAN_CHECKBOX_LABELS.unchecked;
     }
-    return Array.isArray(value) ? value.join('、') : String(value ?? '');
+    // A chosen option is stored as staff wrote it, which may include an
+    // `<a>` link; a free-text answer is the participant's own and is shown
+    // as typed.
+    const plain = (option: string) =>
+      isFreeTextFieldType(fieldDef.fieldType) ? option : labelPlainText(option);
+    return Array.isArray(value)
+      ? value.map(plain).join('、')
+      : plain(String(value ?? ''));
   }
 </script>
 
@@ -67,7 +76,7 @@
       <dt class="font-medium text-muted-foreground sm:py-1.5">ふりがな</dt>
       <dd class="mb-3 break-words sm:mb-0 sm:py-1.5">{data.entry.furigana}</dd>
 
-      <dt class="font-medium text-muted-foreground sm:py-1.5">掲載名</dt>
+      <dt class="font-medium text-muted-foreground sm:py-1.5">エントリーリスト掲載名</dt>
       <dd class="mb-3 break-words sm:mb-0 sm:py-1.5">{data.entry.displayName}</dd>
 
       <dt class="font-medium text-muted-foreground sm:py-1.5">メールアドレス</dt>
@@ -105,7 +114,7 @@
       {/if}
 
       {#each customFieldEntries as {fieldDef, value} (fieldDef.fieldKey)}
-        <dt class="font-medium text-muted-foreground sm:py-1.5">{fieldDef.label}</dt>
+        <dt class="font-medium text-muted-foreground sm:py-1.5">{fieldDef.plainLabel}</dt>
         <dd class="mb-3 break-words sm:mb-0 sm:py-1.5">
           {formatFieldValue(fieldDef, value)}
         </dd>

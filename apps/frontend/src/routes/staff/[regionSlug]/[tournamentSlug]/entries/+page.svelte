@@ -79,7 +79,7 @@
         <tr class="border-b border-border">
           <TableHead size="small">氏名</TableHead>
           <TableHead size="small">ふりがな</TableHead>
-          <TableHead size="small">掲載名</TableHead>
+          <TableHead size="small">エントリーリスト掲載名</TableHead>
           <TableHead size="small">メールアドレス</TableHead>
           <TableHead size="small">ステータス</TableHead>
           <TableHead size="small">操作</TableHead>

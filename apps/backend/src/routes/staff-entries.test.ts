@@ -398,7 +398,7 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
     // mojibake.
     expect(body.startsWith('\uFEFF')).toBe(true);
     expect(body.slice(1).split('\r\n')).toEqual([
-      '氏名,ふりがな,掲載名,ステータス,レギュレーション,Tシャツサイズ,規約に同意する',
+      '氏名,ふりがな,エントリーリスト掲載名,ステータス,レギュレーション,Tシャツサイズ,規約に同意する',
       '山田太郎,ヤマダタロウ,太郎,確定,一般の部;学生の部,M,はい',
     ]);
   });
@@ -415,7 +415,7 @@ describe('GET /staff/tournaments/:id/entries.csv (mocked Supabase)', () => {
 
     expect(res.status).toBe(200);
     expect(await res.text()).toBe(
-      '\uFEFF氏名,ふりがな,掲載名,ステータス,レギュレーション,Tシャツサイズ,規約に同意する',
+      '\uFEFF氏名,ふりがな,エントリーリスト掲載名,ステータス,レギュレーション,Tシャツサイズ,規約に同意する',
     );
   });
 

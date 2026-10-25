@@ -11,6 +11,7 @@ import {
   type Locator,
   type Page,
 } from '@playwright/test';
+import {isFreeTextFieldType, labelPlainText} from '@regional-quiz/shared';
 import {
   extractVerificationUrl,
   verificationMailSubject,
@@ -179,7 +180,7 @@ export async function fillEntryForm(
     participant.furigana,
   );
   await fillField(
-    page.getByLabel('掲載名', {exact: true}),
+    page.getByLabel('エントリーリスト掲載名', {exact: true}),
     participant.displayName,
   );
   if (!input.loggedIn) {
@@ -311,14 +312,18 @@ async function answerCustomField(
 
   // Not `exact` on the group's own label, because a required field's label
   // carries a trailing "*"; the options inside it are matched exactly.
+  // Both are matched as the page names them: a label or option with an
+  // `<a>` link in it is named by its text, not by the markup (#173).
+  const label = labelPlainText(field.label);
+  if (isFreeTextFieldType(field.fieldType)) {
+    await fillField(page.getByLabel(label), options[0]);
+    return;
+  }
   switch (field.fieldType) {
-    case 'textarea':
-      await fillField(page.getByLabel(field.label), options[0]);
-      return;
     case 'radio':
       await page
-        .getByRole('group', {name: field.label})
-        .getByLabel(options[0], {exact: true})
+        .getByRole('group', {name: label})
+        .getByLabel(labelPlainText(options[0]), {exact: true})
         .check();
       return;
     case 'checkbox': {
@@ -331,9 +336,9 @@ async function answerCustomField(
             'implemented; no fixture seeds one.',
         );
       }
-      const group = page.getByRole('group', {name: field.label});
+      const group = page.getByRole('group', {name: label});
       for (const option of options) {
-        await group.getByLabel(option, {exact: true}).check();
+        await group.getByLabel(labelPlainText(option), {exact: true}).check();
       }
       return;
     }

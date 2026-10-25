@@ -1,6 +1,7 @@
 import {
   FormFieldDefYamlSchema,
   stringifyFormDefinitionYaml,
+  type FormFieldType,
   type TournamentType,
 } from '@regional-quiz/shared';
 
@@ -26,10 +27,11 @@ export const FORM_DEFINITION_RANGE = 'A2:E';
  * Japanese dropdown labels (as filled in the spreadsheet's `type` column)
  * mapped to the internal `FormFieldDefYamlSchema` field type.
  */
-export const TYPE_LABELS: Record<string, 'checkbox' | 'radio' | 'textarea'> = {
+export const TYPE_LABELS: Record<string, FormFieldType> = {
   チェックボックス: 'checkbox',
   ラジオボタン: 'radio',
   自由記述: 'textarea',
+  '自由記述（一行）': 'textfield',
 };
 
 /**

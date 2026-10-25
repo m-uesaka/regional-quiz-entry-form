@@ -64,7 +64,7 @@ export const EntryInputSchema = z
   .object({
     name: nameFieldSchema('氏名'),
     furigana: nameFieldSchema('ふりがな'),
-    displayName: nameFieldSchema('掲載名'),
+    displayName: nameFieldSchema('エントリーリスト掲載名'),
     email: emailAddressSchema('メールアドレスの形式が正しくありません'),
     // Length only: the same field is how a returning participant proves the
     // password they already have, which may predate the common-password

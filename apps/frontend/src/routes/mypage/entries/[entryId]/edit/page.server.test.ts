@@ -39,6 +39,7 @@ const ENTRY: MypageEntryDetail = {
     {
       fieldKey: 't_shirt_size',
       label: 'Tシャツサイズ',
+      plainLabel: 'Tシャツサイズ',
       fieldType: 'radio',
       required: true,
       options: ['S', 'M', 'L'],
@@ -47,6 +48,7 @@ const ENTRY: MypageEntryDetail = {
     {
       fieldKey: 'agree_to_rules',
       label: '規約に同意する',
+      plainLabel: '規約に同意する',
       fieldType: 'checkbox',
       required: true,
       options: null,
@@ -267,7 +269,7 @@ describe('mypage entry edit form action', () => {
       data: {
         fieldErrors: {
           displayName: [
-            `掲載名は${ENTRY_NAME_MAX_LENGTH}文字以内で入力してください`,
+            `エントリーリスト掲載名は${ENTRY_NAME_MAX_LENGTH}文字以内で入力してください`,
           ],
         },
       },
@@ -421,6 +423,7 @@ describe('mypage entry edit form action', () => {
         {
           fieldKey: 'message',
           label: 'メッセージ',
+          plainLabel: 'メッセージ',
           fieldType: 'textarea',
           required: false,
           options: null,

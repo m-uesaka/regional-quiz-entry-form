@@ -40,6 +40,7 @@ const FORM_FIELD_DEFS: FormFieldDef[] = [
   {
     fieldKey: 't_shirt_size',
     label: 'Tシャツサイズ',
+    plainLabel: 'Tシャツサイズ',
     fieldType: 'radio',
     required: true,
     options: ['S', 'M', 'L'],
@@ -48,6 +49,7 @@ const FORM_FIELD_DEFS: FormFieldDef[] = [
   {
     fieldKey: 'agree_rules',
     label: '規約に同意する',
+    plainLabel: '規約に同意する',
     fieldType: 'checkbox',
     required: true,
     options: null,
@@ -94,7 +96,7 @@ describe('entry +page.svelte', () => {
 
     expect(screen.getByLabelText('氏名')).toBeInTheDocument();
     expect(screen.getByLabelText('ふりがな')).toBeInTheDocument();
-    expect(screen.getByLabelText('掲載名')).toBeInTheDocument();
+    expect(screen.getByLabelText('エントリーリスト掲載名')).toBeInTheDocument();
     expect(screen.getByLabelText('メールアドレス')).toBeInTheDocument();
     expect(screen.getByLabelText('パスワード')).toBeInTheDocument();
     expect(screen.getByLabelText('パスワード(確認)')).toBeInTheDocument();

@@ -41,6 +41,7 @@ const FORM_FIELD_DEFS: FormFieldDef[] = [
   {
     fieldKey: 'agree_rules',
     label: '規約に同意する',
+    plainLabel: '規約に同意する',
     fieldType: 'checkbox',
     required: true,
     options: null,
@@ -601,6 +602,7 @@ describe('entry +page.server default action', () => {
             {
               fieldKey: 'password',
               label: '合言葉',
+              plainLabel: '合言葉',
               fieldType: 'textarea',
               required: false,
               options: null,
@@ -636,6 +638,7 @@ describe('entry +page.server default action', () => {
             {
               fieldKey: 'workshops',
               label: '参加したい企画',
+              plainLabel: '参加したい企画',
               fieldType: 'checkbox',
               required: true,
               options: ['早押し', '筆記'],
@@ -670,6 +673,7 @@ describe('entry +page.server default action', () => {
             {
               fieldKey: 'workshops',
               label: '参加したい企画',
+              plainLabel: '参加したい企画',
               fieldType: 'checkbox',
               required: true,
               options: ['早押し', '筆記'],
@@ -678,6 +682,7 @@ describe('entry +page.server default action', () => {
             {
               fieldKey: 't_shirt_size',
               label: 'Tシャツサイズ',
+              plainLabel: 'Tシャツサイズ',
               fieldType: 'radio',
               required: true,
               options: ['S', 'M'],

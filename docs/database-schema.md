@@ -149,10 +149,10 @@ flowchart TB
 | `id` | uuid | PK | |
 | `tournament_id` | uuid | not null, FK → `tournaments.id`(on delete cascade) | |
 | `field_key` | text | not null | 項目キー。`entries.custom_field_values` の JSON キーになる |
-| `label` | text | not null | 画面上のラベル |
-| `field_type` | text | not null, check in (`checkbox`, `radio`, `textarea`) | 入力形式 |
+| `label` | text | not null | 画面上のラベル。`<a href="https://...">文字</a>` の形でリンクを書ける(#173、[`form-generation.md`](./form-generation.md)) |
+| `field_type` | text | not null, check in (`checkbox`, `radio`, `textarea`, `textfield`) | 入力形式(`textfield` は `0029` で追加) |
 | `required` | boolean | not null, default false | 必須かどうか |
-| `options` | jsonb | nullable | 選択肢の文字列配列。YAML で `options` を省略した項目(単独チェックボックスなど)だけが `null` になります。`checkbox` / `textarea` でも `options` が書かれていれば(空配列であっても)`toFormFieldDefRows()` がその配列をそのまま保存します |
+| `options` | jsonb | nullable | 選択肢の文字列配列。YAML で `options` を省略した項目(単独チェックボックスなど)だけが `null` になります。`checkbox` / `textarea` / `textfield` でも `options` が書かれていれば(空配列であっても)`toFormFieldDefRows()` がその配列をそのまま保存します |
 | `display_order` | integer | not null, default 0 | 表示順(YAML の記述順がそのまま入る) |
 
 - `unique (tournament_id, field_key)`: 同一大会内で項目キーは重複不可。
@@ -562,3 +562,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0026_staff_accounts_per_type_and_disable.sql` | `staff_accounts` の一意制約を `(email, tournament_type)` に変更(#166)、`disabled_at` と `disable_staff_account()` を追加し、`reset_staff_password()` を無効なアカウントを拒否するよう再定義(#156) |
 | `0027_staff_account_enable_and_link_locking.sql` | `disable_staff_account()` を対象が統括スタッフのときだけ全統括スタッフをロックするよう再定義し、`enable_staff_account()` と `issue_staff_password_link()` を追加(有効化とリンク発行をアカウント行のロック下で 1 トランザクションに) |
 | `0028_import_tournament_fn.sql` | 大会一覧からの一括登録(#168)用の `import_tournament()`。大会の upsert・フォーム定義・レギュレーション(名前で既存と突き合わせ)を 1 トランザクションで |
+| `0029_form_field_textfield.sql` | `form_field_defs.field_type` の check 制約を張り替え、一行の自由記述 `textfield` を許す(#173) |
