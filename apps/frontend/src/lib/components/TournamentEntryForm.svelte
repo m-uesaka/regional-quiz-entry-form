@@ -9,6 +9,7 @@
     type Regulation,
   } from '@regional-quiz/shared';
   import DynamicFormField from '$lib/components/DynamicFormField.svelte';
+  import PasswordRequirements from '$lib/components/PasswordRequirements.svelte';
   import {customFieldName} from '$lib/custom-field-name';
   import RegulationSelector from '$lib/components/RegulationSelector.svelte';
   import Turnstile from '$lib/components/Turnstile.svelte';
@@ -57,6 +58,12 @@
   // the route parameters, so the page wraps this component in
   // `{#key data.tournament.id}` to have it built afresh instead.
   const initial = untrack(() => values);
+
+  // Bound only so `PasswordRequirements` can say, as they are typed, whether
+  // they will be accepted (#177). Never seeded: the action doesn't echo
+  // passwords back.
+  let password = $state('');
+  let passwordConfirm = $state('');
 
   let name = $state(initial?.name ?? '');
   let furigana = $state(initial?.furigana ?? '');
@@ -186,6 +193,8 @@
         minlength={8}
         autocomplete="new-password"
         isError={!!fieldError('password')}
+        bind:value={password}
+        aria-describedby="password-requirements"
         required
       />
       {#if fieldError('password')}
@@ -202,11 +211,23 @@
         minlength={8}
         autocomplete="new-password"
         isError={!!fieldError('passwordConfirm')}
+        bind:value={passwordConfirm}
         required
       />
       {#if fieldError('passwordConfirm')}
         <p class="text-sm text-destructive">{fieldError('passwordConfirm')}</p>
       {/if}
+    </div>
+
+    <!-- Under both fields, so the match is reported next to the second. The
+         rules apply only when the address turns out to be new; a registered
+         participant types the password they already have (#117). -->
+    <div id="password-requirements">
+      <PasswordRequirements
+        {password}
+        confirmation={passwordConfirm}
+        newAccountOnly
+      />
     </div>
   {/if}
 

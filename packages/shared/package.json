@@ -6,7 +6,8 @@
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./password-policy": "./src/password-policy.ts"
+    "./password-policy": "./src/password-policy.ts",
+    "./common-passwords": "./src/common-passwords.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

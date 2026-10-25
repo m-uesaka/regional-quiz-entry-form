@@ -291,7 +291,7 @@ if ('yaml' in body) {
 
 スタッフが招待メール(`POST /api/staff/accounts`)・リンク再発行(`POST /api/staff/accounts/:id/password-reset`)・本人の申し込み(上記 `/request`)で受け取ったトークンを使い、自分のパスワードを設定します。
 
-- リクエスト: `StaffPasswordResetConfirmInputSchema` — `{token: string(min 1), newPassword: PasswordSchema}`(`PasswordSchema` は `packages/shared/src/password-policy.ts`。8 文字以上 256 文字以内で、よく使われるパスワードの一覧(約 3,300 件、大文字小文字を区別しない)に載っていないこと。記号必須などの文字種の強制はしません。よく使われるパスワードの一覧は約 30 KB あるため、ブラウザのバンドルに入らないようパッケージの `index.ts` からは export せず、サーバー側のコードだけが `@regional-quiz/shared/password-policy` から import します)
+- リクエスト: `StaffPasswordResetConfirmInputSchema` — `{token: string(min 1), newPassword: PasswordSchema}`(`PasswordSchema` は `packages/shared/src/password-policy.ts`。8 文字以上 256 文字以内で、よく使われるパスワードの一覧(約 3,300 件、大文字小文字を区別しない)に載っていないこと。記号必須などの文字種の強制はしません。よく使われるパスワードの一覧は約 30 KB あるため、ブラウザのバンドルに入らないようパッケージの `index.ts` からは export せず、サーバー側のコードだけが `@regional-quiz/shared/password-policy` から import します。パスワードを設定するフォーム(エントリー・参加者/スタッフのパスワード再設定)は、送信前に受け付けられるかを表示するため(#177、`PasswordRequirements.svelte`)、照合だけを持つ `@regional-quiz/shared/common-passwords` を動的 `import()` で読み込みます。一覧はそのフォームのページでだけ取得される別チャンクになり、最初のバンドルには入りません)
 - `200`: `{"ok": true}`
 - `400`: `{"error": "invalid or expired token"}`(未知・使用済み・期限切れのトークン)
 - `500`: `{"error": "internal server error"}`
