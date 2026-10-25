@@ -39,7 +39,7 @@ export interface PortalRegionView {
 /**
  * A tournament's public pages sit under `/<regionSlug>/<tournamentType>`:
  * the entry form at `/entry`, the published entry list at `/list`. Every
- * link to them is built here, so they all agree on the encoding.
+ * link to them is built from here, so they all agree on the encoding.
  * @param regionSlug The tournament's region slug.
  * @param tournamentType The tournament's type, used as the URL slug.
  */
@@ -48,6 +48,19 @@ export function tournamentPublicPath(
   tournamentType: TournamentType,
 ): string {
   return `/${encodeURIComponent(regionSlug)}/${tournamentType}`;
+}
+
+/**
+ * The tournament's published entry list,
+ * `/<regionSlug>/<tournamentType>/list`.
+ * @param regionSlug The tournament's region slug.
+ * @param tournamentType The tournament's type, used as the URL slug.
+ */
+export function tournamentEntryListPath(
+  regionSlug: string,
+  tournamentType: TournamentType,
+): string {
+  return `${tournamentPublicPath(regionSlug, tournamentType)}/list`;
 }
 
 /**
@@ -94,17 +107,16 @@ export function groupPortalTournaments(
       };
       regions.set(tournament.regionSlug, region);
     }
-    const tournamentPath = tournamentPublicPath(
-      tournament.regionSlug,
-      tournament.tournamentType,
-    );
     region.tournaments.push({
       name: tournament.tournamentName,
       typeLabel: TOURNAMENT_TYPE_LABELS[tournament.tournamentType],
       status: portalStatus(tournament, now),
       entryPeriodLabel: `${formatJstDateTime(tournament.entryOpensAt)} 〜 ${formatJstDateTime(tournament.entryClosesAt)}`,
-      entryPath: `${tournamentPath}/entry`,
-      entryListPath: `${tournamentPath}/list`,
+      entryPath: `${tournamentPublicPath(tournament.regionSlug, tournament.tournamentType)}/entry`,
+      entryListPath: tournamentEntryListPath(
+        tournament.regionSlug,
+        tournament.tournamentType,
+      ),
     });
   }
   return [...regions.values()];

@@ -3,6 +3,7 @@ import type {PortalTournament} from '@regional-quiz/shared';
 import {
   groupPortalTournaments,
   portalStatus,
+  tournamentEntryListPath,
   tournamentPublicPath,
 } from './portal';
 
@@ -31,6 +32,14 @@ describe('tournamentPublicPath', () => {
   it('encodes a region slug that would otherwise change the URL', () => {
     expect(tournamentPublicPath('a?b#c', 'shinjinou')).toBe(
       '/a%3Fb%23c/shinjinou',
+    );
+  });
+});
+
+describe('tournamentEntryListPath', () => {
+  it('points at the list page under the tournament', () => {
+    expect(tournamentEntryListPath('tokyo', 'saikyoi')).toBe(
+      '/tokyo/saikyoi/list',
     );
   });
 });

@@ -10,7 +10,7 @@
   import Table from '$lib/components/ui/atoms/Table.svelte';
   import TableData from '$lib/components/ui/atoms/TableData.svelte';
   import TableHead from '$lib/components/ui/atoms/TableHead.svelte';
-  import {tournamentPublicPath} from '$lib/portal';
+  import {tournamentEntryListPath} from '$lib/portal';
   import type {PageProps} from './$types';
 
   let {data}: PageProps = $props();
@@ -42,12 +42,14 @@
    * The per-tournament staff screens (Task 6-2 / 6-3 / 6-4) are keyed by
    * region slug and tournament type, and their API is scoped by
    * `requireStaffForTournament()`, which general staff pass for any region
-   * — so this link is how those screens are reached across regions.
+   * — so this link is how those screens are reached across regions. The
+   * slug is encoded as `tournamentEntryListPath()` encodes it, so the two
+   * links on a row always name the same tournament.
    * @param regionSlug The tournament's region slug.
    * @param tournamentType The tournament's type, used as the URL slug.
    */
   function entriesHref(regionSlug: string, tournamentType: string): string {
-    return `/staff/${regionSlug}/${tournamentType}/entries`;
+    return `/staff/${encodeURIComponent(regionSlug)}/${tournamentType}/entries`;
   }
 </script>
 
@@ -119,12 +121,16 @@
                   <!-- The list participants see, for checking what is
                        published and copying the URL to share. It is outside
                        the staff screens, so it opens in a new tab and leaves
-                       the dashboard where it was. -->
+                       the dashboard where it was. The page is served from
+                       the Cloudflare cache for up to 30 seconds
+                       (`$lib/server/entry-list-cache`), and a change made
+                       on the staff screens doesn't clear it, so a change
+                       made just now may not show yet. -->
                   <Link
-                    href="{tournamentPublicPath(
+                    href={tournamentEntryListPath(
                       summary.regionSlug,
                       summary.tournamentType,
-                    )}/list"
+                    )}
                     target="_blank"
                     aria-label="{summary.regionName} {summary.tournamentName}の公開エントリーリスト(新しいタブで開きます)"
                   >
