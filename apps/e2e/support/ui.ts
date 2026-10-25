@@ -22,6 +22,7 @@ import {
   REGION,
   uniqueEmail,
   type FormFieldDefFixture,
+  staffLoginScope,
   type StaffFixture,
   type TournamentFixture,
 } from './fixtures';
@@ -403,6 +404,7 @@ export async function loginStaffThroughForm(
   ).toBeVisible();
 
   await fillField(page.getByLabel('メールアドレス'), staff.email);
+  await page.getByLabel('区分').selectOption(staffLoginScope(staff));
   await fillField(page.getByLabel('パスワード'), staff.password);
   await page.getByRole('button', {name: 'ログイン'}).click();
   await page.waitForURL(url => !url.pathname.startsWith(STAFF_LOGIN_PATH));

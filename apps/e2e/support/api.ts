@@ -23,6 +23,7 @@ import {BACKEND_URL, MAIL_SINK_URL} from './env';
 import {
   PARTICIPANT_PASSWORD,
   uniqueEmail,
+  staffLoginScope,
   type StaffFixture,
   type TournamentFixture,
 } from './fixtures';
@@ -267,7 +268,11 @@ export async function loginStaff(
   staff: StaffFixture,
 ): Promise<void> {
   const response = await request.post(`${BACKEND_URL}/api/auth/staff/login`, {
-    data: {email: staff.email, password: staff.password},
+    data: {
+      email: staff.email,
+      scope: staffLoginScope(staff),
+      password: staff.password,
+    },
   });
   expect(response.status(), await response.text()).toBe(200);
 }

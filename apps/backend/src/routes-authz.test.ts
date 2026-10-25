@@ -19,6 +19,7 @@ import {
 } from './test-support/bindings';
 import {
   isStaffSessionCheck,
+  staffSessionRow,
   TEST_SESSIONS_VALID_FROM,
   TEST_SESSIONS_VALID_FROM_MS,
 } from './test-support/staff-session';
@@ -133,6 +134,8 @@ const ROUTE_POLICIES: Readonly<Record<string, Policy>> = {
   'POST /api/staff/accounts': {access: 'general-staff'},
   'POST /api/staff/accounts/:id/password-reset': {access: 'general-staff'},
   'POST /api/staff/accounts/:id/revoke-sessions': {access: 'general-staff'},
+  'POST /api/staff/accounts/:id/disable': {access: 'general-staff'},
+  'POST /api/staff/accounts/:id/enable': {access: 'general-staff'},
   'GET /api/mypage/entries': {access: 'participant'},
   'GET /api/mypage/entries/:entryId': {access: 'participant'},
   'PATCH /api/mypage/entries/:entryId': {access: 'participant'},
@@ -305,7 +308,7 @@ function classifyRead(url: URL): GuardRead | null {
   if (isStaffSessionCheck(url.toString())) {
     return {
       kind: 'staff-session',
-      body: [{sessions_valid_from: TEST_SESSIONS_VALID_FROM}],
+      body: [staffSessionRow(TEST_SESSIONS_VALID_FROM)],
     };
   }
   if (table === 'participants' && select === 'password_changed_at') {

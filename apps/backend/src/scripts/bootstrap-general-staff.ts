@@ -40,10 +40,15 @@ function quoteLiteral(value: string): string {
  * The account row is locked (`for update`) before its links are touched, so
  * concurrent runs for the same address take turns instead of both keeping a
  * usable link, matching the account-before-token order of
- * `reset_staff_password()`. An
- * address that belongs to a regional account is refused rather than handed a
- * link: that would be a regional staff member's password reset, which a
- * general staff member can already do from the staff screen.
+ * `reset_staff_password()`.
+ *
+ * Only the general account at that address is ever touched: accounts are
+ * unique per (address, tournament type) (#166), and a general one is the
+ * row whose type is null, so a regional account sharing the address is left
+ * alone rather than handed a link. If the general account was disabled
+ * (#156), it is enabled again -- this is the break-glass path for an
+ * environment that has lost its general staff access, and a link to an
+ * account that can't log in would recover nothing.
  * @param email The account's address, already validated.
  * @param tokenHash `hashToken()` of the token in the printed link.
  */
@@ -55,14 +60,13 @@ declare
 begin
   insert into staff_accounts (email, password_hash, role)
   values (${emailLiteral}, ${quoteLiteral(UNUSABLE_PASSWORD_HASH)}, 'general')
-  on conflict (email) do nothing;
+  on conflict (email, tournament_type) do nothing;
 
   select id into v_id from staff_accounts
   where email = ${emailLiteral} and role = 'general'
   for update;
-  if v_id is null then
-    raise exception '% is a regional staff account', ${emailLiteral};
-  end if;
+
+  update staff_accounts set disabled_at = null where id = v_id;
 
   delete from staff_password_reset_tokens where staff_account_id = v_id;
   insert into staff_password_reset_tokens

@@ -70,15 +70,31 @@ export const staffAuthRoute = new Hono<Env>()
       LOGIN_LIMIT_PERIOD_SECONDS,
     ),
     async c => {
-      const {email, password} = c.req.valid('json');
+      const {email, scope, password} = c.req.valid('json');
       const db = createDbClient(c.env);
-      const {data: staff, error} = await db
+      // The address alone may name two accounts -- a region's 最強位 and
+      // 新人王 run from one mailbox (#166) -- so `scope` picks the one: a
+      // tournament type for regional staff, or none at all for general
+      // staff, whose rows carry a null type. The unique constraint on
+      // (email, tournament_type) leaves at most one row either way.
+      //
+      // A disabled account (#156) is simply not looked for, so it gets the
+      // same 401 -- after the same PBKDF2 work -- as an address that was
+      // never registered: whoever holds its password learns nothing from
+      // trying it.
+      const query = db
         .from('staff_accounts')
         .select(
           'id, password_hash, role, region_id, tournament_type, ' +
             'sessions_valid_from, regions(slug)',
         )
         .eq('email', email)
+        .is('disabled_at', null);
+      const {data: staff, error} = await (
+        scope === 'general'
+          ? query.is('tournament_type', null)
+          : query.eq('tournament_type', scope)
+      )
         .returns<StaffAccountRow[]>()
         .maybeSingle();
 

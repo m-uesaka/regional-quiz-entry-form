@@ -54,28 +54,37 @@ function regionalStaffRow(passwordHash: string): Record<string, unknown> {
   };
 }
 
-function mockStaffAccountFetch(row: Record<string, unknown> | null): void {
-  globalThis.fetch = (() =>
-    Promise.resolve(
-      Response.json(row ? [row] : []),
-    )) as unknown as typeof fetch;
+/**
+ * Answers every read with `row`, and records the URLs the login asked for
+ * so a test can check which row it was looking for.
+ * @param row The account the lookup finds, or `null` for none.
+ */
+function mockStaffAccountFetch(row: Record<string, unknown> | null): URL[] {
+  const urls: URL[] = [];
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    urls.push(new URL(input instanceof Request ? input.url : String(input)));
+    return Promise.resolve(Response.json(row ? [row] : []));
+  }) as unknown as typeof fetch;
+  return urls;
 }
 
 /**
  * Posts a login request for the mocked account.
  * @param password The password to submit.
  * @param email The address to submit.
+ * @param scope Which of the address's accounts to log in to.
  */
 async function login(
   password: string,
   email = 'staff@example.com',
+  scope = 'saikyoi',
 ): Promise<Response> {
   return staffAuthRoute.request(
     '/login',
     {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({email, password}),
+      body: JSON.stringify({email, scope, password}),
     },
     ENV,
   );
@@ -154,7 +163,7 @@ describe('POST /login', () => {
       regions: null,
     });
 
-    const res = await login('correct-password');
+    const res = await login('correct-password', 'staff@example.com', 'general');
 
     expect(res.status).toBe(200);
     expect((await res.json()) as Record<string, unknown>).toEqual({
@@ -163,6 +172,66 @@ describe('POST /login', () => {
       regionSlug: null,
       tournamentType: null,
     });
+  });
+
+  // #166: one address may hold a 最強位 and a 新人王 account, so the
+  // lookup has to be narrowed by the type the login names.
+  it('looks the account up by address and tournament type', async () => {
+    const urls = mockStaffAccountFetch(
+      regionalStaffRow(await hashPassword('correct-password')),
+    );
+
+    await login('correct-password', 'staff@example.com', 'shinjinou');
+
+    expect(urls).toHaveLength(1);
+    expect(urls[0].searchParams.get('email')).toBe('eq.staff@example.com');
+    expect(urls[0].searchParams.get('tournament_type')).toBe('eq.shinjinou');
+  });
+
+  // General staff carry no tournament type, so `general` has to match the
+  // null one rather than a type named `general`.
+  it('looks a general account up by its null tournament type', async () => {
+    const urls = mockStaffAccountFetch(null);
+
+    await login('anything', 'staff@example.com', 'general');
+
+    expect(urls[0].searchParams.get('tournament_type')).toBe('is.null');
+  });
+
+  // #156: a disabled account is not looked for at all, so it is refused the
+  // same way as an address that was never registered.
+  it('only looks for an account that is not disabled', async () => {
+    const urls = mockStaffAccountFetch(null);
+
+    await login('anything');
+
+    expect(urls[0].searchParams.get('disabled_at')).toBe('is.null');
+  });
+
+  // #133: the account was stored lowercased, so the lookup must be too.
+  it('lowercases the address before looking it up', async () => {
+    const urls = mockStaffAccountFetch(null);
+
+    await login('anything', 'Staff@Example.COM');
+
+    expect(urls[0].searchParams.get('email')).toBe('eq.staff@example.com');
+  });
+
+  it('returns 400 without a scope', async () => {
+    const urls = mockStaffAccountFetch(null);
+
+    const res = await staffAuthRoute.request(
+      '/login',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({email: 'staff@example.com', password: 'x'}),
+      },
+      ENV,
+    );
+
+    expect(res.status).toBe(400);
+    expect(urls).toHaveLength(0);
   });
 
   it('returns 401 for a wrong password', async () => {
@@ -193,6 +262,7 @@ describe('POST /login', () => {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
           email: 'staff@example.com',
+          scope: 'saikyoi',
           password: 'correct',
         }),
       },
@@ -225,6 +295,7 @@ describe('POST /login', () => {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
           email: 'Shared@Example.com',
+          scope: 'saikyoi',
           password: 'anything',
         }),
       },
@@ -265,7 +336,11 @@ describe('POST /login', () => {
         {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({email: 'staff@example.com', password}),
+          body: JSON.stringify({
+            email: 'staff@example.com',
+            scope: 'saikyoi',
+            password,
+          }),
         },
         ENV,
         ctx,

@@ -47,7 +47,7 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 どちらのセッションも、署名の検証に加えて**リクエストごとに DB 参照が 1 回入ります**(セッションの失効)。
 
 - **参加者**: `pwdChangedAt` はログイン時点の `participants.password_changed_at`(エポックミリ秒)で、`requireParticipant()` が毎リクエストその列を読み直し、**値が動いていたら 401** にします。パスワード再設定でこの列が更新されるため、再設定前に発行された Cookie(盗まれたものを含む)はその時点で使えなくなります。ステートレスな JWT のままだと、パスワードを変えても攻撃者のアクセスが最大 7 日間続いてしまいます。
-- **スタッフ**(Task 11-3): `sessionsValidFrom` はログイン時点の `staff_accounts.sessions_valid_from`(エポックミリ秒)で、スタッフ用のミドルウェアすべて(`requireGeneralStaff()` / `requireStaffForTournament()` / `requireStaffForEntry()`、期間外の `requireOpenEntryPeriodOrStaff()`)が毎リクエストその列を読み直し、**値が動いていたら 401** にします。この列は統括スタッフの明示的な無効化(`POST /api/staff/accounts/:id/revoke-sessions`、12 章)とパスワード再設定(`reset_staff_password()`)で進みます。スタッフの Cookie は参加者全員の氏名・ふりがな・メールアドレスに届くので、漏れたときに 12 時間止められないことの影響は参加者セッションより大きく、列名を `password_changed_at` にしていないのは端末紛失・Cookie の漏洩などパスワード変更以外でも切れるようにするためです。ただし切れるのはセッションだけで、**パスワードを知っている人の再ログインは止められません**(アカウントの無効化は #156)。
+- **スタッフ**(Task 11-3): `sessionsValidFrom` はログイン時点の `staff_accounts.sessions_valid_from`(エポックミリ秒)で、スタッフ用のミドルウェアすべて(`requireGeneralStaff()` / `requireStaffForTournament()` / `requireStaffForEntry()`、期間外の `requireOpenEntryPeriodOrStaff()`)が毎リクエストその列を読み直し、**値が動いていたら 401** にします。この列は統括スタッフの明示的な無効化(`POST /api/staff/accounts/:id/revoke-sessions`、12 章)とパスワード再設定(`reset_staff_password()`)で進みます。スタッフの Cookie は参加者全員の氏名・ふりがな・メールアドレスに届くので、漏れたときに 12 時間止められないことの影響は参加者セッションより大きく、列名を `password_changed_at` にしていないのは端末紛失・Cookie の漏洩などパスワード変更以外でも切れるようにするためです。ただし切れるのはセッションだけで、**パスワードを知っている人の再ログインは止められません**。締め出すにはアカウントを無効化します(`POST /api/staff/accounts/:id/disable`、12 章)。無効化されたアカウントのセッションは、この列の値にかかわらず 401 です(`staff_accounts.disabled_at` も同じ読み取りで見ています)。
 
 どちらも、**列を読めなかったときは 401 ではなく 500** を返します。セッション自体は正しいかもしれず、DB 障害でログイン画面に追い返すべきではないためです。行が消えている(アカウント削除)場合は失効と同じく 401 です。`sessionsValidFrom` を持たない古いスタッフ Cookie(Task 11-3 以前に発行されたもの)はクレームの形の検証で落ち、未ログインと同じ扱いになります。
 
@@ -230,6 +230,8 @@ if ('yaml' in body) {
 | POST | `/api/staff/accounts` | 統括スタッフ |
 | POST | `/api/staff/accounts/:id/password-reset` | 統括スタッフ |
 | POST | `/api/staff/accounts/:id/revoke-sessions` | 統括スタッフ |
+| POST | `/api/staff/accounts/:id/disable` | 統括スタッフ |
+| POST | `/api/staff/accounts/:id/enable` | 統括スタッフ |
 | GET | `/api/mypage/entries` | 参加者 |
 | GET | `/api/mypage/entries/:entryId` | 参加者(本人) |
 | PATCH | `/api/mypage/entries/:entryId` | 参加者(本人) |
@@ -248,11 +250,17 @@ if ('yaml' in body) {
 
 スタッフのログイン。成功時に `staff_session` Cookie を発行します。
 
-- リクエスト: `StaffLoginInputSchema` — `{email: string(email), password: string(min 1, max 1024)}`(ログインには下記のパスワードポリシーを**適用しません**。ポリシー導入前に設定したパスワードでもログインできる必要があるためです。上限も新規設定時の 256 文字より緩い 1024 文字(`LOGIN_PASSWORD_MAX_LENGTH`)にしています。256 文字の上限ができる前は上限が無かったためで、上限自体は PBKDF2 の計算量を守るために残しています)
+- リクエスト: `StaffLoginInputSchema` — `{email: string(email), scope: "saikyoi" | "shinjinou" | "general", password: string(min 1, max 1024)}`(ログインには下記のパスワードポリシーを**適用しません**。ポリシー導入前に設定したパスワードでもログインできる必要があるためです。上限も新規設定時の 256 文字より緩い 1024 文字(`LOGIN_PASSWORD_MAX_LENGTH`)にしています。256 文字の上限ができる前は上限が無かったためで、上限自体は PBKDF2 の計算量を守るために残しています)
 - `200`: `StaffLoginResponseSchema` — `{"ok": true, "role": "regional" | "general", "regionSlug": string | null, "tournamentType": "saikyoi" | "shinjinou" | null}`
 - `401`: `{"error": "invalid credentials"}`
 - `429`: `{"error": "too many requests"}`(`Retry-After: 60`。1 章「レート制限と Turnstile」を参照)
 - `500`: `{"error": "internal server error"}`
+
+スタッフアカウントは**メールアドレスと担当種別の組**で 1 つに決まります(#166)。同じ地域の最強位と新人王を同じ人が同じアドレスで担当することがあり、それぞれ別のアカウントになるためです。`scope` はどのアカウントでログインするかで、地域スタッフは担当種別(`saikyoi` / `shinjinou`)、統括スタッフは `general` を選びます。`(email, tournament_type)` の一意制約(統括スタッフは `tournament_type` が null)があるので、どの組み合わせでも該当は高々 1 行です。
+
+**無効化されたアカウント(#156)は探しません。** パスワードが正しくても、未登録のアドレスと同じ 401 になります。
+
+`email` は**小文字にしてから**照合します(`packages/shared/src/schemas/email.ts` の `emailAddressSchema()`、#133)。参加者側のログイン・再設定要求・エントリーも同じです。
 
 該当アカウントが存在しない場合もダミーのハッシュ(`lib/password.ts` の `DUMMY_PASSWORD_HASH`。現行の反復回数で作った形式なので、新規ハッシュと同じコストがかかります)に対して PBKDF2 を実行してから 401 を返します。これにより「メールアドレスが存在しない」場合と「パスワードが違う」場合の応答時間が揃い、タイミング差からのアカウント列挙を防ぎます。
 
@@ -828,13 +836,13 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 ガードは `routes/regions.ts` と違い**ルート単位**で付けています。このサブアプリは `/staff` にマウントされており、同じ `/staff` に地域スタッフも使う `routes/staff-entries.ts` / `routes/staff-mail.ts` がマウントされているため、`.use('*', ...)` にすると地域スタッフが自分のエントリー一覧から締め出されます。
 
-**削除は提供しません。** 退任したスタッフのアカウントをどう扱うか(無効化か削除か、`entries` との関係をどうするか)は未決なので、この API では作成・再招待と、セッションの無効化(`revoke-sessions`)だけを扱います。
+**削除は提供せず、無効化で扱います**(#156)。`entries` など既存データからスタッフを参照する外部キーは無いので削除もできますが、行を消すと誰がどの大会を担当していたかも消え、誤操作を戻せません。無効化なら行もパスワードも残り、有効化すれば元どおり使えます。
 
 ### `GET /api/staff/accounts`
 
 全スタッフアカウントを `created_at` 昇順で返します。
 
-- `200`: `StaffAccount[]` — `{id, email, role, regionId, regionSlug, regionName, tournamentType, passwordSet}`
+- `200`: `StaffAccount[]` — `{id, email, role, regionId, regionSlug, regionName, tournamentType, passwordSet, disabledAt}`(`disabledAt` は無効化された時刻、有効なら `null`)
 - `401` / `403`
 - `500`: `{"error": "internal server error"}`
 
@@ -849,7 +857,9 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
   - `{role: 'regional', email, regionId, tournamentType}`
 - `201`: 作成された `StaffAccount`(`passwordSet` は必ず `false`)
 - `400`: バリデーション違反(`zValidator`)、または `{"error": "unknown region"}`(存在しない `regionId` = Postgres の `23503`)
-- `409`: `{"error": "email already in use"}`(Postgres の `23505`)
+- `409`: `{"error": "email already in use"}`(Postgres の `23505`。同じアドレスで同じ担当種別のアカウント、または同じアドレスの統括スタッフが既にある)
+
+一意なのは `(email, tournament_type)` の組です(#166)。同じアドレスで最強位と新人王のアカウントを 1 つずつ作れます。統括スタッフ(`tournament_type` が null)はアドレスごとに 1 つです。アドレスは小文字にしてから保存します(#133)。
 - `401` / `403`
 - `500`: `{"error": "internal server error"}`、またはメール送信に失敗した場合の `{"error": "account created but the setup mail could not be sent"}`
 
@@ -869,6 +879,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 - `200`: `{"ok": true}`
 - `400`: バリデーション違反(`zValidator`)
 - `404`: `{"error": "staff account not found"}`
+- `409`: `{"error": "staff account disabled"}`(無効化されたアカウント。先に有効化してください)
 - `401` / `403`
 - `500`: `{"error": "internal server error"}`
 
@@ -889,13 +900,44 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 - `401` / `403`(`regional` スタッフは不可)
 - `500`: `{"error": "internal server error"}`
 
-**パスワードは変えません。** パスワードを知っていれば誰でもそのまま再ログインできるので、**退任者やパスワードごと漏れた相手を締め出す手段にはなりません**。`password-reset` でリンクを再発行してもそのリンクは本人のアドレスに届くため、退任者本人は止められません。アカウントを使えなくする機能は #156 で扱います。
+**パスワードは変えません。** パスワードを知っていれば誰でもそのまま再ログインできるので、**退任者やパスワードごと漏れた相手を締め出す手段にはなりません**。`password-reset` でリンクを再発行してもそのリンクは本人のアドレスに届くため、退任者本人は止められません。その場合は下記の `disable` を使います。
 
 管理画面(`/admin/staff`)のボタンは、押すと確認ダイアログを出してから送信します。
 
 **自分自身のアカウントも対象にできます。** 端末を失くしたスタッフが手元の別の端末から押せるようにするためです。その場合、このリクエスト自体は 200 で通りますが、呼び出し元のセッションも同じアカウントのものなので次のリクエストからは 401 になります。管理画面(`/admin/staff`)はこのケースを見分け、Cookie を消してそのままログイン画面へ送ります。
 
 新しい値は Postgres の `now()` ではなく Worker の時計で書いています(PostgREST 経由の UPDATE では `now()` を指定できないため)。判定は「発行時刻より後か」ではなく値の一致なので、時計がずれていても値が変わりさえすれば足ります。
+
+### `POST /api/staff/accounts/:id/disable`
+
+アカウントを**無効化**します(#156)。退任したスタッフや、パスワードごと漏れたかもしれないアカウントを締め出すためのものです。
+
+- パス: `id` は UUID
+- `200`: `{"ok": true}`(既に無効なアカウントでも 200。`disabledAt` は最初に無効化した時刻のまま)
+- `400`: バリデーション違反(`zValidator`)
+- `404`: `{"error": "staff account not found"}`
+- `409`: `{"error": "cannot disable your own account"}`(自分自身)、`{"error": "cannot disable the last general staff account"}`(有効な統括スタッフが残らなくなる)
+- `401` / `403`
+- `500`: `{"error": "internal server error"}`
+
+無効化すると、DB 関数 `disable_staff_account()`(`supabase/migrations/0026_...`)が 1 トランザクションで次を行います。
+
+- `staff_accounts.disabled_at` を設定する。以後のログインは、パスワードが正しくても 401 です
+- `sessions_valid_from` を進めて、発行済みのセッションを次のリクエストから 401 にする(スタッフ用ミドルウェアは `disabled_at` も見ているので、列が戻されても通りません)
+- 未使用のパスワード設定リンクを削除する。`reset_staff_password()` も無効なアカウントへの設定を拒否するので、無効化と同時に使われたリンクも通りません
+
+**自分自身は無効化できません。** 統括スタッフが自分を締め出すと、ほかの統括スタッフしか戻せず、最後の 1 人なら誰も戻せないためです。加えて関数側でも、**有効な統括スタッフが 0 人になる無効化を拒否します**。統括スタッフの行をすべてロックしてから数えるので、2 人が同時に互いを無効化した場合も後の方が 409 になります。
+
+### `POST /api/staff/accounts/:id/enable`
+
+無効化したアカウントを**有効に戻します**。パスワードは無効化前のままなので、本人はそのパスワードでログインできます。無効化で切れたセッションは戻りません(`sessions_valid_from` は動かさない)。あわせて、そのアカウントのパスワード設定リンクも削除します。無効化と同時に走った再送が無効化の後にリンクを書き込んでいた場合、そのリンクは無効な間は拒否されますが、有効化で再び使えるようにはしないためです(必要なら有効化の後に再送します)。既に有効なアカウントに対しては 200 を返します。
+
+- パス: `id` は UUID
+- `200`: `{"ok": true}`
+- `400`: バリデーション違反(`zValidator`)
+- `404`: `{"error": "staff account not found"}`
+- `401` / `403`
+- `500`: `{"error": "internal server error"}`
 
 ## 13. マイページ(参加者本人)
 

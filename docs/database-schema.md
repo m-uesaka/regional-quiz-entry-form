@@ -165,12 +165,14 @@ flowchart TB
 | --- | --- | --- | --- |
 | `id` | uuid | PK | |
 | `region_id` | uuid | not null, FK → `regions.id` | 所属地域 |
-| `email` | text | not null, **unique(全体)** | ログイン ID |
+| `email` | text | not null, **unique(全体)**, check `email = lower(email)` | ログイン ID。小文字で保存(#133) |
 | `password_hash` | text | not null | PBKDF2-SHA256 ハッシュ。`pbkdf2-sha256$<反復回数>$<16バイトのソルトの hex>$<32バイトのハッシュの hex>` の形式(現行 10 万回)。`$` を含まない `{ソルト}:{ハッシュ}` は旧形式(10 万回)として読み、次のログインで新形式に書き換わります |
 | `password_changed_at` | timestamptz | not null, default `now()` | パスワードが最後に変わった時刻(`0011` で追加)。セッション失効の判定に使います |
 | `created_at` | timestamptz | not null, default `now()` | |
 
 - `email` は地域ごとではなく**システム全体で一意**です。そのため、ある参加者が別地域の大会にエントリーすることはできません。未ログインのエントリーでは、その旨をそのアドレスへメールで伝え(応答は他の場合と同じ `202`。#117)、ログイン中のエントリーでは 409(`already registered in another region`)を返します。
+- `email` は**小文字で保存します**(#133、`0025`)。メールアドレスは実運用上大文字小文字を区別しないのに、Postgres の `text` の比較・一意制約は区別するため、`Foo@example.com` と `foo@example.com` が別の参加者になり、既存参加者のパスワード確認や地域重複・二重エントリーの検査を素通りしていました。入力は `packages/shared` の `emailAddressSchema()` が小文字にし、check 制約 `participants_email_lowercase` が小文字以外の書き込みを拒否します(この制約があるので、既存の unique 制約がそのまま大文字小文字を区別しない一意性になります)。
+  - `0025` は、大文字小文字違いの行が既にあると**衝突しているアドレスを並べて失敗します**。どちらの行を残すかは機械的に決められないためで、適用前に `select lower(email), array_agg(id) from participants group by 1 having count(*) > 1` で洗い出し、残す行を決めて、もう一方の `entries.participant_id`(と `password_reset_tokens.participant_id`)を残す行に付け替えてから削除してください。同じ大会に両方のエントリーがある場合は `unique (participant_id, tournament_id)` に当たるので、片方をキャンセル済みにするか削除します。`staff_accounts` も同様です(参照しているのは `staff_password_reset_tokens` だけで、これは `on delete cascade`)。
 - Supabase Auth ではなく自前のテーブルでアカウントを管理しています。パスワードのハッシュ化・検証は `apps/backend/src/lib/password.ts`(Web Crypto の PBKDF2)。Cloudflare Workers は Node.js ランタイムではないため、Node 依存のライブラリは使えません。
 - `password_hash` は**アルゴリズムと反復回数を自分の中に持っています**。新しいハッシュを作るパラメータを変えても、既存のハッシュは保存時の回数で検証できるので誰もログインできなくなりません。照合が通ったときに古いパラメータ(または旧形式)だったものは、ログイン(参加者・スタッフ)と未ログインでのエントリーの照合時に、その場で現行パラメータで作り直されます(`lib/password-rehash.ts` の `verifyAccountPassword()`。パスワードを照合する箇所はすべてこれを通ります)。保存された反復回数が Workers の上限(10 万回)を超えるハッシュは、本番で例外になるため使えない値として扱い、ログインは 401 になります。この書き換えは `password_hash` が照合時の値のままである行だけを対象にし、`password_changed_at` は動かしません。
 - 反復回数が OWASP の推奨(PBKDF2-SHA256 で 60 万回)を下回る **10 万回に留まっているのは、Cloudflare Workers の本番ランタイムが 100,000 回を超える PBKDF2 を `NotSupportedError` で拒否するため**です(2026-10-23 に `wrangler dev --remote` で 100,001 回・600,000 回が拒否されることを確認)。ローカルの `wrangler dev --local` / workerd ではこの上限がかからず、Bun のテストでも検出できないので、デプロイして初めて全ログインが失敗する形で表面化します。上限を越えるための選択肢(`nodejs_compat` 経由の scrypt など)と計測値は `lib/password.ts` 冒頭のコメントにまとめています。
@@ -284,18 +286,22 @@ flowchart TB
 | カラム | 型 | 制約 | 説明 |
 | --- | --- | --- | --- |
 | `id` | uuid | PK | |
-| `email` | text | not null, unique | |
+| `email` | text | not null, check `email = lower(email)` | 小文字で保存(#133)。一意なのは下記の `(email, tournament_type)` の組 |
 | `password_hash` | text | not null | participants と同じ PBKDF2 形式(旧形式の読み取りとログイン時の書き換えも同じ) |
 | `role` | staff_role | not null | `regional` / `general` |
 | `region_id` | uuid | nullable, FK → `regions.id` | `regional` のときの担当地域 |
 | `tournament_type` | tournament_type | nullable | `regional` のときの担当大会種別 |
 | `created_at` | timestamptz | not null, default `now()` | |
 | `sessions_valid_from` | timestamptz | not null, default `now()` | 発行済みセッションの世代(`0020` で追加)。セッション失効の判定に使います |
+| `disabled_at` | timestamptz | nullable | 無効化された時刻(`0026` で追加、#156)。null なら有効 |
+
+- 一意制約は `unique nulls not distinct (email, tournament_type)` です(`0026`、#166)。同じ地域の最強位と新人王を同じ人が同じアドレスで担当することがあるため、地域スタッフはアドレス × 種別ごとに 1 アカウント持てます。統括スタッフは `tournament_type` が null なので、`nulls not distinct` によりアドレスごとに 1 つです。ログインでは種別(統括スタッフは `general`)も選ばせて 1 行に絞ります(`POST /api/auth/staff/login` の `scope`)。
 
 - `general`(統括スタッフ)は `region_id` / `tournament_type` が `null` で、全地域・全大会にアクセスできます。
 - `regional`(地域スタッフ)は `(region_id, tournament_type)` の組が担当範囲で、その大会のエントリーしか閲覧できません。この範囲チェックは `apps/backend/src/middleware/staff-auth.ts` が担当します。
 - この 2 パターン以外の行は check 制約 `staff_accounts_scope_matches_role`(`0015`)が拒否します。`regional` なのに `region_id` か `tournament_type` の片方しか無い行は「担当範囲が狭いアカウント」ではなく**壊れた行**で、上記の範囲チェックがすべての大会で落ちるため、そのアカウントはどこにアクセスしても静かに 403 を返し続けます。Zod 側(`StaffAccountCreateInputSchema` の判別共用体)と両方で縛っているのは、Supabase を直接触って行を作る経路が残るためです。
-- `sessions_valid_from` は**発行済みスタッフセッションを切る**ためのものです(Task 11-3)。ログイン時にこの列の値を `sessionsValidFrom` クレームとして JWT に載せ、スタッフ用ミドルウェアが毎リクエストこの列を読み直して**一致しないセッションを 401 で拒否**します。統括スタッフが `POST /api/staff/accounts/:id/revoke-sessions` で進めるほか、`reset_staff_password()` がパスワードと同じ UPDATE 文で進めます。参加者側の `password_changed_at` と同じ仕組みですが、端末紛失・Cookie の漏洩などパスワード変更以外でも切れるようにこの名前にしています。セッションを切るだけなので、パスワードを知っている人の再ログインは止められません(アカウントの無効化は #156)。比較が値の一致である理由も参加者側と同じです。
+- `sessions_valid_from` は**発行済みスタッフセッションを切る**ためのものです(Task 11-3)。ログイン時にこの列の値を `sessionsValidFrom` クレームとして JWT に載せ、スタッフ用ミドルウェアが毎リクエストこの列を読み直して**一致しないセッションを 401 で拒否**します。統括スタッフが `POST /api/staff/accounts/:id/revoke-sessions` で進めるほか、`reset_staff_password()` がパスワードと同じ UPDATE 文で進めます。参加者側の `password_changed_at` と同じ仕組みですが、端末紛失・Cookie の漏洩などパスワード変更以外でも切れるようにこの名前にしています。セッションを切るだけなので、パスワードを知っている人の再ログインは止められません(締め出すには `disabled_at` で無効化します)。比較が値の一致である理由も参加者側と同じです。
+- `disabled_at` は**アカウントの無効化**です(#156)。退任者やパスワードごと漏れたアカウントを締め出すためのもので、無効なアカウントはログインできず(ログインが無効な行を探さない)、セッションも通らず(スタッフ用ミドルウェアがこの列も見る)、パスワード設定リンクも使えません(`reset_staff_password()` が拒否する)。無効化は `disable_staff_account()`、有効化は `POST /api/staff/accounts/:id/enable` が null に戻します。削除ではなく無効化にしているのは、行・パスワード・担当の記録を残し、有効化で元に戻せるようにするためです(スタッフを参照する外部キーは `staff_password_reset_tokens` だけなので、削除そのものは可能です)。
 - 作成は `POST /api/staff/accounts`(統括スタッフ限定)です。作成時の `password_hash` にはハッシュ形式に合わない固定値が入り、本人が招待メールのリンクでパスワードを設定するまでログインできません。統括スタッフが他人のパスワードを知らずに済ませるための作りです。
 
 ### mail_jobs — 一斉メールの送信ジョブ
@@ -462,6 +468,15 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 - `password_hash` と同じ UPDATE 文で `staff_accounts.sessions_valid_from` も `now()` に進めます(`0020` で再定義。`0011` が参加者側の `0010` を再定義したのと同じ形)。これにより、再設定前に発行されたそのアカウントのセッション(盗まれた Cookie を含む)はすべて 401 になります。招待リンクからの初回設定でも同じく進みますが、その時点ではまだログインできないので切れるセッションはありません。
 
+- `0026` で、アカウント行をロックしたあとに `disabled_at` を見て、**無効なアカウントなら `P0003` で拒否する**ように再定義しました(#156)。
+
+### disable_staff_account(p_staff_account_id)
+
+スタッフアカウントを無効化します(#156、`0026`)。`disabled_at` と `sessions_valid_from` を `now()` にし、そのアカウントの `staff_password_reset_tokens` を削除します。
+
+- **有効な統括スタッフが 0 人になる無効化は `P0004` で拒否します。** API は自分自身の無効化を先に断りますが、それだけでは 2 人の統括スタッフが同時に互いを無効化すると 0 人になります。統括スタッフの行を id 順にすべて `for update` でロックしてから数えるので、同時の無効化はここで直列化され、後の方は先の方の結果を見て拒否されます。スタッフ行 → トークン行のロック順は `reset_staff_password()` と同じです。
+- アカウントが無ければ `P0002`。既に無効なら何もしません(`disabled_at` は最初の時刻のまま)。
+
 ### tournament_entry_summary()
 
 統括スタッフ向けダッシュボード(`GET /api/staff/dashboard`)のために、全大会 1 行ずつの集計を返します。
@@ -521,3 +536,5 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0022_missing_indexes.sql` | `email_verification_tokens (entry_id)`・`participants (region_id)`・`staff_accounts (region_id)` など、外部キーの子側で抜けていたインデックス |
 | `0023_tournament_delete_cascade.sql` | 大会削除(#164)のため、`regulations`・`form_field_defs`・`mail_jobs` の `tournament_id` 外部キーを `on delete cascade` に張り直す(`entries` は no action のまま) |
 | `0024_tournament_default_name.sql` | `tournaments.name` を null 可にし、null を「既定名(地域名＋種別)を読み出し時に作る」とする(#164)。既定名と同じ名前・空文字の既存行は null に置き換える |
+| `0025_lowercase_emails.sql` | `participants.email` / `staff_accounts.email` を小文字に揃え、check 制約 `*_email_lowercase` を追加(#133)。大文字小文字違いの重複があれば失敗する |
+| `0026_staff_accounts_per_type_and_disable.sql` | `staff_accounts` の一意制約を `(email, tournament_type)` に変更(#166)、`disabled_at` と `disable_staff_account()` を追加し、`reset_staff_password()` を無効なアカウントを拒否するよう再定義(#156) |
