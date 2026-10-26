@@ -1,10 +1,19 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
-import {EntryInputSchema, type EntryInput} from '@regional-quiz/shared';
-import type {Env} from '../types/env';
-import {createEntry} from '../lib/entries';
+import {
+  EntryInputSchema,
+  EntrySessionInputSchema,
+  type EntryInput,
+} from '@regional-quiz/shared';
+import type {Env, ParticipantEnv} from '../types/env';
+import {
+  checkEntrySubmission,
+  createEntryForParticipant,
+  createEntryUnauthenticated,
+} from '../lib/entries';
 import {internalError} from '../lib/errors';
+import {requireParticipant} from '../middleware/participant-auth';
 import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
 import {requireTurnstile} from '../middleware/turnstile';
 
@@ -40,15 +49,74 @@ export const entriesRoute = new Hono<Env>().post(
     MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
   ),
   async c => {
-    const result = await createEntry(
+    const input = c.req.valid('json');
+    // Only the refusals that don't depend on the address are answered
+    // directly: the tournament, its entry period, the regulations and the
+    // custom fields read the same, and take the same time, whoever is
+    // entering.
+    const check = await checkEntrySubmission(
       c.env,
       c.req.valid('param').tournamentId,
+      input,
+    );
+    if (!check.ok) {
+      // A 500 here carries whatever Supabase said -- kept server-side. The
+      // 4xx messages are the ones the form maps to its own wording.
+      if (check.status === 500) {
+        return c.json(
+          internalError('failed to check the entry', check.error),
+          500,
+        );
+      }
+      return c.json({error: check.error}, check.status);
+    }
+
+    // Everything past this point depends on the address: whether it is
+    // registered, in which region, under which password. Answering with any
+    // of that would make this endpoint an oracle for which addresses are
+    // registered and where (#117) -- and so would the time it takes, since a
+    // registered address costs a password check that an unregistered one
+    // doesn't, and a refusal skips the mail a success sends. So the answer
+    // is given now, identically for every address, and the rest runs after
+    // it in `waitUntil()`. What the submitter needs to know arrives by mail,
+    // to the owner of the address only: the verification link, or why there
+    // won't be one.
+    c.executionCtx.waitUntil(
+      createEntryUnauthenticated(c.env, check.tournament, input),
+    );
+    return c.json({ok: true}, 202);
+  },
+);
+
+/**
+ * The entry form, submitted by a participant who is logged in. The session
+ * says whose entry it is, so the body carries no address or password, and
+ * refusals are answered directly: the person being told already owns the
+ * account they are about.
+ */
+export const entrySessionRoute = new Hono<ParticipantEnv>().post(
+  '/:tournamentId/entries/session',
+  zValidator('param', TournamentIdParamSchema),
+  requireParticipant(),
+  // Still mails a verification link, so the IP limit and the challenge stay.
+  // The per-address limit doesn't apply: the link only ever goes to the
+  // logged-in participant's own address, which the session already ties to
+  // whoever is asking.
+  rateLimit(
+    env => env.MAIL_TRIGGER_IP_RATE_LIMITER,
+    c => `ip:${clientIp(c)}`,
+    MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
+  ),
+  requireTurnstile(),
+  zValidator('json', EntrySessionInputSchema),
+  async c => {
+    const result = await createEntryForParticipant(
+      c.env,
+      c.req.valid('param').tournamentId,
+      c.get('participantId'),
       c.req.valid('json'),
     );
     if (!result.ok) {
-      // Unauthenticated, and a 500 here carries whatever Supabase said
-      // about the insert — kept server-side. The 4xx messages are the
-      // ones the form maps to its own wording.
       if (result.status === 500) {
         return c.json(
           internalError('failed to create the entry', result.error),

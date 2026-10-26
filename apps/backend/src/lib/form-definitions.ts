@@ -16,21 +16,24 @@ import {
 export {TournamentNotFoundError};
 
 /**
- * Maps the camelCase `form_field_defs` rows produced by
- * `toFormFieldDefRows()` to the snake_case columns the table actually has.
+ * The `p_rows` `sync_form_field_defs()` takes for a definition: one
+ * snake_case `form_field_defs` row per field, in display order. The
+ * tournament is not among the columns: the function sets it from its own
+ * `p_tournament_id`, which is what lets the bulk import (#168) build these
+ * before the tournament they belong to exists.
+ * @param definition The parsed form definition.
  */
-function toFormFieldDefTableRow(
-  row: ReturnType<typeof toFormFieldDefRows>[number],
-): Record<string, unknown> {
-  return {
-    tournament_id: row.tournamentId,
+export function formFieldDefSyncRows(
+  definition: FormDefinitionYaml,
+): Array<Record<string, unknown>> {
+  return toFormFieldDefRows(definition, '').map(row => ({
     field_key: row.fieldKey,
     label: row.label,
     field_type: row.fieldType,
     required: row.required,
     options: row.options,
     display_order: row.displayOrder,
-  };
+  }));
 }
 
 /**
@@ -112,13 +115,9 @@ export async function syncFormFieldDefs(
     throw new TournamentSlugMismatchError(type, definition.tournamentSlug);
   }
 
-  const rows = toFormFieldDefRows(definition, tournamentId).map(
-    toFormFieldDefTableRow,
-  );
-
   const {error} = await db.rpc('sync_form_field_defs', {
     p_tournament_id: tournamentId,
-    p_rows: rows,
+    p_rows: formFieldDefSyncRows(definition),
   });
   if (error) {
     if (error.code === TOURNAMENT_NOT_FOUND_SQLSTATE) {

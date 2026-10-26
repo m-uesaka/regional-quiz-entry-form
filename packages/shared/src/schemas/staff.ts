@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {emailAddressSchema} from './email';
 import {TournamentTypeSchema} from './tournament';
 
 const EMAIL_MESSAGE = 'メールアドレスの形式が正しくありません';
@@ -13,6 +14,18 @@ export const StaffClaimsSchema = z.object({
   role: StaffRoleSchema,
   regionId: z.string().uuid().nullable(),
   tournamentType: TournamentTypeSchema.nullable(),
+  // Which generation of the account's sessions this one belongs to:
+  // `staff_accounts.sessions_valid_from` at login, as epoch milliseconds.
+  // The staff guards compare it against the column on every request, so
+  // moving the column (`POST /api/staff/accounts/:id/revoke-sessions`) ends
+  // every session issued before. Same shape and reasoning as the participant
+  // side's `pwdChangedAt`: an equality between two readings of one column
+  // needs no agreement between the Worker's clock and Postgres'.
+  //
+  // Required: a session that doesn't say which generation it belongs to
+  // can't be shown to be current, so a cookie issued before this claim
+  // existed reads as logged out.
+  sessionsValidFrom: z.number(),
 });
 export type StaffClaims = z.infer<typeof StaffClaimsSchema>;
 
@@ -36,6 +49,11 @@ export const StaffAccountSchema = z.object({
   // this the admin screen can't tell a working account from one whose invite
   // is still outstanding — and can't tell whom to re-send it to.
   passwordSet: z.boolean(),
+  // When a general staff member disabled the account
+  // (`POST /api/staff/accounts/:id/disable`, #156), or null while it is
+  // usable. A disabled account can't log in, keeps no session, and can't be
+  // sent a password link until it is enabled again.
+  disabledAt: z.string().nullable(),
 });
 export type StaffAccount = z.infer<typeof StaffAccountSchema>;
 
@@ -57,11 +75,11 @@ export type StaffAccount = z.infer<typeof StaffAccountSchema>;
 export const StaffAccountCreateInputSchema = z.discriminatedUnion('role', [
   z.object({
     role: z.literal('general'),
-    email: z.string().email({message: EMAIL_MESSAGE}),
+    email: emailAddressSchema(EMAIL_MESSAGE),
   }),
   z.object({
     role: z.literal('regional'),
-    email: z.string().email({message: EMAIL_MESSAGE}),
+    email: emailAddressSchema(EMAIL_MESSAGE),
     regionId: z.string().uuid({message: '担当地域を選択してください'}),
     // 担当種別 is a two-option select, so it carries no message of its
     // own: the form cannot submit a value the enum refuses.

@@ -3,14 +3,18 @@ import {createMiddleware} from 'hono/factory';
 import {getCookie} from 'hono/cookie';
 import {isWithinEntryPeriod} from '@regional-quiz/shared';
 import type {Env} from '../types/env';
-import {internalError} from '../lib/errors';
 import {
   fetchTournamentById,
   fetchTournamentBySlug,
-  TournamentLookupError,
+  tournamentLookupFailure,
   type TournamentRow,
 } from '../lib/tournaments';
-import {isInScope, readStaffClaims, STAFF_SESSION_COOKIE} from './staff-auth';
+import {
+  isInScope,
+  isSessionCurrent,
+  readStaffClaims,
+  STAFF_SESSION_COOKIE,
+} from './staff-auth';
 
 /** How a route says which tournament the request is about. */
 type TournamentResolver = (c: Context<Env>) => Promise<TournamentRow | null>;
@@ -63,8 +67,7 @@ export function requireOpenEntryPeriodOrStaff(
     try {
       tournament = await resolveTournament(c);
     } catch (e: unknown) {
-      const cause = e instanceof TournamentLookupError ? e.cause : e;
-      return c.json(internalError('failed to read the tournament', cause), 500);
+      return c.json(tournamentLookupFailure(e), 500);
     }
     if (!tournament) {
       return c.json({error: 'tournament not found'}, 404);
@@ -93,7 +96,23 @@ export function requireOpenEntryPeriodOrStaff(
     // resource is not one a login would generally unlock, and the entry
     // form's own error mapping already renders this `error` string as
     // 「エントリー期間外です」.
-    if (!staff || !isInScope(staff, tournament)) {
+    if (!staff) {
+      return c.json({error: 'entry period closed'}, 403);
+    }
+    // The session is checked against `sessions_valid_from` before the scope,
+    // the same order as the staff guards: a revoked session is a dead one,
+    // answered the same as an expired cookie for the same reason, and it
+    // stays dead whichever tournament it is aimed at. Checking scope first
+    // would answer a revoked 地域スタッフ looking at another region's form
+    // with a 403 that never sends them back to log in.
+    const check = await isSessionCurrent(c.env, staff);
+    if (!check.ok) {
+      return c.json({error: 'internal server error'}, 500);
+    }
+    if (!check.current) {
+      return c.json({error: 'staff session expired'}, 401);
+    }
+    if (!isInScope(staff, tournament)) {
       return c.json({error: 'entry period closed'}, 403);
     }
     c.set('entryPeriodStaff', staff);

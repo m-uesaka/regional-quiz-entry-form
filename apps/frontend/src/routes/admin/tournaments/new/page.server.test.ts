@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import type {HttpError} from '@sveltejs/kit';
+import type {Cookies, HttpError} from '@sveltejs/kit';
 import type {Region, Tournament} from '@regional-quiz/shared';
 import {actions, load} from './+page.server';
 
@@ -61,9 +61,23 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+/**
+ * A stand-in for `event.cookies`, recording the names deleted on it: a
+ * session the API refuses is dropped on the way to the login screen.
+ * @param deleted Collects the deleted cookie names.
+ */
+function fakeCookies(deleted: string[] = []): Cookies {
+  return {
+    delete: (name: string) => {
+      deleted.push(name);
+    },
+  } as unknown as Cookies;
+}
+
 function buildLoadEvent(fetchImpl: typeof fetch): Parameters<typeof load>[0] {
   return {
     fetch: fetchImpl,
+    cookies: fakeCookies(),
     url: new URL('http://localhost/admin/tournaments/new'),
   } as Parameters<typeof load>[0];
 }
@@ -74,6 +88,7 @@ function buildActionEvent(
 ): Parameters<typeof actions.default>[0] {
   return {
     fetch: fetchImpl,
+    cookies: fakeCookies(),
     url: new URL('http://localhost/admin/tournaments/new'),
     request: {formData: async () => formData},
   } as Parameters<typeof actions.default>[0];
@@ -147,6 +162,19 @@ describe('admin tournament create action', () => {
 
     await expect(actions.default(event)).rejects.toMatchObject({status: 303});
     expect(calls[0].body).toMatchObject({capacity: null});
+  });
+
+  // 大会名 is optional: the API names the tournament after its region and
+  // type when it is left blank.
+  it('passes a blank name on for the API to fill in', async () => {
+    const calls: ApiCall[] = [];
+    const event = buildActionEvent(
+      fakeFetch({calls}),
+      createFormData({name: ''}),
+    );
+
+    await expect(actions.default(event)).rejects.toMatchObject({status: 303});
+    expect(calls[0].body).toMatchObject({name: ''});
   });
 
   it('refuses a form the API would reject, without asking it', async () => {

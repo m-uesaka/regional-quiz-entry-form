@@ -15,8 +15,8 @@ const DB_URL =
 const SUPABASE_URL = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
 // Publicly documented local-dev demo key for Supabase CLI's default stack,
 // same as `lib/entries.test.ts` — not a real credential.
-const SUPABASE_SERVICE_ROLE_KEY =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ??
+const SUPABASE_SECRET_KEY =
+  process.env.SUPABASE_SECRET_KEY ??
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
 
 async function isDbReachable(): Promise<boolean> {
@@ -34,7 +34,7 @@ async function isDbReachable(): Promise<boolean> {
 const env: Bindings = {
   ...PERMISSIVE_PLATFORM_BINDINGS,
   SUPABASE_URL,
-  SUPABASE_SERVICE_ROLE_KEY,
+  SUPABASE_SECRET_KEY,
   MAIL_API_KEY: 'dummy-mail-api-key',
   GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
   MAIL_FROM_ADDRESS: 'entry@example.com',
@@ -93,11 +93,16 @@ describe.skipIf(!(await isDbReachable()))(
 
     async function createParticipantFixture(
       password = 'original-password',
+      options: {verified?: boolean} = {},
     ): Promise<{id: string; email: string}> {
       const email = `participant-${crypto.randomUUID()}@${testEmailDomain}`;
+      const verifiedAt = options.verified === false ? null : new Date();
       const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${regionId}, ${email}, ${await hashPassword(password)})
+        insert into participants (
+          region_id, email, password_hash, email_verified_at
+        ) values (
+          ${regionId}, ${email}, ${await hashPassword(password)}, ${verifiedAt}
+        )
         returning id
       `;
       return {id: participant.id as string, email};
@@ -177,12 +182,12 @@ describe.skipIf(!(await isDbReachable()))(
 
       expect(result).toEqual({ok: true});
       const passwordHash = await readPasswordHash(participant.id);
-      expect(await verifyPassword('brand-new-password', passwordHash)).toBe(
-        true,
-      );
-      expect(await verifyPassword('original-password', passwordHash)).toBe(
-        false,
-      );
+      expect(
+        (await verifyPassword('brand-new-password', passwordHash)).valid,
+      ).toBe(true);
+      expect(
+        (await verifyPassword('original-password', passwordHash)).valid,
+      ).toBe(false);
       const [tokenRow] = await sql`
         select used_at from password_reset_tokens
         where participant_id = ${participant.id}
@@ -214,6 +219,52 @@ describe.skipIf(!(await isDbReachable()))(
       expect(new Date(after.password_changed_at).getTime()).toBeGreaterThan(
         new Date(before.password_changed_at).getTime(),
       );
+    });
+
+    // A reset proves the address but leaves the region as it was, and an
+    // unverified account's region was chosen by a submission nobody
+    // confirmed -- possibly by someone holding the owner's address in a far
+    // region (#189). Verifying here would lock the owner into it, and
+    // resetting without verifying would leave a password the login still
+    // refuses; entering again is how they take the account back.
+    it('requestPasswordReset tells an unverified account how to get it back instead of mailing a link', async () => {
+      const participant = await createParticipantFixture('original-password', {
+        verified: false,
+      });
+      const mailsBefore = sentMails.length;
+
+      await requestPasswordReset(env, participant.email);
+
+      expect(sentMails.length).toBe(mailsBefore + 1);
+      const mail = sentMails[sentMails.length - 1];
+      expect(mail.to).toBe(participant.email);
+      expect(mail.html).not.toContain('password-reset?token=');
+      expect(mail.html).toContain('エントリー');
+      expect(
+        await sql`
+          select id from password_reset_tokens
+          where participant_id = ${participant.id}
+        `,
+      ).toHaveLength(0);
+    });
+
+    // A link mailed before the account check existed is refused like a dead
+    // one, and the password stays as it was.
+    it('confirmPasswordReset refuses a token for an unverified account', async () => {
+      const participant = await createParticipantFixture('original-password', {
+        verified: false,
+      });
+      const token = await createTokenFixture(participant.id);
+      const before = await readPasswordHash(participant.id);
+
+      expect(
+        await confirmPasswordReset(env, {
+          token,
+          newPassword: 'brand-new-password',
+        }),
+      ).toEqual({ok: false, status: 400, error: 'invalid or expired token'});
+
+      expect(await readPasswordHash(participant.id)).toBe(before);
     });
 
     it('requestPasswordReset drops the participant’s expired tokens', async () => {
@@ -261,8 +312,12 @@ describe.skipIf(!(await isDbReachable()))(
       });
       // The second attempt left the password from the first one in place.
       const passwordHash = await readPasswordHash(participant.id);
-      expect(await verifyPassword('first-password', passwordHash)).toBe(true);
-      expect(await verifyPassword('second-password', passwordHash)).toBe(false);
+      expect((await verifyPassword('first-password', passwordHash)).valid).toBe(
+        true,
+      );
+      expect(
+        (await verifyPassword('second-password', passwordHash)).valid,
+      ).toBe(false);
     });
 
     it('confirmPasswordReset rejects an expired token', async () => {
@@ -282,10 +337,12 @@ describe.skipIf(!(await isDbReachable()))(
         error: 'invalid or expired token',
       });
       expect(
-        await verifyPassword(
-          'original-password',
-          await readPasswordHash(participant.id),
-        ),
+        (
+          await verifyPassword(
+            'original-password',
+            await readPasswordHash(participant.id),
+          )
+        ).valid,
       ).toBe(true);
     });
 
@@ -335,16 +392,20 @@ describe.skipIf(!(await isDbReachable()))(
       const passwordHash = await readPasswordHash(participant.id);
       const winnerIsFirst = results[0].ok;
       expect(
-        await verifyPassword(
-          winnerIsFirst ? 'first-password' : 'second-password',
-          passwordHash,
-        ),
+        (
+          await verifyPassword(
+            winnerIsFirst ? 'first-password' : 'second-password',
+            passwordHash,
+          )
+        ).valid,
       ).toBe(true);
       expect(
-        await verifyPassword(
-          winnerIsFirst ? 'second-password' : 'first-password',
-          passwordHash,
-        ),
+        (
+          await verifyPassword(
+            winnerIsFirst ? 'second-password' : 'first-password',
+            passwordHash,
+          )
+        ).valid,
       ).toBe(false);
 
       // Both links are spent either way.

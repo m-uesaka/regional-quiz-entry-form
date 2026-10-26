@@ -8,7 +8,7 @@
 
 import {createClient, type SupabaseClient} from '@supabase/supabase-js';
 import {hashPassword} from '@regional-quiz/backend/lib/password';
-import {SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL} from './env';
+import {SUPABASE_SECRET_KEY, SUPABASE_URL} from './env';
 import {FORM_FIELD_DEFS, REGION, STAFF, TOURNAMENTS} from './fixtures';
 
 const ENTRY_OPENED_DAYS_AGO = 1;
@@ -71,7 +71,7 @@ function assertLocalSupabase(): void {
 }
 
 function createServiceRoleClient(): SupabaseClient {
-  return createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  return createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, {
     auth: {persistSession: false},
   });
 }

@@ -24,6 +24,15 @@ describe('StaffAccountCreateInputSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('lowercases the address', () => {
+    const parsed = StaffAccountCreateInputSchema.parse({
+      role: 'general',
+      email: 'General@Example.com',
+    });
+
+    expect(parsed.email).toBe('general@example.com');
+  });
+
   it('rejects a regional account missing half of its scope', () => {
     for (const input of [
       {role: 'regional', email: 'a@example.com', regionId: REGION_ID},

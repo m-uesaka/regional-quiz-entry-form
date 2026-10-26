@@ -36,15 +36,18 @@ flowchart LR
 | --- | --- |
 | `apps/backend/src/lib/sheet-to-form-definition.ts` | `fetchSheetRows()`(Sheets API v4 呼び出し)・`sheetRowsToYaml()`(行データ→YAML変換) |
 | `apps/backend/src/lib/sheet-to-regulations.ts` | `fetchRegulationSheetValues()`(「レギュレーション」シートの取得)・`sheetValuesToRegulations()`(行データ→レギュレーション配列) |
-| `apps/backend/src/routes/sheet-import.ts` | `POST /api/sheet-import/preview`(フォーム定義)と `POST /api/sheet-import/regulations/preview`(レギュレーション)。統括スタッフ限定 |
+| `apps/backend/src/routes/sheet-import.ts` | `POST /api/sheet-import/preview`(フォーム定義)・`POST /api/sheet-import/regulations/preview`(レギュレーション)・`POST /api/sheet-import/tournaments`(大会一覧からの一括登録、#168)。統括スタッフ限定 |
+| `apps/backend/src/lib/tournament-bulk-import.ts` | 大会一覧の読み取り(`parseTournamentIndex()`)・締切の既定値(`defaultEntryClosesAt()`)・行ごとの登録(`importTournaments()`) |
+| `apps/frontend/src/routes/admin/tournaments/import/` | 一括登録の画面 |
 | `apps/backend/src/routes/form-definitions.ts` | `PUT /api/form-definitions/:tournamentId`。プレビュー済み YAML をパース・検証して保存処理に渡す(Task 2-2)。統括スタッフ限定 |
 | `apps/backend/src/lib/form-definitions.ts` | `syncFormFieldDefs()`。大会種別の照合と `form_field_defs` の置き換え(`sync_form_field_defs` RPC) |
 | `apps/backend/src/types/env.ts` | `Bindings.GOOGLE_SHEETS_API_KEY` を定義 |
 | `packages/shared/src/schemas/form-definition.ts` | YAML のスキーマ(`FormFieldDefYamlSchema` 等)。バックエンド/フロントエンド共通 |
-| `apps/frontend/src/lib/components/SheetImportPanel.svelte` | スプレッドシートID入力→プレビュー→保存の UI。大会スラッグは入力させず、props の `tournamentType` を使う |
-| `apps/frontend/src/lib/components/TournamentEditor.svelte` | 大会編集画面の本体。大会フォームの下に `SheetImportPanel` を置く |
-| `apps/frontend/src/routes/admin/tournaments/new/+page.server.ts` | 大会新規作成画面の action。作成成功後は大会編集画面(`SheetImportPanel` 表示)へリダイレクトする |
-| `apps/frontend/src/routes/admin/tournaments/[id]/edit/+page.svelte` | 大会編集画面。`TournamentEditor` 経由で常時 `SheetImportPanel` を表示 |
+| `apps/frontend/src/lib/components/FormDefinitionEditor.svelte` | フォーム定義の YAML エディタ。保存済みの定義から始め、YAML の直接編集と、スプレッドシートID入力→読み込み(エディタの中身を置き換え)のどちらでも直せる。保存は「保存」を押したときだけ。大会スラッグは入力させず、props の `tournamentType` を使う(#164) |
+| `apps/frontend/src/lib/components/TournamentEditor.svelte` | 大会編集画面の本体。大会フォームの下に `FormDefinitionEditor` を置く |
+| `apps/frontend/src/routes/admin/tournaments/new/+page.server.ts` | 大会新規作成画面の action。作成成功後は大会編集画面(`FormDefinitionEditor` 表示)へリダイレクトする |
+| `apps/frontend/src/routes/admin/tournaments/[id]/edit/+page.server.ts` | 大会編集画面の `load`。保存済みのフォーム定義(`GET /api/form-definitions/:tournamentId`)を `formFieldDefsToYaml()` で YAML に書き戻してエディタに渡す |
+| `apps/frontend/src/routes/admin/tournaments/[id]/edit/+page.svelte` | 大会編集画面。`TournamentEditor` 経由で常時 `FormDefinitionEditor` を表示 |
 | `apps/frontend/src/routes/admin/tournaments/[id]/regulations/+page.server.ts` | レギュレーション管理画面。`import` action がシートを読んでフォームの行を組み立て、`save` action が保存する |
 | `packages/shared/src/schemas/regulation.ts` | `REGULATION_SHEET_NAME`(シート名)・`RegulationSheetImportRequestSchema`・保存時の `RegulationSyncInputSchema` |
 
@@ -83,12 +86,12 @@ Sheets API 専用の SDK(`googleapis` 等)は使わず、`fetch` で REST エン
 | 列 | 内容 | 例 |
 | --- | --- | --- |
 | A: key | フィールド識別子。`/^[a-z][a-z0-9_]*$/` に一致する必要がある(小文字英数字とアンダースコアのみ、先頭は英字)。前後の空白は除去されないので、空白が混じると不正な形式として弾かれる。シート内で重複不可(重複はプレビューでは検出されず、保存時に 400 になる) | `tshirt_size` |
-| B: label | 表示ラベル。空欄は検証で弾かれず、空のラベルのまま取り込まれてしまうので必ず記入する | `T シャツのサイズ` |
-| C: type | `チェックボックス` / `ラジオボタン` / `自由記述` のいずれか | `ラジオボタン` |
+| B: label | 表示ラベル。空欄は検証で弾かれず、空のラベルのまま取り込まれてしまうので必ず記入する。`<a href="https://...">文字</a>` と書くとその部分がリンクになる(`http(s)` の URL のみ。詳細は [`form-generation.md`](./form-generation.md)) | `T シャツのサイズ` |
+| C: type | `チェックボックス` / `ラジオボタン` / `自由記述`(複数行)/ `自由記述（一行）`(括弧は全角)のいずれか | `ラジオボタン` |
 | D: required | 文字列 `必須` の場合のみ必須。それ以外(`任意`・空欄等)はすべて任意扱い | `必須` |
-| E: options | カンマ区切りの選択肢(各要素は trim され、空要素は除去、重複は不可)。`ラジオボタン` は最低1件必須、`チェックボックス`/`自由記述` は省略可 | `S, M, L, XL` |
+| E: options | カンマ区切りの選択肢(各要素は trim され、空要素は除去、重複は不可)。各選択肢にも B 列と同じ形でリンクを書ける(URL にカンマを含めないこと)。`ラジオボタン` は最低1件必須、`チェックボックス`/`自由記述`/`自由記述（一行）` は省略可 | `S, M, L, XL` |
 
-C列(type)・D列(required)は Google スプレッドシート側のデータの入力規則(プルダウン)で上記の値のみ選択可能にする運用を想定している(地域スタッフが自由入力するとタイプミスで取り込みに失敗するため)。
+C列(type)・D列(required)は Google スプレッドシート側のデータの入力規則(プルダウン)で上記の値のみ選択可能にする運用を想定している(配布済みのテンプレートのプルダウンには `自由記述（一行）` を追加すること)(地域スタッフが自由入力するとタイプミスで取り込みに失敗するため)。
 
 シート例(1行目はヘッダー、2行目以降がデータ):
 
@@ -96,7 +99,9 @@ C列(type)・D列(required)は Google スプレッドシート側のデータの
 | --- | --- | --- | --- | --- |
 | tshirt_size | T シャツのサイズ | ラジオボタン | 必須 | S, M, L, XL |
 | has_allergy | アレルギーの有無 | チェックボックス | 任意 | |
+| affiliation | 所属 | 自由記述（一行） | 任意 | |
 | notes | 備考 | 自由記述 | 任意 | |
+| agree_to_rules | <a href="https://example.com/rules">規約</a>に同意する | チェックボックス | 必須 | |
 
 地域スタッフに配布するテンプレートシートは、この列構成に合わせて作成すること。
 
@@ -117,7 +122,7 @@ C列(type)・D列(required)は Google スプレッドシート側のデータの
 
 | 列 | 内容 | 例 |
 | --- | --- | --- |
-| A: レギュレーション名 | エントリーフォームに表示する文言。必須。前後の空白は除去される。200文字以内。シート内で重複不可 | `開催地域に在住・在学・在勤の方` |
+| A: レギュレーション名 | エントリーフォームに表示する文言。必須。前後の空白は除去される。300文字以内。シート内で重複不可 | `開催地域に在住・在学・在勤の方` |
 | B: 優先期間の開始 | 優先エントリー期間を設ける場合のみ記入。**日本時間**として読まれる | `2026-08-01 10:00` |
 | C: 優先期間の終了 | B列を記入した場合は必須。開始より後の日時 | `2026-08-08 10:00` |
 
@@ -149,12 +154,12 @@ C列(type)・D列(required)は Google スプレッドシート側のデータの
 
 ## 7. 処理フロー(フォーム定義)
 
-1. 統括スタッフが管理画面(`SheetImportPanel.svelte`)で「スプレッドシートID」を入力し、「YAMLプレビュー」を押す。大会スラッグは手入力させず、**パネルが編集中の大会の `type`(`saikyoi` / `shinjinou`)を親から props で受け取ってそのまま使う**。取り込み先はパネル上部に表示される。
+1. 統括スタッフが大会編集画面のフォーム定義エディタ(`FormDefinitionEditor.svelte`)で「スプレッドシートID」を入力し、「スプレッドシートから読み込む」を押す。大会スラッグは手入力させず、**エディタが編集中の大会の `type`(`saikyoi` / `shinjinou`)を親から props で受け取ってそのまま使う**。対象の種別はエディタ上部に表示される。
 2. フロントエンドが `POST /api/sheet-import/preview` に `{spreadsheetId, tournamentSlug}`(`packages/shared` の `SheetImportRequestSchema`)を送信。`tournamentSlug` は `TournamentTypeSchema` の enum なので、`saikyoi` / `shinjinou` 以外は 400 で弾かれる。ルートは `requireGeneralStaff()` ミドルウェアで保護されており、統括スタッフ(`role: 'general'`)のみアクセス可能(未ログイン・セッション切れは 401、地域スタッフは 403)。この認証チェックはボディの検証より先に走る。
 3. バックエンドの `fetchSheetRows(spreadsheetId, c.env.GOOGLE_SHEETS_API_KEY)` がシートの `A2:E` を取得。ネットワークエラーや Google からの非 2xx レスポンスは、HTTP ステータス(取得できた場合)を保持した `SheetFetchError` として throw される。
 4. `sheetRowsToYaml(tournamentSlug, rows)` が各行を YAML 化する。
    - `key` はスプレッドシートの A 列に地域スタッフが入力した値をそのまま使う(5章参照)。
-   - `type` は `TYPE_LABELS`(`チェックボックス`→`checkbox`、`ラジオボタン`→`radio`、`自由記述`→`textarea`)で内部の enum に変換。未知の値の場合は `Unknown field type: {値}` を throw。
+   - `type` は `TYPE_LABELS`(`チェックボックス`→`checkbox`、`ラジオボタン`→`radio`、`自由記述`→`textarea`、`自由記述（一行）`→`textfield`)で内部の enum に変換。未知の値の場合は `Unknown field type: {値}` を throw。
    - `required` は文字列 `'必須'` との一致で boolean 化(それ以外はすべて `false`)。
    - `options` はカンマ区切り文字列を trim・空要素除去した配列に変換。重複が残っている場合は `Duplicate option values: {値}` を throw。
    - 最後に `FormFieldDefYamlSchema.parse()` で行ごとに検証(例: `key` が不正な形式、`ラジオボタン` なのに `options` が空、など)。バリデーション失敗時は `ZodError` を throw。
@@ -209,6 +214,8 @@ bunx wrangler secret put GOOGLE_SHEETS_API_KEY --env production
 
 > 同じコマンドは `docs/supabase-deployment.md` 6.2 節のシークレット一覧にも含まれている。新規環境構築時は同節の手順どおりに登録すれば本キーも登録される。
 
+キーは環境ごとに別のものを発行する(staging / production で共有しない)。登録前にキー単体で読めるかを確かめる手順と、staging でどの画面から取り込みを試せるかは [`staging-setup-walkthrough.md`](./staging-setup-walkthrough.md) の手順 8 を参照。
+
 ## 9. 使い方
 
 このツールは独立した CLI スクリプトではなく、**HTTP API + Web UI** として実装されている。
@@ -216,10 +223,31 @@ bunx wrangler secret put GOOGLE_SHEETS_API_KEY --env production
 ### Web UI から使う(通常の運用)
 
 1. `bunx wrangler dev`(`apps/backend`)と SvelteKit の dev server(`apps/frontend`)を起動。
-2. 統括スタッフでログインし、`/admin/tournaments/{id}/edit` を開く。取り込みパネルは大会の種別を必要とするため、大会を作成した**後**の編集画面にのみ置かれている(`/admin/tournaments/new` には無い)。
-3. 「スプレッドシート取り込み」パネルでスプレッドシートIDを入力し「YAMLプレビュー」を押す(大会スラッグは編集中の大会から自動で決まる)。
-4. プレビューされた YAML を確認し、問題なければ「保存」を押す。
+2. 統括スタッフでログインし、`/admin/tournaments`(管理メニューの「大会」)から大会の「編集」を開く(`/admin/tournaments/{id}/edit`)。フォーム定義エディタは大会の種別を必要とするため、大会を作成した**後**の編集画面にのみ置かれている(`/admin/tournaments/new` には無い)。
+3. 「フォーム定義」でスプレッドシートIDを入力し「スプレッドシートから読み込む」を押す(大会スラッグは編集中の大会から自動で決まる)。読み込んだ YAML がエディタの中身を置き換える(まだ保存はされない)。
+4. YAML を確認し(必要ならその場で書き換え)、問題なければ「保存」を押す。シートを直した後の再読み込みも同じ手順で、保存済みの定義が置き換わる。シートを使わず YAML を直接書き換えて「保存」してもよい。
 5. レギュレーションを取り込む場合は、同じ画面の「レギュレーションを管理」リンクから `/admin/tournaments/{id}/regulations` を開く。「スプレッドシートから読み込む」に同じスプレッドシートIDを入力して読み込み、フォームの内容を確認して「保存」を押す。
+
+### 大会を一括登録する(#168)
+
+大会一覧のスプレッドシートから、記載されたすべての大会を一度に登録できる。各行の入力シートから、フォーム定義とレギュレーションもまとめて取り込む。
+
+1. 統括スタッフでログインし、管理メニューの「大会を一括登録」(`/admin/tournaments/import`)を開く。
+2. 大会一覧のスプレッドシートの URL(または ID)を貼り付けて「一括登録する」を押す。**プレビューの段階は無く、押すとすぐに登録される。**
+3. 結果に「登録した大会」と「登録できなかった大会(理由つき)」が並ぶ。登録できなかった大会は、理由を直して再実行するか、大会の画面から個別に登録する。再実行しても、登録済みの大会は上書きされるだけで重複はしない。
+
+大会一覧(先頭のシート)の書式:
+
+- 1 行目がヘッダー。列は**ヘッダー名で探す**ので順番は問わない。必要なのは `地域` / `種別` / `実施日` / `スプレッドシートID` の 4 列で、それ以外の列(表示用の日付・スプレッドシート名・URL など)は読まない。
+- `地域` は地域の画面で登録した**地域名と完全に一致**させる。
+- `種別` は `最強位` / `新人王` のどちらか。
+- `実施日` は `2026/12/26（土）` のように**先頭が年/月/日**の形(`2026-12-26` も可)。エントリーの締切はこの前日の 23:59(日本時間)。新しく作る大会のエントリー開始は登録した時刻になる。`調整中` など日付でない値の行は登録されない。
+- `スプレッドシートID` はその大会の入力シート(5 章・6 章の書式)。ID の代わりに URL を書いてもよい。大会一覧と同じく「リンクを知っている全員が閲覧可」にしておくこと。
+- 同じ地域・種別の行が 2 つ以上あると、どちらが正しいか決められないので**どちらも登録しない**。
+
+既に登録されている大会(同じ地域・種別)は**上書き**される。締切・フォーム定義・レギュレーションが置き換わり、**エントリー開始**・大会名・定員はそのまま残る(エラーの出た行を直して流し直しても、受付開始前の大会が即時受付開始になることはない)。レギュレーションは名前で既存のものと突き合わせるので、名前を変えなければエントリーとの紐付けは保たれる。エントリーで使われているレギュレーションの名前を変えた(シートから消した)場合、その大会は登録できなかった大会として報告され、何も変更されない。フォーム定義の誤りは「フォーム定義 3行目: A列(key)…」のように行番号付きで報告される。
+
+一括登録は Cloudflare Workers の**有料プラン**が前提(1 行ごとに Google と Supabase へのサブリクエストが発生し、無料プランの上限 50 では約 24 行で足りなくなる。一斉メールの Queues のため、このプロジェクトは元々有料プランを前提にしている)。
 
 ### API を直接叩く場合
 
@@ -234,6 +262,12 @@ curl -X POST http://localhost:8787/api/sheet-import/regulations/preview \
   -H 'Content-Type: application/json' \
   -H 'Cookie: staff_session=<統括スタッフのJWT>' \
   -d '{"spreadsheetId": "<スプレッドシートID>"}'
+
+# 大会の一括登録(書き込む)
+curl -X POST http://localhost:8787/api/sheet-import/tournaments \
+  -H 'Content-Type: application/json' \
+  -H 'Cookie: staff_session=<統括スタッフのJWT>' \
+  -d '{"spreadsheetId": "<大会一覧のスプレッドシートID>"}'
 ```
 
 ## 10. 関連スキーマ(`packages/shared/src/schemas/`)
@@ -254,7 +288,7 @@ curl -X POST http://localhost:8787/api/sheet-import/regulations/preview \
 - `RegulationSheetImportRequestSchema`: レギュレーションのプレビュー API のリクエストボディ(`{spreadsheetId: string}`)。
 - `RegulationSyncInputSchema`: 保存 API のリクエストボディ。プレビューの変換結果もこれで検証する。
 
-フォーム定義のスキーマを直接 import するのはバックエンド(`routes/sheet-import.ts`、`routes/form-definitions.ts`、`lib/form-definitions.ts`、`lib/sheet-to-form-definition.ts`)。フロントエンドの `SheetImportPanel.svelte` はスキーマを直接 import せず、`hc<AppType>()` のクライアント経由でリクエスト/レスポンスの型を受け取る(`@regional-quiz/shared` から import しているのは `TournamentType` と `TOURNAMENT_TYPE_LABELS` のみ)。
+フォーム定義のスキーマを直接 import するのはバックエンド(`routes/sheet-import.ts`、`routes/form-definitions.ts`、`lib/form-definitions.ts`、`lib/sheet-to-form-definition.ts`)。フロントエンドの `FormDefinitionEditor.svelte` はスキーマを直接 import せず、`hc<AppType>()` のクライアント経由でリクエスト/レスポンスの型を受け取る(`@regional-quiz/shared` から import しているのは `TournamentType` と `TOURNAMENT_TYPE_LABELS` のみ)。
 
 ## 11. トラブルシューティング
 
@@ -264,7 +298,7 @@ curl -X POST http://localhost:8787/api/sheet-import/regulations/preview \
 | プレビューで 400、`Failed to fetch sheet: 400`/`404` | スプレッドシートIDが誤っている | URL 内の `/d/` と `/edit` の間の文字列を再確認 |
 | プレビューで 502、「Google スプレッドシートへの接続に失敗しました」 | Google Sheets API へのネットワーク接続に失敗、または Google 側が 5xx を返した | 統括スタッフ側で復旧を待って再試行。継続する場合は Cloudflare Workers 側のログ・Google Cloud のステータスを確認 |
 | プレビューで 503、「Google スプレッドシートへのリクエストが制限されています…」 | Google Sheets API のレート制限(429)にかかった | しばらく待ってから再試行 |
-| プレビューで 400、`Unknown field type: ...` | `type` 列が `チェックボックス`/`ラジオボタン`/`自由記述` のいずれでもない | プルダウン(データの入力規則)の選択肢から入力し直す。表記ゆれ(全角/半角スペース等)がないか確認 |
+| プレビューで 400、`Unknown field type: ...` | `type` 列が `チェックボックス`/`ラジオボタン`/`自由記述`/`自由記述（一行）` のいずれでもない | プルダウン(データの入力規則)の選択肢から入力し直す。表記ゆれ(全角/半角スペース等)がないか確認 |
 | プレビューで 400、`Unknown field type: undefined` | データ行の途中に空行がある、または `type` 列が空欄の行がある | 空行を削除して行を詰める。`type` 列をプルダウンから選択する |
 | プレビューで 400、`Duplicate option values: ...` | `options` 列内の値が trim 後に重複している | カンマ区切りの選択肢から重複を削除 |
 | プレビューで Zod バリデーションエラー(例: `key` が不正な形式、`ラジオボタン` なのに `options` が空) | シートの列内容がフォーマット規約(5章)に沿っていない | シートの列順・`key` の形式(`/^[a-z][a-z0-9_]*$/`)・`options` の記法(カンマ区切り)を修正 |

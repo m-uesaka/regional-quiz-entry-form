@@ -1,10 +1,18 @@
 import {error, redirect} from '@sveltejs/kit';
-import {TournamentTypeSchema} from '@regional-quiz/shared';
+import {EntryStatusSchema, TournamentTypeSchema} from '@regional-quiz/shared';
 import {createApiClient, isUnauthorized} from '$lib/api';
+import {readPageOffset} from '$lib/pagination';
 import {staffLoginPath} from '$lib/server/staff-login';
+import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {PageServerLoad} from './$types';
 
-export const load: PageServerLoad = async ({params, fetch, locals, url}) => {
+export const load: PageServerLoad = async ({
+  params,
+  fetch,
+  locals,
+  cookies,
+  url,
+}) => {
   if (!locals.staff) {
     redirect(303, staffLoginPath(url));
   }
@@ -34,7 +42,7 @@ export const load: PageServerLoad = async ({params, fetch, locals, url}) => {
     // backend. The gate tells that apart from a caller who never had a
     // session, so a working account isn't stranded on the 403 below.
     if (isUnauthorized(tournamentRes)) {
-      redirect(303, staffLoginPath(url));
+      redirectToStaffLogin(cookies, url);
     }
     // Outside the entry period the backend hands the tournament only to the
     // staff who cover it (`middleware/entry-period.ts`), so an out-of-scope
@@ -46,16 +54,26 @@ export const load: PageServerLoad = async ({params, fetch, locals, url}) => {
   }
   const tournament = await tournamentRes.json();
 
+  // An unknown `?status=` (a hand-edited URL) lists every status rather
+  // than letting the backend's 400 fail the page.
+  const parsedStatus = EntryStatusSchema.safeParse(
+    url.searchParams.get('status'),
+  );
+  const status = parsedStatus.success ? parsedStatus.data : null;
   const entriesRes = await api.api.staff.tournaments[
     ':tournamentId'
   ].entries.$get({
     param: {tournamentId: tournament.id},
+    query: {
+      offset: readPageOffset(url.searchParams),
+      ...(status ? {status} : {}),
+    },
   });
   if (!entriesRes.ok) {
     // The claims check above cannot rule this out: the JWT may expire between
     // `hooks.server.ts` parsing it and this request reaching the backend.
     if (entriesRes.status === 401) {
-      redirect(303, staffLoginPath(url));
+      redirectToStaffLogin(cookies, url);
     }
     if (entriesRes.status === 403) {
       throw error(403, 'この大会のエントリーを閲覧する権限がありません');
@@ -63,5 +81,6 @@ export const load: PageServerLoad = async ({params, fetch, locals, url}) => {
     throw error(502, 'エントリー情報の取得に失敗しました');
   }
 
-  return {tournament, entries: await entriesRes.json()};
+  const {items, ...paging} = await entriesRes.json();
+  return {tournament, entries: items, ...paging, status};
 };

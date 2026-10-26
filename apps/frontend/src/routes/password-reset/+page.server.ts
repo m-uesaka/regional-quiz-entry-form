@@ -1,10 +1,14 @@
 import {fail, redirect} from '@sveltejs/kit';
-import {
-  PasswordResetConfirmInputSchema,
-  PasswordResetRequestInputSchema,
-} from '@regional-quiz/shared';
+import {PasswordResetRequestInputSchema} from '@regional-quiz/shared';
+import {PasswordResetConfirmInputSchema} from '@regional-quiz/shared/password-policy';
 import {createApiClient} from '$lib/api';
 import {readTurnstileToken, TURNSTILE_TOKEN_FIELD} from '$lib/turnstile';
+import {
+  clearResetToken,
+  PARTICIPANT_RESET_TOKEN_COOKIE,
+  readResetToken,
+  takeResetToken,
+} from '$lib/server/reset-token';
 import {clearParticipantSession} from '$lib/server/participant-session';
 import type {Actions, PageServerLoad} from './$types';
 
@@ -23,44 +27,40 @@ const TOO_MANY_REQUESTS_MESSAGE =
  * The mail sent by `POST /api/auth/participant/password-reset/request`
  * links here with the one-time token in the query (see
  * `apps/backend/src/lib/password-reset.ts`), so a token means "choose a new
- * password" and its absence means "mail me a link". The token itself is not
- * returned: the form posts back to this same URL, so the action can read it
- * from the query rather than the page having to carry it in a field.
+ * password" and its absence means "mail me a link". The token is moved out
+ * of the URL into an httpOnly cookie on arrival (`$lib/server/reset-token.ts`,
+ * #120), so the page is only told whether there is one.
  */
-export const load: PageServerLoad = ({url}) => {
-  return {hasToken: readToken(url) !== null};
+export const load: PageServerLoad = ({cookies, url}) => {
+  return {
+    hasToken:
+      takeResetToken(cookies, url, PARTICIPANT_RESET_TOKEN_COOKIE) !== null,
+  };
 };
 
-/**
- * Reads the reset token out of the page's own URL.
- *
- * A present but empty `?token=` counts as absent, so that `load` and the
- * form action agree on which half of the flow a request belongs to: an empty
- * token would otherwise render the new-password form and then be refused by
- * the schema as if the password were at fault.
- *
- * @param url The URL this page was requested with.
- * @return The token, or `null` when there isn't a usable one.
- */
-function readToken(url: URL): string | null {
-  return url.searchParams.get('token') || null;
-}
-
+// Every failure says whether it was the token the API refused
+// (`tokenRejected`), which is when the page stops offering the new-password
+// form. Spelled out as `false` on the others rather than left off: SvelteKit
+// unions the `fail()` payloads into `ActionData`, and TypeScript would
+// otherwise drop the one member that has it as a subtype of the rest.
 export const actions = {
   default: async ({cookies, fetch, request, url}) => {
     const formData = await request.formData();
     const api = createApiClient(fetch);
-    // The two forms this page can render are told apart the same way the
-    // page itself picks which one to show, so a submission is always
-    // answered by the half it came from.
-    const token = readToken(url);
+    // The two forms this page can render are told apart by the token, the
+    // same way the page itself picks which one to show, so a submission is
+    // always answered by the half it came from.
+    const token = readResetToken(cookies, PARTICIPANT_RESET_TOKEN_COOKIE);
 
     if (token === null) {
       const parsed = PasswordResetRequestInputSchema.safeParse({
         email: String(formData.get('email') ?? ''),
       });
       if (!parsed.success) {
-        return fail(400, {error: 'メールアドレスを正しく入力してください'});
+        return fail(400, {
+          error: 'メールアドレスを正しく入力してください',
+          tokenRejected: false,
+        });
       }
 
       // Written into the form by the Turnstile widget
@@ -76,7 +76,10 @@ export const actions = {
       );
       if (!res.ok) {
         if (res.status === 429) {
-          return fail(429, {error: TOO_MANY_REQUESTS_MESSAGE});
+          return fail(429, {
+            error: TOO_MANY_REQUESTS_MESSAGE,
+            tokenRejected: false,
+          });
         }
         if (res.status === 400) {
           // The body was checked above, so the only 400 left is the
@@ -84,9 +87,13 @@ export const actions = {
           return fail(400, {
             error:
               '「私はロボットではありません」の確認に失敗しました。ページを再読み込みして、もう一度お試しください',
+            tokenRejected: false,
           });
         }
-        return fail(502, {error: '再設定メールの送信に失敗しました'});
+        return fail(502, {
+          error: '再設定メールの送信に失敗しました',
+          tokenRejected: false,
+        });
       }
       // Reported identically whether or not the address is registered: the
       // API answers the same way for both on purpose, and saying "no such
@@ -96,14 +103,25 @@ export const actions = {
 
     const newPassword = String(formData.get('newPassword') ?? '');
     if (newPassword !== String(formData.get('newPasswordConfirm') ?? '')) {
-      return fail(400, {error: 'パスワードが一致しません'});
+      return fail(400, {
+        error: 'パスワードが一致しません',
+        tokenRejected: false,
+      });
     }
     const parsed = PasswordResetConfirmInputSchema.safeParse({
       token,
       newPassword,
     });
     if (!parsed.success) {
-      return fail(400, {error: 'パスワードは8文字以上で入力してください'});
+      // The token was already read as non-empty, so what failed is the
+      // password, and the shared schema's own message says which rule it
+      // broke (too short, too long, or too common).
+      return fail(400, {
+        error:
+          parsed.error.flatten().fieldErrors.newPassword?.[0] ??
+          'パスワードを正しく入力してください',
+        tokenRejected: false,
+      });
     }
 
     const res = await api.api.auth.participant['password-reset'].confirm.$post({
@@ -113,13 +131,19 @@ export const actions = {
       if (res.status === 400) {
         // The API answers 400 for a token that is unknown, already used or
         // expired, and doesn't say which; all three are fixed by asking for
-        // a new link, which is what the message points at.
+        // a new link, which is what the message points at -- and which the
+        // page offers again once the dead token is gone.
+        clearResetToken(cookies, url, PARTICIPANT_RESET_TOKEN_COOKIE);
         return fail(400, {
           error:
             'このリンクは無効か、有効期限が切れています。もう一度パスワード再設定をやり直してください',
+          tokenRejected: true,
         });
       }
-      return fail(502, {error: 'パスワードの再設定に失敗しました'});
+      return fail(502, {
+        error: 'パスワードの再設定に失敗しました',
+        tokenRejected: false,
+      });
     }
 
     // A reset cuts every session the participant had, this browser's
@@ -128,6 +152,7 @@ export const actions = {
     // the notice below (and cost a pointless round trip through the 401 the
     // API would answer there with).
     clearParticipantSession(cookies, url);
+    clearResetToken(cookies, url, PARTICIPANT_RESET_TOKEN_COOKIE);
     // The only thing left to do is log in again with the password they have
     // just chosen.
     throw redirect(303, '/mypage/login?reset=done');

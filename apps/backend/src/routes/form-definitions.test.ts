@@ -1,4 +1,12 @@
-import {afterAll, afterEach, beforeAll, describe, expect, it} from 'bun:test';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from 'bun:test';
 import {SQL} from 'bun';
 import {sign} from 'hono/jwt';
 import type {TournamentType} from '@regional-quiz/shared';
@@ -12,6 +20,23 @@ import {
   TEST_REGION_ID,
   tournamentAwareFetch,
 } from '../test-support/tournaments';
+import {
+  staffSessionAwareFetch,
+  TEST_SESSIONS_VALID_FROM_MS,
+} from '../test-support/staff-session';
+
+// Every staff guard checks the session against
+// `staff_accounts.sessions_valid_from` before the handler runs; answer that
+// read for the tests that don't stub `fetch` themselves.
+const fetchWithoutSessionStub = globalThis.fetch;
+
+beforeEach(() => {
+  globalThis.fetch = staffSessionAwareFetch(fetchWithoutSessionStub);
+});
+
+afterEach(() => {
+  globalThis.fetch = fetchWithoutSessionStub;
+});
 
 // Local Supabase stack (`supabase start`), same convention as
 // `lib/db-schema.test.ts`. Skipped automatically when it isn't reachable,
@@ -23,8 +48,8 @@ const SUPABASE_URL = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
 // Publicly documented local-dev demo key for Supabase CLI's default stack
 // (fixed `super-secret-jwt-token-with-at-least-32-characters-long` JWT
 // secret) — not a real credential, safe to commit.
-const SUPABASE_SERVICE_ROLE_KEY =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ??
+const SUPABASE_SECRET_KEY =
+  process.env.SUPABASE_SECRET_KEY ??
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
 const SESSION_SECRET = 'test-session-secret';
 
@@ -43,7 +68,7 @@ async function isDbReachable(): Promise<boolean> {
 const env: Bindings = {
   ...PERMISSIVE_PLATFORM_BINDINGS,
   SUPABASE_URL,
-  SUPABASE_SERVICE_ROLE_KEY,
+  SUPABASE_SECRET_KEY,
   MAIL_API_KEY: 'dummy-mail-api-key',
   GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
   MAIL_FROM_ADDRESS: 'entry@example.com',
@@ -58,6 +83,7 @@ async function generalStaffCookie(): Promise<string> {
       role: 'general',
       regionId: null,
       tournamentType: null,
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     SESSION_SECRET,
@@ -72,6 +98,7 @@ async function regionalStaffCookie(regionId: string): Promise<string> {
       role: 'regional',
       regionId,
       tournamentType: 'saikyoi',
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     SESSION_SECRET,
@@ -171,8 +198,10 @@ function mockFormFieldDefsFetch(
   rows: unknown[],
   tournament: TournamentRow | null = openEntryPeriodTournament(),
 ): void {
-  globalThis.fetch = tournamentAwareFetch(tournament, (() =>
-    Promise.resolve(Response.json(rows))) as unknown as typeof fetch);
+  globalThis.fetch = staffSessionAwareFetch(
+    tournamentAwareFetch(tournament, (() =>
+      Promise.resolve(Response.json(rows))) as unknown as typeof fetch),
+  );
 }
 
 describe('GET /form-definitions/:tournamentId (mocked Supabase)', () => {
@@ -187,7 +216,7 @@ describe('GET /form-definitions/:tournamentId (mocked Supabase)', () => {
     mockFormFieldDefsFetch([
       {
         field_key: 'agree_rules',
-        label: '規約に同意する',
+        label: '<a href="https://example.com/rules">規約</a>に同意する',
         field_type: 'checkbox',
         required: true,
         options: null,
@@ -214,7 +243,8 @@ describe('GET /form-definitions/:tournamentId (mocked Supabase)', () => {
     expect(body).toEqual([
       {
         fieldKey: 'agree_rules',
-        label: '規約に同意する',
+        label: '<a href="https://example.com/rules">規約</a>に同意する',
+        plainLabel: '規約に同意する',
         fieldType: 'checkbox',
         required: true,
         options: null,
@@ -223,6 +253,7 @@ describe('GET /form-definitions/:tournamentId (mocked Supabase)', () => {
       {
         fieldKey: 't_shirt_size',
         label: 'Tシャツサイズ',
+        plainLabel: 'Tシャツサイズ',
         fieldType: 'radio',
         required: false,
         options: ['S', 'M', 'L'],

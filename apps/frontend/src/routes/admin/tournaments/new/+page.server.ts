@@ -1,10 +1,10 @@
 import {error, fail, redirect} from '@sveltejs/kit';
-import {createApiClient, isUnauthorized} from '$lib/api';
+import {createApiClient, isUnauthorized, readErrorMessage} from '$lib/api';
 import {
   parseTournamentFormValues,
   readTournamentFormValues,
 } from '$lib/tournament-form';
-import {staffLoginPath} from '$lib/server/staff-login';
+import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {TournamentFormValues} from '$lib/types/tournament-form';
 import type {Actions, PageServerLoad} from './$types';
 
@@ -23,11 +23,11 @@ const INVALID_INPUT_MESSAGE = '入力内容を確認してください';
 // Read and written server-side rather than from the browser: `/api/*` is
 // only routed to the backend Worker for requests the frontend makes itself
 // until Task 9-5 lands, so a client-side call would 404 in production.
-export const load: PageServerLoad = async ({fetch, url}) => {
+export const load: PageServerLoad = async ({fetch, cookies, url}) => {
   const res = await createApiClient(fetch).api.regions.$get();
   if (!res.ok) {
     if (isUnauthorized(res)) {
-      redirect(303, staffLoginPath(url));
+      redirectToStaffLogin(cookies, url);
     }
     error(502, '地域の取得に失敗しました');
   }
@@ -35,7 +35,7 @@ export const load: PageServerLoad = async ({fetch, url}) => {
 };
 
 export const actions = {
-  default: async ({request, fetch, url}) => {
+  default: async ({request, fetch, cookies, url}) => {
     const values = readTournamentFormValues(await request.formData());
     const input = parseTournamentFormValues(values);
     if (!input) {
@@ -47,11 +47,11 @@ export const actions = {
     });
     if (!res.ok) {
       if (isUnauthorized(res)) {
-        redirect(303, staffLoginPath(url));
+        redirectToStaffLogin(cookies, url);
       }
-      // 400 is what the database refused — a region that no longer exists,
-      // say — and the API passes that message through, so it is shown
-      // rather than replaced.
+      // 400 is a constraint the database refused — a region that no longer
+      // exists, or a second tournament of the same type in it — which the
+      // API words in Japanese itself, so it is shown rather than replaced.
       if (res.status === 400) {
         return createFailure(
           400,
@@ -88,30 +88,4 @@ function createFailure(
     error: message,
     values,
   } satisfies TournamentCreateActionResult);
-}
-
-/**
- * Reads the `{error: string}` body the backend answers a refusal with.
- * @param res The failed API response.
- * @param fallback What to say when the body carries no message.
- */
-async function readErrorMessage(
-  res: {json(): Promise<unknown>},
-  fallback: string,
-): Promise<string> {
-  try {
-    const body: unknown = await res.json();
-    if (
-      typeof body === 'object' &&
-      body !== null &&
-      'error' in body &&
-      typeof body.error === 'string'
-    ) {
-      return body.error;
-    }
-  } catch {
-    // A non-JSON body (a proxy error page, say) leaves the fallback to
-    // speak for itself.
-  }
-  return fallback;
 }

@@ -1,16 +1,22 @@
-import {error, fail, redirect} from '@sveltejs/kit';
+import {error, fail} from '@sveltejs/kit';
 import {
   RegulationSyncInputSchema,
   type Regulation,
 } from '@regional-quiz/shared';
-import {createApiClient, isNotFound, isUnauthorized} from '$lib/api';
+import {
+  createApiClient,
+  isNotFound,
+  isUnauthorized,
+  readErrorMessage,
+} from '$lib/api';
 import {fromJstDatetimeLocal} from '$lib/jst-datetime';
 import {
   emptyRegulationRow,
   isUntouchedNewRegulationRow,
   toRegulationRow,
 } from '$lib/regulation-rows';
-import {staffLoginPath} from '$lib/server/staff-login';
+import {redirectToStaffLogin} from '$lib/server/staff-session';
+import {sortBySubmittedOrder} from '$lib/submitted-order';
 import type {RegulationRowValues} from '$lib/types/regulation-form';
 import type {Actions, PageServerLoad} from './$types';
 
@@ -76,7 +82,7 @@ function importRefusal(
 // browser serialized the body in says nothing.
 const ROW_CONTROL_PATTERN = /^regulations\[(\d+)\]\.(\w+)$/;
 
-export const load: PageServerLoad = async ({params, fetch, url}) => {
+export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
   const api = createApiClient(fetch);
   // The regulations endpoint sits behind `requireOpenEntryPeriodOrStaff()`,
   // which answers 404 for an id no tournament has — so a mistyped or stale
@@ -94,7 +100,7 @@ export const load: PageServerLoad = async ({params, fetch, url}) => {
     // The layout guard cannot rule this out: the JWT may expire between
     // `hooks.server.ts` parsing it and these requests reaching the backend.
     if (isUnauthorized(tournamentsRes) || isUnauthorized(regulationsRes)) {
-      redirect(303, staffLoginPath(url));
+      redirectToStaffLogin(cookies, url);
     }
     if (isNotFound(regulationsRes)) {
       error(404, '大会が見つかりません');
@@ -113,7 +119,7 @@ export const load: PageServerLoad = async ({params, fetch, url}) => {
 };
 
 export const actions = {
-  save: async ({params, request, fetch, url}) => {
+  save: async ({params, request, fetch, cookies, url}) => {
     const rows = readRegulationRows(await request.formData());
 
     // The rows are sent as the whole set the tournament should end up with,
@@ -168,7 +174,7 @@ export const actions = {
     });
     if (!res.ok) {
       if (isUnauthorized(res)) {
-        redirect(303, staffLoginPath(url));
+        redirectToStaffLogin(cookies, url);
       }
       // 400 names the regulations that don't belong to this tournament and
       // 409 the ones an entry still points at. Both are written by the API
@@ -205,7 +211,7 @@ export const actions = {
   // them into the form *without saving*: the form itself is the preview, and
   // the staff member presses "保存" once it reads right. That keeps a single
   // write path (the `save` action above) whichever way the rows were filled.
-  import: async ({params, request, fetch, url}) => {
+  import: async ({params, request, fetch, cookies, url}) => {
     const formData = await request.formData();
     const spreadsheetId = String(formData.get('spreadsheetId') ?? '').trim();
     if (spreadsheetId === '') {
@@ -225,7 +231,7 @@ export const actions = {
       }),
     ]);
     if (isUnauthorized(previewRes) || isUnauthorized(storedRes)) {
-      redirect(303, staffLoginPath(url));
+      redirectToStaffLogin(cookies, url);
     }
     if (!previewRes.ok) {
       // Written by the API for the staff member reading this screen (the
@@ -306,7 +312,7 @@ function mergeImportedRegulations(
  *
  * The controls are named `regulations[i].field`, so a row is assembled from
  * the controls sharing an index and the rows are then put in the order their
- * "表示順" asks for — see the note on the sort below. A gap in the indices is
+ * "表示順" asks for (`sortBySubmittedOrder()`). A gap in the indices is
  * fine: only the relative order matters.
  *
  * @param formData The submitted body.
@@ -347,76 +353,11 @@ function readRegulationRows(formData: FormData): RegulationRowValues[] {
     }
     rows.set(index, row);
   }
-  // Sorted by the "表示順" the form carries, which the page pre-fills with
-  // each row's current position — so a form nobody reordered saves in the
-  // order it was rendered in, and moving a row is a matter of rewriting its
-  // number.
-  //
-  // Ties are broken by whether the number was rewritten at all: a row asking
-  // for a position it was not already in takes it, and the rows left where
-  // they were close up behind it in the order they were displayed. Without
-  // that, typing `1` into the third of three rows — the one gesture the page
-  // tells staff to use — would leave it behind the row already numbered `1`,
-  // so nothing could ever be moved to the front.
-  return [...rows.entries()]
-    .sort(([leftIndex, left], [rightIndex, right]) => {
-      const byPosition =
-        rowPosition(leftIndex, left) - rowPosition(rightIndex, right);
-      if (byPosition !== 0) return byPosition;
-      const byMove = moveRank(leftIndex, left) - moveRank(rightIndex, right);
-      if (byMove !== 0) return byMove;
-      return leftIndex - rightIndex;
-    })
-    .map(([, row]) => row);
-}
-
-/**
- * How a row ranks among others claiming the same position: a row whose
- * "表示順" was rewritten goes ahead of one that still carries the number the
- * page pre-filled it with.
- * @param index The row's index in the rendered form.
- * @param row The submitted row.
- * @return 0 for a row that was moved, 1 for one that was left alone.
- */
-function moveRank(index: number, row: RegulationRowValues): number {
-  return rowPosition(index, row) === index + 1 ? 1 : 0;
-}
-
-/**
- * Where a row asked to be placed, on the 1-based scale the control shows.
- * @param index The row's index in the rendered form.
- * @param row The submitted row.
- * @return The requested position, or the row's own position when the
- *     control was left empty or holds something that isn't a number.
- */
-function rowPosition(index: number, row: RegulationRowValues): number {
-  if (row.order.trim() === '') return index + 1;
-  const requested = Number(row.order);
-  return Number.isFinite(requested) ? requested : index + 1;
-}
-
-/**
- * Reads the `{error: string}` body the backend answers a refusal with.
- * @param res The failed API response.
- * @param fallback What to say when the body carries no message.
- */
-async function readErrorMessage(
-  res: {json(): Promise<unknown>},
-  fallback: string,
-): Promise<string> {
-  try {
-    const body: unknown = await res.json();
-    if (
-      typeof body === 'object' &&
-      body !== null &&
-      'error' in body &&
-      typeof body.error === 'string'
-    ) {
-      return body.error;
-    }
-  } catch {
-    // A non-JSON body (a proxy error page, say) leaves the fallback to
-    // speak for itself.
-  }
-  return fallback;
+  return sortBySubmittedOrder(
+    [...rows.entries()].map(([index, row]) => ({
+      index,
+      order: row.order,
+      value: row,
+    })),
+  );
 }

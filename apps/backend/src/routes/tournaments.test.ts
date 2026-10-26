@@ -1,4 +1,12 @@
-import {afterAll, afterEach, describe, expect, it} from 'bun:test';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from 'bun:test';
 import {SQL} from 'bun';
 import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
@@ -10,6 +18,23 @@ import {
   TEST_REGION_ID,
   tournamentAwareFetch,
 } from '../test-support/tournaments';
+import {
+  staffSessionAwareFetch,
+  TEST_SESSIONS_VALID_FROM_MS,
+} from '../test-support/staff-session';
+
+// Every staff guard checks the session against
+// `staff_accounts.sessions_valid_from` before the handler runs; answer that
+// read for the tests that don't stub `fetch` themselves.
+const fetchWithoutSessionStub = globalThis.fetch;
+
+beforeEach(() => {
+  globalThis.fetch = staffSessionAwareFetch(fetchWithoutSessionStub);
+});
+
+afterEach(() => {
+  globalThis.fetch = fetchWithoutSessionStub;
+});
 
 // Local Supabase stack (`supabase start`), same convention as
 // `lib/db-schema.test.ts`. Skipped automatically when it isn't reachable,
@@ -21,8 +46,8 @@ const SUPABASE_URL = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
 // Publicly documented local-dev demo key for Supabase CLI's default stack
 // (fixed `super-secret-jwt-token-with-at-least-32-characters-long` JWT
 // secret) — not a real credential, safe to commit.
-const SUPABASE_SERVICE_ROLE_KEY =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ??
+const SUPABASE_SECRET_KEY =
+  process.env.SUPABASE_SECRET_KEY ??
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
 const SESSION_SECRET = 'test-session-secret';
 
@@ -41,7 +66,7 @@ async function isDbReachable(): Promise<boolean> {
 const env: Bindings = {
   ...PERMISSIVE_PLATFORM_BINDINGS,
   SUPABASE_URL,
-  SUPABASE_SERVICE_ROLE_KEY,
+  SUPABASE_SECRET_KEY,
   MAIL_API_KEY: 'dummy-mail-api-key',
   GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
   MAIL_FROM_ADDRESS: 'entry@example.com',
@@ -56,6 +81,7 @@ async function generalStaffCookie(): Promise<string> {
       role: 'general',
       regionId: null,
       tournamentType: null,
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     SESSION_SECRET,
@@ -70,6 +96,7 @@ async function regionalStaffCookie(regionId: string): Promise<string> {
       role: 'regional',
       regionId,
       tournamentType: 'saikyoi',
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     SESSION_SECRET,
@@ -104,6 +131,28 @@ describe('tournaments routes (request validation)', () => {
     );
 
     expect(res.status).toBe(403);
+  });
+
+  it('DELETE /tournaments/:id rejects regional staff with 403', async () => {
+    const cookie = await regionalStaffCookie(fixedRegionId);
+
+    const res = await app.request(
+      `/api/tournaments/${fixedRegionId}`,
+      {method: 'DELETE', headers: {cookie, origin: env.FRONTEND_URL}},
+      env,
+    );
+
+    expect(res.status).toBe(403);
+  });
+
+  it('DELETE /tournaments/:id rejects a request without a session with 401', async () => {
+    const res = await app.request(
+      `/api/tournaments/${fixedRegionId}`,
+      {method: 'DELETE', headers: {origin: env.FRONTEND_URL}},
+      env,
+    );
+
+    expect(res.status).toBe(401);
   });
 
   it('rejects a body missing entryOpensAt with 400', async () => {
@@ -142,6 +191,106 @@ describe('tournaments routes (request validation)', () => {
 // The by-slug read is public only while the entry period is open; outside
 // it, it belongs to the tournament's own staff (`middleware/entry-period.ts`).
 // Mocked rather than run against Supabase so these hold in CI too.
+// Postgres's messages name tables, columns and constraints, so the route
+// answers with its own wording instead (#122). PostgREST is stubbed, so
+// these run without a database.
+describe('tournaments routes (database errors)', () => {
+  const fixedRegionId = '00000000-0000-0000-0000-000000000000';
+  const tournamentId = '11111111-1111-1111-1111-111111111111';
+  const createBody = {
+    regionId: fixedRegionId,
+    type: 'saikyoi',
+    name: 'テスト大会',
+    capacity: null,
+    entryOpensAt: '2026-01-01T00:00:00+09:00',
+    entryClosesAt: '2026-01-31T00:00:00+09:00',
+  };
+
+  /**
+   * Answers every PostgREST write with `error`, as it would a refused
+   * statement.
+   * @param status The HTTP status PostgREST answers with.
+   * @param error The PostgREST error body.
+   */
+  function stubPostgrestError(
+    status: number,
+    error: Record<string, unknown>,
+  ): void {
+    globalThis.fetch = staffSessionAwareFetch((async () =>
+      Response.json(error, {status})) as unknown as typeof fetch);
+  }
+
+  async function request(method: 'POST' | 'PATCH'): Promise<Response> {
+    return app.request(
+      method === 'POST'
+        ? '/api/tournaments'
+        : `/api/tournaments/${tournamentId}`,
+      {
+        method,
+        headers: {
+          cookie: await generalStaffCookie(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(createBody),
+      },
+      env,
+    );
+  }
+
+  it('POST /tournaments does not leak the raw database message on a constraint violation', async () => {
+    stubPostgrestError(409, {
+      code: '23505',
+      message:
+        'duplicate key value violates unique constraint "tournaments_region_id_type_key"',
+      details: 'Key (region_id, type)=(…, saikyoi) already exists.',
+      hint: null,
+    });
+
+    const res = await request('POST');
+    const text = await res.text();
+
+    expect(res.status).toBe(400);
+    expect(JSON.parse(text)).toEqual({
+      error: 'この地域には同じ種別の大会がすでにあります',
+    });
+    expect(text).not.toContain('tournaments_region_id_type_key');
+  });
+
+  it('PATCH /tournaments/:id reports a region that does not exist in Japanese', async () => {
+    stubPostgrestError(409, {
+      code: '23503',
+      message:
+        'insert or update on table "tournaments" violates foreign key constraint "tournaments_region_id_fkey"',
+      details: null,
+      hint: null,
+    });
+
+    const res = await request('PATCH');
+
+    expect(res.status).toBe(400);
+    expect((await res.json()) as unknown).toEqual({
+      error: '指定された地域が存在しません',
+    });
+  });
+
+  it('answers any other database error with a generic 500', async () => {
+    stubPostgrestError(400, {
+      code: '23514',
+      message:
+        'new row for relation "tournaments" violates check constraint "x"',
+      details: null,
+      hint: null,
+    });
+
+    const res = await request('POST');
+
+    expect(res.status).toBe(500);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'internal server error',
+    });
+  });
+});
+
 describe('GET /tournaments/:regionSlug/:tournamentSlug (entry period)', () => {
   const originalFetch = globalThis.fetch;
   const path = '/api/tournaments/some-region/saikyoi';
@@ -155,8 +304,10 @@ describe('GET /tournaments/:regionSlug/:tournamentSlug (entry period)', () => {
   function mockTournamentFetch(
     tournament: ReturnType<typeof openEntryPeriodTournament> | null,
   ): void {
-    globalThis.fetch = tournamentAwareFetch(tournament, (() =>
-      Promise.resolve(Response.json([]))) as unknown as typeof fetch);
+    globalThis.fetch = staffSessionAwareFetch(
+      tournamentAwareFetch(tournament, (() =>
+        Promise.resolve(Response.json([]))) as unknown as typeof fetch),
+    );
   }
 
   it('serves the tournament during the entry period without a session', async () => {
@@ -197,7 +348,12 @@ describe('GET /tournaments/:regionSlug/:tournamentSlug (entry period)', () => {
 
     const res = await app.request(
       path,
-      {headers: {cookie: await generalStaffCookie()}},
+      {
+        headers: {
+          cookie: await generalStaffCookie(),
+          origin: env.FRONTEND_URL,
+        },
+      },
       env,
     );
 
@@ -222,6 +378,279 @@ describe('GET /tournaments/:regionSlug/:tournamentSlug (entry period)', () => {
     const res = await app.request(path, {}, env);
 
     expect(res.status).toBe(404);
+  });
+});
+
+// The by-slug read and the by-id read, with PostgREST stubbed by a fixture
+// that honours the filters the route sends, so a region or type that
+// doesn't match finds nothing the way the real join would (#123).
+describe('GET /tournaments/:id and /:regionSlug/:tournamentSlug (queries)', () => {
+  const originalFetch = globalThis.fetch;
+  const tournament = openEntryPeriodTournament();
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  /**
+   * Answers `tournaments` reads with `tournament` when every `eq` filter on
+   * the request matches it, recording each Supabase URL besides the staff
+   * session check.
+   * @param calls Collects the requested URLs.
+   */
+  function mockFilteringFetch(calls: URL[] = []): void {
+    const known: Record<string, string> = {
+      id: tournament.id,
+      type: tournament.type,
+      'regions.slug': 'tokyo',
+    };
+    globalThis.fetch = staffSessionAwareFetch(((input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      calls.push(url);
+      if (!url.pathname.endsWith('/rest/v1/tournaments')) {
+        return Promise.resolve(Response.json([]));
+      }
+      const matches = [...url.searchParams].every(
+        ([key, value]) =>
+          !value.startsWith('eq.') || known[key] === value.slice(3),
+      );
+      // The edit screen's by-id read embeds the tournament's form fields
+      // too; the fixture has none.
+      const row = url.searchParams.get('select')?.includes('form_field_defs')
+        ? {...tournament, form_field_defs: []}
+        : tournament;
+      return Promise.resolve(Response.json(matches ? [row] : []));
+    }) as unknown as typeof fetch);
+  }
+
+  it('GET /tournaments/:regionSlug/:tournamentSlug returns 404 for an unknown region', async () => {
+    mockFilteringFetch();
+
+    const res = await app.request('/api/tournaments/osaka/saikyoi', {}, env);
+
+    expect(res.status).toBe(404);
+  });
+
+  it('GET /tournaments/:regionSlug/:tournamentSlug returns 404 for a known region without that tournament type', async () => {
+    mockFilteringFetch();
+
+    const res = await app.request('/api/tournaments/tokyo/shinjinou', {}, env);
+
+    expect(res.status).toBe(404);
+  });
+
+  it('GET /tournaments/:regionSlug/:tournamentSlug resolves in a single query', async () => {
+    const calls: URL[] = [];
+    mockFilteringFetch(calls);
+
+    const res = await app.request('/api/tournaments/tokyo/saikyoi', {}, env);
+
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].pathname).toEndWith('/rest/v1/tournaments');
+    expect(calls[0].searchParams.get('select')).toContain(
+      'regions!inner(name)',
+    );
+    expect(calls[0].searchParams.get('regions.slug')).toBe('eq.tokyo');
+  });
+
+  it('GET /tournaments/:id returns the tournament for general staff', async () => {
+    mockFilteringFetch();
+
+    const res = await app.request(
+      `/api/tournaments/${tournament.id}`,
+      {
+        headers: {
+          cookie: await generalStaffCookie(),
+          origin: env.FRONTEND_URL,
+        },
+      },
+      env,
+    );
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as unknown).toEqual({
+      tournament: {
+        id: tournament.id,
+        regionId: tournament.region_id,
+        type: tournament.type,
+        name: tournament.name,
+        capacity: tournament.capacity,
+        entryOpensAt: tournament.entry_opens_at,
+        entryClosesAt: tournament.entry_closes_at,
+      },
+      customName: tournament.name,
+      formFieldDefs: [],
+    });
+  });
+
+  it('GET /tournaments/:id reads the form fields in the same query', async () => {
+    const calls: URL[] = [];
+    mockFilteringFetch(calls);
+
+    const res = await app.request(
+      `/api/tournaments/${tournament.id}`,
+      {
+        headers: {
+          cookie: await generalStaffCookie(),
+          origin: env.FRONTEND_URL,
+        },
+      },
+      env,
+    );
+
+    expect(res.status).toBe(200);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].searchParams.get('select')).toContain('form_field_defs(');
+  });
+
+  it('GET /tournaments/:id returns 404 for an id that names no tournament', async () => {
+    mockFilteringFetch();
+
+    const res = await app.request(
+      '/api/tournaments/99999999-9999-9999-9999-999999999998',
+      {
+        headers: {
+          cookie: await generalStaffCookie(),
+          origin: env.FRONTEND_URL,
+        },
+      },
+      env,
+    );
+
+    expect(res.status).toBe(404);
+  });
+
+  it('GET /tournaments/:id returns 403 for regional staff', async () => {
+    mockFilteringFetch();
+
+    const res = await app.request(
+      `/api/tournaments/${tournament.id}`,
+      {headers: {cookie: await regionalStaffCookie(tournament.region_id)}},
+      env,
+    );
+
+    expect(res.status).toBe(403);
+  });
+
+  it('GET /tournaments/:id does not shadow the two-segment slug route', async () => {
+    mockFilteringFetch();
+
+    // Public, no session: had `/:id` caught it, this would be a 401.
+    const bySlug = await app.request('/api/tournaments/tokyo/saikyoi', {}, env);
+    // And the other way round: one segment is never read as a slug pair.
+    const byId = await app.request(
+      `/api/tournaments/${tournament.id}`,
+      {},
+      env,
+    );
+
+    expect(bySlug.status).toBe(200);
+    expect(((await bySlug.json()) as {id: string}).id).toBe(tournament.id);
+    expect(byId.status).toBe(401);
+  });
+});
+
+describe('PUT /tournaments/order (mocked Supabase)', () => {
+  const A = '00000000-0000-0000-0000-00000000000a';
+  const B = '00000000-0000-0000-0000-00000000000b';
+  let rpcCalls: Array<{url: string; body: unknown}> = [];
+
+  /**
+   * Answers the `reorder_tournaments()` RPC with `response`, recording what
+   * it was called with.
+   * @param response What PostgREST answers.
+   */
+  function stubRpc(response: () => Response): void {
+    rpcCalls = [];
+    globalThis.fetch = staffSessionAwareFetch((async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      rpcCalls.push({
+        url: input.toString(),
+        body: JSON.parse(String(init?.body ?? 'null')),
+      });
+      return response();
+    }) as unknown as typeof fetch);
+  }
+
+  async function putOrder(
+    tournamentIds: unknown,
+    cookie?: string,
+  ): Promise<Response> {
+    return app.request(
+      '/api/tournaments/order',
+      {
+        method: 'PUT',
+        headers: {
+          cookie: cookie ?? (await generalStaffCookie()),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({tournamentIds}),
+      },
+      env,
+    );
+  }
+
+  it('hands the ids to reorder_tournaments() in the order given', async () => {
+    stubRpc(() => new Response(null, {status: 204}));
+
+    const res = await putOrder([B, A]);
+
+    expect(res.status).toBe(204);
+    expect(rpcCalls).toHaveLength(1);
+    expect(rpcCalls[0].url).toContain('/rest/v1/rpc/reorder_tournaments');
+    expect(rpcCalls[0].body).toEqual({p_tournament_ids: [B, A]});
+  });
+
+  it('refuses regional staff without touching the database', async () => {
+    stubRpc(() => new Response(null, {status: 204}));
+
+    const res = await putOrder([A], await regionalStaffCookie(TEST_REGION_ID));
+
+    expect(res.status).toBe(403);
+    expect(rpcCalls).toHaveLength(0);
+  });
+
+  it('refuses the same tournament twice before reaching the database', async () => {
+    stubRpc(() => new Response(null, {status: 204}));
+
+    const res = await putOrder([A, A]);
+
+    expect(res.status).toBe(400);
+    expect(rpcCalls).toHaveLength(0);
+  });
+
+  it('answers 409 in Japanese when the ids are not the tournaments there are', async () => {
+    stubRpc(() =>
+      Response.json(
+        {
+          code: 'P0003',
+          message: 'the tournament ids do not match the tournaments',
+          details: null,
+          hint: null,
+        },
+        {status: 400},
+      ),
+    );
+
+    const res = await putOrder([A]);
+
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as {error: string}).error).toContain(
+      'ページを読み込み直して',
+    );
+  });
+
+  it('answers any other database error with a generic 500', async () => {
+    stubRpc(() =>
+      Response.json({code: 'XX000', message: 'boom'}, {status: 500}),
+    );
+
+    const res = await putOrder([A]);
+
+    expect(res.status).toBe(500);
   });
 });
 
@@ -346,6 +775,222 @@ describe.skipIf(!(await isDbReachable()))(
     });
 
     /**
+     * Creates a tournament through the API.
+     * @param regionId The region to create it in.
+     * @param fields Fields to send on top of the fixed entry window.
+     */
+    async function postTournament(
+      regionId: string,
+      fields: Record<string, unknown>,
+    ): Promise<Response> {
+      return app.request(
+        '/api/tournaments',
+        {
+          method: 'POST',
+          headers: {
+            cookie: await generalStaffCookie(),
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            regionId,
+            type: 'saikyoi',
+            capacity: null,
+            entryOpensAt: '2026-01-01T00:00:00+09:00',
+            entryClosesAt: '2026-01-31T00:00:00+09:00',
+            ...fields,
+          }),
+        },
+        env,
+      );
+    }
+
+    it('names a tournament created without a name after its region and type', async () => {
+      const regionId = await createTestRegion('default-name');
+
+      const omitted = await postTournament(regionId, {});
+      const blank = await postTournament(regionId, {
+        type: 'shinjinou',
+        name: '  ',
+      });
+
+      expect(omitted.status).toBe(201);
+      expect(((await omitted.json()) as {name: string}).name).toBe(
+        'テスト地域最強位',
+      );
+      expect(blank.status).toBe(201);
+      expect(((await blank.json()) as {name: string}).name).toBe(
+        'テスト地域新人王',
+      );
+    });
+
+    it('refuses a blank name for a region that does not exist with 400', async () => {
+      const res = await postTournament('00000000-0000-0000-0000-000000000000', {
+        name: '',
+      });
+
+      expect(res.status).toBe(400);
+      expect((await res.json()) as unknown).toEqual({
+        error: '指定された地域が存在しません',
+      });
+    });
+
+    it('resets a cleared name to the default for the type it is changed to', async () => {
+      const regionId = await createTestRegion('reset-name');
+      const created = (await (
+        await postTournament(regionId, {name: '独自の大会名'})
+      ).json()) as {id: string};
+
+      const res = await app.request(
+        `/api/tournaments/${created.id}`,
+        {
+          method: 'PATCH',
+          headers: {
+            cookie: await generalStaffCookie(),
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({name: '', type: 'shinjinou'}),
+        },
+        env,
+      );
+
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as {name: string}).name).toBe(
+        'テスト地域新人王',
+      );
+    });
+
+    it('keeps a blank name following the region it is moved to and renamed', async () => {
+      const fromRegionId = await createTestRegion('move-from');
+      const toRegionId = await createTestRegion('move-to');
+      await sql`update regions set name = '移動先' where id = ${toRegionId}`;
+      const created = (await (
+        await postTournament(fromRegionId, {})
+      ).json()) as {
+        id: string;
+      };
+      const cookie = await generalStaffCookie();
+
+      // Only the region changes: the name is left alone, as the edit form
+      // leaves it when 大会名 was blank.
+      const moved = await app.request(
+        `/api/tournaments/${created.id}`,
+        {
+          method: 'PATCH',
+          headers: {cookie, 'content-type': 'application/json'},
+          body: JSON.stringify({regionId: toRegionId}),
+        },
+        env,
+      );
+      await sql`update regions set name = '改名後' where id = ${toRegionId}`;
+      const read = await app.request(
+        `/api/tournaments/${created.id}`,
+        {headers: {cookie, origin: env.FRONTEND_URL}},
+        env,
+      );
+
+      expect(moved.status).toBe(200);
+      expect(((await moved.json()) as {name: string}).name).toBe(
+        '移動先最強位',
+      );
+      expect(read.status).toBe(200);
+      expect(
+        (await read.json()) as unknown as {
+          tournament: {name: string};
+          customName: string | null;
+        },
+      ).toMatchObject({tournament: {name: '改名後最強位'}, customName: null});
+    });
+
+    it('deletes a tournament with its regulations and form fields', async () => {
+      const regionId = await createTestRegion('delete');
+      const created = (await (await postTournament(regionId, {})).json()) as {
+        id: string;
+      };
+      await sql`insert into regulations (tournament_id, label)
+        values (${created.id}, '一般の部')`;
+      await sql`insert into form_field_defs (tournament_id, field_key, label, field_type)
+        values (${created.id}, 'note', '備考', 'textarea')`;
+
+      const res = await app.request(
+        `/api/tournaments/${created.id}`,
+        {
+          method: 'DELETE',
+          headers: {
+            cookie: await generalStaffCookie(),
+            origin: env.FRONTEND_URL,
+          },
+        },
+        env,
+      );
+      const again = await app.request(
+        `/api/tournaments/${created.id}`,
+        {
+          method: 'DELETE',
+          headers: {
+            cookie: await generalStaffCookie(),
+            origin: env.FRONTEND_URL,
+          },
+        },
+        env,
+      );
+
+      expect(res.status).toBe(204);
+      expect(again.status).toBe(404);
+      const [{count}] = await sql`
+        select (select count(*) from tournaments where id = ${created.id})
+          + (select count(*) from regulations where tournament_id = ${created.id})
+          + (select count(*) from form_field_defs where tournament_id = ${created.id})
+          as count
+      `;
+      expect(Number(count)).toBe(0);
+    });
+
+    it('refuses to delete a tournament that has entries with 409', async () => {
+      const regionId = await createTestRegion('delete-with-entries');
+      const created = (await (await postTournament(regionId, {})).json()) as {
+        id: string;
+      };
+      const [participant] = await sql`
+        insert into participants (region_id, email, password_hash)
+        values (${regionId}, 'tournament-delete-test@example.com', 'hash')
+        returning id
+      `;
+      await sql`
+        insert into entries (
+          participant_id, tournament_id, name, furigana, display_name, status
+        ) values (
+          ${participant.id}, ${created.id}, '山田太郎', 'ヤマダタロウ', '太郎',
+          'cancelled'
+        )
+      `;
+
+      try {
+        const res = await app.request(
+          `/api/tournaments/${created.id}`,
+          {
+            method: 'DELETE',
+            headers: {
+              cookie: await generalStaffCookie(),
+              origin: env.FRONTEND_URL,
+            },
+          },
+          env,
+        );
+
+        expect(res.status).toBe(409);
+        expect((await res.json()) as unknown).toEqual({
+          error: 'エントリーがある大会は削除できません',
+        });
+        const [{count}] =
+          await sql`select count(*) as count from tournaments where id = ${created.id}`;
+        expect(Number(count)).toBe(1);
+      } finally {
+        await sql`delete from entries where tournament_id = ${created.id}`;
+        await sql`delete from participants where id = ${participant.id}`;
+      }
+    });
+
+    /**
      * Inserts a tournament whose entry period is open right now. The window
      * is relative to the clock rather than a pair of literal dates because
      * the public read below is gated on it (`middleware/entry-period.ts`) —
@@ -405,6 +1050,99 @@ describe.skipIf(!(await isDbReachable()))(
       );
 
       expect(res.status).toBe(404);
+    });
+  },
+);
+
+describe.skipIf(!(await isDbReachable()))(
+  'PUT /tournaments/order (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const testRegionSlug = 'tournaments-order-test-region';
+    let originalOrder: string[] = [];
+
+    async function listIds(cookie: string): Promise<string[]> {
+      const res = await app.request(
+        '/api/tournaments',
+        {headers: {cookie}},
+        env,
+      );
+      return ((await res.json()) as Array<{id: string}>).map(t => t.id);
+    }
+
+    async function putOrder(
+      cookie: string,
+      tournamentIds: string[],
+    ): Promise<Response> {
+      return app.request(
+        '/api/tournaments/order',
+        {
+          method: 'PUT',
+          headers: {cookie, 'content-type': 'application/json'},
+          body: JSON.stringify({tournamentIds}),
+        },
+        env,
+      );
+    }
+
+    // Read straight from the table: the session stub the requests need is
+    // only installed per test (the file's `beforeEach`).
+    beforeAll(async () => {
+      const rows =
+        await sql`select id from tournaments order by display_order, id`;
+      originalOrder = rows.map((row: {id: string}) => row.id);
+    });
+
+    afterAll(async () => {
+      await sql`delete from tournaments where region_id in (
+        select id from regions where slug = ${testRegionSlug}
+      )`;
+      await sql`delete from regions where slug = ${testRegionSlug}`;
+      // Put the other tournaments back the way they were listed. The ids go
+      // over as a Postgres array literal, which Bun's `SQL` doesn't build
+      // from a JS array.
+      await sql`
+        update tournaments t
+          set display_order = (o.ordinality - 1)::integer
+          from unnest(${`{${originalOrder.join(',')}}`}::uuid[]) with ordinality as o(id, ordinality)
+          where t.id = o.id
+      `;
+      await sql.close();
+    });
+
+    it('lists the tournaments in the order set, and a new one last', async () => {
+      const cookie = await generalStaffCookie();
+      const [region] = await sql`
+        insert into regions (slug, name)
+        values (${testRegionSlug}, '並べ替えテスト地域')
+        on conflict (slug) do update set name = excluded.name
+        returning id
+      `;
+      const created = await sql`
+        insert into tournaments (region_id, type, entry_opens_at, entry_closes_at)
+        values
+          (${region.id}, 'saikyoi', now(), now() + interval '1 day'),
+          (${region.id}, 'shinjinou', now(), now() + interval '1 day')
+        returning id
+      `;
+      const before = await listIds(cookie);
+      expect(before.slice(-2)).toEqual(created.map((t: {id: string}) => t.id));
+
+      const reversed = [...before].reverse();
+      const res = await putOrder(cookie, reversed);
+
+      expect(res.status).toBe(204);
+      expect(await listIds(cookie)).toEqual(reversed);
+    });
+
+    it('refuses a list missing a tournament and leaves the order alone', async () => {
+      const cookie = await generalStaffCookie();
+      const before = await listIds(cookie);
+
+      const res = await putOrder(cookie, before.slice(1).reverse());
+
+      expect(res.status).toBe(409);
+      expect(await listIds(cookie)).toEqual(before);
     });
   },
 );

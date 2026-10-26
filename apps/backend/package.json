@@ -9,10 +9,11 @@
     "./lib/password": "./src/lib/password.ts"
   },
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --var FRONTEND_URL:http://localhost:5173 --var CSRF_TRUSTED_ORIGINS:http://127.0.0.1:5173",
     "build": "wrangler deploy --dry-run",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "staff:bootstrap": "bun src/scripts/bootstrap-general-staff.ts",
     "lint": "gts lint",
     "fix": "gts fix"
   },

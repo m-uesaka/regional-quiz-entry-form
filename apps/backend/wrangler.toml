@@ -2,6 +2,27 @@ name = "regional-quiz-backend"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
 
+# Keep the `*.workers.dev` subdomain enabled.
+#
+# Wrangler decides this as `config.workers_dev ?? routes.length === 0`, and
+# `deploy.yml` passes `--route "$FRONTEND_HOST/api/*"` as soon as an
+# environment has a `FRONTEND_HOST` variable. With no `workers_dev` key that
+# route alone would flip the default to `false`, and the deploy would then
+# POST `{enabled: false}` to the Worker's `/subdomain` endpoint, tearing down
+# `regional-quiz-backend[-staging].<subdomain>.workers.dev`.
+#
+# That origin is not spare. It is what the Pages projects' `BACKEND_URL`
+# points at (`docs/supabase-deployment.md` 6.3), and SSR rewrites every
+# `/api/*` call to it in `handleFetch` (`apps/frontend/src/hooks.server.ts`).
+# Losing it breaks every `load` and every form action — and the smoke test at
+# the end of the deploy would not notice, because it probes `/api/*` on the
+# frontend host, which goes through the new route and answers fine.
+#
+# Unlike `vars`, `routes`, `unsafe` and `queues` below, `workers_dev` *is* an
+# inheritable key, so this one line covers `[env.staging]` and
+# `[env.production]` both.
+workers_dev = true
+
 # `vars` and `routes` are non-inheritable keys: an `[env.*]` block that doesn't
 # restate them gets none at all rather than the top-level ones. So each named
 # environment below carries its own copy.
@@ -12,8 +33,13 @@ compatibility_date = "2026-08-01"
 # workflows always pass `--env`; pass it by hand too.
 [vars]
 # 非機密の設定値のみここに記載し、機密情報は `wrangler secret put` で登録する
-MAIL_FROM_ADDRESS = "entry@entry.regionalquiz.example"
-FRONTEND_URL = "https://entry.regionalquiz.example"
+MAIL_FROM_ADDRESS = "no-reply@mail.regional-quiz-project.app"
+# 本番の値のままにしておく: 上のとおり `--env` を付け忘れた `wrangler deploy` は
+# このブロックで本番 Worker を上書きするため、ここにローカル用の値を書くと
+# 本番のメールのリンクと `src/index.ts` の Origin 検証が localhost を向いてしまう。
+# ローカル開発の値(`vite dev` のオリジン)は `package.json` の `dev` スクリプトが
+# `--var` で渡し、E2E は `apps/e2e/playwright.config.ts` が同じく `--var` で渡す。
+FRONTEND_URL = "https://regional-quiz-project.app"
 # Turnstile の「常に成功する」テスト用シークレット(Cloudflare が公開している
 # 固定値)。ローカル開発と E2E はこれで通す。`[env.*.vars]` には**置かない**:
 # 同名の var があるとデプロイのたびに `wrangler secret put` で登録した本物の
@@ -44,7 +70,9 @@ TURNSTILE_SECRET_KEY = "1x0000000000000000000000000000000AA"
 #
 # The limits here are the *development* ones, and they are loose on purpose.
 # `wrangler dev` sees no `CF-Connecting-IP` header, so every local request
-# shares the single `ip:unknown` bucket (`src/middleware/rate-limit.ts`) — the
+# shares the single `ip:unknown` bucket (`src/middleware/rate-limit.ts`; or,
+# with `CLIENT_IP_FORWARD_SECRET` set, the loopback address the frontend
+# forwards, which is one bucket all the same) — the
 # production limits would put a developer filling in the entry form twice, or
 # an end-to-end run seeding a waitlist, straight into a 429. The real policy
 # is in `[env.staging]` / `[env.production]` below.
@@ -122,26 +150,46 @@ dead_letter_queue = "regional-quiz-bulk-mail-dev-dlq"
 #
 # The frontend calls the API at a same-origin `/api/*` (`$lib/api.ts`), and
 # nothing in `apps/frontend` proxies that in production — `vite.config.ts`'s
-# proxy is `vite dev` only. What routes it is the `routes` entry below: a
-# Workers route wins over the Pages project serving the same hostname, so
-# `/api/*` reaches Hono while every other path stays with Pages.
+# proxy is `vite dev` only. What routes it is a Workers route: such a route
+# wins over the Pages project serving the same hostname, so `/api/*` reaches
+# Hono while every other path stays with Pages.
 #
-# It is commented out because `regionalquiz.example` is a placeholder, and a
-# `zone_name` the Cloudflare account doesn't hold fails `wrangler deploy`
-# outright — that would break the pipeline rather than the routing. Uncomment
-# it with the real hostname once the domain exists, and leave it where it is:
-# `routes` belongs directly under `[env.staging]`, not below the
-# `[env.staging.vars]` header, where TOML would read it as a var named
-# `routes`. Tracked as #101; see `docs/supabase-deployment.md` §6.4.
+# There is deliberately no `routes` key here. Wrangler resolves a route's zone
+# against the Cloudflare account at deploy time, so a committed entry naming a
+# zone the account doesn't hold fails `wrangler deploy` outright — the whole
+# pipeline breaks, not just the routing. The hostname is therefore deployment
+# configuration rather than code: `.github/workflows/deploy.yml` passes
+# `--route "$FRONTEND_HOST/api/*"` when the environment's `FRONTEND_HOST`
+# GitHub variable is set, and deploys with no route when it isn't. Setting up
+# a real domain is then a settings change, with nothing to edit here. See
+# `docs/supabase-deployment.md` §6.4 and #101.
+#
+# If you nonetheless add a `routes` key by hand, put it directly under
+# `[env.staging]`: below the `[env.staging.vars]` header TOML reads it as a
+# var named `routes`, and the deploy then goes out with no route and no
+# warning (#100).
 [env.staging]
 name = "regional-quiz-backend-staging"
-# routes = [
-#   {pattern = "staging.entry.regionalquiz.example/api/*", zone_name = "regionalquiz.example"},
-# ]
 
+# The domain is `regional-quiz-project.app`: the site is served from
+# `staging.` on staging and from the apex on production, and mail is sent
+# from a `mail.` subdomain of its own (`staging.mail.` on staging) so the
+# sending reputation is kept apart from the site's.
+#
+# `FRONTEND_URL` is the less pressing of the two: `deploy.yml` overrides it
+# with `--var FRONTEND_URL:"https://$FRONTEND_HOST"` whenever the
+# environment's `FRONTEND_HOST` variable is set, so the value here is only
+# what a hand-run `wrangler deploy --env staging` would ship. It is deliberate
+# that the routed host and the host the mail links point at come from one
+# setting — see the comment on that step.
+#
+# `MAIL_FROM_ADDRESS` has no such override and must be edited here, because
+# the sending domain is whichever one is verified with the mail provider and
+# need not be the host the site is served from. Until it is a real, verified
+# domain, every send fails.
 [env.staging.vars]
-MAIL_FROM_ADDRESS = "entry@staging.entry.regionalquiz.example"
-FRONTEND_URL = "https://staging.entry.regionalquiz.example"
+MAIL_FROM_ADDRESS = "no-reply@staging.mail.regional-quiz-project.app"
+FRONTEND_URL = "https://staging.regional-quiz-project.app"
 
 # 10 login attempts a minute from one address. Enough for someone retyping a
 # password they half-remember, far too few to work through a
@@ -213,16 +261,16 @@ dead_letter_queue = "regional-quiz-bulk-mail-staging-dlq"
 # `name` is set back to the unsuffixed one: without it, `--env production`
 # would deploy a Worker called `regional-quiz-backend-production`.
 #
-# `routes` carries the same caveats as `env.staging`'s above.
+# Like staging, this block carries no `routes` key: the `/api/*` route is
+# passed at deploy time from the environment's `FRONTEND_HOST` variable. See
+# the comment on `[env.staging]` above for why.
 [env.production]
 name = "regional-quiz-backend"
-# routes = [
-#   {pattern = "entry.regionalquiz.example/api/*", zone_name = "regionalquiz.example"},
-# ]
 
+# Placeholders, and overridden, exactly as in `[env.staging.vars]` above.
 [env.production.vars]
-MAIL_FROM_ADDRESS = "entry@entry.regionalquiz.example"
-FRONTEND_URL = "https://entry.regionalquiz.example"
+MAIL_FROM_ADDRESS = "no-reply@mail.regional-quiz-project.app"
+FRONTEND_URL = "https://regional-quiz-project.app"
 
 # Same policy as staging, on its own namespaces — see the comments there.
 [[env.production.unsafe.bindings]]

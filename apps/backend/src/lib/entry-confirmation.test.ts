@@ -13,8 +13,8 @@ const DB_URL =
   process.env.SUPABASE_DB_URL ??
   'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
 const SUPABASE_URL = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
-const SUPABASE_SERVICE_ROLE_KEY =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ??
+const SUPABASE_SECRET_KEY =
+  process.env.SUPABASE_SECRET_KEY ??
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
 
 async function isDbReachable(): Promise<boolean> {
@@ -32,7 +32,7 @@ async function isDbReachable(): Promise<boolean> {
 const env: Bindings = {
   ...PERMISSIVE_PLATFORM_BINDINGS,
   SUPABASE_URL,
-  SUPABASE_SERVICE_ROLE_KEY,
+  SUPABASE_SECRET_KEY,
   MAIL_API_KEY: 'dummy-mail-api-key',
   GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
   MAIL_FROM_ADDRESS: 'entry@example.com',
@@ -115,7 +115,7 @@ describe.skipIf(!(await isDbReachable()))(
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       const [participant] = await sql`
         insert into participants (region_id, email, password_hash)
-        values (${regionId}, ${email}, ${await hashPassword('password123')})
+        values (${regionId}, ${email}, ${await hashPassword('quiz-entry-pass1')})
         returning id
       `;
       const [entry] = await sql`
@@ -162,12 +162,93 @@ describe.skipIf(!(await isDbReachable()))(
 
       const result = await confirmEntryByToken(env, token);
 
-      expect(result).toEqual({ok: true, status: 'confirmed'});
+      expect(result).toEqual({
+        ok: true,
+        status: 'confirmed',
+        // What the frontend needs to drop the list from its cache (#125).
+        tournament: {regionSlug: `${testRegionSlug}-confirm`, type: 'saikyoi'},
+      });
       const [entryRow] = await sql`
         select status, email_verified_at from entries where id = ${entryId}
       `;
       expect(entryRow.status).toBe('confirmed');
       expect(entryRow.email_verified_at).not.toBeNull();
+    });
+
+    // Following the link proves the address, and the link belongs to a
+    // submission made with the account's current password and region (#189).
+    it('marks the participant verified, keeping the first verification time', async () => {
+      const fixture = await createTournamentAndRegulation(
+        'verify-account',
+        null,
+      );
+      const entryId = await createEntryFixture(
+        fixture.regionId,
+        fixture.tournamentId,
+        fixture.regulationId,
+      );
+      const [{participant_id: participantId}] = await sql`
+        select participant_id from entries where id = ${entryId}
+      `;
+      const [before] = await sql`
+        select email_verified_at from participants where id = ${participantId}
+      `;
+      expect(before.email_verified_at).toBeNull();
+
+      expect(
+        await confirmEntryByToken(env, await createTokenFixture(entryId)),
+      ).toMatchObject({ok: true});
+
+      const [after] = await sql`
+        select email_verified_at from participants where id = ${participantId}
+      `;
+      expect(after.email_verified_at).not.toBeNull();
+
+      // A later confirmation of another entry leaves the original time alone.
+      const otherFixture = await createTournamentAndRegulation(
+        'verify-account-again',
+        null,
+      );
+      const [otherEntry] = await sql`
+        insert into entries (
+          participant_id, tournament_id, name, furigana, display_name
+        ) values (
+          ${participantId}, ${otherFixture.tournamentId}, '山田太郎',
+          'ヤマダタロウ', '太郎'
+        )
+        returning id
+      `;
+      expect(
+        await confirmEntryByToken(env, await createTokenFixture(otherEntry.id)),
+      ).toMatchObject({ok: true});
+      const [later] = await sql`
+        select email_verified_at from participants where id = ${participantId}
+      `;
+      expect(later.email_verified_at).toEqual(after.email_verified_at);
+    });
+
+    it('leaves the participant unverified when the token is refused', async () => {
+      const fixture = await createTournamentAndRegulation(
+        'verify-account-refused',
+        null,
+      );
+      const entryId = await createEntryFixture(
+        fixture.regionId,
+        fixture.tournamentId,
+        fixture.regulationId,
+      );
+      const token = await createTokenFixture(entryId, {
+        expiresAt: '2020-01-01T00:00:00Z',
+      });
+
+      expect(await confirmEntryByToken(env, token)).toMatchObject({ok: false});
+
+      const [participant] = await sql`
+        select p.email_verified_at from participants p
+        join entries e on e.participant_id = p.id
+        where e.id = ${entryId}
+      `;
+      expect(participant.email_verified_at).toBeNull();
     });
 
     it('waitlists an entry when capacity is full', async () => {
@@ -187,7 +268,14 @@ describe.skipIf(!(await isDbReachable()))(
 
       const result = await confirmEntryByToken(env, token);
 
-      expect(result).toEqual({ok: true, status: 'waitlisted'});
+      expect(result).toEqual({
+        ok: true,
+        status: 'waitlisted',
+        tournament: {
+          regionSlug: `${testRegionSlug}-capacity`,
+          type: 'saikyoi',
+        },
+      });
       const [entryRow] = await sql`
         select status, waitlist_position from entries where id = ${entryId}
       `;

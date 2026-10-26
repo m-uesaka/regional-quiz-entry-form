@@ -1,9 +1,39 @@
-import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from 'bun:test';
 import {SQL} from 'bun';
 import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
 import {app} from '../index';
+import {isPasswordHashUsable} from '../lib/password';
+import {staffPasswordMailSubject} from '../lib/staff-password-reset';
+import {
+  isStaffSessionCheck,
+  staffSessionAwareFetch,
+  staffSessionRow,
+  TEST_SESSIONS_VALID_FROM,
+  TEST_SESSIONS_VALID_FROM_MS,
+} from '../test-support/staff-session';
+
+// Every staff guard checks the session against
+// `staff_accounts.sessions_valid_from` before the handler runs; answer that
+// read for the tests that don't stub `fetch` themselves.
+const fetchWithoutSessionStub = globalThis.fetch;
+
+beforeEach(() => {
+  globalThis.fetch = staffSessionAwareFetch(fetchWithoutSessionStub);
+});
+
+afterEach(() => {
+  globalThis.fetch = fetchWithoutSessionStub;
+});
 
 // Local Supabase stack (`supabase start`), same convention as
 // `routes/regions.test.ts`. Skipped automatically when it isn't reachable,
@@ -15,8 +45,8 @@ const SUPABASE_URL = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
 // Publicly documented local-dev demo key for Supabase CLI's default stack
 // (fixed `super-secret-jwt-token-with-at-least-32-characters-long` JWT
 // secret) — not a real credential, safe to commit.
-const SUPABASE_SERVICE_ROLE_KEY =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ??
+const SUPABASE_SECRET_KEY =
+  process.env.SUPABASE_SECRET_KEY ??
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
 const SESSION_SECRET = 'test-session-secret';
 
@@ -35,7 +65,7 @@ async function isDbReachable(): Promise<boolean> {
 const BASE_ENV: Bindings = {
   ...PERMISSIVE_PLATFORM_BINDINGS,
   SUPABASE_URL,
-  SUPABASE_SERVICE_ROLE_KEY,
+  SUPABASE_SECRET_KEY,
   MAIL_API_KEY: 'dummy-mail-api-key',
   GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
   MAIL_FROM_ADDRESS: 'entry@example.com',
@@ -50,6 +80,7 @@ async function generalStaffCookie(): Promise<string> {
       role: 'general',
       regionId: null,
       tournamentType: null,
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     SESSION_SECRET,
@@ -64,6 +95,7 @@ async function regionalStaffCookie(): Promise<string> {
       role: 'regional',
       regionId: '00000000-0000-0000-0000-000000000000',
       tournamentType: 'saikyoi',
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     SESSION_SECRET,
@@ -113,6 +145,431 @@ describe('staff account routes (request validation)', () => {
   });
 });
 
+const GENERAL_STAFF_ID = '99999999-9999-9999-9999-999999999999';
+const TARGET_STAFF_ID = '77777777-7777-7777-7777-777777777777';
+
+/** A request the fake below received, other than the session check. */
+interface RecordedRequest {
+  method: string;
+  url: URL;
+  body: Record<string, unknown> | null;
+}
+
+/**
+ * A stand-in for the `staff_accounts` table as far as the revoke endpoint
+ * and the session check touch it: one `sessions_valid_from` per existing
+ * account, which the check reads and the endpoint's PATCH moves.
+ *
+ * Kept stateful rather than answering each call with a canned body, so that
+ * a test can follow a revocation through to the next request and see the
+ * session it cut refused.
+ * @param accounts The `sessions_valid_from` of every account that exists.
+ * @param failWrites Whether the PATCH should fail as a database error would.
+ */
+function fakeStaffAccounts(
+  accounts: Map<string, string>,
+  failWrites = false,
+): {requests: RecordedRequest[]} {
+  const requests: RecordedRequest[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    const id = url.searchParams.get('id')?.replace(/^eq\./, '') ?? '';
+    const current = accounts.get(id);
+    if (isStaffSessionCheck(url.toString())) {
+      return Response.json(
+        current === undefined ? [] : [staffSessionRow(current)],
+      );
+    }
+    const body =
+      typeof init?.body === 'string'
+        ? (JSON.parse(init.body) as Record<string, unknown>)
+        : null;
+    requests.push({method: init?.method ?? 'GET', url, body});
+    if (failWrites) {
+      return Response.json({message: 'connection refused'}, {status: 500});
+    }
+    if (current === undefined) {
+      return Response.json([]);
+    }
+    accounts.set(id, String(body?.sessions_valid_from));
+    return Response.json([{id}]);
+  }) as unknown as typeof fetch;
+  return {requests};
+}
+
+async function revokeSessions(
+  staffAccountId: string,
+  cookie: string,
+): Promise<Response> {
+  return app.request(
+    `/api/staff/accounts/${staffAccountId}/revoke-sessions`,
+    {method: 'POST', headers: {cookie, origin: BASE_ENV.FRONTEND_URL}},
+    BASE_ENV,
+  );
+}
+
+describe('POST /staff/accounts/:id/revoke-sessions (mocked Supabase)', () => {
+  it('POST /staff/accounts/:id/revoke-sessions moves sessions_valid_from', async () => {
+    const accounts = new Map([
+      [GENERAL_STAFF_ID, TEST_SESSIONS_VALID_FROM],
+      [TARGET_STAFF_ID, TEST_SESSIONS_VALID_FROM],
+    ]);
+    const {requests} = fakeStaffAccounts(accounts);
+    const startedAt = Date.now();
+
+    const res = await revokeSessions(
+      TARGET_STAFF_ID,
+      await generalStaffCookie(),
+    );
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as unknown).toEqual({ok: true});
+    expect(requests).toHaveLength(1);
+    expect(requests[0].method).toBe('PATCH');
+    expect(requests[0].url.pathname).toEndWith('/rest/v1/staff_accounts');
+    expect(requests[0].url.searchParams.get('id')).toBe(
+      `eq.${TARGET_STAFF_ID}`,
+    );
+    // Only the generation moves: the password (and everything else on the
+    // row) is left alone, so the owner can log straight back in.
+    expect(Object.keys(requests[0].body ?? {})).toEqual([
+      'sessions_valid_from',
+    ]);
+    const movedTo = Date.parse(accounts.get(TARGET_STAFF_ID) ?? '');
+    expect(movedTo).toBeGreaterThanOrEqual(startedAt);
+    expect(movedTo).not.toBe(TEST_SESSIONS_VALID_FROM_MS);
+    // Someone else's revocation leaves the caller's own sessions alone.
+    expect(accounts.get(GENERAL_STAFF_ID)).toBe(TEST_SESSIONS_VALID_FROM);
+  });
+
+  it('POST /staff/accounts/:id/revoke-sessions returns 403 for regional staff', async () => {
+    // The caller's own row is there too, so its session reads as current
+    // and the role is what refuses it.
+    const accounts = new Map([
+      [TARGET_STAFF_ID, TEST_SESSIONS_VALID_FROM],
+      ['88888888-8888-8888-8888-888888888888', TEST_SESSIONS_VALID_FROM],
+    ]);
+    const {requests} = fakeStaffAccounts(accounts);
+
+    const res = await revokeSessions(
+      TARGET_STAFF_ID,
+      await regionalStaffCookie(),
+    );
+
+    expect(res.status).toBe(403);
+    expect(requests).toHaveLength(0);
+    expect(accounts.get(TARGET_STAFF_ID)).toBe(TEST_SESSIONS_VALID_FROM);
+  });
+
+  it('returns 401 without a staff session', async () => {
+    const {requests} = fakeStaffAccounts(new Map());
+
+    const res = await app.request(
+      `/api/staff/accounts/${TARGET_STAFF_ID}/revoke-sessions`,
+      {method: 'POST', headers: {origin: BASE_ENV.FRONTEND_URL}},
+      BASE_ENV,
+    );
+
+    expect(res.status).toBe(401);
+    expect(requests).toHaveLength(0);
+  });
+
+  it('a staff member may revoke their own sessions', async () => {
+    // The lost-laptop case: the staff member cuts the session on the device
+    // they no longer have from the one they still do -- which, being a
+    // session of the same account, is cut along with it.
+    const accounts = new Map([[GENERAL_STAFF_ID, TEST_SESSIONS_VALID_FROM]]);
+    fakeStaffAccounts(accounts);
+    const cookie = await generalStaffCookie();
+
+    const res = await revokeSessions(GENERAL_STAFF_ID, cookie);
+
+    expect(res.status).toBe(200);
+    expect(accounts.get(GENERAL_STAFF_ID)).not.toBe(TEST_SESSIONS_VALID_FROM);
+
+    // The request that did it was let through; the next one is not.
+    const next = await app.request(
+      '/api/staff/accounts',
+      {headers: {cookie}},
+      BASE_ENV,
+    );
+    expect(next.status).toBe(401);
+  });
+
+  it('returns 404 for an account that does not exist', async () => {
+    fakeStaffAccounts(new Map([[GENERAL_STAFF_ID, TEST_SESSIONS_VALID_FROM]]));
+
+    const res = await revokeSessions(
+      TARGET_STAFF_ID,
+      await generalStaffCookie(),
+    );
+
+    expect(res.status).toBe(404);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'staff account not found',
+    });
+  });
+
+  it('returns 400 for an id that is not a UUID', async () => {
+    const {requests} = fakeStaffAccounts(
+      new Map([[GENERAL_STAFF_ID, TEST_SESSIONS_VALID_FROM]]),
+    );
+
+    const res = await revokeSessions('not-a-uuid', await generalStaffCookie());
+
+    expect(res.status).toBe(400);
+    expect(requests).toHaveLength(0);
+  });
+
+  it('returns 500 when the update fails', async () => {
+    const originalConsoleError = console.error;
+    console.error = () => {};
+    fakeStaffAccounts(
+      new Map([
+        [GENERAL_STAFF_ID, TEST_SESSIONS_VALID_FROM],
+        [TARGET_STAFF_ID, TEST_SESSIONS_VALID_FROM],
+      ]),
+      true,
+    );
+
+    try {
+      const res = await revokeSessions(
+        TARGET_STAFF_ID,
+        await generalStaffCookie(),
+      );
+
+      expect(res.status).toBe(500);
+      expect((await res.json()) as unknown).toEqual({
+        error: 'internal server error',
+      });
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+});
+
+/**
+ * Answers the session check for the caller's own (enabled) account, and the
+ * endpoint's RPC (`disable_staff_account()` / `enable_staff_account()`) with
+ * `rpc`.
+ * @param rpc What the RPC answers: nothing for success, or the error
+ *     PostgREST would send back.
+ */
+function fakeDisableRpc(
+  rpc: {status: number; body?: Record<string, unknown>} = {status: 204},
+): {requests: RecordedRequest[]} {
+  const requests: RecordedRequest[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (isStaffSessionCheck(url.toString())) {
+      return Response.json([staffSessionRow(TEST_SESSIONS_VALID_FROM)]);
+    }
+    requests.push({
+      method: init?.method ?? 'GET',
+      url,
+      body:
+        typeof init?.body === 'string'
+          ? (JSON.parse(init.body) as Record<string, unknown>)
+          : null,
+    });
+    return rpc.body === undefined
+      ? new Response(null, {status: rpc.status})
+      : Response.json(rpc.body, {status: rpc.status});
+  }) as unknown as typeof fetch;
+  return {requests};
+}
+
+async function disableAccount(
+  staffAccountId: string,
+  cookie: string,
+): Promise<Response> {
+  return app.request(
+    `/api/staff/accounts/${staffAccountId}/disable`,
+    {method: 'POST', headers: {cookie, origin: BASE_ENV.FRONTEND_URL}},
+    BASE_ENV,
+  );
+}
+
+describe('POST /staff/accounts/:id/disable (mocked Supabase)', () => {
+  it('hands the account to disable_staff_account()', async () => {
+    const {requests} = fakeDisableRpc();
+
+    const res = await disableAccount(
+      TARGET_STAFF_ID,
+      await generalStaffCookie(),
+    );
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as unknown).toEqual({ok: true});
+    expect(requests).toHaveLength(1);
+    expect(requests[0].method).toBe('POST');
+    expect(requests[0].url.pathname).toEndWith(
+      '/rest/v1/rpc/disable_staff_account',
+    );
+    expect(requests[0].body).toEqual({p_staff_account_id: TARGET_STAFF_ID});
+  });
+
+  // A general staff member who locked themselves out could only be let back
+  // in by another one -- and by no one, if they were the last.
+  it("refuses to disable the caller's own account", async () => {
+    const {requests} = fakeDisableRpc();
+
+    const res = await disableAccount(
+      GENERAL_STAFF_ID,
+      await generalStaffCookie(),
+    );
+
+    expect(res.status).toBe(409);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'cannot disable your own account',
+    });
+    expect(requests).toHaveLength(0);
+  });
+
+  // The param schema accepts either case, the claim is lowercase.
+  it("refuses the caller's own account spelled in upper case", async () => {
+    const {requests} = fakeDisableRpc();
+    const ownId = 'abcdef00-0000-4000-8000-0000000000ab';
+    const token = await sign(
+      {
+        sub: ownId,
+        role: 'general',
+        regionId: null,
+        tournamentType: null,
+        sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      },
+      SESSION_SECRET,
+    );
+
+    const res = await disableAccount(
+      ownId.toUpperCase(),
+      `staff_session=${token}`,
+    );
+
+    expect(res.status).toBe(409);
+    expect(requests).toHaveLength(0);
+  });
+
+  it('answers 409 when no general staff account would be left', async () => {
+    fakeDisableRpc({
+      status: 400,
+      body: {code: 'P0004', message: 'cannot disable the last general'},
+    });
+
+    const res = await disableAccount(
+      TARGET_STAFF_ID,
+      await generalStaffCookie(),
+    );
+
+    expect(res.status).toBe(409);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'cannot disable the last general staff account',
+    });
+  });
+
+  it('answers 404 for an account that does not exist', async () => {
+    fakeDisableRpc({
+      status: 400,
+      body: {code: 'P0002', message: 'staff account not found'},
+    });
+
+    const res = await disableAccount(
+      TARGET_STAFF_ID,
+      await generalStaffCookie(),
+    );
+
+    expect(res.status).toBe(404);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'staff account not found',
+    });
+  });
+
+  it('returns 403 for regional staff', async () => {
+    const {requests} = fakeDisableRpc();
+
+    const res = await disableAccount(
+      TARGET_STAFF_ID,
+      await regionalStaffCookie(),
+    );
+
+    expect(res.status).toBe(403);
+    expect(requests).toHaveLength(0);
+  });
+
+  it('returns 500 when the call fails', async () => {
+    const originalConsoleError = console.error;
+    console.error = () => {};
+    fakeDisableRpc({status: 500, body: {message: 'connection refused'}});
+
+    try {
+      const res = await disableAccount(
+        TARGET_STAFF_ID,
+        await generalStaffCookie(),
+      );
+
+      expect(res.status).toBe(500);
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+});
+
+describe('POST /staff/accounts/:id/enable (mocked Supabase)', () => {
+  async function enableAccount(staffAccountId: string): Promise<Response> {
+    return app.request(
+      `/api/staff/accounts/${staffAccountId}/enable`,
+      {
+        method: 'POST',
+        headers: {
+          cookie: await generalStaffCookie(),
+          origin: BASE_ENV.FRONTEND_URL,
+        },
+      },
+      BASE_ENV,
+    );
+  }
+
+  // The update and the dropping of the account's links happen together in
+  // `enable_staff_account()`, so neither can happen without the other.
+  it('hands the account to enable_staff_account()', async () => {
+    const {requests} = fakeDisableRpc();
+
+    const res = await enableAccount(TARGET_STAFF_ID);
+
+    expect(res.status).toBe(200);
+    expect(requests).toHaveLength(1);
+    expect(requests[0].method).toBe('POST');
+    expect(requests[0].url.pathname).toEndWith(
+      '/rest/v1/rpc/enable_staff_account',
+    );
+    expect(requests[0].body).toEqual({p_staff_account_id: TARGET_STAFF_ID});
+  });
+
+  it('returns 404 for an account that does not exist', async () => {
+    fakeDisableRpc({
+      status: 400,
+      body: {code: 'P0002', message: 'staff account not found'},
+    });
+
+    const res = await enableAccount(TARGET_STAFF_ID);
+
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 500 when the call fails', async () => {
+    const originalConsoleError = console.error;
+    console.error = () => {};
+    fakeDisableRpc({status: 500, body: {message: 'connection refused'}});
+
+    try {
+      expect((await enableAccount(TARGET_STAFF_ID)).status).toBe(500);
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+});
+
 describe.skipIf(!(await isDbReachable()))(
   'staff account routes (local Supabase integration)',
   () => {
@@ -142,6 +599,10 @@ describe.skipIf(!(await isDbReachable()))(
 
     async function deleteTestRows(): Promise<void> {
       await sql`delete from staff_accounts where email like ${emailPrefix + '%'}`;
+      await sql`
+        delete from tournaments
+        where region_id in (select id from regions where slug = ${regionSlug})
+      `;
       await sql`delete from regions where slug = ${regionSlug}`;
     }
 
@@ -171,6 +632,16 @@ describe.skipIf(!(await isDbReachable()))(
         returning id
       `;
       regionId = region.id;
+      // The region's 新人王 only, so the 最強位 accounts below show the name
+      // a tournament not created yet would get by default.
+      await sql`
+        insert into tournaments (
+          region_id, type, name, entry_opens_at, entry_closes_at
+        ) values (
+          ${regionId}, 'shinjinou', 'スタッフ管理テスト新人王決定戦',
+          '2020-01-01T00:00:00Z', '2099-01-01T00:00:00Z'
+        )
+      `;
     });
 
     afterAll(async () => {
@@ -205,7 +676,7 @@ describe.skipIf(!(await isDbReachable()))(
       sentMail = [];
       const res = await app.request(
         `/api/staff/accounts/${staffAccountId}/password-reset`,
-        {method: 'POST', headers: {cookie}},
+        {method: 'POST', headers: {cookie, origin: env.FRONTEND_URL}},
         env,
       );
       expect(res.status).toBe(200);
@@ -276,6 +747,50 @@ describe.skipIf(!(await isDbReachable()))(
       expect(sentMail[0].html).toContain(
         `${env.FRONTEND_URL}/staff/password-reset?token=`,
       );
+      // No 最強位 tournament exists in the region yet, so the account is
+      // named by the default the tournament would get.
+      expect(sentMail[0].subject).toBe(
+        staffPasswordMailSubject(
+          '「スタッフ管理テスト地域最強位」のスタッフアカウント',
+        ),
+      );
+      expect(sentMail[0].html).toContain(
+        'このメールアドレスの「スタッフ管理テスト地域最強位」のスタッフアカウントについて',
+      );
+    });
+
+    // #170: one address may hold both types' accounts (#166), so each mail
+    // has to say which one it sets the password for.
+    it("names a regional account's setup mail after its tournament", async () => {
+      sentMail = [];
+
+      const res = await createAccount({
+        ...regionalAccountBody('regional-shinjinou'),
+        tournamentType: 'shinjinou',
+      });
+
+      expect(res.status).toBe(201);
+      expect(sentMail).toHaveLength(1);
+      expect(sentMail[0].subject).toBe(
+        staffPasswordMailSubject(
+          '「スタッフ管理テスト新人王決定戦」のスタッフアカウント',
+        ),
+      );
+    });
+
+    it("names a general account's setup mail as such", async () => {
+      sentMail = [];
+
+      const res = await createAccount(generalAccountBody('general-mail'));
+
+      expect(res.status).toBe(201);
+      expect(sentMail).toHaveLength(1);
+      expect(sentMail[0].subject).toBe(
+        staffPasswordMailSubject('統括スタッフアカウント'),
+      );
+      expect(sentMail[0].html).toContain(
+        'このメールアドレスの統括スタッフアカウントについて',
+      );
     });
 
     it('never puts the initial password or its hash in the response', async () => {
@@ -309,16 +824,20 @@ describe.skipIf(!(await isDbReachable()))(
       const [row] = await sql`
         select password_hash from staff_accounts where email = ${email}
       `;
-      // Not a `salt:hash` pair of hex halves, so `verifyPassword()` refuses
+      // Not a hash in either format `verifyPassword()` reads, so it refuses
       // every password submitted against it.
-      expect(row.password_hash).not.toContain(':');
+      expect(isPasswordHashUsable(row.password_hash)).toBe(false);
 
       const res = await app.request(
         '/api/auth/staff/login',
         {
           method: 'POST',
           headers: {'content-type': 'application/json'},
-          body: JSON.stringify({email, password: row.password_hash}),
+          body: JSON.stringify({
+            email,
+            scope: 'general',
+            password: row.password_hash,
+          }),
         },
         env,
       );
@@ -387,7 +906,11 @@ describe.skipIf(!(await isDbReachable()))(
         {
           method: 'POST',
           headers: {'content-type': 'application/json'},
-          body: JSON.stringify({email, password: 'new-staff-password'}),
+          body: JSON.stringify({
+            email,
+            scope: 'general',
+            password: 'new-staff-password',
+          }),
         },
         env,
       );
@@ -425,13 +948,422 @@ describe.skipIf(!(await isDbReachable()))(
 
       const res = await app.request(
         '/api/staff/accounts/33333333-3333-3333-3333-333333333333/password-reset',
-        {method: 'POST', headers: {cookie}},
+        {method: 'POST', headers: {cookie, origin: env.FRONTEND_URL}},
         env,
       );
       const body = (await res.json()) as Record<string, unknown>;
 
       expect(res.status).toBe(404);
       expect(body.error).toBe('staff account not found');
+    });
+
+    /**
+     * A cookie for the account `email` names, issued for the generation its
+     * row carries right now -- i.e. what logging in as it would hand back.
+     */
+    async function realSessionCookie(email: string): Promise<string> {
+      const [account] = await sql`
+        select id, sessions_valid_from from staff_accounts where email = ${email}
+      `;
+      const token = await sign(
+        {
+          sub: account.id,
+          role: 'general',
+          regionId: null,
+          tournamentType: null,
+          sessionsValidFrom: new Date(account.sessions_valid_from).getTime(),
+          exp: Math.floor(Date.now() / 1000) + 3600,
+        },
+        SESSION_SECRET,
+      );
+      return `staff_session=${token}`;
+    }
+
+    it('POST /staff/accounts/:id/revoke-sessions moves sessions_valid_from', async () => {
+      const email = `${emailPrefix}-revoke@example.com`;
+      const created = (await (
+        await createAccount({role: 'general', email})
+      ).json()) as {id: string};
+      const [before] = await sql`
+        select sessions_valid_from from staff_accounts where id = ${created.id}
+      `;
+
+      const res = await app.request(
+        `/api/staff/accounts/${created.id}/revoke-sessions`,
+        {
+          method: 'POST',
+          headers: {
+            cookie: await generalStaffCookie(),
+            origin: env.FRONTEND_URL,
+          },
+        },
+        env,
+      );
+
+      expect(res.status).toBe(200);
+      const [after] = await sql`
+        select sessions_valid_from from staff_accounts where id = ${created.id}
+      `;
+      expect(new Date(after.sessions_valid_from).getTime()).not.toBe(
+        new Date(before.sessions_valid_from).getTime(),
+      );
+    });
+
+    it('a staff member may revoke their own sessions', async () => {
+      const email = `${emailPrefix}-revoke-own@example.com`;
+      const created = (await (
+        await createAccount({role: 'general', email})
+      ).json()) as {id: string};
+      // From here on, against the real session check rather than the stub
+      // the rest of this file uses, so the column this endpoint writes is
+      // seen to be the one the guards read.
+      globalThis.fetch = fetchWithoutSessionStub;
+      const cookie = await realSessionCookie(email);
+      const list = () =>
+        app.request('/api/staff/accounts', {headers: {cookie}}, env);
+      expect((await list()).status).toBe(200);
+
+      const res = await app.request(
+        `/api/staff/accounts/${created.id}/revoke-sessions`,
+        {method: 'POST', headers: {cookie, origin: env.FRONTEND_URL}},
+        env,
+      );
+
+      expect(res.status).toBe(200);
+      expect((await list()).status).toBe(401);
+    });
+
+    it('a password reset ends the sessions issued before it', async () => {
+      const email = `${emailPrefix}-reset-revokes@example.com`;
+      const created = (await (
+        await createAccount({role: 'general', email})
+      ).json()) as {id: string};
+      const token = await reissueLink(created.id, await generalStaffCookie());
+      expect((await confirmReset(token, 'first-password')).status).toBe(200);
+      globalThis.fetch = fetchWithoutSessionStub;
+      const cookie = await realSessionCookie(email);
+      const list = () =>
+        app.request('/api/staff/accounts', {headers: {cookie}}, env);
+      expect((await list()).status).toBe(200);
+
+      // A second reset, as after a suspected leak. `reset_staff_password()`
+      // moves `sessions_valid_from` with the password (`0020`).
+      globalThis.fetch = staffSessionAwareFetch(fetchWithoutSessionStub);
+      const second = await reissueLink(created.id, await generalStaffCookie());
+      expect((await confirmReset(second, 'second-password')).status).toBe(200);
+      globalThis.fetch = fetchWithoutSessionStub;
+
+      expect((await list()).status).toBe(401);
+    });
+
+    it('returns 404 when revoking the sessions of an account that does not exist', async () => {
+      const res = await app.request(
+        '/api/staff/accounts/33333333-3333-3333-3333-333333333333/revoke-sessions',
+        {
+          method: 'POST',
+          headers: {
+            cookie: await generalStaffCookie(),
+            origin: env.FRONTEND_URL,
+          },
+        },
+        env,
+      );
+
+      expect(res.status).toBe(404);
+    });
+
+    /** Logs in as `email`'s `scope` account with `password`. */
+    async function staffLogin(
+      email: string,
+      scope: string,
+      password: string,
+    ): Promise<Response> {
+      return app.request(
+        '/api/auth/staff/login',
+        {
+          method: 'POST',
+          headers: {'content-type': 'application/json'},
+          body: JSON.stringify({email, scope, password}),
+        },
+        env,
+      );
+    }
+
+    /** Creates an account and sets its password through the mailed link. */
+    async function createWithPassword(
+      body: Record<string, unknown>,
+      password: string,
+    ): Promise<string> {
+      const res = await createAccount(body);
+      expect(res.status).toBe(201);
+      const {id} = (await res.json()) as {id: string};
+      const token = await reissueLink(id, await generalStaffCookie());
+      expect((await confirmReset(token, password)).status).toBe(200);
+      return id;
+    }
+
+    // #166: a region's 最強位 and 新人王 run from one mailbox.
+    it('keeps a 最強位 and a 新人王 account apart under one address', async () => {
+      const email = `${emailPrefix}-both-types@example.com`;
+      const saikyoiId = await createWithPassword(
+        {role: 'regional', email, regionId, tournamentType: 'saikyoi'},
+        'saikyoi-password',
+      );
+      const shinjinouId = await createWithPassword(
+        {role: 'regional', email, regionId, tournamentType: 'shinjinou'},
+        'shinjinou-password',
+      );
+      expect(shinjinouId).not.toBe(saikyoiId);
+
+      const saikyoi = await staffLogin(email, 'saikyoi', 'saikyoi-password');
+      expect(saikyoi.status).toBe(200);
+      expect(
+        ((await saikyoi.json()) as {tournamentType: string}).tournamentType,
+      ).toBe('saikyoi');
+      const shinjinou = await staffLogin(
+        email,
+        'shinjinou',
+        'shinjinou-password',
+      );
+      expect(shinjinou.status).toBe(200);
+      expect(
+        ((await shinjinou.json()) as {tournamentType: string}).tournamentType,
+      ).toBe('shinjinou');
+
+      // Each password opens its own account only.
+      expect(
+        (await staffLogin(email, 'shinjinou', 'saikyoi-password')).status,
+      ).toBe(401);
+      expect(
+        (await staffLogin(email, 'general', 'saikyoi-password')).status,
+      ).toBe(401);
+
+      // A third account of a type the address already has is still refused.
+      const dup = await createAccount({
+        role: 'regional',
+        email,
+        regionId,
+        tournamentType: 'saikyoi',
+      });
+      expect(dup.status).toBe(409);
+    });
+
+    // #133: one mailbox, one account, whichever way the address is typed.
+    it('treats an address case-insensitively', async () => {
+      const lower = `${emailPrefix}-mixed-case@example.com`;
+      const typed = lower
+        .replace('mixed', 'Mixed')
+        .replace('example', 'Example');
+      await createWithPassword({role: 'general', email: typed}, 'mixed-pass');
+
+      const [row] = await sql`
+        select email from staff_accounts where email = ${lower}
+      `;
+      expect(row?.email).toBe(lower);
+      expect(
+        (await staffLogin(typed.toUpperCase(), 'general', 'mixed-pass')).status,
+      ).toBe(200);
+      expect(
+        (await createAccount({role: 'general', email: lower})).status,
+      ).toBe(409);
+    });
+
+    // #156: unlike revoking sessions, disabling shuts out someone who knows
+    // the password too, until the account is enabled again.
+    it('disables an account until it is enabled again', async () => {
+      const email = `${emailPrefix}-disable@example.com`;
+      const id = await createWithPassword(
+        {role: 'regional', email, regionId, tournamentType: 'saikyoi'},
+        'disable-password',
+      );
+      const outstanding = await reissueLink(id, await generalStaffCookie());
+      const login = await staffLogin(email, 'saikyoi', 'disable-password');
+      expect(login.status).toBe(200);
+      const [{sessions_valid_from: before}] = await sql`
+        select sessions_valid_from from staff_accounts where id = ${id}
+      `;
+
+      const res = await app.request(
+        `/api/staff/accounts/${id}/disable`,
+        {
+          method: 'POST',
+          headers: {
+            cookie: await generalStaffCookie(),
+            origin: env.FRONTEND_URL,
+          },
+        },
+        env,
+      );
+      expect(res.status).toBe(200);
+
+      const [after] = await sql`
+        select disabled_at, sessions_valid_from from staff_accounts
+        where id = ${id}
+      `;
+      expect(after.disabled_at).not.toBeNull();
+      // Every session it had open ends along with it.
+      expect(new Date(after.sessions_valid_from).getTime()).not.toBe(
+        new Date(before).getTime(),
+      );
+      // The right password no longer opens it, ...
+      expect(
+        (await staffLogin(email, 'saikyoi', 'disable-password')).status,
+      ).toBe(401);
+      // ... the link it had outstanding is gone, ...
+      expect((await confirmReset(outstanding, 'taken-over')).status).toBe(400);
+      // ... and no new one can be sent.
+      const reset = await app.request(
+        `/api/staff/accounts/${id}/password-reset`,
+        {
+          method: 'POST',
+          headers: {
+            cookie: await generalStaffCookie(),
+            origin: env.FRONTEND_URL,
+          },
+        },
+        env,
+      );
+      expect(reset.status).toBe(409);
+
+      const list = (await (
+        await app.request(
+          '/api/staff/accounts',
+          {headers: {cookie: await generalStaffCookie()}},
+          env,
+        )
+      ).json()) as Array<{id: string; disabledAt: string | null}>;
+      expect(
+        list.find(account => account.id === id)?.disabledAt,
+      ).not.toBeNull();
+
+      const enable = await app.request(
+        `/api/staff/accounts/${id}/enable`,
+        {
+          method: 'POST',
+          headers: {
+            cookie: await generalStaffCookie(),
+            origin: env.FRONTEND_URL,
+          },
+        },
+        env,
+      );
+      expect(enable.status).toBe(200);
+      // The password it had before still works.
+      expect(
+        (await staffLogin(email, 'saikyoi', 'disable-password')).status,
+      ).toBe(200);
+    });
+
+    it("refuses a disabled account's session", async () => {
+      const email = `${emailPrefix}-disable-session@example.com`;
+      const created = (await (
+        await createAccount({role: 'general', email})
+      ).json()) as {id: string};
+      globalThis.fetch = fetchWithoutSessionStub;
+      const cookie = await realSessionCookie(email);
+      const list = () =>
+        app.request('/api/staff/accounts', {headers: {cookie}}, env);
+      expect((await list()).status).toBe(200);
+
+      // Disabled without moving `sessions_valid_from`, as a row edited by
+      // hand might be: the guards must still refuse it.
+      await sql`
+        update staff_accounts set disabled_at = now() where id = ${created.id}
+      `;
+
+      expect((await list()).status).toBe(401);
+    });
+
+    // PR #167 review: a 有効化 pressed on a stale screen must not throw away
+    // a link another general staff member has just sent.
+    it('leaves the links of an account that is already enabled alone', async () => {
+      const email = `${emailPrefix}-enable-enabled@example.com`;
+      const created = (await (
+        await createAccount({role: 'general', email})
+      ).json()) as {id: string};
+      const token = await reissueLink(created.id, await generalStaffCookie());
+
+      const res = await app.request(
+        `/api/staff/accounts/${created.id}/enable`,
+        {
+          method: 'POST',
+          headers: {
+            cookie: await generalStaffCookie(),
+            origin: env.FRONTEND_URL,
+          },
+        },
+        env,
+      );
+
+      expect(res.status).toBe(200);
+      expect((await confirmReset(token, 'still-valid-link')).status).toBe(200);
+    });
+
+    // The refusal comes from `issue_staff_password_link()` under the
+    // account's lock, so it holds however the disable and the re-send race.
+    it('writes no link for a disabled account', async () => {
+      const created = (await (
+        await createAccount(regionalAccountBody('link-disabled'))
+      ).json()) as {id: string};
+      await sql`select disable_staff_account(${created.id})`;
+
+      let errno: unknown;
+      try {
+        await sql`select issue_staff_password_link(
+          ${created.id}, 'race-token-hash', now() + interval '1 day'
+        )`;
+      } catch (e) {
+        errno = (e as {errno?: unknown}).errno;
+      }
+
+      expect(errno).toBe('P0005');
+      const tokens = await sql`
+        select 1 from staff_password_reset_tokens
+        where staff_account_id = ${created.id}
+      `;
+      expect(tokens).toHaveLength(0);
+    });
+
+    // Locking the target first and the other generals after would deadlock
+    // two general staff disabling each other at once; locking every general
+    // in id order queues them instead, and the second one is judged on what
+    // the first left behind.
+    it('serialises two general staff disabling each other', async () => {
+      const ids: string[] = [];
+      for (const suffix of ['mutual-a', 'mutual-b']) {
+        const res = await createAccount(generalAccountBody(suffix));
+        ids.push(((await res.json()) as {id: string}).id);
+      }
+      const first = new SQL(DB_URL);
+      const second = new SQL(DB_URL);
+      try {
+        const results = await Promise.allSettled([
+          first.begin(async tx => {
+            await tx`select disable_staff_account(${ids[1]})`;
+            await tx`select pg_sleep(0.2)`;
+          }),
+          second.begin(async tx => {
+            await tx`select pg_sleep(0.05)`;
+            await tx`select disable_staff_account(${ids[0]})`;
+          }),
+        ]);
+
+        for (const result of results) {
+          if (result.status === 'rejected') {
+            // Only the "last general" refusal is acceptable, never 40P01.
+            expect(result.reason).toMatchObject({errno: 'P0004'});
+          }
+        }
+        expect(results.some(r => r.status === 'fulfilled')).toBe(true);
+        const [{count}] = await sql`
+          select count(*)::int as count from staff_accounts
+          where role = 'general' and disabled_at is null
+        `;
+        expect(count).toBeGreaterThanOrEqual(1);
+      } finally {
+        await first.close();
+        await second.close();
+      }
     });
   },
 );

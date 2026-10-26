@@ -1,16 +1,28 @@
 import {afterEach, describe, expect, it} from 'bun:test';
 import {staffAuthRoute} from './staff-auth';
-import {hashPassword, UNUSABLE_PASSWORD_HASH} from '../lib/password';
+import {
+  hashPassword,
+  UNUSABLE_PASSWORD_HASH,
+  verifyPassword,
+} from '../lib/password';
 import type {Bindings} from '../types/env';
 import {
   PERMISSIVE_PLATFORM_BINDINGS,
   refusingRateLimiter,
+  TURNSTILE_TEST_TOKEN,
+  turnstileAwareFetch,
 } from '../test-support/bindings';
+import {TURNSTILE_TOKEN_HEADER} from '../middleware/turnstile';
+import {
+  collectingExecutionContext,
+  legacyHashPassword,
+  mockAccountFetchWithRehash,
+} from '../test-support/password';
 
 const ENV: Bindings = {
   ...PERMISSIVE_PLATFORM_BINDINGS,
   SUPABASE_URL: 'https://example.supabase.co',
-  SUPABASE_SERVICE_ROLE_KEY: 'dummy-service-role-key',
+  SUPABASE_SECRET_KEY: 'dummy-service-role-key',
   MAIL_API_KEY: 'dummy-mail-api-key',
   GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
   MAIL_FROM_ADDRESS: 'entry@example.com',
@@ -21,6 +33,10 @@ const ENV: Bindings = {
 const STAFF_ID = '33333333-3333-3333-3333-333333333333';
 const REGION_ID = '11111111-1111-1111-1111-111111111111';
 const REGION_SLUG = 'tokyo';
+// What the account's `sessions_valid_from` reads as. PostgREST spells
+// `timestamptz` with an offset, and the claim has to come out as the same
+// instant regardless.
+const SESSIONS_VALID_FROM = '2026-08-25T01:23:45.678+00:00';
 
 function decodeJwtPayload(token: string): Record<string, unknown> {
   const payloadSegment = token.split('.')[1];
@@ -36,32 +52,42 @@ function regionalStaffRow(passwordHash: string): Record<string, unknown> {
     role: 'regional',
     region_id: REGION_ID,
     tournament_type: 'saikyoi',
+    sessions_valid_from: SESSIONS_VALID_FROM,
     regions: {slug: REGION_SLUG},
   };
 }
 
-function mockStaffAccountFetch(row: Record<string, unknown> | null): void {
-  globalThis.fetch = (() =>
-    Promise.resolve(
-      Response.json(row ? [row] : []),
-    )) as unknown as typeof fetch;
+/**
+ * Answers every read with `row`, and records the URLs the login asked for
+ * so a test can check which row it was looking for.
+ * @param row The account the lookup finds, or `null` for none.
+ */
+function mockStaffAccountFetch(row: Record<string, unknown> | null): URL[] {
+  const urls: URL[] = [];
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    urls.push(new URL(input instanceof Request ? input.url : String(input)));
+    return Promise.resolve(Response.json(row ? [row] : []));
+  }) as unknown as typeof fetch;
+  return urls;
 }
 
 /**
  * Posts a login request for the mocked account.
  * @param password The password to submit.
  * @param email The address to submit.
+ * @param scope Which of the address's accounts to log in to.
  */
 async function login(
   password: string,
   email = 'staff@example.com',
+  scope = 'saikyoi',
 ): Promise<Response> {
   return staffAuthRoute.request(
     '/login',
     {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({email, password}),
+      body: JSON.stringify({email, scope, password}),
     },
     ENV,
   );
@@ -96,6 +122,23 @@ describe('POST /login', () => {
     });
   });
 
+  it("embeds the account's sessions_valid_from as sessionsValidFrom", async () => {
+    // What the staff guards compare against the column on every request: a
+    // session issued without it, or with a different instant, would be
+    // refused as revoked from its very first request.
+    mockStaffAccountFetch(
+      regionalStaffRow(await hashPassword('correct-password')),
+    );
+
+    const res = await login('correct-password');
+
+    const setCookieHeader = res.headers.get('set-cookie') ?? '';
+    const token = setCookieHeader.split('staff_session=')[1].split(';')[0];
+    expect(decodeJwtPayload(token).sessionsValidFrom).toBe(
+      Date.parse('2026-08-25T01:23:45.678Z'),
+    );
+  });
+
   it("answers regional staff with their own tournament's region slug", async () => {
     mockStaffAccountFetch(
       regionalStaffRow(await hashPassword('correct-password')),
@@ -119,10 +162,11 @@ describe('POST /login', () => {
       role: 'general',
       region_id: null,
       tournament_type: null,
+      sessions_valid_from: SESSIONS_VALID_FROM,
       regions: null,
     });
 
-    const res = await login('correct-password');
+    const res = await login('correct-password', 'staff@example.com', 'general');
 
     expect(res.status).toBe(200);
     expect((await res.json()) as Record<string, unknown>).toEqual({
@@ -131,6 +175,66 @@ describe('POST /login', () => {
       regionSlug: null,
       tournamentType: null,
     });
+  });
+
+  // #166: one address may hold a 最強位 and a 新人王 account, so the
+  // lookup has to be narrowed by the type the login names.
+  it('looks the account up by address and tournament type', async () => {
+    const urls = mockStaffAccountFetch(
+      regionalStaffRow(await hashPassword('correct-password')),
+    );
+
+    await login('correct-password', 'staff@example.com', 'shinjinou');
+
+    expect(urls).toHaveLength(1);
+    expect(urls[0].searchParams.get('email')).toBe('eq.staff@example.com');
+    expect(urls[0].searchParams.get('tournament_type')).toBe('eq.shinjinou');
+  });
+
+  // General staff carry no tournament type, so `general` has to match the
+  // null one rather than a type named `general`.
+  it('looks a general account up by its null tournament type', async () => {
+    const urls = mockStaffAccountFetch(null);
+
+    await login('anything', 'staff@example.com', 'general');
+
+    expect(urls[0].searchParams.get('tournament_type')).toBe('is.null');
+  });
+
+  // #156: a disabled account is not looked for at all, so it is refused the
+  // same way as an address that was never registered.
+  it('only looks for an account that is not disabled', async () => {
+    const urls = mockStaffAccountFetch(null);
+
+    await login('anything');
+
+    expect(urls[0].searchParams.get('disabled_at')).toBe('is.null');
+  });
+
+  // #133: the account was stored lowercased, so the lookup must be too.
+  it('lowercases the address before looking it up', async () => {
+    const urls = mockStaffAccountFetch(null);
+
+    await login('anything', 'Staff@Example.COM');
+
+    expect(urls[0].searchParams.get('email')).toBe('eq.staff@example.com');
+  });
+
+  it('returns 400 without a scope', async () => {
+    const urls = mockStaffAccountFetch(null);
+
+    const res = await staffAuthRoute.request(
+      '/login',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({email: 'staff@example.com', password: 'x'}),
+      },
+      ENV,
+    );
+
+    expect(res.status).toBe(400);
+    expect(urls).toHaveLength(0);
   });
 
   it('returns 401 for a wrong password', async () => {
@@ -161,6 +265,7 @@ describe('POST /login', () => {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
           email: 'staff@example.com',
+          scope: 'saikyoi',
           password: 'correct',
         }),
       },
@@ -193,6 +298,7 @@ describe('POST /login', () => {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
           email: 'Shared@Example.com',
+          scope: 'saikyoi',
           password: 'anything',
         }),
       },
@@ -214,6 +320,311 @@ describe('POST /login', () => {
       error: 'invalid credentials',
     });
     expect(res.headers.get('set-cookie')).toBeNull();
+  });
+
+  describe('rehashing', () => {
+    const originalConsoleError = console.error;
+
+    afterEach(() => {
+      console.error = originalConsoleError;
+    });
+
+    /** Logs in as the mocked staff member inside `ctx`. */
+    async function loginWithContext(
+      password: string,
+      ctx: ExecutionContext,
+    ): Promise<Response> {
+      return staffAuthRoute.request(
+        '/login',
+        {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            email: 'staff@example.com',
+            scope: 'saikyoi',
+            password,
+          }),
+        },
+        ENV,
+        ctx,
+      );
+    }
+
+    it('login rehashes a legacy password and still succeeds', async () => {
+      const legacyHash = await legacyHashPassword('correct-password');
+      const updates = mockAccountFetchWithRehash(regionalStaffRow(legacyHash));
+      const {ctx, settle} = collectingExecutionContext();
+
+      const res = await loginWithContext('correct-password', ctx);
+      await settle();
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('set-cookie') ?? '').toContain('staff_session=');
+      expect(updates.length).toBe(1);
+      const [update] = updates;
+      expect(update.table).toBe('staff_accounts');
+      expect(update.filters.get('id')).toBe(`eq.${STAFF_ID}`);
+      // Conditional on the old hash, so a reset that lands in between is not
+      // overwritten with the old password.
+      expect(update.filters.get('password_hash')).toBe(`eq.${legacyHash}`);
+      expect(
+        await verifyPassword('correct-password', update.passwordHash),
+      ).toEqual({valid: true, needsRehash: false});
+    });
+
+    it('login still succeeds when the rehash fails', async () => {
+      const errors: unknown[][] = [];
+      console.error = (...args: unknown[]) => {
+        errors.push(args);
+      };
+      const updates = mockAccountFetchWithRehash(
+        regionalStaffRow(await legacyHashPassword('correct-password')),
+        {failUpdate: true},
+      );
+      const {ctx, settle} = collectingExecutionContext();
+
+      const res = await loginWithContext('correct-password', ctx);
+      await settle();
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('set-cookie') ?? '').toContain('staff_session=');
+      expect(updates.length).toBe(1);
+      expect(errors.length).toBe(1);
+      expect(errors[0][0]).toBe('failed to rehash a password');
+    });
+
+    it('login does not rewrite a hash already in the current format', async () => {
+      const updates = mockAccountFetchWithRehash(
+        regionalStaffRow(await hashPassword('correct-password')),
+      );
+      const {ctx, settle} = collectingExecutionContext();
+
+      const res = await loginWithContext('correct-password', ctx);
+      await settle();
+
+      expect(res.status).toBe(200);
+      expect(updates).toEqual([]);
+    });
+  });
+});
+
+describe('POST /password-reset/request', () => {
+  const originalFetch = globalThis.fetch;
+  // Every request the route made, with the body of each, so a test can tell
+  // what ran on the response path from what was deferred, and read the
+  // link the mail carried.
+  let requests: Array<{url: URL; body: string}> = [];
+  let backgroundWork: Array<Promise<unknown>> = [];
+  const executionCtx = {
+    waitUntil(promise: Promise<unknown>): void {
+      backgroundWork.push(promise);
+    },
+    passThroughOnException(): void {},
+  } as unknown as ExecutionContext;
+
+  /** Runs the deferred work, the way the Workers runtime would. */
+  async function settle(): Promise<void> {
+    const pending = backgroundWork;
+    backgroundWork = [];
+    await Promise.all(pending);
+  }
+
+  /**
+   * Answers the account lookup with `account`, naming it for the mail as a
+   * regional 最強位 account of the 東京 region, and accepts the link write
+   * and the Resend call.
+   * @param account The account the lookup finds, or `null` for none.
+   */
+  function mockResetFetch(account: {id: string} | null): void {
+    requests = [];
+    globalThis.fetch = turnstileAwareFetch((async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      requests.push({url, body: String(init?.body ?? '')});
+      if (url.hostname === 'api.resend.com') {
+        return new Response(null, {status: 200});
+      }
+      if (url.pathname.endsWith('/rpc/add_staff_password_link')) {
+        return Response.json(null);
+      }
+      if (url.searchParams.get('select') === 'id') {
+        return Response.json(account ? [account] : []);
+      }
+      return Response.json([
+        {
+          role: 'regional',
+          tournament_type: 'saikyoi',
+          regions: {
+            name: '東京',
+            tournaments: [{name: null, type: 'saikyoi'}],
+          },
+        },
+      ]);
+    }) as unknown as typeof fetch);
+  }
+
+  async function request(
+    body: unknown,
+    options: {env?: Bindings; turnstileToken?: string | null} = {},
+  ): Promise<Response> {
+    const {env = ENV, turnstileToken = TURNSTILE_TEST_TOKEN} = options;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (turnstileToken !== null) {
+      headers[TURNSTILE_TOKEN_HEADER] = turnstileToken;
+    }
+    return staffAuthRoute.request(
+      '/password-reset/request',
+      {method: 'POST', headers, body: JSON.stringify(body)},
+      env,
+      executionCtx,
+    );
+  }
+
+  afterEach(async () => {
+    await settle();
+    globalThis.fetch = originalFetch;
+  });
+
+  it('answers a registered and an unregistered address the same way', async () => {
+    mockResetFetch({id: STAFF_ID});
+    const registered = await request({
+      email: 'staff@example.com',
+      scope: 'saikyoi',
+    });
+    await settle();
+    mockResetFetch(null);
+    const unregistered = await request({
+      email: 'nobody@example.com',
+      scope: 'saikyoi',
+    });
+    await settle();
+
+    expect(registered.status).toBe(200);
+    expect(unregistered.status).toBe(200);
+    expect(await registered.json()).toEqual(await unregistered.json());
+    expect(requests.some(r => r.url.hostname === 'api.resend.com')).toBe(false);
+  });
+
+  it('does none of the reset work before answering', async () => {
+    mockResetFetch({id: STAFF_ID});
+
+    const res = await request({email: 'staff@example.com', scope: 'saikyoi'});
+
+    expect(res.status).toBe(200);
+    expect(requests).toEqual([]);
+  });
+
+  it('mails an hour-long reset link for the account the address and scope name', async () => {
+    mockResetFetch({id: STAFF_ID});
+
+    await request({email: 'Staff@Example.com', scope: 'saikyoi'});
+    await settle();
+
+    const lookup = requests.find(
+      r => r.url.searchParams.get('select') === 'id',
+    );
+    expect(lookup?.url.searchParams.get('email')).toBe('eq.staff@example.com');
+    expect(lookup?.url.searchParams.get('tournament_type')).toBe('eq.saikyoi');
+    expect(lookup?.url.searchParams.get('disabled_at')).toBe('is.null');
+
+    const issue = requests.find(r =>
+      r.url.pathname.endsWith('/rpc/add_staff_password_link'),
+    );
+    const {p_staff_account_id, p_expires_at} = JSON.parse(issue!.body) as {
+      p_staff_account_id: string;
+      p_expires_at: string;
+    };
+    expect(p_staff_account_id).toBe(STAFF_ID);
+    // Added beside the account's other links rather than replacing them,
+    // so a request from anyone can't throw away an invitation (#175).
+    expect(
+      requests.some(r =>
+        r.url.pathname.endsWith('/rpc/issue_staff_password_link'),
+      ),
+    ).toBe(false);
+    const ttl = Date.parse(p_expires_at) - Date.now();
+    expect(ttl).toBeGreaterThan(55 * 60 * 1000);
+    expect(ttl).toBeLessThanOrEqual(60 * 60 * 1000);
+
+    const mail = requests.find(r => r.url.hostname === 'api.resend.com');
+    const sent = JSON.parse(mail!.body) as {
+      to: string[] | string;
+      subject: string;
+      text: string;
+    };
+    expect(sent.subject).toContain(
+      '「東京最強位」のスタッフアカウントのパスワード再設定',
+    );
+    expect(sent.text).toContain(
+      'https://entry.example.com/staff/password-reset?token=',
+    );
+    expect(sent.text).toContain('パスワード再設定のお申し込みを受け付けました');
+  });
+
+  it('looks a general account up by its null tournament type', async () => {
+    mockResetFetch(null);
+
+    await request({email: 'staff@example.com', scope: 'general'});
+    await settle();
+
+    expect(requests[0].url.searchParams.get('tournament_type')).toBe('is.null');
+  });
+
+  it('returns 429 with Retry-After when the rate limiter refuses', async () => {
+    mockResetFetch({id: STAFF_ID});
+
+    const res = await request(
+      {email: 'staff@example.com', scope: 'saikyoi'},
+      {env: {...ENV, MAIL_TRIGGER_IP_RATE_LIMITER: refusingRateLimiter()}},
+    );
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe('60');
+    await settle();
+    expect(requests).toEqual([]);
+  });
+
+  it('counts the per-address limit under a key naming this endpoint', async () => {
+    mockResetFetch(null);
+    const keys: string[] = [];
+    const recording: RateLimit = {
+      limit: ({key}) => {
+        keys.push(key ?? '');
+        return Promise.resolve({success: true});
+      },
+    };
+
+    await request(
+      {email: 'Shared@Example.com', scope: 'saikyoi'},
+      {env: {...ENV, MAIL_TRIGGER_EMAIL_RATE_LIMITER: recording}},
+    );
+
+    expect(keys).toEqual(['staff-password-reset:email:shared@example.com']);
+  });
+
+  it('returns 400 when the Turnstile token is missing', async () => {
+    mockResetFetch({id: STAFF_ID});
+
+    const res = await request(
+      {email: 'staff@example.com', scope: 'saikyoi'},
+      {turnstileToken: null},
+    );
+
+    expect(res.status).toBe(400);
+    await settle();
+    expect(requests).toEqual([]);
+  });
+
+  it('returns 400 without a scope', async () => {
+    mockResetFetch({id: STAFF_ID});
+
+    const res = await request({email: 'staff@example.com'});
+
+    expect(res.status).toBe(400);
   });
 });
 

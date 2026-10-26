@@ -1,13 +1,30 @@
-import {afterEach, describe, expect, it} from 'bun:test';
+import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
 import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
 import {app} from '../index';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {
+  staffSessionAwareFetch,
+  TEST_SESSIONS_VALID_FROM_MS,
+} from '../test-support/staff-session';
+
+// Every staff guard checks the session against
+// `staff_accounts.sessions_valid_from` before the handler runs; answer that
+// read for the tests that don't stub `fetch` themselves.
+const fetchWithoutSessionStub = globalThis.fetch;
+
+beforeEach(() => {
+  globalThis.fetch = staffSessionAwareFetch(fetchWithoutSessionStub);
+});
+
+afterEach(() => {
+  globalThis.fetch = fetchWithoutSessionStub;
+});
 
 const ENV: Bindings = {
   ...PERMISSIVE_PLATFORM_BINDINGS,
   SUPABASE_URL: 'https://example.supabase.co',
-  SUPABASE_SERVICE_ROLE_KEY: 'dummy-service-role-key',
+  SUPABASE_SECRET_KEY: 'dummy-service-role-key',
   MAIL_API_KEY: 'dummy-mail-api-key',
   GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
   MAIL_FROM_ADDRESS: 'entry@example.com',
@@ -27,6 +44,7 @@ async function regionalStaffCookie(): Promise<string> {
       role: 'regional',
       regionId: TOKYO_REGION_ID,
       tournamentType: 'saikyoi',
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     ENV.SESSION_SECRET,
@@ -41,6 +59,7 @@ async function generalStaffCookie(): Promise<string> {
       role: 'general',
       regionId: null,
       tournamentType: null,
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     ENV.SESSION_SECRET,
@@ -66,7 +85,8 @@ const SUMMARY_ROWS = [
   },
   {
     tournament_id: OSAKA_TOURNAMENT_ID,
-    tournament_name: '大阪大会',
+    // Left blank, so named after the region on read (0024).
+    tournament_name: null,
     tournament_type: 'shinjinou',
     region_id: OSAKA_REGION_ID,
     region_slug: 'osaka',
@@ -87,12 +107,14 @@ const SUMMARY_ROWS = [
  */
 function mockFetch(body: unknown | Response): {urls: string[]} {
   const urls: string[] = [];
-  globalThis.fetch = ((input: string | URL | Request) => {
+  globalThis.fetch = staffSessionAwareFetch(((
+    input: string | URL | Request,
+  ) => {
     urls.push(typeof input === 'string' ? input : input.toString());
     return Promise.resolve(
       body instanceof Response ? body : Response.json(body),
     );
-  }) as unknown as typeof fetch;
+  }) as unknown as typeof fetch);
   return {urls};
 }
 
@@ -150,7 +172,7 @@ describe('GET /staff/dashboard', () => {
       },
       {
         tournamentId: OSAKA_TOURNAMENT_ID,
-        tournamentName: '大阪大会',
+        tournamentName: '大阪新人王',
         tournamentType: 'shinjinou',
         regionId: OSAKA_REGION_ID,
         regionSlug: 'osaka',

@@ -1,7 +1,22 @@
 import {describe, expect, it} from 'bun:test';
-import {RegulationSyncInputSchema, RegulationUpsertSchema} from './regulation';
+import {
+  REGULATION_LABEL_MAX_LENGTH,
+  RegulationSyncInputSchema,
+  RegulationUpsertSchema,
+} from './regulation';
 
 describe('RegulationUpsertSchema', () => {
+  // Some regions' conditions run long (the limit was 200 before).
+  it('accepts a label of up to 300 characters and refuses a longer one', () => {
+    expect(REGULATION_LABEL_MAX_LENGTH).toBe(300);
+    expect(
+      RegulationUpsertSchema.safeParse({label: 'あ'.repeat(300)}).success,
+    ).toBe(true);
+    expect(
+      RegulationUpsertSchema.safeParse({label: 'あ'.repeat(301)}).success,
+    ).toBe(false);
+  });
+
   it('accepts a new regulation without an id or a priority window', () => {
     const result = RegulationUpsertSchema.safeParse({label: '一般の部'});
 

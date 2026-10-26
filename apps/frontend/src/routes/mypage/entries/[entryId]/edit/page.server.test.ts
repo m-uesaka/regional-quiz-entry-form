@@ -1,6 +1,15 @@
 import {describe, expect, it} from 'vitest';
 import type {Cookies, HttpError, Redirect} from '@sveltejs/kit';
-import type {MypageEntryDetail} from '@regional-quiz/shared';
+import {
+  CUSTOM_FIELD_VALUE_MAX_LENGTH,
+  ENTRY_FREE_TEXT_MAX_LENGTH,
+  ENTRY_NAME_MAX_LENGTH,
+  type MypageEntryDetail,
+} from '@regional-quiz/shared';
+import {
+  fakePlatform,
+  TOKYO_SAIKYOI_LIST_KEY,
+} from '../../../../../test-support/fake-platform';
 import {actions, load} from './+page.server';
 
 const OPEN_PERIOD = {
@@ -23,12 +32,14 @@ const ENTRY: MypageEntryDetail = {
     name: 'テスト大会',
     type: 'saikyoi',
     regionId: '00000000-0000-0000-0000-000000000003',
+    regionSlug: 'tokyo',
     ...OPEN_PERIOD,
   },
   formFieldDefs: [
     {
       fieldKey: 't_shirt_size',
       label: 'Tシャツサイズ',
+      plainLabel: 'Tシャツサイズ',
       fieldType: 'radio',
       required: true,
       options: ['S', 'M', 'L'],
@@ -37,6 +48,7 @@ const ENTRY: MypageEntryDetail = {
     {
       fieldKey: 'agree_to_rules',
       label: '規約に同意する',
+      plainLabel: '規約に同意する',
       fieldType: 'checkbox',
       required: true,
       options: null,
@@ -106,10 +118,12 @@ function buildActionEvent(
   fetchImpl: typeof fetch,
   formData: FormData,
   deleted: string[] = [],
+  platform?: App.Platform,
 ): Parameters<typeof actions.default>[0] {
   return {
     params: {entryId: ENTRY.id},
     fetch: fetchImpl,
+    platform,
     cookies: fakeCookies(deleted),
     url: new URL(`http://localhost/mypage/entries/${ENTRY.id}/edit`),
     request: {formData: async () => formData},
@@ -244,6 +258,25 @@ describe('mypage entry edit form action', () => {
     expect(log.patchBodies).toEqual([]);
   });
 
+  it('names a field over its length limit, without calling the API', async () => {
+    const log: FetchLog = {patchBodies: []};
+    const formData = validFormData();
+    formData.set('displayName', 'あ'.repeat(ENTRY_NAME_MAX_LENGTH + 1));
+    const event = buildActionEvent(fakeFetch({}, log), formData);
+
+    await expect(actions.default(event)).resolves.toMatchObject({
+      status: 400,
+      data: {
+        fieldErrors: {
+          displayName: [
+            `エントリーリスト掲載名は${ENTRY_NAME_MAX_LENGTH}文字以内で入力してください`,
+          ],
+        },
+      },
+    });
+    expect(log.patchBodies).toEqual([]);
+  });
+
   it('names every required custom field left blank in one answer', async () => {
     const log: FetchLog = {patchBodies: []};
     const formData = validFormData();
@@ -360,5 +393,101 @@ describe('mypage entry edit form action', () => {
           .customFieldValues,
       ),
     ).toEqual(['t_shirt_size', 'agree_to_rules']);
+  });
+
+  // A browser submits a textarea's line breaks as CRLF but counts each as
+  // one character against `maxlength`, so an answer it let through at the
+  // limit must not come out over it here.
+  it('counts a submitted CRLF as one character and stores it as \\n', async () => {
+    const log: FetchLog = {patchBodies: []};
+    const formData = validFormData();
+    const line = 'あ'.repeat(9);
+    // 200 lines of 9 characters and a line break: 2000 as the browser
+    // counts it, 2199 as submitted.
+    const freeText = `${line}\n`.repeat(200).slice(0, -1);
+    expect(freeText.length).toBeLessThanOrEqual(ENTRY_FREE_TEXT_MAX_LENGTH);
+    formData.set('freeText', freeText.replaceAll('\n', '\r\n'));
+    const event = buildActionEvent(fakeFetch({}, log), formData);
+
+    await expect(actions.default(event)).rejects.toMatchObject({
+      status: 303,
+    } satisfies Partial<Redirect>);
+    expect(log.patchBodies).toMatchObject([{freeText}]);
+  });
+
+  it('names a custom answer over its limit once, under its own control', async () => {
+    const log: FetchLog = {patchBodies: []};
+    const entry: MypageEntryDetail = {
+      ...ENTRY,
+      formFieldDefs: [
+        {
+          fieldKey: 'message',
+          label: 'メッセージ',
+          plainLabel: 'メッセージ',
+          fieldType: 'textarea',
+          required: false,
+          options: null,
+          displayOrder: 0,
+        },
+      ],
+    };
+    const formData = validFormData();
+    formData.set(
+      'custom.message',
+      'あ'.repeat(CUSTOM_FIELD_VALUE_MAX_LENGTH + 1),
+    );
+    const event = buildActionEvent(fakeFetch({entry}, log), formData);
+
+    const result = await actions.default(event);
+
+    expect(result).toMatchObject({
+      status: 400,
+      data: {
+        fieldErrors: {
+          'custom.message': [
+            `「メッセージ」は${CUSTOM_FIELD_VALUE_MAX_LENGTH}文字以内で入力してください`,
+          ],
+        },
+      },
+    });
+    expect(
+      (result as {data: {fieldErrors: Record<string, unknown>}}).data
+        .fieldErrors.customFieldValues,
+    ).toBeUndefined();
+    expect(log.patchBodies).toEqual([]);
+  });
+
+  describe('the cached public entry list (#125)', () => {
+    it('drops it once the edit is saved', async () => {
+      const {platform, stored} = fakePlatform();
+      stored.set(TOKYO_SAIKYOI_LIST_KEY, Response.json([]));
+      const event = buildActionEvent(
+        fakeFetch(),
+        validFormData(),
+        [],
+        platform,
+      );
+
+      await expect(actions.default(event)).rejects.toMatchObject({
+        status: 303,
+      });
+      expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(false);
+    });
+
+    it('keeps it when the backend refuses the edit', async () => {
+      const {platform, stored} = fakePlatform();
+      stored.set(TOKYO_SAIKYOI_LIST_KEY, Response.json([]));
+      const event = buildActionEvent(
+        fakeFetch({patchStatus: 403}),
+        validFormData(),
+        [],
+        platform,
+      );
+
+      await expect(actions.default(event)).resolves.toMatchObject({
+        status: 403,
+      });
+      expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(true);
+    });
   });
 });

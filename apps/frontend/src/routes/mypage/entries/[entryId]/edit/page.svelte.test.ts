@@ -19,6 +19,7 @@ const ENTRY: MypageEntryDetail = {
     name: 'テスト大会',
     type: 'saikyoi',
     regionId: '00000000-0000-0000-0000-000000000003',
+    regionSlug: 'tokyo',
     entryOpensAt: '2020-01-01T00:00:00.000Z',
     entryClosesAt: '2099-01-01T00:00:00.000Z',
   },
@@ -26,6 +27,7 @@ const ENTRY: MypageEntryDetail = {
     {
       fieldKey: 't_shirt_size',
       label: 'Tシャツサイズ',
+      plainLabel: 'Tシャツサイズ',
       fieldType: 'radio',
       required: true,
       options: ['S', 'M', 'L'],
@@ -34,6 +36,7 @@ const ENTRY: MypageEntryDetail = {
     {
       fieldKey: 'agree_to_rules',
       label: '規約に同意する',
+      plainLabel: '規約に同意する',
       fieldType: 'checkbox',
       required: true,
       options: null,
@@ -71,7 +74,7 @@ describe('mypage entry edit +page.svelte', () => {
 
     expect(screen.getByLabelText('氏名')).toHaveValue('山田太郎');
     expect(screen.getByLabelText('ふりがな')).toHaveValue('ヤマダタロウ');
-    expect(screen.getByLabelText('掲載名')).toHaveValue('太郎');
+    expect(screen.getByLabelText('エントリーリスト掲載名')).toHaveValue('太郎');
     expect(screen.getByLabelText('自由記述')).toHaveValue('自由記述');
   });
 

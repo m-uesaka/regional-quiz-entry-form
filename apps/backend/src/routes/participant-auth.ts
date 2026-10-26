@@ -8,15 +8,11 @@ import {
 } from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
-import {verifyPassword} from '../lib/password';
+import {verifyAccountPassword} from '../lib/password-rehash';
 import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
 import {PARTICIPANT_SESSION_COOKIE} from '../middleware/participant-auth';
 
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
-// A well-formed but unusable hash, run through `verifyPassword` when no
-// account matches so that a missing email costs the same PBKDF2 work as a
-// wrong password and can't be timed to enumerate participant emails.
-const DUMMY_PASSWORD_HASH = `${'00'.repeat(16)}:${'00'.repeat(32)}`;
 // The attributes the session cookie is issued under, shared with `/logout`
 // so the two can't drift apart: a deletion whose `path` / `secure` /
 // `sameSite` differ from the ones the cookie was set with addresses a
@@ -33,6 +29,7 @@ interface ParticipantRow {
   id: string;
   password_hash: string;
   password_changed_at: string;
+  email_verified_at: string | null;
 }
 
 // The period both login limiters count over (`wrangler.toml`), which is
@@ -74,7 +71,7 @@ export const participantAuthRoute = new Hono<Env>()
       const db = createDbClient(c.env);
       const {data: participant, error} = await db
         .from('participants')
-        .select('id, password_hash, password_changed_at')
+        .select('id, password_hash, password_changed_at, email_verified_at')
         .eq('email', email)
         .returns<ParticipantRow[]>()
         .maybeSingle();
@@ -83,11 +80,24 @@ export const participantAuthRoute = new Hono<Env>()
         return c.json({error: 'internal server error'}, 500);
       }
 
-      const passwordValid = await verifyPassword(
+      // An account whose address was never verified is not anyone's yet:
+      // its password is whatever the last unconfirmed entry submitted under
+      // that address chose, which may have been someone other than its
+      // owner (#189). It is checked as if it didn't exist -- against the
+      // dummy hash, refused with the same answer -- so a login can't tell
+      // an unverified account from a wrong password or an unknown address.
+      const account = participant?.email_verified_at ? participant : null;
+      // The same work whether or not the address is registered, and the
+      // hash moved to the current parameters after the response if it is
+      // older: see `verifyAccountPassword()`.
+      const valid = await verifyAccountPassword(
+        c.env,
+        'participants',
+        account,
         password,
-        participant?.password_hash ?? DUMMY_PASSWORD_HASH,
+        upgrade => c.executionCtx.waitUntil(upgrade),
       );
-      if (!participant || !passwordValid) {
+      if (!account || !valid) {
         return c.json({error: 'invalid credentials'}, 401);
       }
 
@@ -99,8 +109,8 @@ export const participantAuthRoute = new Hono<Env>()
       const issuedAt = Math.floor(Date.now() / 1000);
       const token = await sign(
         {
-          sub: participant.id,
-          pwdChangedAt: Date.parse(participant.password_changed_at),
+          sub: account.id,
+          pwdChangedAt: Date.parse(account.password_changed_at),
           iat: issuedAt,
           exp: issuedAt + SESSION_TTL_SECONDS,
         },
@@ -124,7 +134,10 @@ export const participantAuthRoute = new Hono<Env>()
     // Cutting that too needs a server-side generation to check the token
     // against, the way `participants.password_changed_at` already cuts
     // sessions issued before a password reset (see
-    // `middleware/participant-auth.ts`); Task 11-3 is where that lands.
+    // `middleware/participant-auth.ts`), or the way
+    // `staff_accounts.sessions_valid_from` lets a general staff member cut
+    // a staff account's sessions (Task 11-3). Participants have no such
+    // explicit revocation; a password reset is theirs.
     deleteCookie(c, PARTICIPANT_SESSION_COOKIE, SESSION_COOKIE_OPTIONS);
     return c.json({ok: true});
   });

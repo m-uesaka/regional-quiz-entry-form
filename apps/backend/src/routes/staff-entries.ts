@@ -5,7 +5,7 @@ import {
   ENTRY_STATUS_LABELS,
   EntrySchema,
   StaffEntryDetailSchema,
-  type CustomFieldValues,
+  StaffEntryListQuerySchema,
   type Entry,
   type EntryStatus,
 } from '@regional-quiz/shared';
@@ -27,7 +27,12 @@ import {
   sortEntryRegulations,
   type EntryRegulationRow,
 } from '../lib/entry-regulations';
-import {fetchAllRows, type AllRowsResult} from '../lib/paged-select';
+import {
+  fetchAllRows,
+  fetchPage,
+  toPageResponse,
+  type AllRowsResult,
+} from '../lib/paged-select';
 import {internalError} from '../lib/errors';
 
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
@@ -41,19 +46,13 @@ const ENTRY_COLUMNS =
   // `entry_regulations` join table rather than off the entry itself.
   ENTRY_REGULATIONS_COLUMNS;
 
-const ENTRY_CSV_COLUMNS =
-  'name, furigana, display_name, custom_field_values, status, ' +
-  ENTRY_REGULATIONS_COLUMNS;
+// Everything the list reads, and when the entry was made: the export is
+// the list's rows in full (#178), so it is built from the same select and
+// can't fall behind it when the entry gains a field.
+const ENTRY_CSV_COLUMNS = `${ENTRY_COLUMNS}, created_at`;
 
 /** Shape of an `entries` row as selected for the CSV export. */
-interface EntryCsvRow {
-  name: string;
-  furigana: string;
-  display_name: string;
-  custom_field_values: CustomFieldValues;
-  status: EntryStatus;
-  entry_regulations: EntryRegulationRow[];
-}
+type EntryCsvRow = EntryRow & {created_at: string};
 
 // Excel on Windows reads a BOM-less file as the system's legacy encoding,
 // which turns every Japanese cell into mojibake, so the export is served
@@ -62,6 +61,10 @@ const UTF8_BOM = '\uFEFF';
 
 /**
  * Fetches every entry of a tournament in the shape the CSV export needs.
+ *
+ * Unlike the paginated list route, the export deliberately keeps going
+ * through `fetchAllRows()`: a file with every entry in it is the whole
+ * point of the export, and it is downloaded, not embedded in a page.
  * @param db The Supabase client to query with.
  * @param tournamentId The tournament whose entries are exported.
  */
@@ -92,7 +95,9 @@ interface EntryRow {
   custom_field_values: Record<string, string | string[]>;
   status: EntryStatus;
   waitlist_position: number | null;
-  participants: {email: string} | null;
+  // To-one and always there: `entries.participant_id` is a not-null
+  // foreign key.
+  participants: {email: string};
   entry_regulations: EntryRegulationRow[];
 }
 
@@ -104,7 +109,7 @@ function rowToEntry(row: EntryRow): Entry {
     name: row.name,
     furigana: row.furigana,
     displayName: row.display_name,
-    email: row.participants?.email,
+    email: row.participants.email,
     regulationIds: regulations.map(regulation => regulation.regulation_id),
     regulationLabels: regulations.map(
       regulation => regulation.regulations.label,
@@ -120,24 +125,35 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
   .get(
     '/tournaments/:tournamentId/entries',
     zValidator('param', TournamentIdParamSchema),
+    zValidator('query', StaffEntryListQuerySchema),
     requireStaffForTournament(),
     async c => {
       const db = createDbClient(c.env);
       const {tournamentId} = c.req.valid('param');
-      const {rows, error} = await fetchAllRows<EntryRow>((from, to) =>
-        db
+      const {status, ...page} = c.req.valid('query');
+      // One page, optionally narrowed to one status: what staff look for is
+      // "only the waitlist" or "only the unverified", not a scroll through
+      // everyone. The total comes back in the same request (`count:
+      // 'exact'`), and counts the filtered rows, so the pager follows the
+      // filter.
+      const {rows, total, error} = await fetchPage<EntryRow>((from, to) => {
+        let query = db
           .from('entries')
-          .select(ENTRY_COLUMNS)
-          .eq('tournament_id', tournamentId)
+          .select(ENTRY_COLUMNS, {count: 'exact'})
+          .eq('tournament_id', tournamentId);
+        if (status) {
+          query = query.eq('status', status);
+        }
+        return query
           .order('created_at', {ascending: true})
           .order('id', {ascending: true})
           .range(from, to)
-          .returns<EntryRow[]>(),
-      );
+          .returns<EntryRow[]>();
+      }, page);
       if (error) {
         return c.json(internalError('failed to read the entries', error), 500);
       }
-      return c.json(rows.map(rowToEntry));
+      return c.json(toPageResponse(rows.map(rowToEntry), total, page));
     },
   )
   .get(
@@ -183,8 +199,12 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
           name: row.name,
           furigana: row.furigana,
           displayName: row.display_name,
+          email: row.participants.email,
           status: ENTRY_STATUS_LABELS[row.status],
+          waitlistPosition: row.waitlist_position,
+          createdAt: row.created_at,
           regulationLabels: entryRegulationLabels(row.entry_regulations),
+          freeText: row.free_text,
           customFieldValues: row.custom_field_values,
         })),
       );

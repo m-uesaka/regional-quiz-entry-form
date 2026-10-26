@@ -4,26 +4,29 @@ import {sign} from 'hono/jwt';
 import {deleteCookie, setCookie} from 'hono/cookie';
 import {
   StaffLoginInputSchema,
-  StaffPasswordResetConfirmInputSchema,
+  StaffPasswordResetRequestInputSchema,
   type StaffClaims,
   type StaffLoginInput,
+  type StaffPasswordResetRequestInput,
   type StaffLoginResponse,
   type StaffRole,
   type TournamentType,
 } from '@regional-quiz/shared';
+import {StaffPasswordResetConfirmInputSchema} from '@regional-quiz/shared/password-policy';
 import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
-import {isPasswordHashUsable, verifyPassword} from '../lib/password';
+import {verifyAccountPassword} from '../lib/password-rehash';
 import {internalError} from '../lib/errors';
-import {confirmStaffPasswordReset} from '../lib/staff-password-reset';
+import {findStaffAccountByScope} from '../lib/staff-account-lookup';
+import {
+  confirmStaffPasswordReset,
+  requestStaffPasswordReset,
+} from '../lib/staff-password-reset';
 import {STAFF_SESSION_COOKIE} from '../middleware/staff-auth';
 import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
+import {requireTurnstile} from '../middleware/turnstile';
 
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
-// A well-formed but unusable hash, run through `verifyPassword` when no
-// account matches so that a missing email costs the same PBKDF2 work as a
-// wrong password and can't be timed to enumerate staff emails.
-const DUMMY_PASSWORD_HASH = `${'00'.repeat(16)}:${'00'.repeat(32)}`;
 // The attributes the session cookie is issued under, shared with `/logout`
 // so the two can't drift apart: a deletion whose `path` / `secure` /
 // `sameSite` differ from the ones the cookie was set with addresses a
@@ -47,6 +50,7 @@ interface StaffAccountRow {
   role: StaffRole;
   region_id: string | null;
   tournament_type: TournamentType | null;
+  sessions_valid_from: string;
   // The joined `regions` row, null for `general` staff (who have no
   // `region_id`). Only the slug is read: the staff screens are keyed by it.
   regions: {slug: string} | null;
@@ -54,6 +58,10 @@ interface StaffAccountRow {
 
 // Matches the period both login limiters count over (`wrangler.toml`).
 const LOGIN_LIMIT_PERIOD_SECONDS = 60;
+
+// Matches the period both mail-trigger limiters count over
+// (`wrangler.toml`).
+const MAIL_TRIGGER_LIMIT_PERIOD_SECONDS = 60;
 
 export const staffAuthRoute = new Hono<Env>()
   .post(
@@ -73,33 +81,38 @@ export const staffAuthRoute = new Hono<Env>()
       LOGIN_LIMIT_PERIOD_SECONDS,
     ),
     async c => {
-      const {email, password} = c.req.valid('json');
-      const db = createDbClient(c.env);
-      const {data: staff, error} = await db
-        .from('staff_accounts')
-        .select(
-          'id, password_hash, role, region_id, tournament_type, regions(slug)',
-        )
-        .eq('email', email)
-        .returns<StaffAccountRow[]>()
-        .maybeSingle();
+      const {email, scope, password} = c.req.valid('json');
+      // `scope` picks one of the address's accounts, and a disabled one
+      // (#156) isn't looked for, so it gets the same 401 -- after the same
+      // PBKDF2 work -- as an address that was never registered: whoever
+      // holds its password learns nothing from trying it.
+      const {data: staff, error} =
+        await findStaffAccountByScope<StaffAccountRow>(
+          createDbClient(c.env),
+          email,
+          scope,
+          'id, password_hash, role, region_id, tournament_type, ' +
+            'sessions_valid_from, regions(slug)',
+        );
 
       if (error) {
         return c.json({error: 'internal server error'}, 500);
       }
 
       // An account created by `POST /api/staff/accounts` whose owner hasn't
-      // followed their invite link yet carries an unusable placeholder hash.
-      // `verifyPassword()` refuses it either way, but it refuses it before
-      // doing any PBKDF2 work, which would make "invited, not set up yet"
-      // distinguishable from "wrong password" by response time -- the same leak
-      // the dummy hash exists to close for an unknown email.
-      const storedHash =
-        staff && isPasswordHashUsable(staff.password_hash)
-          ? staff.password_hash
-          : DUMMY_PASSWORD_HASH;
-      const passwordValid = await verifyPassword(password, storedHash);
-      if (!staff || !passwordValid) {
+      // followed their invite link yet carries an unusable placeholder hash,
+      // which costs the same PBKDF2 work as a wrong password so "invited, not
+      // set up yet" can't be told apart by response time: see
+      // `verifyAccountPassword()`, which also moves an older hash to the
+      // current parameters after the response.
+      const valid = await verifyAccountPassword(
+        c.env,
+        'staff_accounts',
+        staff,
+        password,
+        upgrade => c.executionCtx.waitUntil(upgrade),
+      );
+      if (!staff || !valid) {
         return c.json({error: 'invalid credentials'}, 401);
       }
 
@@ -108,6 +121,11 @@ export const staffAuthRoute = new Hono<Env>()
         role: staff.role,
         regionId: staff.region_id,
         tournamentType: staff.tournament_type,
+        // Which generation of this account's sessions the new one belongs
+        // to, so that moving `sessions_valid_from` later can cut it (see
+        // `isSessionCurrent()` in `middleware/staff-auth.ts`). Read in the
+        // same query as the password hash, so it costs no extra round trip.
+        sessionsValidFrom: Date.parse(staff.sessions_valid_from),
       };
       const token = await sign(
         {
@@ -132,12 +150,39 @@ export const staffAuthRoute = new Hono<Env>()
       return c.json(body);
     },
   )
-  // The counterpart to the invite mail `POST /api/staff/accounts` sends, and
-  // to the link a general staff member re-issues from
-  // `/api/staff/accounts/:id/password-reset`. There is no `/request` sibling:
-  // staff links are always issued by a general staff member for a named
-  // account, so this endpoint never has to take an address -- and can't be
-  // used to find out which ones are registered.
+  // A staff member who forgot their password asks for a link here (#175),
+  // the staff counterpart of `POST /api/auth/participant/password-reset/
+  // request`, with the same defences for the same reason: it is
+  // unauthenticated and mails an address of the caller's choosing. The
+  // email limiter's key is named after this endpoint, as at login, so the
+  // two reset forms don't spend each other's budget.
+  .post(
+    '/password-reset/request',
+    rateLimit(
+      env => env.MAIL_TRIGGER_IP_RATE_LIMITER,
+      c => `ip:${clientIp(c)}`,
+      MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
+    ),
+    requireTurnstile(),
+    zValidator('json', StaffPasswordResetRequestInputSchema),
+    rateLimit<{out: {json: StaffPasswordResetRequestInput}}>(
+      env => env.MAIL_TRIGGER_EMAIL_RATE_LIMITER,
+      c => `staff-password-reset:${emailKey(c.req.valid('json').email)}`,
+      MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
+    ),
+    c => {
+      // Handed to `waitUntil()` rather than awaited, so whether the address
+      // names an account can't be read off the response time any more than
+      // off its body (see `requestStaffPasswordReset()`).
+      const {email, scope} = c.req.valid('json');
+      c.executionCtx.waitUntil(requestStaffPasswordReset(c.env, email, scope));
+      return c.json({ok: true});
+    },
+  )
+  // The counterpart to the invite mail `POST /api/staff/accounts` sends, to
+  // the link a general staff member re-issues from
+  // `/api/staff/accounts/:id/password-reset`, and to the one `/request`
+  // above mails.
   .post(
     '/password-reset/confirm',
     zValidator('json', StaffPasswordResetConfirmInputSchema),
@@ -165,7 +210,10 @@ export const staffAuthRoute = new Hono<Env>()
     // Same shape as the participant logout, and for the same reasons: no
     // session is required, and dropping the cookie is all a stateless JWT
     // allows. A staff token copied off the machine stays valid for the rest
-    // of its 12 hours; revoking that is Task 11-3.
+    // of its 12 hours unless a general staff member revokes the account's
+    // sessions (`POST /api/staff/accounts/:id/revoke-sessions`), which is
+    // deliberately a separate, explicit act: logging out of one browser
+    // shouldn't log the same person out of every other one.
     deleteCookie(c, STAFF_SESSION_COOKIE, SESSION_COOKIE_OPTIONS);
     return c.json({ok: true});
   });

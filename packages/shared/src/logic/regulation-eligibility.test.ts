@@ -1,5 +1,8 @@
 import {describe, expect, it} from 'bun:test';
-import {isRegulationSelectionAllowed} from './regulation-eligibility';
+import {
+  activePriorityRegulations,
+  isRegulationSelectionAllowed,
+} from './regulation-eligibility';
 
 describe('isRegulationSelectionAllowed', () => {
   it('rejects an empty selection', () => {
@@ -102,5 +105,46 @@ describe('isRegulationSelectionAllowed', () => {
         new Date('2026-08-23T00:00:00Z'),
       ),
     ).toBe(false);
+  });
+});
+
+describe('activePriorityRegulations', () => {
+  const regulations = [
+    {
+      id: 'none',
+      label: '条件なし',
+      priorityStartsAt: null,
+      priorityEndsAt: null,
+    },
+    {
+      id: 'open',
+      label: '在住',
+      priorityStartsAt: '2026-11-01T00:00:00Z',
+      priorityEndsAt: '2026-11-05T00:00:00Z',
+    },
+    {
+      id: 'later',
+      label: '在学',
+      priorityStartsAt: '2026-11-10T00:00:00Z',
+      priorityEndsAt: '2026-11-12T00:00:00Z',
+    },
+  ];
+
+  it('lists only the windows open at that moment, keeping their fields', () => {
+    const active = activePriorityRegulations(
+      regulations,
+      new Date('2026-11-03T00:00:00Z'),
+    );
+
+    expect(active.map(r => [r.id, r.label])).toEqual([['open', '在住']]);
+  });
+
+  it('counts both ends of a window as inside it', () => {
+    const ids = (now: string) =>
+      activePriorityRegulations(regulations, new Date(now)).map(r => r.id);
+
+    expect(ids('2026-11-01T00:00:00Z')).toEqual(['open']);
+    expect(ids('2026-11-05T00:00:00Z')).toEqual(['open']);
+    expect(ids('2026-11-05T00:00:01Z')).toEqual([]);
   });
 });

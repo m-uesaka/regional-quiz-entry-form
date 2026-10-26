@@ -3,8 +3,16 @@
     BOOLEAN_CHECKBOX_LABELS,
     ENTRY_STATUS_LABELS,
     isBooleanCheckbox,
+    isFreeTextFieldType,
+    labelPlainText,
     type FormFieldDef,
   } from '@regional-quiz/shared';
+  import PageContainer from '$lib/components/layout/PageContainer.svelte';
+  import PageHeader from '$lib/components/layout/PageHeader.svelte';
+  import Card from '$lib/components/ui/atoms/Card.svelte';
+  import Chip from '$lib/components/ui/atoms/Chip.svelte';
+  import Link from '$lib/components/ui/atoms/Link.svelte';
+  import {ENTRY_STATUS_CHIP_VARIANT} from '$lib/entry-status';
   import type {PageProps} from './$types';
 
   let {data, params}: PageProps = $props();
@@ -37,57 +45,80 @@
         ? BOOLEAN_CHECKBOX_LABELS.checked
         : BOOLEAN_CHECKBOX_LABELS.unchecked;
     }
-    return Array.isArray(value) ? value.join('、') : String(value ?? '');
+    // A chosen option is stored as staff wrote it, which may include an
+    // `<a>` link; a free-text answer is the participant's own and is shown
+    // as typed.
+    const plain = (option: string) =>
+      isFreeTextFieldType(fieldDef.fieldType) ? option : labelPlainText(option);
+    return Array.isArray(value)
+      ? value.map(plain).join('、')
+      : plain(String(value ?? ''));
   }
 </script>
 
-<a href={`/staff/${params.regionSlug}/${params.tournamentSlug}/entries`}>
-  ← 一覧へ戻る
-</a>
+<PageContainer>
+  <p class="text-sm">
+    <Link
+      href={`/staff/${params.regionSlug}/${params.tournamentSlug}/entries`}
+      variant="secondary"
+    >
+      ← 一覧へ戻る
+    </Link>
+  </p>
 
-<h1>{data.entry.displayName} さんのエントリー詳細</h1>
+  <PageHeader title="{data.entry.displayName} さんのエントリー詳細" />
 
-<dl>
-  <dt>氏名</dt>
-  <dd>{data.entry.name}</dd>
+  <Card>
+    <dl class="grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-[10rem_1fr]">
+      <dt class="font-medium text-muted-foreground sm:py-1.5">氏名</dt>
+      <dd class="mb-3 break-words sm:mb-0 sm:py-1.5">{data.entry.name}</dd>
 
-  <dt>ふりがな</dt>
-  <dd>{data.entry.furigana}</dd>
+      <dt class="font-medium text-muted-foreground sm:py-1.5">ふりがな</dt>
+      <dd class="mb-3 break-words sm:mb-0 sm:py-1.5">{data.entry.furigana}</dd>
 
-  <dt>掲載名</dt>
-  <dd>{data.entry.displayName}</dd>
+      <dt class="font-medium text-muted-foreground sm:py-1.5">エントリーリスト掲載名</dt>
+      <dd class="mb-3 break-words sm:mb-0 sm:py-1.5">{data.entry.displayName}</dd>
 
-  <dt>メールアドレス</dt>
-  <dd>{data.entry.email}</dd>
+      <dt class="font-medium text-muted-foreground sm:py-1.5">メールアドレス</dt>
+      <dd class="mb-3 break-all sm:mb-0 sm:py-1.5">{data.entry.email}</dd>
 
-  <dt>レギュレーション</dt>
-  <!-- An entry may claim several conditions, so they are listed rather than
-       rendered as one value. Keyed by the regulation id rather than by the
-       label: nothing stops a tournament from having two regulations under
-       the same label, and a duplicate key is a render-time error. -->
-  <dd>
-    <ul class="entry-regulations">
-      {#each data.entry.regulationLabels as label, i (data.entry.regulationIds[i])}
-        <li>{label}</li>
+      <dt class="font-medium text-muted-foreground sm:py-1.5">レギュレーション</dt>
+      <!-- An entry may claim several conditions, so they are listed rather than
+           rendered as one value. Keyed by the regulation id rather than by the
+           label: nothing stops a tournament from having two regulations under
+           the same label, and a duplicate key is a render-time error. -->
+      <dd class="mb-3 sm:mb-0 sm:py-1.5">
+        <ul class="entry-regulations list-inside list-disc">
+          {#each data.entry.regulationLabels as label, i (data.entry.regulationIds[i])}
+            <li>{label}</li>
+          {/each}
+        </ul>
+      </dd>
+
+      <dt class="font-medium text-muted-foreground sm:py-1.5">ステータス</dt>
+      <dd class="mb-3 sm:mb-0 sm:py-1.5">
+        <Chip
+          tone="soft"
+          variant={ENTRY_STATUS_CHIP_VARIANT[data.entry.status]}
+        >
+          {ENTRY_STATUS_LABELS[data.entry.status]}
+          {#if data.entry.status === 'waitlisted'}
+            ({data.entry.waitlistPosition}番目)
+          {/if}
+        </Chip>
+      </dd>
+
+      {#if data.entry.freeText}
+        <dt class="font-medium text-muted-foreground sm:py-1.5">自由記述</dt>
+        <dd class="mb-3 whitespace-pre-wrap break-words sm:mb-0 sm:py-1.5">{data.entry.freeText}</dd>
+      {/if}
+
+      {#each customFieldEntries as {fieldDef, value} (fieldDef.fieldKey)}
+        <dt class="font-medium text-muted-foreground sm:py-1.5">{fieldDef.plainLabel}</dt>
+        <dd class="mb-3 break-words sm:mb-0 sm:py-1.5">
+          {formatFieldValue(fieldDef, value)}
+        </dd>
       {/each}
-    </ul>
-  </dd>
-
-  <dt>ステータス</dt>
-  <dd>
-    {ENTRY_STATUS_LABELS[data.entry.status]}
-    {#if data.entry.status === 'waitlisted'}
-      ({data.entry.waitlistPosition}番目)
-    {/if}
-  </dd>
-
-  {#if data.entry.freeText}
-    <dt>自由記述</dt>
-    <dd>{data.entry.freeText}</dd>
-  {/if}
-
-  {#each customFieldEntries as {fieldDef, value} (fieldDef.fieldKey)}
-    <dt>{fieldDef.label}</dt>
-    <dd>{formatFieldValue(fieldDef, value)}</dd>
-  {/each}
-</dl>
+    </dl>
+  </Card>
+</PageContainer>

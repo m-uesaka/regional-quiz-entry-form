@@ -15,8 +15,8 @@ const SUPABASE_URL = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
 // Publicly documented local-dev demo key for Supabase CLI's default stack
 // (fixed `super-secret-jwt-token-with-at-least-32-characters-long` JWT
 // secret) — not a real credential, safe to commit.
-const SUPABASE_SERVICE_ROLE_KEY =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ??
+const SUPABASE_SECRET_KEY =
+  process.env.SUPABASE_SECRET_KEY ??
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
 const SESSION_SECRET = 'test-session-secret';
 
@@ -35,7 +35,7 @@ async function isDbReachable(): Promise<boolean> {
 const env: Bindings = {
   ...PERMISSIVE_PLATFORM_BINDINGS,
   SUPABASE_URL,
-  SUPABASE_SERVICE_ROLE_KEY,
+  SUPABASE_SECRET_KEY,
   MAIL_API_KEY: 'dummy-mail-api-key',
   GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
   MAIL_FROM_ADDRESS: 'entry@example.com',
@@ -80,7 +80,7 @@ describe('mypage routes (request validation)', () => {
   it('rejects a DELETE without a participant session with 401', async () => {
     const res = await app.request(
       `/api/mypage/entries/${ENTRY_ID}`,
-      {method: 'DELETE'},
+      {method: 'DELETE', headers: {origin: env.FRONTEND_URL}},
       env,
     );
 
@@ -161,13 +161,18 @@ describe.skipIf(!(await isDbReachable()))(
       return regulation.id as string;
     }
 
+    /**
+     * A participant whose address is verified: `requireParticipant()`
+     * refuses any session of one that isn't (#189).
+     */
     async function createParticipant(
       regionId: string,
       email: string,
     ): Promise<string> {
       const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${regionId}, ${email}, 'hash')
+        insert into participants (
+          region_id, email, password_hash, email_verified_at
+        ) values (${regionId}, ${email}, 'hash', now())
         returning id
       `;
       return participant.id as string;
@@ -235,11 +240,16 @@ describe.skipIf(!(await isDbReachable()))(
         {headers: {cookie: await participantCookie(participantId)}},
         env,
       );
-      const body = (await res.json()) as Array<{tournamentId: string}>;
+      const body = (await res.json()) as Array<{
+        tournamentId: string;
+        tournament: {regionSlug: string};
+      }>;
 
       expect(res.status).toBe(200);
       expect(body).toHaveLength(1);
       expect(body[0].tournamentId).toBe(tournamentId);
+      // Names the public list page whose cache a cancel drops (#125).
+      expect(body[0].tournament.regionSlug).toBe(`${testRegionSlug}-own`);
     });
 
     it('returns entries for both saikyoi and shinjinou in the same region', async () => {
@@ -501,7 +511,10 @@ describe.skipIf(!(await isDbReachable()))(
         `/api/mypage/entries/${entryId}`,
         {
           method: 'DELETE',
-          headers: {cookie: await participantCookie(participantId)},
+          headers: {
+            cookie: await participantCookie(participantId),
+            origin: env.FRONTEND_URL,
+          },
         },
         env,
       );

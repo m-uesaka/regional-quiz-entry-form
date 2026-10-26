@@ -12,6 +12,7 @@ import {requireParticipant} from '../middleware/participant-auth';
 import {createDbClient} from '../lib/db';
 import {cancelOwnEntry, updateOwnEntry} from '../lib/entries';
 import {internalError} from '../lib/errors';
+import {tournamentDisplayName} from '../lib/tournaments';
 import {
   FORM_FIELD_DEF_COLUMNS,
   toFormFieldDef,
@@ -27,7 +28,8 @@ const EntryIdParamSchema = z.object({entryId: z.string().uuid()});
 
 const LIST_COLUMNS =
   'id, tournament_id, status, waitlist_position, ' +
-  'tournaments(name, type, region_id, entry_opens_at, entry_closes_at)';
+  'tournaments(name, type, region_id, entry_opens_at, entry_closes_at, ' +
+  'regions(slug, name))';
 
 const DETAIL_COLUMNS =
   LIST_COLUMNS +
@@ -41,11 +43,12 @@ interface MypageEntryRow {
   status: MypageEntry['status'];
   waitlist_position: number | null;
   tournaments: {
-    name: string;
+    name: string | null;
     type: MypageEntry['tournament']['type'];
     region_id: string;
     entry_opens_at: string;
     entry_closes_at: string;
+    regions: {slug: string; name: string};
   };
 }
 
@@ -66,9 +69,14 @@ function rowToMypageEntry(row: MypageEntryRow): MypageEntry {
     status: row.status,
     waitlistPosition: row.waitlist_position,
     tournament: {
-      name: row.tournaments.name,
+      name: tournamentDisplayName(
+        row.tournaments.name,
+        row.tournaments.regions.name,
+        row.tournaments.type,
+      ),
       type: row.tournaments.type,
       regionId: row.tournaments.region_id,
+      regionSlug: row.tournaments.regions.slug,
       entryOpensAt: row.tournaments.entry_opens_at,
       entryClosesAt: row.tournaments.entry_closes_at,
     },

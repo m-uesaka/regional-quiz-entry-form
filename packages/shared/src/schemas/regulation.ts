@@ -1,5 +1,13 @@
 import {z} from 'zod';
 
+/**
+ * The longest a regulation's label may be. A label is the condition itself
+ * as entrants read it on the entry form (「開催地域に在住・在学・在勤の方」),
+ * and some regions' conditions run long, so 300 rather than the 200 it
+ * started at.
+ */
+export const REGULATION_LABEL_MAX_LENGTH = 300;
+
 export const RegulationSchema = z.object({
   id: z.string().uuid(),
   tournamentId: z.string().uuid(),
@@ -21,7 +29,7 @@ export type Regulation = z.infer<typeof RegulationSchema>;
 export const RegulationUpsertSchema = z
   .object({
     id: z.string().uuid().optional(),
-    label: z.string().min(1).max(200),
+    label: z.string().min(1).max(REGULATION_LABEL_MAX_LENGTH),
     // Omitting either field means "no priority window", so a client that
     // never uses one doesn't have to send explicit nulls.
     priorityStartsAt: z

@@ -46,6 +46,7 @@ test('staff sign in, read their tournament roster, and export it as CSV', async 
     name: '出力花子',
     furigana: 'しゅつりょくはなこ',
     displayName: 'はなこ',
+    freeText: 'よろしくお願いします',
     customFieldValues: {
       shirt_size: 'L',
       note: '会場まで徒歩',
@@ -120,14 +121,19 @@ test('staff sign in, read their tournament roster, and export it as CSV', async 
   expect(body.startsWith(UTF8_BOM)).toBe(true);
   const rows = parseSimpleCsv(body.slice(UTF8_BOM.length));
 
-  // The tournament's custom fields become the trailing columns, headed by
-  // their labels in `display_order`.
+  // Everything an entry carries is exported (#178), and the tournament's
+  // custom fields become the trailing columns, headed by their labels in
+  // `display_order`.
   expect(rows[0]).toEqual([
     '氏名',
     'ふりがな',
-    '掲載名',
+    'エントリーリスト掲載名',
+    'メールアドレス',
     'ステータス',
+    'キャンセル待ち順位',
+    'エントリー日時',
     'レギュレーション',
+    '自由記述',
     'Tシャツサイズ',
     '備考',
     '参加したい企画',
@@ -137,9 +143,15 @@ test('staff sign in, read their tournament roster, and export it as CSV', async 
     confirmed.name,
     'しゅつりょくはなこ',
     confirmed.displayName,
+    confirmed.email,
     '確定',
+    // Only a waitlisted entry has a place in the queue.
+    '',
+    // Written in Japan time, to the minute.
+    expect.stringMatching(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/),
     // An entry may claim several regulations, and they share one cell.
     '一般;学生',
+    'よろしくお願いします',
     'L',
     '会場まで徒歩',
     // A checkbox group's selections share one cell, joined by `;`.
@@ -151,8 +163,12 @@ test('staff sign in, read their tournament roster, and export it as CSV', async 
     pending.name,
     'みかくにんじろう',
     pending.displayName,
+    pending.email,
     'メール確認待ち',
+    '',
+    expect.stringMatching(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/),
     '一般;学生',
+    '',
     'S',
     '',
     '筆記',

@@ -2,6 +2,7 @@ import {render, screen} from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import {describe, expect, it} from 'vitest';
 import type {FormFieldDef, Regulation, Tournament} from '@regional-quiz/shared';
+import type {PriorityEntryNotice} from '$lib/priority-entry';
 import Page from './+page.svelte';
 
 const TOURNAMENT: Tournament = {
@@ -40,6 +41,7 @@ const FORM_FIELD_DEFS: FormFieldDef[] = [
   {
     fieldKey: 't_shirt_size',
     label: 'Tシャツサイズ',
+    plainLabel: 'Tシャツサイズ',
     fieldType: 'radio',
     required: true,
     options: ['S', 'M', 'L'],
@@ -48,6 +50,7 @@ const FORM_FIELD_DEFS: FormFieldDef[] = [
   {
     fieldKey: 'agree_rules',
     label: '規約に同意する',
+    plainLabel: '規約に同意する',
     fieldType: 'checkbox',
     required: true,
     options: null,
@@ -57,7 +60,16 @@ const FORM_FIELD_DEFS: FormFieldDef[] = [
 
 type ActionResult = Parameters<typeof Page>[1]['form'];
 
-function renderPage(form: ActionResult = null) {
+const LOGIN_PATH = '/mypage/login?redirectTo=%2Ftokyo%2Fsaikyoi%2Fentry';
+
+function renderPage(
+  form: ActionResult = null,
+  options: {
+    loggedIn?: boolean;
+    priorityNotices?: PriorityEntryNotice[];
+    waitlistOpen?: boolean;
+  } = {},
+) {
   return render(Page, {
     props: {
       params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
@@ -65,6 +77,10 @@ function renderPage(form: ActionResult = null) {
         tournament: TOURNAMENT,
         regulations: REGULATIONS,
         formFieldDefs: FORM_FIELD_DEFS,
+        priorityNotices: options.priorityNotices ?? [],
+        waitlistOpen: options.waitlistOpen ?? false,
+        loggedIn: options.loggedIn ?? false,
+        loginPath: LOGIN_PATH,
       },
       form,
     },
@@ -82,12 +98,37 @@ const SUBMITTED_VALUES = {
 };
 
 describe('entry +page.svelte', () => {
+  it('opens with the 優先エントリー and the waitlist when there are any', () => {
+    renderPage(null, {
+      priorityNotices: [
+        {labels: ['一般の部'], endsAtLabel: '2026年11月5日(木) 9:00'},
+      ],
+      waitlistOpen: true,
+    });
+
+    expect(
+      screen.getByText(
+        '現在優先エントリー実施中です。該当レギュレーション: 「一般の部」、〜2026年11月5日(木) 9:00まで',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/キャンセル待ちが発生しています/),
+    ).toBeInTheDocument();
+  });
+
+  it('says nothing of either when there is neither', () => {
+    renderPage();
+
+    expect(screen.queryByText(/優先エントリー実施中/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/キャンセル待ち/)).not.toBeInTheDocument();
+  });
+
   it('renders the entry form fields', () => {
     renderPage();
 
     expect(screen.getByLabelText('氏名')).toBeInTheDocument();
     expect(screen.getByLabelText('ふりがな')).toBeInTheDocument();
-    expect(screen.getByLabelText('掲載名')).toBeInTheDocument();
+    expect(screen.getByLabelText('エントリーリスト掲載名')).toBeInTheDocument();
     expect(screen.getByLabelText('メールアドレス')).toBeInTheDocument();
     expect(screen.getByLabelText('パスワード')).toBeInTheDocument();
     expect(screen.getByLabelText('パスワード(確認)')).toBeInTheDocument();
@@ -114,6 +155,7 @@ describe('entry +page.svelte', () => {
       error: 'この大会には既にエントリー済みです',
       fieldErrors: {},
       values: SUBMITTED_VALUES,
+      loginPath: null,
     });
 
     expect(screen.getByRole('alert')).toHaveTextContent(
@@ -135,9 +177,10 @@ describe('entry +page.svelte', () => {
 
   it('leaves the password fields blank after a rejected submission', () => {
     renderPage({
-      error: 'パスワードが正しくありません',
+      error: '入力内容を確認してください',
       fieldErrors: {},
       values: SUBMITTED_VALUES,
+      loginPath: null,
     });
 
     expect(screen.getByLabelText('パスワード')).toHaveValue('');
@@ -149,6 +192,7 @@ describe('entry +page.svelte', () => {
       error: '入力内容を確認してください',
       fieldErrors: {passwordConfirm: ['パスワードが一致しません']},
       values: SUBMITTED_VALUES,
+      loginPath: null,
     });
 
     expect(screen.getByText('パスワードが一致しません')).toBeInTheDocument();
@@ -162,6 +206,7 @@ describe('entry +page.svelte', () => {
       error: '入力内容を確認してください',
       fieldErrors: {'custom.agree_rules': ['「規約に同意する」は必須です']},
       values: SUBMITTED_VALUES,
+      loginPath: null,
     });
 
     expect(
@@ -174,6 +219,64 @@ describe('entry +page.svelte', () => {
 
     expect(screen.getByRole('status')).toHaveTextContent('taro@example.com');
     expect(screen.queryByLabelText('氏名')).not.toBeInTheDocument();
+  });
+
+  // An anonymous submission is answered the same whatever the address
+  // (#117), so the page must not claim the entry was taken: the mail may be
+  // the reason there is no entry.
+  it('only says a mail was sent after an anonymous submission', () => {
+    renderPage({submitted: true, email: 'taro@example.com'});
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'taro@example.com 宛にメールを送信しました',
+    );
+    expect(screen.getByRole('status')).not.toHaveTextContent('受け付けました');
+  });
+
+  it('the form links to the login page for participants who already have an account', () => {
+    renderPage();
+
+    expect(
+      screen.getByRole('link', {name: 'ログインしてエントリーする'}),
+    ).toHaveAttribute('href', LOGIN_PATH);
+  });
+
+  it('the form hides the credential fields for a logged-in participant', () => {
+    renderPage(null, {loggedIn: true});
+
+    expect(screen.queryByLabelText('メールアドレス')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('パスワード')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('パスワード(確認)')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', {name: 'ログインしてエントリーする'}),
+    ).not.toBeInTheDocument();
+    expect(screen.getByLabelText('氏名')).toBeInTheDocument();
+  });
+
+  it('confirms a logged-in entry without naming an address', () => {
+    renderPage({submitted: true, loggedIn: true}, {loggedIn: true});
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'エントリーを受け付けました',
+    );
+  });
+
+  it('offers the login screen when the session lapsed', () => {
+    renderPage(
+      {
+        error:
+          'ログインの有効期限が切れました。もう一度ログインしてからエントリーしてください',
+        fieldErrors: {},
+        values: SUBMITTED_VALUES,
+        loginPath: LOGIN_PATH,
+      },
+      {loggedIn: true},
+    );
+
+    expect(screen.getByRole('link', {name: 'ログイン画面へ'})).toHaveAttribute(
+      'href',
+      LOGIN_PATH,
+    );
   });
 
   // SvelteKit re-uses this page component across a navigation that only
@@ -191,6 +294,10 @@ describe('entry +page.svelte', () => {
         tournament: {...TOURNAMENT, id: OTHER_TOURNAMENT_ID, type: 'shinjinou'},
         regulations: REGULATIONS,
         formFieldDefs: FORM_FIELD_DEFS,
+        priorityNotices: [],
+        waitlistOpen: false,
+        loggedIn: false,
+        loginPath: LOGIN_PATH,
       },
       form: null,
     });

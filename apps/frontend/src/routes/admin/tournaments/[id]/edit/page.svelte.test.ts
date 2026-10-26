@@ -35,7 +35,11 @@ const STAFF: StaffClaims = {
   role: 'general',
   regionId: null,
   tournamentType: null,
+  sessionsValidFrom: 1756085025678,
 };
+
+const FORM_DEFINITION_YAML =
+  'tournamentSlug: saikyoi\nfields:\n  - key: note\n    label: 備考\n    type: textarea\n    required: false\n';
 
 /** A second tournament, reached by a link that only changes `[id]`. */
 const OTHER_TOURNAMENT: Tournament = {
@@ -51,11 +55,18 @@ const OTHER_TOURNAMENT: Tournament = {
 function renderPage(
   tournament: Tournament = TOURNAMENT,
   form: PageProps['form'] = null,
+  customName: string | null = tournament.name,
 ) {
   return render(Page, {
     props: {
       params: {id: tournament.id},
-      data: {staff: STAFF, tournament, regions: REGIONS},
+      data: {
+        staff: STAFF,
+        tournament,
+        customName,
+        regions: REGIONS,
+        formDefinitionYaml: FORM_DEFINITION_YAML,
+      },
       form,
     },
   });
@@ -66,10 +77,19 @@ describe('admin tournament edit +page.svelte', () => {
     renderPage();
 
     expect(screen.getByLabelText('地域')).toHaveValue(TOURNAMENT.regionId);
-    expect(screen.getByLabelText('大会名')).toHaveValue(TOURNAMENT.name);
+    expect(screen.getByLabelText(/大会名/)).toHaveValue(TOURNAMENT.name);
     expect(screen.getByLabelText(/定員/)).toHaveValue(TOURNAMENT.capacity);
     expect(screen.getByLabelText('種別')).toHaveValue('saikyoi');
-    expect(screen.getByText(/取り込み先: 最強位/)).toBeInTheDocument();
+    expect(screen.getByText(/対象: 最強位/)).toBeInTheDocument();
+  });
+
+  // A 大会名 left blank is answered as the default name (東京最強位), which
+  // must not come back as a typed one: a region fixed on this form would
+  // then keep the old region's name.
+  it('leaves a blank 大会名 blank rather than showing the default name', () => {
+    renderPage({...TOURNAMENT, name: '東京最強位'}, null, null);
+
+    expect(screen.getByLabelText(/大会名/)).toHaveValue('');
   });
 
   // The entry window is labelled JST, and is server-rendered by a Worker
@@ -125,7 +145,7 @@ describe('admin tournament edit +page.svelte', () => {
     });
 
     expect(screen.getByRole('alert')).toHaveTextContent('regionId が不正です');
-    expect(screen.getByLabelText('大会名')).toHaveValue('書きかけの大会名');
+    expect(screen.getByLabelText(/大会名/)).toHaveValue('書きかけの大会名');
     expect(screen.getByLabelText('地域')).toHaveValue(REGIONS[1].id);
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
@@ -136,19 +156,24 @@ describe('admin tournament edit +page.svelte', () => {
   // rather than the one the page was first rendered with.
   it('follows a saved type change in the import panel', async () => {
     const {rerender} = renderPage();
-    expect(screen.getByText(/取り込み先: 最強位/)).toBeInTheDocument();
+    expect(screen.getByText(/対象: 最強位/)).toBeInTheDocument();
 
     await rerender({
       params: {id: TOURNAMENT.id},
       data: {
         staff: STAFF,
         tournament: {...TOURNAMENT, type: 'shinjinou'},
+        customName: TOURNAMENT.name,
         regions: REGIONS,
+        formDefinitionYaml: 'tournamentSlug: shinjinou\nfields: []\n',
       },
       form: {saved: true, error: null, values: null},
     });
 
-    expect(screen.getByText(/取り込み先: 新人王/)).toBeInTheDocument();
+    expect(screen.getByText(/対象: 新人王/)).toBeInTheDocument();
+    expect(screen.getByLabelText('YAML')).toHaveValue(
+      'tournamentSlug: shinjinou\nfields: []\n',
+    );
   });
 
   // SvelteKit re-uses this page component across a navigation that only
@@ -161,17 +186,63 @@ describe('admin tournament edit +page.svelte', () => {
 
     await rerender({
       params: {id: OTHER_TOURNAMENT.id},
-      data: {staff: STAFF, tournament: OTHER_TOURNAMENT, regions: REGIONS},
+      data: {
+        staff: STAFF,
+        tournament: OTHER_TOURNAMENT,
+        customName: OTHER_TOURNAMENT.name,
+        regions: REGIONS,
+        formDefinitionYaml: 'tournamentSlug: shinjinou\nfields: []\n',
+      },
       form: null,
     });
 
-    expect(screen.getByLabelText('大会名')).toHaveValue(OTHER_TOURNAMENT.name);
+    expect(screen.getByLabelText(/大会名/)).toHaveValue(OTHER_TOURNAMENT.name);
     expect(screen.getByLabelText('地域')).toHaveValue(
       OTHER_TOURNAMENT.regionId,
     );
     expect(screen.getByLabelText(/定員/)).toHaveValue(null);
     expect(screen.getByLabelText('種別')).toHaveValue('shinjinou');
     expect(screen.getByPlaceholderText('スプレッドシートID')).toHaveValue('');
-    expect(screen.getByText(/取り込み先: 新人王/)).toBeInTheDocument();
+    expect(screen.getByText(/対象: 新人王/)).toBeInTheDocument();
+    expect(screen.getByLabelText('YAML')).toHaveValue(
+      'tournamentSlug: shinjinou\nfields: []\n',
+    );
+  });
+
+  it('starts the YAML editor from the stored form definition', () => {
+    renderPage();
+
+    expect(screen.getByLabelText('YAML')).toHaveValue(FORM_DEFINITION_YAML);
+  });
+
+  // A refused update must not show up in the delete section, nor the other
+  // way round.
+  it('keeps the update result out of the delete section', () => {
+    renderPage(TOURNAMENT, {saved: true, error: null, values: null});
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('deletes through the page action, behind a required confirmation', () => {
+    renderPage();
+
+    const form = screen
+      .getByRole('button', {name: '大会を削除'})
+      .closest('form') as HTMLFormElement;
+    expect(form).toHaveAttribute('method', 'POST');
+    expect(form).toHaveAttribute('action', '?/delete');
+    expect(screen.getByLabelText('この大会を削除する')).toBeRequired();
+  });
+
+  it('shows why a delete was refused, without touching the tournament form', () => {
+    renderPage(TOURNAMENT, {
+      deleteError: 'エントリーがある大会は削除できません',
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'エントリーがある大会は削除できません',
+    );
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/大会名/)).toHaveValue(TOURNAMENT.name);
   });
 });

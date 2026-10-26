@@ -11,9 +11,10 @@ import {
   type Locator,
   type Page,
 } from '@playwright/test';
+import {isFreeTextFieldType, labelPlainText} from '@regional-quiz/shared';
 import {
   extractVerificationUrl,
-  VERIFICATION_MAIL_SUBJECT,
+  verificationMailSubject,
   waitForMail,
 } from './api';
 import {
@@ -22,6 +23,7 @@ import {
   REGION,
   uniqueEmail,
   type FormFieldDefFixture,
+  staffLoginScope,
   type StaffFixture,
   type TournamentFixture,
 } from './fixtures';
@@ -52,6 +54,11 @@ export interface EntryFormInput {
    * `defaultCustomFieldValues`, which satisfy its required fields.
    */
   customFieldValues?: Record<string, string | string[]>;
+  /**
+   * Whether the participant is logged in, in which case the form has no
+   * address or password fields to fill (#117).
+   */
+  loggedIn?: boolean;
 }
 
 /** A participant the test created by filling the entry form in. */
@@ -173,22 +180,24 @@ export async function fillEntryForm(
     participant.furigana,
   );
   await fillField(
-    page.getByLabel('掲載名', {exact: true}),
+    page.getByLabel('エントリーリスト掲載名', {exact: true}),
     participant.displayName,
   );
-  await fillField(
-    page.getByLabel('メールアドレス', {exact: true}),
-    participant.email,
-  );
-  // Exact, or this would also match the confirmation field below it.
-  await fillField(
-    page.getByLabel('パスワード', {exact: true}),
-    participant.password,
-  );
-  await fillField(
-    page.getByLabel('パスワード(確認)', {exact: true}),
-    participant.password,
-  );
+  if (!input.loggedIn) {
+    await fillField(
+      page.getByLabel('メールアドレス', {exact: true}),
+      participant.email,
+    );
+    // Exact, or this would also match the confirmation field below it.
+    await fillField(
+      page.getByLabel('パスワード', {exact: true}),
+      participant.password,
+    );
+    await fillField(
+      page.getByLabel('パスワード(確認)', {exact: true}),
+      participant.password,
+    );
+  }
 
   // Every one of them: an entry may claim several conditions, and the
   // specs assert that all of them come back out on the staff screens.
@@ -266,6 +275,14 @@ export async function submitEntryForm(
 
   await page.getByRole('button', {name: 'エントリーする'}).click();
   await expect(page.getByRole('status')).toContainText(participant.email);
+  // The page answers before the entry is made (#117); the confirmation mail
+  // is the last thing the background work does, so once it is in, the
+  // account and the entry exist for whatever the spec does next.
+  await waitForMail(
+    page.request,
+    participant.email,
+    verificationMailSubject(tournament),
+  );
   return participant;
 }
 
@@ -295,14 +312,18 @@ async function answerCustomField(
 
   // Not `exact` on the group's own label, because a required field's label
   // carries a trailing "*"; the options inside it are matched exactly.
+  // Both are matched as the page names them: a label or option with an
+  // `<a>` link in it is named by its text, not by the markup (#173).
+  const label = labelPlainText(field.label);
+  if (isFreeTextFieldType(field.fieldType)) {
+    await fillField(page.getByLabel(label), options[0]);
+    return;
+  }
   switch (field.fieldType) {
-    case 'textarea':
-      await fillField(page.getByLabel(field.label), options[0]);
-      return;
     case 'radio':
       await page
-        .getByRole('group', {name: field.label})
-        .getByLabel(options[0], {exact: true})
+        .getByRole('group', {name: label})
+        .getByLabel(labelPlainText(options[0]), {exact: true})
         .check();
       return;
     case 'checkbox': {
@@ -315,9 +336,9 @@ async function answerCustomField(
             'implemented; no fixture seeds one.',
         );
       }
-      const group = page.getByRole('group', {name: field.label});
+      const group = page.getByRole('group', {name: label});
       for (const option of options) {
-        await group.getByLabel(option, {exact: true}).check();
+        await group.getByLabel(labelPlainText(option), {exact: true}).check();
       }
       return;
     }
@@ -332,15 +353,21 @@ async function answerCustomField(
  * it lands on the same `vite dev` server the rest of the flow is on.
  * @param page The page to open it in.
  * @param request An API context, used to read the mail stub.
+ * @param tournament The tournament the entry was made to.
  * @param email The address the confirmation mail went to.
  * @return The link that was opened, so a spec can follow it a second time.
  */
 export async function openVerificationLink(
   page: Page,
   request: APIRequestContext,
+  tournament: TournamentFixture,
   email: string,
 ): Promise<string> {
-  const mail = await waitForMail(request, email, VERIFICATION_MAIL_SUBJECT);
+  const mail = await waitForMail(
+    request,
+    email,
+    verificationMailSubject(tournament),
+  );
   const link = extractVerificationUrl(mail.html);
   await page.goto(link);
   return link;
@@ -392,6 +419,7 @@ export async function loginStaffThroughForm(
   ).toBeVisible();
 
   await fillField(page.getByLabel('メールアドレス'), staff.email);
+  await page.getByLabel('区分').selectOption(staffLoginScope(staff));
   await fillField(page.getByLabel('パスワード'), staff.password);
   await page.getByRole('button', {name: 'ログイン'}).click();
   await page.waitForURL(url => !url.pathname.startsWith(STAFF_LOGIN_PATH));

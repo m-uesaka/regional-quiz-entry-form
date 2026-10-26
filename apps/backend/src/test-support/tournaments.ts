@@ -33,6 +33,7 @@ export function openEntryPeriodTournament(
     capacity: null,
     entry_opens_at: new Date(now - DAY_MS).toISOString(),
     entry_closes_at: new Date(now + DAY_MS).toISOString(),
+    regions: {name: 'テスト地域'},
     ...overrides,
   };
 }
@@ -50,14 +51,14 @@ export function closedEntryPeriodTournament(
 }
 
 /**
- * Answers the region and tournament lookups the entry-period gate makes
- * with `tournament`, and everything else with `fetchImpl`.
+ * Answers the tournament lookup the entry-period gate makes with
+ * `tournament`, and everything else with `fetchImpl`.
  *
- * Both tables are answered because the gate resolves a tournament two ways:
- * straight by `:tournamentId`, and — on the public by-slug routes — via the
- * region named by `:regionSlug` first.
+ * Both of the gate's resolvers read `tournaments` alone: straight by
+ * `:tournamentId`, and -- on the public by-slug routes -- with the region
+ * embedded as an inner join to filter on its slug.
  *
- * @param tournament The row the lookups should find, or `null` for a
+ * @param tournament The row the lookup should find, or `null` for a
  *     tournament (and region) that doesn't exist.
  * @param fetchImpl The stub for every other Supabase call.
  */
@@ -67,11 +68,6 @@ export function tournamentAwareFetch(
 ): typeof fetch {
   return ((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString();
-    if (url.includes('/rest/v1/regions')) {
-      return Promise.resolve(
-        Response.json(tournament ? [{id: tournament.region_id}] : []),
-      );
-    }
     if (url.includes('/rest/v1/tournaments')) {
       return Promise.resolve(Response.json(tournament ? [tournament] : []));
     }

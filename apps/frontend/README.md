@@ -46,7 +46,7 @@ because the two call sites take different routes:
 | Caller | Wiring |
 | --- | --- |
 | `load` / `actions` (SSR) | `handleFetch` in `src/hooks.server.ts`. SvelteKit's `event.fetch` short-circuits same-origin requests into its own router instead of the network, so the rewrite has to happen in the hook; it also re-attaches the incoming cookies, which SvelteKit only forwards to the app's own host and its subdomains. |
-| The browser (CSV download links, client-side `createApiClient()`) | `server.proxy` in `vite.config.ts` for `vite dev`. In production the same-origin `/api/*` prefix is routed to the backend Worker by a Workers route (`routes` in `apps/backend/wrangler.toml`, which wins over the Pages project on the same hostname), not by this app — see `docs/supabase-deployment.md` §6.4. |
+| The browser (CSV download links, client-side `createApiClient()`) | `server.proxy` in `vite.config.ts` for `vite dev`. In production the same-origin `/api/*` prefix is routed to the backend Worker by a Workers route, which wins over the Pages project on the same hostname, not by this app. The route is not in `apps/backend/wrangler.toml`: `.github/workflows/deploy.yml` applies it with `--route "$FRONTEND_HOST/api/*"` from the deploying environment's `FRONTEND_HOST` variable — see `docs/supabase-deployment.md` §6.4. |
 
 ## Form controls are bound, not rendered from an expression
 
@@ -121,10 +121,10 @@ else the page accumulated about the record it was showing goes with them —
 `TournamentEditor` also holds the "更新しました" notice, which would otherwise
 stand over a tournament that was never saved, and the type the API last
 confirmed. The child is where a component with state of its own goes too:
-`SheetImportPanel` keeps the YAML it previewed and uploads it under whatever
-`tournamentId` it is currently handed, so a preview built for one tournament
-and a prop that followed `data` to the next would file the first one's sheet
-rows as the second one's form definition. (Only between tournaments of the
+`FormDefinitionEditor` keeps the YAML being edited and uploads it under
+whatever `tournamentId` it is currently handed, so a draft built for one
+tournament and a prop that followed `data` to the next would file the first
+one's form definition as the second one's. (Only between tournaments of the
 same type: the API rejects a `tournamentSlug` that doesn't match its target,
 which is what turns the same mistake between differing types into an error
 message rather than a silent misfile.) See #98.

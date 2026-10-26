@@ -4,16 +4,19 @@ import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
 import {
   EntryListItemSchema,
+  PageQuerySchema,
+  TournamentEntryCountsSchema,
   TournamentTypeSchema,
   type EntryListItem,
+  type PageQuery,
 } from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
-import {fetchAllRows} from '../lib/paged-select';
+import {fetchPage, toPageResponse} from '../lib/paged-select';
 import {internalError} from '../lib/errors';
 import {
   fetchTournamentBySlug,
-  TournamentLookupError,
+  tournamentLookupFailure,
   type TournamentRow,
 } from '../lib/tournaments';
 
@@ -28,6 +31,7 @@ interface EntryListRow {
   display_name: string;
   status: 'confirmed' | 'waitlisted' | 'cancelled';
   waitlist_position: number | null;
+  email_verified_at: string;
 }
 
 function rowToEntryListItem(row: EntryListRow): EntryListItem {
@@ -40,42 +44,119 @@ function rowToEntryListItem(row: EntryListRow): EntryListItem {
     displayName: row.status === 'cancelled' ? 'キャンセル' : row.display_name,
     status: row.status,
     waitlistPosition: row.waitlist_position,
+    // Masked along with the name: a cancelled row's exact time would tell
+    // anyone who knew when someone entered that they were the one who
+    // cancelled.
+    confirmedAt: row.status === 'cancelled' ? null : row.email_verified_at,
   });
 }
 
 /**
- * Answers with a tournament's public entry list.
+ * Answers with one page of a tournament's public entry list, plus the total
+ * the pager needs.
  *
  * Neither of the two routes below is gated on the entry period
  * (`middleware/entry-period.ts`), on purpose: the entry list is a published
  * result, and the moment it is read most is after entries have closed.
  * @param c The request context.
  * @param tournamentId The tournament whose entries to list.
+ * @param page The page to answer with.
  */
-async function respondWithEntryList(c: Context<Env>, tournamentId: string) {
+async function respondWithEntryList(
+  c: Context<Env>,
+  tournamentId: string,
+  page: PageQuery,
+) {
   const db = createDbClient(c.env);
-  const {rows, error} = await fetchAllRows<EntryListRow>((from, to) =>
-    db
-      .from('entries')
-      .select('display_name, status, waitlist_position, created_at')
-      .eq('tournament_id', tournamentId)
-      .in('status', ['confirmed', 'waitlisted', 'cancelled'])
-      .order('created_at', {ascending: true})
-      .order('id', {ascending: true})
-      .range(from, to)
-      .returns<EntryListRow[]>(),
+  // One page rather than every entry: the list page's `load` result is
+  // embedded in the SSR'd HTML, so answering with all of them made the page
+  // grow with the tournament's size. `count: 'exact'` brings the total in
+  // the same round trip, so the pager's "m–k of n" costs no extra query.
+  //
+  // Listed in the order the entries were confirmed -- the moment the mailed
+  // link was followed, which is also when the seat or the waitlist place
+  // was decided (`confirm_entry_by_token()`) -- rather than when the form
+  // was sent, so the list's numbering agrees with who got in first. An entry
+  // that was never confirmed has no such moment and is left out: that is
+  // one that lapsed unverified (`lapse_expired_pending_entries()`) and was
+  // never on the list. `email_verified_at, id` is a total order, so plain
+  // offsets page stably.
+  const {rows, total, error} = await fetchPage<EntryListRow>(
+    (from, to) =>
+      db
+        .from('entries')
+        .select('display_name, status, waitlist_position, email_verified_at', {
+          count: 'exact',
+        })
+        .eq('tournament_id', tournamentId)
+        .in('status', ['confirmed', 'waitlisted', 'cancelled'])
+        .not('email_verified_at', 'is', null)
+        .order('email_verified_at', {ascending: true})
+        .order('id', {ascending: true})
+        .range(from, to)
+        .returns<EntryListRow[]>(),
+    page,
   );
   if (error) {
     return c.json(internalError('failed to read the entry list', error), 500);
   }
-  return c.json(rows.map(rowToEntryListItem));
+  return c.json(toPageResponse(rows.map(rowToEntryListItem), total, page));
+}
+
+/**
+ * Counts a tournament's entries in one status. Head-only, so no row is
+ * pulled into the Worker just to be counted.
+ * @param c The request context.
+ * @param tournamentId The tournament whose entries to count.
+ * @param status The status to count.
+ */
+async function countEntries(
+  c: Context<Env>,
+  tournamentId: string,
+  status: 'confirmed' | 'waitlisted',
+) {
+  return createDbClient(c.env)
+    .from('entries')
+    .select('id', {count: 'exact', head: true})
+    .eq('tournament_id', tournamentId)
+    .eq('status', status);
 }
 
 export const entryListRoute = new Hono<Env>()
+  // How full the tournament is, for the entry form to say that a new entry
+  // would join the waitlist. Ungated for the same reason as the list: both
+  // numbers can already be counted off the published list.
+  .get(
+    '/:tournamentId/entry-counts',
+    zValidator('param', TournamentIdParamSchema),
+    async c => {
+      const {tournamentId} = c.req.valid('param');
+      const [confirmed, waitlisted] = await Promise.all([
+        countEntries(c, tournamentId, 'confirmed'),
+        countEntries(c, tournamentId, 'waitlisted'),
+      ]);
+      const error = confirmed.error ?? waitlisted.error;
+      if (error) {
+        return c.json(internalError('failed to count the entries', error), 500);
+      }
+      return c.json(
+        TournamentEntryCountsSchema.parse({
+          confirmedCount: confirmed.count ?? 0,
+          waitlistedCount: waitlisted.count ?? 0,
+        }),
+      );
+    },
+  )
   .get(
     '/:tournamentId/entry-list',
     zValidator('param', TournamentIdParamSchema),
-    async c => respondWithEntryList(c, c.req.valid('param').tournamentId),
+    zValidator('query', PageQuerySchema),
+    async c =>
+      respondWithEntryList(
+        c,
+        c.req.valid('param').tournamentId,
+        c.req.valid('query'),
+      ),
   )
   // The slug-keyed twin of the route above, for the public list page, whose
   // URL names a tournament the way the entry form's does. It exists because
@@ -86,6 +167,7 @@ export const entryListRoute = new Hono<Env>()
   .get(
     '/:regionSlug/:tournamentSlug/entry-list',
     zValidator('param', TournamentBySlugParamSchema),
+    zValidator('query', PageQuerySchema),
     async c => {
       const {regionSlug, tournamentSlug} = c.req.valid('param');
       let tournament: TournamentRow | null;
@@ -96,15 +178,11 @@ export const entryListRoute = new Hono<Env>()
           tournamentSlug,
         );
       } catch (e: unknown) {
-        const cause = e instanceof TournamentLookupError ? e.cause : e;
-        return c.json(
-          internalError('failed to read the tournament', cause),
-          500,
-        );
+        return c.json(tournamentLookupFailure(e), 500);
       }
       if (!tournament) {
         return c.json({error: 'tournament not found'}, 404);
       }
-      return respondWithEntryList(c, tournament.id);
+      return respondWithEntryList(c, tournament.id, c.req.valid('query'));
     },
   );

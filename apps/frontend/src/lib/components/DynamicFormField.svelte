@@ -1,12 +1,21 @@
 <script lang="ts">
-  import type {FormFieldDefYaml} from '@regional-quiz/shared';
+  import {
+    CUSTOM_FIELD_VALUE_MAX_LENGTH,
+    isFreeTextFieldType,
+    type FormFieldDefYaml,
+  } from '@regional-quiz/shared';
   import {customFieldName} from '$lib/custom-field-name';
+  import FieldLabelText from '$lib/components/FieldLabelText.svelte';
+  import Input from '$lib/components/ui/atoms/Input.svelte';
+  import Label from '$lib/components/ui/atoms/Label.svelte';
+  import Textarea from '$lib/components/ui/atoms/Textarea.svelte';
 
   interface Props {
     field: FormFieldDefYaml;
     /**
      * The field's answer: the chosen option for a `radio` field, the list of
-     * chosen ones for a `checkbox` field, the text for a `textarea` field.
+     * chosen ones for a `checkbox` field, the text for a `textarea` /
+     * `textfield` field.
      * Bound, so answering the field writes it back to the caller — see "Form
      * controls are bound, not rendered from an expression" in
      * `apps/frontend/README.md`.
@@ -65,79 +74,98 @@
   });
 </script>
 
-<!-- The three branches below each render this under their control, so a
+<!-- The branches below each render this under their control, so a
      rejected answer is reported in the same place whatever the field
      type is. -->
 {#snippet errorMessage()}
-  {#if error}<p class="field-error">{error}</p>{/if}
+  {#if error}<p class="text-sm text-destructive">{error}</p>{/if}
 {/snippet}
 
-{#if field.type === 'textarea'}
-  <div class="form-field">
-    <label for={controlName}>
-      {field.label}
-      {#if field.required}<span aria-hidden="true">*</span>{/if}
-    </label>
-    <textarea
-      id={controlName}
-      name={controlName}
-      required={field.required}
-      bind:value
-    ></textarea>
+<!-- The options stay native inputs inside their own `<label>`: a native
+     radio/checkbox is what `bind:group` and the server-rendered `required`
+     rely on, and the wrapping label is what names each option. -->
+{#if isFreeTextFieldType(field.type)}
+  <div class="flex flex-col gap-1.5">
+    <Label for={controlName}>
+      <FieldLabelText label={field.label} />
+      {#if field.required}<span aria-hidden="true" class="ml-0.5 text-destructive">*</span>{/if}
+    </Label>
+    {#if field.type === 'textarea'}
+      <Textarea
+        id={controlName}
+        name={controlName}
+        required={field.required}
+        maxlength={CUSTOM_FIELD_VALUE_MAX_LENGTH}
+        isError={!!error}
+        bind:value
+      />
+    {:else}
+      <Input
+        id={controlName}
+        name={controlName}
+        required={field.required}
+        maxlength={CUSTOM_FIELD_VALUE_MAX_LENGTH}
+        isError={!!error}
+        bind:value
+      />
+    {/if}
     {@render errorMessage()}
   </div>
 {:else if field.type === 'radio'}
-  <fieldset class="form-field">
-    <legend>
-      {field.label}
-      {#if field.required}<span aria-hidden="true">*</span>{/if}
+  <fieldset class="flex flex-col gap-2">
+    <legend class="mb-1.5 text-sm/tight font-medium text-foreground">
+      <FieldLabelText label={field.label} />
+      {#if field.required}<span aria-hidden="true" class="ml-0.5 text-destructive">*</span>{/if}
     </legend>
     {#each field.options as option (option)}
-      <label>
+      <label class="flex w-fit cursor-pointer items-center gap-2 text-sm">
         <input
           type="radio"
+          class="size-4 cursor-pointer accent-primary"
           name={controlName}
           value={option}
           required={field.required}
           bind:group={value}
         />
-        {option}
+        <FieldLabelText label={option} />
       </label>
     {/each}
     {@render errorMessage()}
   </fieldset>
 {:else if field.type === 'checkbox'}
   {#if field.options && field.options.length > 0}
-    <fieldset class="form-field">
-      <legend>
-        {field.label}
-        {#if field.required}<span aria-hidden="true">*</span>{/if}
+    <fieldset class="flex flex-col gap-2">
+      <legend class="mb-1.5 text-sm/tight font-medium text-foreground">
+        <FieldLabelText label={field.label} />
+        {#if field.required}<span aria-hidden="true" class="ml-0.5 text-destructive">*</span>{/if}
       </legend>
       {#each field.options as option (option)}
-        <label>
+        <label class="flex w-fit cursor-pointer items-center gap-2 text-sm">
           <input
             type="checkbox"
+            class="size-4 cursor-pointer accent-primary"
             name={controlName}
             value={option}
             required={hydrated && field.required && !hasCheckboxSelection}
             bind:group={value}
           />
-          {option}
+          <FieldLabelText label={option} />
         </label>
       {/each}
       {@render errorMessage()}
     </fieldset>
   {:else}
-    <div class="form-field">
-      <label>
+    <div class="flex flex-col gap-1.5">
+      <label class="flex w-fit cursor-pointer items-center gap-2 text-sm">
         <input
           type="checkbox"
+          class="size-4 cursor-pointer accent-primary"
           name={controlName}
           value={booleanCheckboxValue}
           required={field.required}
           bind:group={value}
         />
-        {field.label}
+        <FieldLabelText label={field.label} />
       </label>
       {@render errorMessage()}
     </div>

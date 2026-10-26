@@ -114,7 +114,7 @@ flowchart TB
 | `id` | uuid | PK | |
 | `region_id` | uuid | not null, FK → `regions.id` | |
 | `type` | tournament_type | not null | 最強位 / 新人王 |
-| `name` | text | not null | 大会名 |
+| `name` | text | null 可 | 大会名。管理画面で空欄にすると `null` になり、API が読むたびに「地域名＋種別」(例: `東京最強位`)を作って返す(#164、`0024`)。地域名の変更や地域・種別の修正に追従させるため、既定名は保存しない |
 | `capacity` | integer | nullable | 定員。**`null` は「定員無制限」を意味する**(0 ではない) |
 | `entry_opens_at` | timestamptz | not null | エントリー開始日時 |
 | `entry_closes_at` | timestamptz | not null | エントリー終了日時 |
@@ -122,6 +122,7 @@ flowchart TB
 
 - `unique (region_id, type)`: 1つの地域につき、各大会種別は1大会まで。この制約があるため `/{regionSlug}/{tournamentSlug}` の組から大会を一意に引ける。
 - `capacity` が `null` のときは定員チェック自体を行いません(`confirm_entry_by_token()` / `promote_next_waitlisted_entry()` の両方で `v_capacity is not null` を条件にしている)。
+- 削除(`DELETE /api/tournaments/:id`、#164)では `regulations`・`form_field_defs`・`mail_jobs` が一緒に消えます(`0023` で `on delete cascade`)。`entries` の外部キーは no action のままなので、エントリーがある大会の削除は外部キー違反で止まります。
 - エントリー期間の判定は `packages/shared/src/logic/entry-period.ts` の `isWithinEntryPeriod()` に集約されており、バックエンド(API での拒否)とフロントエンド(UI の非表示)で同じ関数を共有しています。
 
 ### regulations — レギュレーション
@@ -129,7 +130,7 @@ flowchart TB
 | カラム | 型 | 制約 | 説明 |
 | --- | --- | --- | --- |
 | `id` | uuid | PK | |
-| `tournament_id` | uuid | not null, FK → `tournaments.id` | |
+| `tournament_id` | uuid | not null, FK → `tournaments.id`(on delete cascade) | |
 | `label` | text | not null | 表示ラベル |
 | `priority_starts_at` | timestamptz | nullable | 優先エントリー期間の開始 |
 | `priority_ends_at` | timestamptz | nullable | 優先エントリー期間の終了 |
@@ -146,12 +147,12 @@ flowchart TB
 | カラム | 型 | 制約 | 説明 |
 | --- | --- | --- | --- |
 | `id` | uuid | PK | |
-| `tournament_id` | uuid | not null, FK → `tournaments.id` | |
+| `tournament_id` | uuid | not null, FK → `tournaments.id`(on delete cascade) | |
 | `field_key` | text | not null | 項目キー。`entries.custom_field_values` の JSON キーになる |
-| `label` | text | not null | 画面上のラベル |
-| `field_type` | text | not null, check in (`checkbox`, `radio`, `textarea`) | 入力形式 |
+| `label` | text | not null | 画面上のラベル。`<a href="https://...">文字</a>` の形でリンクを書ける(#173、[`form-generation.md`](./form-generation.md)) |
+| `field_type` | text | not null, check in (`checkbox`, `radio`, `textarea`, `textfield`) | 入力形式(`textfield` は `0029` で追加) |
 | `required` | boolean | not null, default false | 必須かどうか |
-| `options` | jsonb | nullable | 選択肢の文字列配列。YAML で `options` を省略した項目(単独チェックボックスなど)だけが `null` になります。`checkbox` / `textarea` でも `options` が書かれていれば(空配列であっても)`toFormFieldDefRows()` がその配列をそのまま保存します |
+| `options` | jsonb | nullable | 選択肢の文字列配列。YAML で `options` を省略した項目(単独チェックボックスなど)だけが `null` になります。`checkbox` / `textarea` / `textfield` でも `options` が書かれていれば(空配列であっても)`toFormFieldDefRows()` がその配列をそのまま保存します |
 | `display_order` | integer | not null, default 0 | 表示順(YAML の記述順がそのまま入る) |
 
 - `unique (tournament_id, field_key)`: 同一大会内で項目キーは重複不可。
@@ -164,14 +165,23 @@ flowchart TB
 | --- | --- | --- | --- |
 | `id` | uuid | PK | |
 | `region_id` | uuid | not null, FK → `regions.id` | 所属地域 |
-| `email` | text | not null, **unique(全体)** | ログイン ID |
-| `password_hash` | text | not null | PBKDF2-SHA256 ハッシュ。`{16バイトのソルト}:{32バイトのハッシュ}` を hex 化してコロンで連結した形式(10万回反復) |
+| `email` | text | not null, **unique(全体)**, check `email = lower(email)` | ログイン ID。小文字で保存(#133) |
+| `password_hash` | text | not null | PBKDF2-SHA256 ハッシュ。`pbkdf2-sha256$<反復回数>$<16バイトのソルトの hex>$<32バイトのハッシュの hex>` の形式(現行 10 万回)。`$` を含まない `{ソルト}:{ハッシュ}` は旧形式(10 万回)として読み、次のログインで新形式に書き換わります |
 | `password_changed_at` | timestamptz | not null, default `now()` | パスワードが最後に変わった時刻(`0011` で追加)。セッション失効の判定に使います |
+| `email_verified_at` | timestamptz | nullable | アドレスの持ち主に確かめられた時刻(`0034` で追加、#189)。最初にエントリーを確認メールのリンクで確定した時刻で、null の間は「未確認」 |
 | `created_at` | timestamptz | not null, default `now()` | |
 
-- `email` は地域ごとではなく**システム全体で一意**です。そのため、ある参加者が別地域の大会にエントリーしようとすると `createEntry()` が 409(`already registered in another region`)を返します。
+- `email` は地域ごとではなく**システム全体で一意**です。そのため、ある参加者が別地域の大会にエントリーすることはできません。未ログインのエントリーでは、その旨をそのアドレスへメールで伝え(応答は他の場合と同じ `202`。#117)、ログイン中のエントリーでは 409(`already registered in another region`)を返します。この地域の固定は**確認済みのアカウントにだけ**かかります(下記)。
+- 参加者行は匿名エントリーの時点で(確認メールのリンクが踏まれる前に)作られるため、`email_verified_at` で**確認済みかどうか**を区別します(#189)。確認済みになるのは `confirm_entry_by_token()` でエントリーを確定したときだけで、パスワード再設定では確認済みになりません(再設定は地域を変えないため)。未確認のアカウントは:
+  - ログインできません(資格情報の誤りと同じ 401)。発行済みのセッションも `requireParticipant()` が拒否します。
+  - 次の匿名エントリーで、パスワードと地域が今のものと同じでなければ**上書き**されます(`take_over_unverified_participant()`)。地域の固定やパスワード照合で断られることはありません。
+  - `0034` は、確定したことのあるエントリー(`entries.email_verified_at` が null でない行)を持つ参加者を、その最も早い時刻で確認済みに埋め戻します。それ以外の参加者は適用時点で未確認になり、ログインできなくなります(確定待ちのエントリーのリンクを踏むか、エントリーし直せば戻れます)。
+- `email` は**小文字で保存します**(#133、`0025`)。メールアドレスは実運用上大文字小文字を区別しないのに、Postgres の `text` の比較・一意制約は区別するため、`Foo@example.com` と `foo@example.com` が別の参加者になり、既存参加者のパスワード確認や地域重複・二重エントリーの検査を素通りしていました。入力は `packages/shared` の `emailAddressSchema()` が小文字にし、check 制約 `participants_email_lowercase` が小文字以外の書き込みを拒否します(この制約があるので、既存の unique 制約がそのまま大文字小文字を区別しない一意性になります)。
+  - `0025` は、大文字小文字違いの行が既にあると**衝突しているアドレスを並べて失敗します**。どちらの行を残すかは機械的に決められないためで、適用前に `select lower(email), array_agg(id) from participants group by 1 having count(*) > 1` で洗い出し、残す行を決めて、もう一方の `entries.participant_id`(と `password_reset_tokens.participant_id`)を残す行に付け替えてから削除してください。同じ大会に両方のエントリーがある場合は `unique (participant_id, tournament_id)` に当たるので、片方をキャンセル済みにするか削除します。`staff_accounts` も同様です(参照しているのは `staff_password_reset_tokens` だけで、これは `on delete cascade`)。
 - Supabase Auth ではなく自前のテーブルでアカウントを管理しています。パスワードのハッシュ化・検証は `apps/backend/src/lib/password.ts`(Web Crypto の PBKDF2)。Cloudflare Workers は Node.js ランタイムではないため、Node 依存のライブラリは使えません。
-- 既存メールアドレスでの再エントリー時は**パスワード照合を必須**にしています。これがないと、メールアドレスを知っている第三者が他人のアカウントにエントリーをぶら下げられてしまいます。
+- `password_hash` は**アルゴリズムと反復回数を自分の中に持っています**。新しいハッシュを作るパラメータを変えても、既存のハッシュは保存時の回数で検証できるので誰もログインできなくなりません。照合が通ったときに古いパラメータ(または旧形式)だったものは、ログイン(参加者・スタッフ)と未ログインでのエントリーの照合時に、その場で現行パラメータで作り直されます(`lib/password-rehash.ts` の `verifyAccountPassword()`。パスワードを照合する箇所はすべてこれを通ります)。保存された反復回数が Workers の上限(10 万回)を超えるハッシュは、本番で例外になるため使えない値として扱い、ログインは 401 になります。この書き換えは `password_hash` が照合時の値のままである行だけを対象にし、`password_changed_at` は動かしません。
+- 反復回数が OWASP の推奨(PBKDF2-SHA256 で 60 万回)を下回る **10 万回に留まっているのは、Cloudflare Workers の本番ランタイムが 100,000 回を超える PBKDF2 を `NotSupportedError` で拒否するため**です(2026-10-23 に `wrangler dev --remote` で 100,001 回・600,000 回が拒否されることを確認)。ローカルの `wrangler dev --local` / workerd ではこの上限がかからず、Bun のテストでも検出できないので、デプロイして初めて全ログインが失敗する形で表面化します。上限を越えるための選択肢(`nodejs_compat` 経由の scrypt など)と計測値は `lib/password.ts` 冒頭のコメントにまとめています。
+- 確認済みのメールアドレスでの再エントリー時は**パスワード照合を必須**にしています。これがないと、メールアドレスを知っている第三者が他人のアカウントにエントリーをぶら下げられてしまいます。未確認のアカウントは照合の代わりに上書きされます(上記)。
 - `password_changed_at` は**パスワード再設定で既存セッションを切る**ためのものです。参加者セッションはサーバ側に実体を持たない HS256 JWT(有効期間 7 日)なので、パスワードを変えただけでは発行済み Cookie は無効になりません。ログイン時にこの列の値を `pwdChangedAt` クレームとして JWT に載せ、`requireParticipant()` が毎回この列を読み直して**一致しないセッションを 401 で拒否**します。これがないと、Cookie を盗まれた参加者がパスワードを変更しても、攻撃者は最大 7 日間マイページにアクセスし続けられます。
 - 比較対象が**どちらも同じ列の読み取り値**である(「発行時刻より後か」ではない)のは意図的です。JWT の `iat` と突き合わせる形だと、Worker と Postgres の時計が数百ミリ秒ずれているだけで、登録直後・再設定直後のログインが自分のセッションで 401 になり得ます。
 - `reset_participant_password()` が `password_hash` と同じ UPDATE 文で更新するため、「新しいパスワードは有効だが古いセッションは生きている」状態は発生しません。
@@ -183,11 +193,11 @@ flowchart TB
 | `id` | uuid | PK | |
 | `participant_id` | uuid | not null, FK → `participants.id` | |
 | `tournament_id` | uuid | not null, FK → `tournaments.id` | |
-| `name` | text | not null | 氏名(非公開) |
-| `furigana` | text | not null | ふりがな(非公開) |
-| `display_name` | text | not null | 公開エントリーリストに載る掲載名 |
-| `free_text` | text | nullable | 自由記述 |
-| `custom_field_values` | jsonb | not null, default `'{}'` | 追加フォーム項目の回答。`{ field_key: string \| string[] }` |
+| `name` | text | not null, 100 文字以内 | 氏名(非公開) |
+| `furigana` | text | not null, 100 文字以内 | ふりがな(非公開) |
+| `display_name` | text | not null, 100 文字以内 | 公開エントリーリストに載る掲載名 |
+| `free_text` | text | nullable, 2000 文字以内 | 自由記述 |
+| `custom_field_values` | jsonb | not null, default `'{}'`, 回答の合計 10000 文字以内 | 追加フォーム項目の回答。`{ field_key: string \| string[] }` |
 | `status` | entry_status | not null, default `pending_verification` | |
 | `waitlist_position` | integer | nullable | キャンセル待ちの順位。`waitlisted` 以外では `null` |
 | `email_verified_at` | timestamptz | nullable | メール確認完了時刻 |
@@ -200,6 +210,7 @@ flowchart TB
 - `unique (participant_id, tournament_id)`: 1参加者につき1大会1エントリー。キャンセル後の再エントリーがこの行を再利用する理由でもあります。
 - `unique (id, tournament_id)`(`0018`): `id` は主キーなので一意性としては冗長ですが、`entry_regulations` から複合外部キーを張るために必要です(参照先はちょうどその列組の一意制約でなければならない)。
 - 選択したレギュレーションは `0018` で `entry_regulations` に移りました。`entries.regulation_id` はもうありません。
+- `entries_text_lengths`(`0021`、Task 11-7 / #122): 文字列項目の長さの check 制約。`name` / `furigana` / `display_name` は 100 文字、`free_text` は 2000 文字、`custom_field_values` は回答の合計 10000 文字まで(`custom_field_values_length()` で数える。キーは数えない)。上限の本体は `packages/shared` の Zod スキーマ(`EntryInputSchema` / `CustomFieldValuesInputSchema`。回答 1 件 2000 文字の上限もこちらにある)で、API・フォームとも同じものを使います。DB 側にも持つのは、直接 SQL でデータを入れる運用が当面残るためです。違反は SQLSTATE `23514`。Zod は UTF-16 のコード単位、`char_length()` はコードポイントで数えるため、絵文字などでは DB の方がわずかに緩くなります(Zod を通った値が DB で弾かれることはない向き)。上限を超える既存行があるとマイグレーションは件数と項目名を添えて止まります(`not valid` にはしない。適用前の確認は `docs/supabase-deployment.md` 5.2)。フォームは textarea の改行を CRLF ではなく `\n` に揃えてから送るので、ブラウザの `maxlength` と同じ数え方になります。
 - `entries_tournament_id_created_at_idx`(`0005`): `(tournament_id, created_at)` の**部分インデックス**で、`status in ('confirmed', 'waitlisted', 'cancelled')` の行だけを対象にします。公開エントリーリスト API(`GET /api/tournaments/:tournamentId/entry-list`)が読む行だけを含むため、インデックスが小さく保たれます。既存の unique インデックスは `(participant_id, tournament_id)` で `tournament_id` が先頭列ではないため、この用途には使えません。
 
 `waitlist_position` について:
@@ -280,16 +291,22 @@ flowchart TB
 | カラム | 型 | 制約 | 説明 |
 | --- | --- | --- | --- |
 | `id` | uuid | PK | |
-| `email` | text | not null, unique | |
-| `password_hash` | text | not null | participants と同じ PBKDF2 形式 |
+| `email` | text | not null, check `email = lower(email)` | 小文字で保存(#133)。一意なのは下記の `(email, tournament_type)` の組 |
+| `password_hash` | text | not null | participants と同じ PBKDF2 形式(旧形式の読み取りとログイン時の書き換えも同じ) |
 | `role` | staff_role | not null | `regional` / `general` |
 | `region_id` | uuid | nullable, FK → `regions.id` | `regional` のときの担当地域 |
 | `tournament_type` | tournament_type | nullable | `regional` のときの担当大会種別 |
 | `created_at` | timestamptz | not null, default `now()` | |
+| `sessions_valid_from` | timestamptz | not null, default `now()` | 発行済みセッションの世代(`0020` で追加)。セッション失効の判定に使います |
+| `disabled_at` | timestamptz | nullable | 無効化された時刻(`0026` で追加、#156)。null なら有効 |
+
+- 一意制約は `unique nulls not distinct (email, tournament_type)` です(`0026`、#166)。同じ地域の最強位と新人王を同じ人が同じアドレスで担当することがあるため、地域スタッフはアドレス × 種別ごとに 1 アカウント持てます。統括スタッフは `tournament_type` が null なので、`nulls not distinct` によりアドレスごとに 1 つです。ログインでは種別(統括スタッフは `general`)も選ばせて 1 行に絞ります(`POST /api/auth/staff/login` の `scope`)。
 
 - `general`(統括スタッフ)は `region_id` / `tournament_type` が `null` で、全地域・全大会にアクセスできます。
 - `regional`(地域スタッフ)は `(region_id, tournament_type)` の組が担当範囲で、その大会のエントリーしか閲覧できません。この範囲チェックは `apps/backend/src/middleware/staff-auth.ts` が担当します。
 - この 2 パターン以外の行は check 制約 `staff_accounts_scope_matches_role`(`0015`)が拒否します。`regional` なのに `region_id` か `tournament_type` の片方しか無い行は「担当範囲が狭いアカウント」ではなく**壊れた行**で、上記の範囲チェックがすべての大会で落ちるため、そのアカウントはどこにアクセスしても静かに 403 を返し続けます。Zod 側(`StaffAccountCreateInputSchema` の判別共用体)と両方で縛っているのは、Supabase を直接触って行を作る経路が残るためです。
+- `sessions_valid_from` は**発行済みスタッフセッションを切る**ためのものです(Task 11-3)。ログイン時にこの列の値を `sessionsValidFrom` クレームとして JWT に載せ、スタッフ用ミドルウェアが毎リクエストこの列を読み直して**一致しないセッションを 401 で拒否**します。統括スタッフが `POST /api/staff/accounts/:id/revoke-sessions` で進めるほか、`reset_staff_password()` がパスワードと同じ UPDATE 文で進めます。参加者側の `password_changed_at` と同じ仕組みですが、端末紛失・Cookie の漏洩などパスワード変更以外でも切れるようにこの名前にしています。セッションを切るだけなので、パスワードを知っている人の再ログインは止められません(締め出すには `disabled_at` で無効化します)。比較が値の一致である理由も参加者側と同じです。
+- `disabled_at` は**アカウントの無効化**です(#156)。退任者やパスワードごと漏れたアカウントを締め出すためのもので、無効なアカウントはログインできず(ログインが無効な行を探さない)、セッションも通らず(スタッフ用ミドルウェアがこの列も見る)、パスワード設定リンクも使えません(`reset_staff_password()` が拒否する)。無効化は `disable_staff_account()`、有効化は `POST /api/staff/accounts/:id/enable` が null に戻します。削除ではなく無効化にしているのは、行・パスワード・担当の記録を残し、有効化で元に戻せるようにするためです(スタッフを参照する外部キーは `staff_password_reset_tokens` だけなので、削除そのものは可能です)。
 - 作成は `POST /api/staff/accounts`(統括スタッフ限定)です。作成時の `password_hash` にはハッシュ形式に合わない固定値が入り、本人が招待メールのリンクでパスワードを設定するまでログインできません。統括スタッフが他人のパスワードを知らずに済ませるための作りです。
 
 ### mail_jobs — 一斉メールの送信ジョブ
@@ -297,9 +314,9 @@ flowchart TB
 | カラム | 型 | 制約 | 説明 |
 | --- | --- | --- | --- |
 | `id` | uuid | PK | `POST /api/staff/tournaments/:id/mail` が返す `jobId` |
-| `tournament_id` | uuid | not null, FK → `tournaments.id` | 送信対象の大会 |
+| `tournament_id` | uuid | not null, FK → `tournaments.id`(on delete cascade) | 送信対象の大会 |
 | `subject` | text | not null | 件名 |
-| `body_html` | text | not null | 本文(スタッフが書いた HTML そのまま) |
+| `body_html` | text | not null | 本文。スタッフが書いた HTML を `sanitizeMailHtml()` で許可タグだけに絞ったもの(#122) |
 | `total` | integer | not null | 受け付けた宛先数 |
 | `sent` | integer | not null, default `0` | 送信できた通数 |
 | `failed` | integer | not null, default `0` | 諦めた宛先数 |
@@ -327,10 +344,35 @@ grant select, insert, update, delete on all tables in schema public to service_r
 設計方針:
 
 - **`anon` / `authenticated` ロールからは一切アクセスできません。** RLS を有効化した上で、そもそも権限自体を剥奪しています(RLS ポリシーは1つも定義していないため、仮に権限が残っていても全行が不可視になります)。
-- **DB へのアクセス経路は Cloudflare Workers 上の Hono API のみ**です。バックエンドは `SUPABASE_SERVICE_ROLE_KEY`(`service_role` ロール)で Supabase に接続します(`apps/backend/src/lib/db.ts`)。
+- **DB へのアクセス経路は Cloudflare Workers 上の Hono API のみ**です。バックエンドは `SUPABASE_SECRET_KEY`(secret key。`service_role` ロールにマッピングされる)で Supabase に接続します(`apps/backend/src/lib/db.ts`)。
 - したがって、**認可はすべてアプリケーション層(Hono のミドルウェアと `lib/` の関数)の責務**です。RLS ポリシーに認可を委ねてはいません。新しいクエリを追加する際は、「誰がこの行を読んでよいか」をアプリ側で必ず絞り込んでください。
   - 例: マイページ系のクエリは `.eq('participant_id', c.get('participantId'))` を必ず付け、他人のエントリーが存在しないエントリーと区別できないようにしています。
-- `SUPABASE_SERVICE_ROLE_KEY` は RLS を貫通する強い鍵です。フロントエンドには決して渡さず、Worker の secret としてのみ扱ってください。
+- `SUPABASE_SECRET_KEY` は RLS を貫通する強い鍵です。フロントエンドには決して渡さず、Worker の secret としてのみ扱ってください。
+
+### 認可の抜け漏れの防ぎ方と、RLS ポリシーに移さない理由(Task 11-6)
+
+上のとおり、`0001_init.sql` で全テーブルの RLS を有効にしてはいますが、**`service_role` は RLS をバイパスする**ため、これは「`anon` / `authenticated` からの直接アクセスを塞ぐ」以上の意味を持ちません。認可は 100% Worker のミドルウェア(`middleware/staff-auth.ts` / `participant-auth.ts` / `entry-period.ts`)頼みで、DB 側の多層防御はありません。ルートを 1 本足してミドルウェアを付け忘れると、その瞬間に全地域の個人情報が無認証で読めるようになります。
+
+これは**ルート網羅テスト**(`apps/backend/src/routes-authz.test.ts`)で構造的に塞いでいます。
+
+- **全ルートの認可方針**(`ROUTE_POLICIES`)をテストのコードに明示します。方針は `public`(無認証で可。理由付き)・`entry-period`(期間中は誰でも、期間外は担当スタッフ)・`general-staff`・`scoped-staff`(担当範囲のスタッフ)・`participant` の 5 種類です。方針の無いルートが 1 本でもあればテストが落ちます。
+- Hono に登録済みの全ルート(`app.routes`)を列挙し、`public` 以外の各ルートに、**その方針なら拒否すべきリクエスト**を送ります。セッション無しだけでなく、有効だが別種のセッション(統括スタッフ限定のルートに参加者や担当範囲内の地域スタッフ、担当範囲限定のルートに範囲外の地域スタッフ、参加者限定のルートにスタッフ、期間外の大会のフォーム用ルートに参加者や範囲外の地域スタッフ)も送るので、ガードが無い場合だけでなく**別のガードが付いている場合**も見つかります。拒否はガード自身の応答(`401 unauthorized` / `403 forbidden` / `403 entry period closed`)で、かつガード自身の読み取り(セッションの失効確認・担当範囲・大会の受付期間)以外に **Supabase へ 1 回も問い合わせずに**行われなければなりません。`waitUntil()` に渡した処理や応答後に走る処理の読み取りも、終わるのを待ってからそのルートの分として数えます。レート制限・Turnstile・パスパラメータの検証は通る形のリクエストにしてあるので、それらがガードの代わりに拒否して見逃す、ということは起きません。`.all()` のルートには全メソッドで送ります。
+- ハンドラとミドルウェアは引数の数でしか見分けられないため、ミドルウェアしか登録されていないパスは、既知の `.use()`(`MIDDLEWARE_ONLY_REGISTRATIONS`)以外はテストを落とします。`(c, next) => ...` と書いたハンドラや `app.mount()` したサブアプリが、検査から黙って漏れないようにするためです。
+- [`api-endpoints.md`](./api-endpoints.md) 2 章の一覧表とのずれ(表に無いルート、「認可」列の記述と方針の食い違い)もテストが落とします。方針はドキュメントから読まずにコードに書いているので、表を書き換えただけで期待する認可が緩むことはありません。
+- 「参加者(本人)」の本人確認はハンドラ内のクエリで行うため、このテストの対象外です(各ルートのテストで確かめています)。
+
+したがって**ルートを足すときは、`ROUTE_POLICIES` と一覧表にそのルートの方針を書き、方針どおりのミドルウェアを付ける**必要があります。どれかが欠けていれば CI が赤くなります。
+
+#### 採らなかった案: service_role をやめて RLS ポリシーで縛る
+
+多層防御としての本命は、`service_role` をやめ、リクエストごとに参加者/スタッフの JWT を Supabase クライアントに渡して RLS ポリシーで行を絞ることです。ミドルウェアを付け忘れても DB が他人の行を返さなくなります。それでも**現時点では採りません**。
+
+- **改修の規模が大きい。** 全クエリを「リクエストのユーザーとして」実行する形に書き換え、全テーブルのポリシーを設計し直す必要があります。セッションは Supabase Auth ではなく自前の JWT(`hono/jwt`、`SESSION_SECRET`)なので、Supabase が検証できる形のトークンを別途発行するか、Supabase Auth へ移行するところから始まります。
+- **ポリシーに載せる判定が単純ではない。** スタッフの担当範囲(`region_id` と `type` の一致)、エントリー期間による公開/非公開の切り替え、マイページの本人限定、`sessions_valid_from` / `password_changed_at` によるセッション失効などを、すべて SQL のポリシーで二重に表現し、アプリ側と食い違わないよう保ち続けることになります。
+- **ポリシーで縛れない処理が残る。** 未ログインのエントリー作成・メール確認・パスワード再設定・キャンセル待ちの繰り上げ・一斉メールのコンシューマなど、本人のセッションを持たない処理は結局 `service_role` で動かす必要があり、「RLS があるから安全」とは言い切れません。
+- **規模に見合わない。** 利用者は一つの大会運営の参加者とスタッフに限られ、ルートも 40 本あまりで、ルート網羅テストで付け忘れを機械的に止められます。大改修のリスク(移行中の認可の取りこぼしを含む)の方が、得られる防御の上積みより大きいと判断しました。
+
+利用者・ルート数・データの機微度が大きく変わった場合は、この判断を見直してください。
 
 ## 5. DB 関数
 
@@ -343,13 +385,15 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | 関数 | 定義ファイル | 呼び出し元 | 役割 |
 | --- | --- | --- | --- |
 | `sync_form_field_defs(uuid, jsonb)` | `0002` | `lib/form-definitions.ts` | 大会のフォーム項目定義を全削除+一括挿入で置き換える |
-| `confirm_entry_by_token(text)` | `0003` → `0008` で再定義 | `lib/entry-confirmation.ts` | 確認トークンでエントリーを確定 / キャンセル待ちに載せる |
+| `confirm_entry_by_token(text)` | `0003` → `0008` → `0034` で再定義 | `lib/entry-confirmation.ts` | 確認トークンでエントリーを確定 / キャンセル待ちに載せる |
 | `promote_next_waitlisted_entry(uuid)` | `0004` → `0007` で再定義 | `lib/waitlist.ts` | キャンセル待ち先頭を繰り上げる |
 | `cancel_own_entry(uuid, uuid)` | `0006` | `lib/entries.ts` | 参加者自身のエントリーをキャンセルする |
 | `reset_participant_password(text, text)` | `0009` → `0010` で再定義 | `lib/password-reset.ts` | 再設定トークンを消費してパスワードを更新し、残りのトークンを焼き捨てる |
+| `take_over_unverified_participant(uuid, text, uuid)` | `0034` | `lib/entries.ts` | 未確認の参加者アカウントのパスワードと地域を上書きし、それまでのエントリーを削除する |
 | `tournament_entry_summary()` | `0013` | `routes/staff-dashboard.ts` | 全大会のエントリー件数をステータス別に集計する(読み取り専用) |
 | `sync_regulations(uuid, jsonb)` | `0014` | `lib/regulations.ts` | 大会のレギュレーションを差分同期する(update / insert / 参照が無ければ delete) |
 | `record_mail_job_progress(uuid, integer, integer)` | `0019` | `lib/mail-jobs.ts` | 一斉メール 1 バッチ分の結果をジョブの件数に加算する |
+| `custom_field_values_length(jsonb)` | `0021` | `entries_text_lengths` check 制約 | 追加項目の回答の合計文字数を数える(`language sql` / `immutable`) |
 
 ### sync_form_field_defs(p_tournament_id, p_rows)
 
@@ -380,11 +424,14 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 処理順:
 
-1. トークン行を `for update of evt` でロックしつつ取得。未知 / 使用済み / 期限切れなら SQLSTATE `P0003` を raise。
-2. 大会行を `for update` でロック(`capacity` も同時に取得)。
-3. **ロック取得後に**エントリーの `status` を読み直し、`pending_verification` でなければ `P0003` を raise(`0008` で追加)。
-4. `confirmed` 件数を数え、`capacity` に空きがあれば `confirmed`、なければ `waitlisted`(順位 = 現在の waitlisted 件数 + 1)。
-5. エントリーと トークン(`used_at`)を更新。
+1. ロックなしでトークンからエントリーの参加者を引き、参加者行を `for no key update` でロック(`0034` で追加)。トークンが見つからなければ SQLSTATE `P0003` を raise。
+2. トークン行を `for update of evt` でロックしつつ取得。未知 / 使用済み / 期限切れなら SQLSTATE `P0003` を raise。
+3. 大会行を `for update` でロック(`capacity` も同時に取得)。
+4. **ロック取得後に**エントリーの `status` を読み直し、`pending_verification` でなければ `P0003` を raise(`0008` で追加)。
+5. `confirmed` 件数を数え、`capacity` に空きがあれば `confirmed`、なければ `waitlisted`(順位 = 現在の waitlisted 件数 + 1)。
+6. エントリーと トークン(`used_at`)を更新し、参加者の `email_verified_at` が null なら打刻する(`0034` で追加、#189)。
+
+参加者行を最初に取るのは、`check_region_dual_entry()` が「参加者行 → 大会行(外部キー検査の `for key share`)」の順で取るのと揃え、`take_over_unverified_participant()` と直列化するためです。大会行を持ったまま参加者行を取るとデッドロックし得ます。`for no key update` なので、エントリーの INSERT が外部キー検査で参加者行に取る `for key share` とは衝突しません。
 
 ステータスをロック取得後に読み直すのが重要な点です。`cancel_own_entry()` は同じ大会行ロックを保持したままエントリーを `cancelled` にするため、先に走り出した確認処理はここでブロックされ、ロック取得後にキャンセルを観測できます。これがないと、キャンセルと競合した再エントリーが挿入した新しいトークンによって、キャンセル済みエントリーが復活し得ます。
 
@@ -407,6 +454,26 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 - `waitlisted` な行をキャンセルした場合は、後続の `waitlist_position` を1つずつ詰めます。
 - すでに `cancelled` の行に対しては何もせず、`cancelled` を返します(冪等)。
 
+### lapse_expired_pending_entries(p_participant_id)
+
+参加者の確定待ち(`pending_verification`)エントリーのうち、**確認トークンが 1 つ以上あり、そのどれもが使用済みか期限切れのもの**を `cancelled` にし、取り消したエントリーの id を返します(`0030`、#172)。エントリー処理(`enterTournament()`)が最初に呼びます。
+
+- 期限が切れたエントリーは確定できないのに、同じ大会への再エントリーと、重複参加を許さない地域のもう一方の大会へのエントリーを断っていました。キャンセル扱いにすることで、同じ大会なら行が再利用され(新しい確認メールが届く)、もう一方の大会の枠も空きます。
+- トークンが 1 つも無い確定待ちは、同じ参加者の別の送信が作っている途中のエントリーなので触りません。
+- 残っていたトークンは使用済みにします。
+- 候補はロック無しで先に絞り込み、期限内のリンクがある確定待ちにはロックを取りません。
+- 候補ごとのロック取得順は `confirm_entry_by_token()` / `cancel_own_entry()` と同じ「トークン行 → 大会行」。状態とトークンは大会行ロックの下で読み直すので、確認と同時に走っても二重に動きません。複数の候補は大会 id 順に処理し、別々の参加者の呼び出し同士のデッドロックを避けます。
+
+### take_over_unverified_participant(p_participant_id, p_password_hash, p_region_id)
+
+未確認の参加者アカウントを、新しい匿名エントリーの送信者のものとして作り直します(`0034`、#189)。上書きしたら `true`、確認済みなら何もせず `false` を返します(呼び出し側はパスワードを照合する通常の経路に進みます)。
+
+1. 参加者行を、`email_verified_at` が null で確定済みのエントリー(`entries.email_verified_at` が null でない行)も持たない場合に限り `for no key update` でロック。該当しなければ `false`。ロック後に条件を評価するので、同時に走った `confirm_entry_by_token()` が先にコミットしていれば確認済みとして `false` になります。
+2. `password_hash` / `region_id` を上書きし、`password_changed_at` を進める(古いセッションを切る)。
+3. その参加者のエントリーの確認トークンを大会 id 順に `for update` でロックし(`lapse_expired_pending_entries()` と同じ順)、トークンとエントリーをすべて削除する(`entry_regulations` は `on delete cascade`)。
+
+エントリーを取り消し扱いで残さずに削除するのは、確定待ちのリンクを踏むと上書き後のパスワードと地域で確認済みになってしまうこと、先の送信者が書いた氏名などが持ち主のマイページや別地域のスタッフ一覧に残ること、重複参加を許さない地域でもう一方の大会の枠を持ち続けることを避けるためです。どのエントリーも確定したことがない(定員にもキャンセル待ちの順位にも関わらない)ので、繰り上げ等は要りません。
+
 ### reset_participant_password(p_token_hash, p_password_hash)
 
 再設定トークンのハッシュと、アプリ側で計算済みの PBKDF2 パスワードハッシュを受け取り、対応する参加者のパスワードを更新します。
@@ -419,6 +486,7 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 4. 参加者の `password_hash` と `password_changed_at` を更新(`0011` で `password_changed_at` を追加)。
 5. その参加者の未使用トークン(消費中のものを含む)をすべて `used_at = now()` にする。
 
+- 参加者を確認済み(`email_verified_at`)にはしません(#189)。再設定は地域を変えないので、未確認アカウントの地域を先回りした送信者が選んだもののまま固定してしまうためです。
 - 4 と 5 が同じトランザクションにあることが要点です。分けて実行していた頃は、5 の失敗時にパスワードだけ変わって古い再設定リンクが有効なまま残り、後から再度パスワードを奪われ得ました。
 - 2 の参加者行ロックを**トークン行より先に**取るのも要点です。`0009` は自分のトークン行しかロックしていなかったため、同じ参加者に 2 通の再設定リンクが出ている状態で両方が同時にクリックされると、互いに相手のトークン行と共有の参加者行を待ち合ってデッドロックし、片方が有効なリンクで 500 を受け取っていました。先に必ず参加者行で待たせることで、後続は先行のコミット後にトークンを読み直し、`used_at` 済みとして 400 になります。
 - 4 で `password_changed_at` を同じ UPDATE 文に含めるのも要点です。参加者セッションは 7 日有効なステートレス JWT なので、この列が動かない限り、再設定前に発行された Cookie(盗まれたものを含む)はそのまま使えてしまいます。
@@ -428,7 +496,38 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 スタッフ用のトークンハッシュと、アプリ側で計算済みの PBKDF2 パスワードハッシュを受け取り、対応するスタッフアカウントのパスワードを設定します。`reset_participant_password()` のスタッフ版で、処理順もロック順も同じです(トークン行 → スタッフ行を `for update` → トークン行を読み直し → 更新 → 残りトークンの焼き捨て)。未知 / 使用済み / 期限切れなら SQLSTATE `P0003`。
 
-- `participants.password_changed_at` に相当する打刻はありません。スタッフセッションは署名だけで受け付ける 12 時間の JWT なので、**再設定前に発行された Cookie は最大 12 時間有効なまま**です。ここを塞ぐには列とクレームの追加が要るため Task 11-3 に分けてあり、そのときこの関数は `0011` が `0010` を再定義したのと同じ形で書き直すことになります。
+- `password_hash` と同じ UPDATE 文で `staff_accounts.sessions_valid_from` も `now()` に進めます(`0020` で再定義。`0011` が参加者側の `0010` を再定義したのと同じ形)。これにより、再設定前に発行されたそのアカウントのセッション(盗まれた Cookie を含む)はすべて 401 になります。招待リンクからの初回設定でも同じく進みますが、その時点ではまだログインできないので切れるセッションはありません。
+
+- `0026` で、アカウント行をロックしたあとに `disabled_at` を見て、**無効なアカウントなら `P0003` で拒否する**ように再定義しました(#156)。
+
+### disable_staff_account(p_staff_account_id)
+
+スタッフアカウントを無効化します(#156、`0026`)。`disabled_at` と `sessions_valid_from` を `now()` にし、そのアカウントの `staff_password_reset_tokens` を削除します。
+
+- **有効な統括スタッフが 0 人になる無効化は `P0004` で拒否します。** API は自分自身の無効化を先に断りますが、それだけでは 2 人の統括スタッフが同時に互いを無効化すると 0 人になります。対象が統括スタッフなら、統括スタッフの行を(対象を含めて)id 順にすべて `for update` でロックしてから数えるので、同時の無効化はここで直列化され、後の方は先の方の結果を見て拒否されます。対象を先にロックしてから残りをロックする順序にすると、互いを無効化する 2 つがそれぞれ自分の対象を持ったまま相手を待ってデッドロックするため、役割だけをロック無しで先に読みます(役割を変える経路はありません)。対象が地域スタッフなら対象の行だけをロックします(`0027` で再定義。`0026` は毎回すべての統括スタッフをロックしていました)。スタッフ行 → トークン行のロック順は `reset_staff_password()` と同じです。
+- アカウントが無ければ `P0002`。既に無効なら何もしません(`disabled_at` は最初の時刻のまま)。
+
+### enable_staff_account(p_staff_account_id)
+
+無効化したアカウントを有効に戻します(`0027`)。アカウント行を `for update` でロックし、無効なら `disabled_at` を null にして、そのアカウントの `staff_password_reset_tokens` を削除します。既に有効なら何もしません(リンクも消しません)。アカウントが無ければ `P0002`。
+
+- 更新とリンクの削除を同じトランザクションで行うのが要点です。API から 2 回に分けて呼んでいた頃(`0026`)は、更新だけが通って削除が失敗すると、無効な間に書かれたリンクが有効化で使えるようになり得ました。
+
+### issue_staff_password_link(p_staff_account_id, p_token_hash, p_expires_at)
+
+スタッフのパスワード設定リンクを発行します(`0027`。`lib/staff-password-reset.ts` の `sendStaffPasswordLink()` が呼びます)。アカウント行を `for update` でロックし、無効なら `P0005`(無ければ `P0002`)。有効なら、そのアカウントの既存のリンクをすべて削除してから新しいリンクを入れます。
+
+- 「無効でないか」の判定と書き込みが同じロックの下にあるので、無効化(`disable_staff_account()`)や有効化と同時に走っても、無効なアカウントに使えるリンクが残ることはありません。リンクが書かれるのは、書き込みの時点で有効なアカウントに対してだけです。
+
+### import_tournament(p_region_id, p_type, p_entry_opens_at, p_entry_closes_at, p_form_fields, p_regulations)
+
+大会一覧のスプレッドシートからの一括登録(#168、`POST /api/sheet-import/tournaments`)で、1 大会ぶんを登録します(`0028`)。返り値は `(tournament_id, created, entry_opens_at)`。
+
+1. `tournaments` に `(region_id, type)` で upsert する。既にあればエントリーの**締切だけ**を上書きし、開始・大会名・定員は触らない(流し直しで開始が動かないように)。新規なら開始 `p_entry_opens_at`・大会名 null(既定名)・定員 null
+2. `sync_form_field_defs()` でフォーム定義を置き換える
+3. `p_regulations`(id なし)の各要素を、同じ大会の既存レギュレーションと**名前で**突き合わせて id を付けてから `sync_regulations()` に渡す。突き合わせないと既存の行はすべて削除扱いになり、エントリーが 1 件でもあると `P0004` で失敗するため
+
+- 3 つが 1 つの関数(= 1 トランザクション)なのが要点です。別々に呼ぶと、3 で失敗したときに大会とフォーム定義だけが上書きされて残り、「エラーが出た大会は登録しない」が成り立ちません。例外(`P0003` / `P0004` など)はそのまま呼び出し元に返り、その大会の変更はすべて取り消されます
 
 ### tournament_entry_summary()
 
@@ -437,7 +536,7 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 - 他の関数と違い、アトミック性やロックのために存在するわけではありません。Worker 側で数えようとすると「大会ごとに `entries` を 1 クエリ」か「全地域のエントリー行を丸ごと取得して数える」のどちらかになるため、集計を DB に寄せています。書き込みがないので `language sql` / `stable` です。
 - `tournaments` から `entries` への **`left join`** が要点です。`count(*) filter (...)` は null 拡張された行を数えないため、エントリーが 0 件の大会も「全件 0」の行として残ります。`inner join` にすると、まだ誰も申し込んでいない大会がダッシュボードから消えてしまいます。
 - 件数は `count()` の `bigint` から `integer` にキャストしています。PostgREST 経由で `bigint` は文字列として届く可能性があり、エントリー件数が `integer` の範囲に迫ることはないためです。
-- 地域名・大会名も一緒に返すため、`regions` を JOIN しています。呼び出し側で JOIN し直さずに済みます。
+- 地域名・大会名も一緒に返すため、`regions` を JOIN しています。呼び出し側で JOIN し直さずに済みます。大会名を空欄にした大会では `tournament_name` が `null` になり、`routes/staff-dashboard.ts` が地域名と種別から既定名を作ります(`0024`)。
 - 本体の列参照はすべてテーブル修飾(`t.id` / `r.slug` など)しています。`returns table` の出力列名(`region_id` など)と衝突して曖昧参照になるのを避けるためです。
 
 ### check_region_dual_entry()(トリガ関数)
@@ -484,3 +583,16 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0017_entries_region_dual_entry_trigger.sql` | `check_region_dual_entry()` と `entries` の before insert or update トリガ |
 | `0018_entry_regulations.sql` | `entry_regulations`(複数選択対応)・`entries` の `unique (id, tournament_id)`・既存行の移送と `entries.regulation_id` の削除・`sync_regulations()` の参照先変更 |
 | `0019_mail_jobs.sql` | `mail_jobs` テーブル・`updated_at` トリガ・索引・`record_mail_job_progress()` |
+| `0020_staff_accounts_sessions_valid_from.sql` | `staff_accounts.sessions_valid_from` を追加し、再設定時に打刻(`0015` の `reset_staff_password()` を再定義) |
+| `0021_entry_text_length_limits.sql` | `custom_field_values_length()` と `entries` の長さの check 制約 `entries_text_lengths` |
+| `0022_missing_indexes.sql` | `email_verification_tokens (entry_id)`・`participants (region_id)`・`staff_accounts (region_id)` など、外部キーの子側で抜けていたインデックス |
+| `0023_tournament_delete_cascade.sql` | 大会削除(#164)のため、`regulations`・`form_field_defs`・`mail_jobs` の `tournament_id` 外部キーを `on delete cascade` に張り直す(`entries` は no action のまま) |
+| `0024_tournament_default_name.sql` | `tournaments.name` を null 可にし、null を「既定名(地域名＋種別)を読み出し時に作る」とする(#164)。既定名と同じ名前・空文字の既存行は null に置き換える |
+| `0025_lowercase_emails.sql` | `participants.email` / `staff_accounts.email` を小文字に揃え、check 制約 `*_email_lowercase` を追加(#133)。大文字小文字違いの重複があれば失敗する |
+| `0026_staff_accounts_per_type_and_disable.sql` | `staff_accounts` の一意制約を `(email, tournament_type)` に変更(#166)、`disabled_at` と `disable_staff_account()` を追加し、`reset_staff_password()` を無効なアカウントを拒否するよう再定義(#156) |
+| `0027_staff_account_enable_and_link_locking.sql` | `disable_staff_account()` を対象が統括スタッフのときだけ全統括スタッフをロックするよう再定義し、`enable_staff_account()` と `issue_staff_password_link()` を追加(有効化とリンク発行をアカウント行のロック下で 1 トランザクションに) |
+| `0028_import_tournament_fn.sql` | 大会一覧からの一括登録(#168)用の `import_tournament()`。大会の upsert・フォーム定義・レギュレーション(名前で既存と突き合わせ)を 1 トランザクションで |
+| `0029_form_field_textfield.sql` | `form_field_defs.field_type` の check 制約を張り替え、一行の自由記述 `textfield` を許す(#173) |
+| `0030_lapse_expired_pending_entries.sql` | 確認リンクの期限が切れた参加者の確定待ちエントリーを `cancelled` にする `lapse_expired_pending_entries()`(#172)。エントリー処理の最初に呼ぶ |
+| `0031_add_staff_password_link_fn.sql` | スタッフ本人の再設定申し込み(#175)用に、既存の有効なリンクを消さずに書き足す `add_staff_password_link()`。期限切れのリンクは削除し、無効なアカウントは断る |
+| `0034_participants_email_verified_at.sql` | `participants.email_verified_at` を追加して確定済みエントリーから埋め戻し、`confirm_entry_by_token()` を確定時に参加者を確認済みにするよう再定義、未確認アカウントを上書きする `take_over_unverified_participant()` を追加(#189) |

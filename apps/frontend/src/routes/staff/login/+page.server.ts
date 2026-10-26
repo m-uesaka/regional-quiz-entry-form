@@ -3,13 +3,17 @@ import {StaffLoginInputSchema} from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
 import {staffLandingPath} from '$lib/server/staff-login';
 import type {Actions, PageServerLoad} from './$types';
+import {readString} from '$lib/form-data';
 
-// Which of the two fields was wrong is deliberately not said. Telling them
+// Which of the fields was wrong is deliberately not said. Telling them
 // apart would turn this form into an oracle for which addresses are staff
 // addresses — the same reason the backend spends the same PBKDF2 work on an
-// unknown address as on a known one.
+// unknown address as on a known one. The 区分 is named alongside them: an
+// address with a 最強位 account but no 新人王 one (#166) answers the same
+// 401 as a wrong password, and choosing the wrong 区分 is the likelier
+// mistake.
 const INVALID_CREDENTIALS_MESSAGE =
-  'メールアドレスまたはパスワードが正しくありません';
+  'メールアドレス・区分・パスワードのいずれかが正しくありません';
 
 /**
  * Reports a password that was just set from an invite (or reset) link, so the
@@ -24,19 +28,21 @@ export const load: PageServerLoad = ({url}) => {
 export const actions = {
   default: async ({request, fetch, url}) => {
     const formData = await request.formData();
-    const submitted = formData.get('email');
     // Echoed back on failure so a mistyped password doesn't cost the whole
     // form. The password never is.
-    const email = typeof submitted === 'string' ? submitted : '';
+    const email = readString(formData, 'email');
+    const scope = readString(formData, 'scope');
 
     const parsed = StaffLoginInputSchema.safeParse({
       email,
+      scope,
       password: formData.get('password'),
     });
     if (!parsed.success) {
       return fail(400, {
         email,
-        error: 'メールアドレスとパスワードを入力してください',
+        scope,
+        error: 'メールアドレス・区分・パスワードを入力してください',
       });
     }
 
@@ -48,15 +54,17 @@ export const actions = {
         // meet it without this visitor having tried anything themselves.
         return fail(429, {
           email,
+          scope,
           error:
             'ログインの試行が集中しています。しばらく待ってから再度お試しください',
         });
       }
       if (res.status === 401) {
-        return fail(401, {email, error: INVALID_CREDENTIALS_MESSAGE});
+        return fail(401, {email, scope, error: INVALID_CREDENTIALS_MESSAGE});
       }
       return fail(502, {
         email,
+        scope,
         error: 'ログインに失敗しました。時間をおいて再度お試しください',
       });
     }
@@ -70,6 +78,7 @@ export const actions = {
       // it, so the only useful thing left is to say so.
       return fail(500, {
         email,
+        scope,
         error:
           '担当する大会が設定されていないため、表示できる画面がありません。管理者にお問い合わせください',
       });

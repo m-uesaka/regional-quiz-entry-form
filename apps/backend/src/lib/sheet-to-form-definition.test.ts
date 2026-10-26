@@ -148,6 +148,25 @@ describe('sheetRowsToYaml', () => {
     expect(parsed.fields[0].required).toBe(false);
   });
 
+  it('reads the one-line free text label as a textfield', () => {
+    const yaml = sheetRowsToYaml('saikyoi', [
+      {
+        key: 'affiliation',
+        label: '所属',
+        type: '自由記述（一行）',
+        required: '必須',
+        options: '',
+      },
+    ]);
+
+    expect(parseFormDefinitionYaml(yaml).fields[0]).toEqual({
+      key: 'affiliation',
+      label: '所属',
+      type: 'textfield',
+      required: true,
+    });
+  });
+
   it('throws on an unknown type label', () => {
     expect(() =>
       sheetRowsToYaml('saikyoi', [

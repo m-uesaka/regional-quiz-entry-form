@@ -1,17 +1,29 @@
 import {
   BOOLEAN_CHECKBOX_LABELS,
   isBooleanCheckbox,
+  isFreeTextFieldType,
+  labelPlainText,
   type CustomFieldValues,
   type FormFieldDef,
 } from '@regional-quiz/shared';
+import {formatJstDateTime} from './jst';
 
-/** The columns every export starts with, before the custom fields. */
+/**
+ * The columns every export starts with, before the custom fields: every
+ * answer the entry form takes (the custom fields' answers follow), the
+ * account's address, and what became of the entry and when it was made
+ * (#178). Staff work from the export rather than from the detail page.
+ */
 const FIXED_HEADERS = [
   '氏名',
   'ふりがな',
-  '掲載名',
+  'エントリーリスト掲載名',
+  'メールアドレス',
   'ステータス',
+  'キャンセル待ち順位',
+  'エントリー日時',
   'レギュレーション',
+  '自由記述',
 ];
 
 /**
@@ -36,7 +48,13 @@ export interface EntriesCsvRow {
   name: string;
   furigana: string;
   displayName: string;
+  /** The address of the participant's account. */
+  email: string;
   status: string;
+  /** The entry's place on the waitlist, `null` unless it is waitlisted. */
+  waitlistPosition: number | null;
+  /** When the entry was submitted, as stored (ISO 8601). */
+  createdAt: string;
   /**
    * Every regulation the entry claims, in the tournament's display order.
    * An entry may meet more than one condition, so these are joined into a
@@ -44,6 +62,7 @@ export interface EntriesCsvRow {
    * cover.
    */
   regulationLabels: string[];
+  freeText: string | null;
   customFieldValues: CustomFieldValues;
 }
 
@@ -51,8 +70,9 @@ export interface EntriesCsvRow {
  * Renders staff-facing entry rows as a CSV document.
  *
  * The tournament's custom form fields become extra columns headed by their
- * `label`, in the order `fieldDefs` is given (the caller is expected to pass
- * them in `display_order`), so a field renamed after entries were submitted
+ * `plainLabel` (the label with any `<a>` link reduced to its text), in the
+ * order `fieldDefs` is given (the caller is expected to pass them in
+ * `display_order`), so a field renamed after entries were submitted
  * exports under its current label. Answers are looked up by `fieldKey`, and
  * a field a given entry has no answer for exports as an empty cell.
  *
@@ -65,13 +85,17 @@ export function buildEntriesCsv(
   fieldDefs: FormFieldDef[],
   entries: EntriesCsvRow[],
 ): string {
-  const headers = [...FIXED_HEADERS, ...fieldDefs.map(f => f.label)];
+  const headers = [...FIXED_HEADERS, ...customFieldHeaders(fieldDefs)];
   const rows = entries.map(entry => [
     entry.name,
     entry.furigana,
     entry.displayName,
+    entry.email,
     entry.status,
+    entry.waitlistPosition === null ? '' : String(entry.waitlistPosition),
+    formatJstDateTime(entry.createdAt),
     entry.regulationLabels.join(MULTI_VALUE_SEPARATOR),
+    entry.freeText ?? '',
     ...fieldDefs.map(fieldDef =>
       formatCustomFieldValue(
         fieldDef,
@@ -82,6 +106,25 @@ export function buildEntriesCsv(
   return [headers, ...rows]
     .map(row => row.map(renderCell).join(','))
     .join('\r\n');
+}
+
+/**
+ * The custom fields' column headings: each field's `plainLabel`, with its
+ * key added to any label that is already a heading -- a fixed column's (a
+ * field labelled 自由記述 or メールアドレス, say) or an earlier field's.
+ * Two columns under one heading would have a spreadsheet lookup or an
+ * import keyed on headings read the wrong one without a word.
+ * @param fieldDefs The custom fields, in column order.
+ */
+function customFieldHeaders(fieldDefs: FormFieldDef[]): string[] {
+  const taken = new Set(FIXED_HEADERS);
+  return fieldDefs.map(fieldDef => {
+    const heading = taken.has(fieldDef.plainLabel)
+      ? `${fieldDef.plainLabel}(${fieldDef.fieldKey})`
+      : fieldDef.plainLabel;
+    taken.add(heading);
+    return heading;
+  });
 }
 
 /**
@@ -110,10 +153,15 @@ function formatCustomFieldValue(
       ? BOOLEAN_CHECKBOX_LABELS.checked
       : BOOLEAN_CHECKBOX_LABELS.unchecked;
   }
+  // A chosen option is stored as staff wrote it, which may include an
+  // `<a>` link; a free-text answer is the participant's own and is kept
+  // as typed.
+  const plain = (option: string) =>
+    isFreeTextFieldType(fieldDef.fieldType) ? option : labelPlainText(option);
   if (Array.isArray(value)) {
-    return value.join(MULTI_VALUE_SEPARATOR);
+    return value.map(plain).join(MULTI_VALUE_SEPARATOR);
   }
-  return value ?? '';
+  return value === undefined ? '' : plain(value);
 }
 
 /**

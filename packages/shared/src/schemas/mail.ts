@@ -10,11 +10,15 @@ export const STAFF_MAIL_BODY_MAX_LENGTH = 20000;
 /**
  * `POST /staff/tournaments/:tournamentId/mail` request body.
  *
- * `body` is sent as the mail's HTML content **as written**: it is neither
- * escaped nor sanitized. Composing it requires a staff session for the
- * tournament, and the same account can already read every participant's
- * address, so staff-authored markup is trusted here on purpose. Anything
- * pasted in from elsewhere has to be vetted by the staff member first.
+ * `body` is the mail's HTML content, narrowed by the API to a few formatting
+ * tags before it is stored and sent (`sanitizeMailHtml()` in
+ * `apps/backend/src/lib/mail-html.ts`): `p`, `br`, `strong`, `em`, `ul`,
+ * `ol`, `li`, and `a` with an `http:` / `https:` / `mailto:` `href`. Every
+ * other tag and attribute is removed, and `script` / `style` and the like
+ * lose their content too. It goes out from the organization's verified
+ * sending domain to every participant of the tournament, so a single
+ * compromised staff account must not be able to send them arbitrary HTML
+ * (#122). A body left empty by that is refused with 400.
  *
  * `statusFilter` narrows the recipients to the entries in one status.
  * Omitting it mails every entry of the tournament **except the cancelled

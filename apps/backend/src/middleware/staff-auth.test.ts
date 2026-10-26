@@ -1,4 +1,4 @@
-import {afterEach, describe, expect, it} from 'bun:test';
+import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
 import {Hono} from 'hono';
 import {sign} from 'hono/jwt';
 import {
@@ -9,12 +9,18 @@ import {
 } from './staff-auth';
 import type {Bindings, StaffEnv} from '../types/env';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {
+  staffSessionAwareFetch,
+  TEST_SESSIONS_VALID_FROM,
+  TEST_SESSIONS_VALID_FROM_MS,
+} from '../test-support/staff-session';
+import {openEntryPeriodTournament} from '../test-support/tournaments';
 
 const SESSION_SECRET = 'test-session-secret';
 const ENV: Bindings = {
   ...PERMISSIVE_PLATFORM_BINDINGS,
   SUPABASE_URL: 'https://example.supabase.co',
-  SUPABASE_SERVICE_ROLE_KEY: 'dummy-service-role-key',
+  SUPABASE_SECRET_KEY: 'dummy-service-role-key',
   MAIL_API_KEY: 'dummy-mail-api-key',
   GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
   MAIL_FROM_ADDRESS: 'entry@example.com',
@@ -26,9 +32,39 @@ const REGION_ID = '11111111-1111-1111-1111-111111111111';
 const OTHER_REGION_ID = '22222222-2222-2222-2222-222222222222';
 const STAFF_ID = '33333333-3333-3333-3333-333333333333';
 
+// A later generation than the one the test tokens carry: what the row says
+// once the account's sessions have been revoked.
+const REVOKED_AT = '2026-08-25T02:00:00.000Z';
+
+/**
+ * A token for `claims`, issued for the generation the session-check stub
+ * reports unless the claims say otherwise.
+ */
 async function tokenFor(claims: Record<string, unknown>): Promise<string> {
   const exp = Math.floor(Date.now() / 1000) + 3600;
-  return sign({...claims, exp}, SESSION_SECRET);
+  return sign(
+    {sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS, ...claims, exp},
+    SESSION_SECRET,
+  );
+}
+
+/** Makes every Supabase call fail, as a database outage would. */
+function mockFailingFetch(): void {
+  globalThis.fetch = (() =>
+    Promise.resolve(
+      Response.json({message: 'connection refused'}, {status: 500}),
+    )) as unknown as typeof fetch;
+}
+
+/** Runs `body` with `console.error` silenced, for the expected 500s. */
+async function withoutErrorLog(body: () => Promise<void>): Promise<void> {
+  const originalConsoleError = console.error;
+  console.error = () => {};
+  try {
+    await body();
+  } finally {
+    console.error = originalConsoleError;
+  }
 }
 
 function cookieHeader(token: string): {Cookie: string} {
@@ -37,11 +73,15 @@ function cookieHeader(token: string): {Cookie: string} {
 
 function mockTournamentFetch(
   row: {region_id: string; type: string} | null,
+  sessionsValidFrom: string | null = TEST_SESSIONS_VALID_FROM,
 ): void {
-  globalThis.fetch = (() =>
-    Promise.resolve(
-      Response.json(row ? [row] : []),
-    )) as unknown as typeof fetch;
+  globalThis.fetch = staffSessionAwareFetch(
+    (() =>
+      Promise.resolve(
+        Response.json(row ? [row] : []),
+      )) as unknown as typeof fetch,
+    sessionsValidFrom,
+  );
 }
 
 describe('requireStaffForTournament', () => {
@@ -112,6 +152,7 @@ describe('requireStaffForTournament', () => {
   });
 
   it('allows general staff for any tournament', async () => {
+    mockTournamentFetch({region_id: OTHER_REGION_ID, type: 'shinjinou'});
     const token = await tokenFor({
       sub: STAFF_ID,
       role: 'general',
@@ -126,6 +167,130 @@ describe('requireStaffForTournament', () => {
     );
 
     expect(res.status).toBe(200);
+  });
+
+  // The handler gets the row the scope check passed, so it neither reads it
+  // again nor risks seeing a different version of it (#123).
+  const appExposingTournament = new Hono<StaffEnv>().get(
+    '/tournaments/:tournamentId/x',
+    requireStaffForTournament(),
+    c => c.json({tournament: c.get('tournament') ?? null}),
+  );
+
+  it('requireStaffForTournament exposes the tournament it read to the handler', async () => {
+    const row = openEntryPeriodTournament({region_id: REGION_ID});
+    mockTournamentFetch(row);
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'regional',
+      regionId: REGION_ID,
+      tournamentType: 'saikyoi',
+    });
+
+    const res = await appExposingTournament.request(
+      `/tournaments/${row.id}/x`,
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as unknown).toEqual({tournament: row});
+  });
+
+  // General staff skip only the scope comparison, not the read, so the row
+  // is there for them too.
+  it('requireStaffForTournament exposes the tournament to general staff too', async () => {
+    const row = openEntryPeriodTournament({region_id: OTHER_REGION_ID});
+    mockTournamentFetch(row);
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'general',
+      regionId: null,
+      tournamentType: null,
+    });
+
+    const res = await appExposingTournament.request(
+      `/tournaments/${row.id}/x`,
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as unknown).toEqual({tournament: row});
+  });
+
+  it('answers general staff with 404 for a tournament that does not exist', async () => {
+    mockTournamentFetch(null);
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'general',
+      regionId: null,
+      tournamentType: null,
+    });
+
+    const res = await app.request(
+      '/tournaments/t1/x',
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(404);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'tournament not found',
+    });
+  });
+
+  // For regional staff a missing tournament looks the same as another
+  // region's, so ids can't be probed for existence.
+  it('answers regional staff with 403 for a tournament that does not exist', async () => {
+    mockTournamentFetch(null);
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'regional',
+      regionId: REGION_ID,
+      tournamentType: 'saikyoi',
+    });
+
+    const res = await app.request(
+      '/tournaments/t1/x',
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(403);
+  });
+
+  it('logs the cause and answers 500 when the tournament cannot be read', async () => {
+    globalThis.fetch = staffSessionAwareFetch((() =>
+      Promise.resolve(
+        Response.json({message: 'connection refused'}, {status: 500}),
+      )) as unknown as typeof fetch);
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'regional',
+      regionId: REGION_ID,
+      tournamentType: 'saikyoi',
+    });
+    const logged: unknown[][] = [];
+    const originalConsoleError = console.error;
+    console.error = (...args: unknown[]) => {
+      logged.push(args);
+    };
+    let res: Response;
+    try {
+      res = await app.request(
+        '/tournaments/t1/x',
+        {headers: cookieHeader(token)},
+        ENV,
+      );
+    } finally {
+      console.error = originalConsoleError;
+    }
+
+    expect(res.status).toBe(500);
+    expect(logged.map(args => args[0])).toContain(
+      'failed to read the tournament',
+    );
   });
 
   it('returns 401 for a malformed token', async () => {
@@ -184,15 +349,178 @@ describe('requireStaffForTournament', () => {
 
     expect(res.status).toBe(401);
   });
+
+  it('requireStaffForTournament rejects a revoked session', async () => {
+    // In scope, correctly signed, unexpired -- and issued before the
+    // account's sessions were revoked, which is the only thing wrong with it.
+    mockTournamentFetch({region_id: REGION_ID, type: 'saikyoi'}, REVOKED_AT);
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'regional',
+      regionId: REGION_ID,
+      tournamentType: 'saikyoi',
+    });
+
+    const res = await app.request(
+      '/tournaments/t1/x',
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(401);
+  });
+
+  it('answers a revoked out-of-scope session with 401, not 403', async () => {
+    mockTournamentFetch(
+      {region_id: 'other-region', type: 'saikyoi'},
+      REVOKED_AT,
+    );
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'regional',
+      regionId: REGION_ID,
+      tournamentType: 'saikyoi',
+    });
+
+    const res = await app.request(
+      '/tournaments/t1/x',
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(401);
+  });
+
+  it('reads the session and the scope concurrently', async () => {
+    // Neither read waits for the other: both are in flight before either
+    // answers.
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const respond = staffSessionAwareFetch((() =>
+      Promise.resolve(
+        Response.json([{region_id: REGION_ID, type: 'saikyoi'}]),
+      )) as unknown as typeof fetch);
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return respond(input, init);
+    }) as unknown as typeof fetch;
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'regional',
+      regionId: REGION_ID,
+      tournamentType: 'saikyoi',
+    });
+
+    const res = await app.request(
+      '/tournaments/t1/x',
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(200);
+    expect(maxInFlight).toBe(2);
+  });
+
+  it('rejects a revoked general staff session too', async () => {
+    // General staff skip the tournament lookup, but not the session check.
+    mockTournamentFetch(null, REVOKED_AT);
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'general',
+      regionId: null,
+      tournamentType: null,
+    });
+
+    const res = await app.request(
+      '/tournaments/t1/x',
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(401);
+  });
+
+  it('the middleware answers 500, not 401, when the revocation check cannot be read', async () => {
+    mockFailingFetch();
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'general',
+      regionId: null,
+      tournamentType: null,
+    });
+
+    await withoutErrorLog(async () => {
+      const res = await app.request(
+        '/tournaments/t1/x',
+        {headers: cookieHeader(token)},
+        ENV,
+      );
+
+      // A database outage must not read as "your session is invalid" and
+      // send staff back to the login screen.
+      expect(res.status).toBe(500);
+    });
+  });
+
+  it('the middleware rejects a session whose staff account no longer exists', async () => {
+    mockTournamentFetch({region_id: REGION_ID, type: 'saikyoi'}, null);
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'regional',
+      regionId: REGION_ID,
+      tournamentType: 'saikyoi',
+    });
+
+    const res = await app.request(
+      '/tournaments/t1/x',
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(401);
+  });
+
+  it('accepts a session whose timestamp Postgres formats differently', async () => {
+    // PostgREST renders `timestamptz` with a `+00:00` offset rather than `Z`;
+    // the claim is compared as epoch milliseconds so both spell one instant.
+    mockTournamentFetch(
+      {region_id: REGION_ID, type: 'saikyoi'},
+      '2026-08-25T01:23:45.678+00:00',
+    );
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'general',
+      regionId: null,
+      tournamentType: null,
+    });
+
+    const res = await app.request(
+      '/tournaments/t1/x',
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(200);
+  });
 });
 
 function mockEntryTournamentFetch(
   row: {region_id: string; type: string} | null,
+  sessionsValidFrom: string | null = TEST_SESSIONS_VALID_FROM,
 ): void {
-  globalThis.fetch = (() =>
-    Promise.resolve(
-      Response.json(row ? [{tournaments: row}] : []),
-    )) as unknown as typeof fetch;
+  globalThis.fetch = staffSessionAwareFetch(
+    (() =>
+      Promise.resolve(
+        Response.json(row ? [{tournaments: row}] : []),
+      )) as unknown as typeof fetch,
+    sessionsValidFrom,
+  );
 }
 
 describe('requireStaffForEntry', () => {
@@ -263,6 +591,7 @@ describe('requireStaffForEntry', () => {
   });
 
   it('allows general staff for any entry', async () => {
+    mockEntryTournamentFetch(null);
     const token = await tokenFor({
       sub: STAFF_ID,
       role: 'general',
@@ -288,12 +617,70 @@ describe('requireStaffForEntry', () => {
 
     expect(res.status).toBe(401);
   });
+
+  it('rejects a revoked session', async () => {
+    mockEntryTournamentFetch(
+      {region_id: REGION_ID, type: 'saikyoi'},
+      REVOKED_AT,
+    );
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'regional',
+      regionId: REGION_ID,
+      tournamentType: 'saikyoi',
+    });
+
+    const res = await app.request(
+      '/entries/e1/x',
+      {headers: cookieHeader(token)},
+      ENV,
+    );
+
+    expect(res.status).toBe(401);
+  });
+
+  it('answers 500 when the revocation check cannot be read', async () => {
+    mockFailingFetch();
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'regional',
+      regionId: REGION_ID,
+      tournamentType: 'saikyoi',
+    });
+
+    await withoutErrorLog(async () => {
+      const res = await app.request(
+        '/entries/e1/x',
+        {headers: cookieHeader(token)},
+        ENV,
+      );
+
+      expect(res.status).toBe(500);
+    });
+  });
 });
 
 describe('requireGeneralStaff', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = staffSessionAwareFetch(originalFetch);
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
   const app = new Hono<StaffEnv>().get('/x', requireGeneralStaff(), c =>
     c.json({staff: c.get('staff')}),
   );
+
+  const generalClaims = {
+    sub: STAFF_ID,
+    role: 'general',
+    regionId: null,
+    tournamentType: null,
+  };
 
   it('rejects a valid token whose role is "regional"', async () => {
     const token = await tokenFor({
@@ -331,6 +718,93 @@ describe('requireGeneralStaff', () => {
       },
       SESSION_SECRET,
     );
+
+    const res = await app.request('/x', {headers: cookieHeader(token)}, ENV);
+
+    expect(res.status).toBe(401);
+  });
+
+  it('requireGeneralStaff rejects a session issued before sessions_valid_from moved', async () => {
+    globalThis.fetch = staffSessionAwareFetch(originalFetch, REVOKED_AT);
+    const token = await tokenFor(generalClaims);
+
+    const res = await app.request('/x', {headers: cookieHeader(token)}, ENV);
+
+    // The whole point of the column: a cookie copied before the revocation
+    // stops working on the next request, not when it expires 12 hours later.
+    expect(res.status).toBe(401);
+  });
+
+  it('accepts a session issued after sessions_valid_from moved', async () => {
+    // The owner logging back in after a revocation gets a session of the new
+    // generation, which the same row now accepts.
+    globalThis.fetch = staffSessionAwareFetch(originalFetch, REVOKED_AT);
+    const token = await tokenFor({
+      ...generalClaims,
+      sessionsValidFrom: Date.parse(REVOKED_AT),
+    });
+
+    const res = await app.request('/x', {headers: cookieHeader(token)}, ENV);
+
+    expect(res.status).toBe(200);
+  });
+
+  it('answers 500, not 401, when the revocation check cannot be read', async () => {
+    mockFailingFetch();
+    const token = await tokenFor(generalClaims);
+
+    await withoutErrorLog(async () => {
+      const res = await app.request('/x', {headers: cookieHeader(token)}, ENV);
+
+      expect(res.status).toBe(500);
+    });
+  });
+
+  it('rejects a session whose staff account no longer exists', async () => {
+    globalThis.fetch = staffSessionAwareFetch(originalFetch, null);
+    const token = await tokenFor(generalClaims);
+
+    const res = await app.request('/x', {headers: cookieHeader(token)}, ENV);
+
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects a token issued before sessionsValidFrom existed', async () => {
+    // A cookie from before this claim was added can't be shown to be
+    // current, so it reads as logged out rather than as a working session.
+    const token = await sign(
+      {...generalClaims, exp: Math.floor(Date.now() / 1000) + 3600},
+      SESSION_SECRET,
+    );
+
+    const res = await app.request('/x', {headers: cookieHeader(token)}, ENV);
+
+    expect(res.status).toBe(401);
+  });
+
+  it('refuses regional staff with 403', async () => {
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'regional',
+      regionId: REGION_ID,
+      tournamentType: 'saikyoi',
+    });
+
+    const res = await app.request('/x', {headers: cookieHeader(token)}, ENV);
+
+    expect(res.status).toBe(403);
+  });
+
+  it('answers a revoked regional session with 401, not 403', async () => {
+    // The role alone would refuse it, but a dead session is answered as one
+    // so the staff screens send its holder back to the login form.
+    globalThis.fetch = staffSessionAwareFetch(originalFetch, REVOKED_AT);
+    const token = await tokenFor({
+      sub: STAFF_ID,
+      role: 'regional',
+      regionId: REGION_ID,
+      tournamentType: 'saikyoi',
+    });
 
     const res = await app.request('/x', {headers: cookieHeader(token)}, ENV);
 

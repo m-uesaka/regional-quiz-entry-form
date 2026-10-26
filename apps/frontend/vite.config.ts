@@ -1,13 +1,30 @@
 import {defineConfig} from 'vitest/config';
-import {loadEnv} from 'vite';
+import {defaultServerConditions, loadEnv} from 'vite';
 import adapter from '@sveltejs/adapter-cloudflare';
 import {sveltekit} from '@sveltejs/kit/vite';
+import tailwindcss from '@tailwindcss/vite';
 
 // The address `wrangler dev` serves `apps/backend` on by default, used when
 // `BACKEND_URL` isn't set so that `bun run dev:frontend` works out of the box.
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8787';
 
-export default defineConfig(({mode}) => {
+// Where Cloudflare Turnstile serves its script and challenge frame from.
+const TURNSTILE_ORIGIN = 'https://challenges.cloudflare.com';
+
+// The SSR build runs on Cloudflare Pages (workerd), not Node, so it resolves
+// packages the way Wrangler does for `apps/backend` rather than with Vite's
+// Node-first defaults. Under the `node` condition `yaml` (via
+// `packages/shared`) resolves to its CommonJS build, which Rolldown wraps in
+// `createRequire(import.meta.url)`; `import.meta.url` is undefined on Pages,
+// so the Function fails to load at deploy time. `vite dev` and vitest run on
+// Node and keep the defaults.
+const WORKERD_SERVER_CONDITIONS = [
+  'workerd',
+  'worker',
+  ...defaultServerConditions.filter(condition => condition !== 'node'),
+];
+
+export default defineConfig(({command, mode}) => {
   // Vite does not put unprefixed `.env` values on `process.env`, so read them
   // here to keep the dev proxy on the same `BACKEND_URL` that
   // `$env/dynamic/private` hands `handleFetch` in `src/hooks.server.ts`.
@@ -15,6 +32,7 @@ export default defineConfig(({mode}) => {
 
   return {
     plugins: [
+      tailwindcss(),
       sveltekit({
         compilerOptions: {
           // Force runes mode for the project, except for libraries. Can be removed in svelte 6.
@@ -22,8 +40,44 @@ export default defineConfig(({mode}) => {
             filename.split(/[/\\]/).includes('node_modules') ? undefined : true,
         },
         adapter: adapter(),
+        csp: {
+          // Content-Security-Policy (#120). `auto` gives every
+          // server-rendered page a fresh nonce, which SvelteKit adds to
+          // `script-src` and puts on the inline script it renders to start
+          // the app, so no `'unsafe-inline'` is needed for scripts; a
+          // prerendered page would get hashes instead.
+          mode: 'auto',
+          directives: {
+            'default-src': ['self'],
+            // Cloudflare Turnstile (`$lib/components/Turnstile.svelte`)
+            // loads its script from this host and renders the challenge in
+            // a frame served from the same one.
+            'script-src': ['self', TURNSTILE_ORIGIN],
+            'frame-src': [TURNSTILE_ORIGIN],
+            // Style attributes (`Input.svelte`, `app.html`) and the
+            // `<style>` elements transitions inject cannot carry a nonce.
+            // A nonce or hash next to `'unsafe-inline'` would also make the
+            // browser ignore it, which SvelteKit avoids by adding none here
+            // once `'unsafe-inline'` is listed.
+            'style-src': ['self', 'unsafe-inline'],
+            'img-src': ['self', 'data:'],
+            'font-src': ['self'],
+            // The browser's own `/api/*` calls are same-origin (the Workers
+            // route in production, the dev proxy under `vite dev`), and so
+            // is `vite dev`'s HMR socket.
+            'connect-src': ['self'],
+            'object-src': ['none'],
+            'base-uri': ['self'],
+            'form-action': ['self'],
+            'frame-ancestors': ['none'],
+          },
+        },
       }),
     ],
+    ssr:
+      command === 'build'
+        ? {resolve: {conditions: WORKERD_SERVER_CONDITIONS}}
+        : undefined,
     server: {
       proxy: {
         // Requests the browser makes to `/api/*` on this origin: the CSV

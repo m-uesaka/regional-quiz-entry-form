@@ -1,4 +1,4 @@
-import {afterEach, describe, expect, it} from 'bun:test';
+import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
 import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
 import {app} from '../index';
@@ -8,6 +8,23 @@ import {
   RecordingQueue,
 } from '../test-support/bindings';
 import {ENQUEUE_BATCH_SIZE} from './staff-mail';
+import {
+  staffSessionAwareFetch,
+  TEST_SESSIONS_VALID_FROM_MS,
+} from '../test-support/staff-session';
+
+// Every staff guard checks the session against
+// `staff_accounts.sessions_valid_from` before the handler runs; answer that
+// read for the tests that don't stub `fetch` themselves.
+const fetchWithoutSessionStub = globalThis.fetch;
+
+beforeEach(() => {
+  globalThis.fetch = staffSessionAwareFetch(fetchWithoutSessionStub);
+});
+
+afterEach(() => {
+  globalThis.fetch = fetchWithoutSessionStub;
+});
 
 const SESSION_SECRET = 'test-session-secret';
 
@@ -25,6 +42,7 @@ async function regionalStaffCookie(regionId = REGION_ID): Promise<string> {
       role: 'regional',
       regionId,
       tournamentType: 'saikyoi',
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     SESSION_SECRET,
@@ -39,6 +57,7 @@ async function generalStaffCookie(): Promise<string> {
       role: 'general',
       regionId: null,
       tournamentType: null,
+      sessionsValidFrom: TEST_SESSIONS_VALID_FROM_MS,
       exp: Math.floor(Date.now() / 1000) + 3600,
     },
     SESSION_SECRET,
@@ -53,7 +72,7 @@ function env(): Bindings {
   return {
     ...PERMISSIVE_PLATFORM_BINDINGS,
     SUPABASE_URL: 'https://example.supabase.co',
-    SUPABASE_SERVICE_ROLE_KEY: 'dummy-service-role-key',
+    SUPABASE_SECRET_KEY: 'dummy-service-role-key',
     MAIL_API_KEY: 'dummy-mail-api-key',
     GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
     MAIL_FROM_ADDRESS: 'entry@example.com',
@@ -122,7 +141,10 @@ function mockFetch(responses: StubbedResponses = {}): FetchLog {
       body instanceof Response ? body.clone() : Response.json(body),
     );
 
-  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
+  globalThis.fetch = staffSessionAwareFetch(((
+    input: string | URL | Request,
+    init?: RequestInit,
+  ) => {
     const url =
       typeof input === 'string'
         ? input
@@ -153,7 +175,7 @@ function mockFetch(responses: StubbedResponses = {}): FetchLog {
       return answer(responses.jobs ?? [jobRow()]);
     }
     throw new Error(`unexpected fetch to ${url}`);
-  }) as unknown as typeof fetch;
+  }) as unknown as typeof fetch);
 
   return log;
 }
@@ -261,6 +283,52 @@ describe('POST /staff/tournaments/:tournamentId/mail', () => {
     ]);
   });
 
+  it('stores the body with disallowed markup removed', async () => {
+    const log = mockFetch({
+      tournament: IN_SCOPE_TOURNAMENT,
+      entries: [[entryRow('taro@example.com')]],
+    });
+    const cookie = await regionalStaffCookie();
+
+    const res = await postMail(cookie, {
+      ...MAIL_INPUT,
+      body:
+        '<p onclick="x()">集合時間</p><script>alert(1)</script>' +
+        '<a href="javascript:alert(1)">詳細</a>',
+    });
+
+    expect(res.status).toBe(202);
+    expect(log.insertedJobs).toMatchObject([
+      {body_html: '<p>集合時間</p><a>詳細</a>'},
+    ]);
+  });
+
+  it('returns 400 for a body that is empty once sanitized', async () => {
+    mockFetch({tournament: IN_SCOPE_TOURNAMENT});
+    const cookie = await regionalStaffCookie();
+
+    const res = await postMail(cookie, {
+      ...MAIL_INPUT,
+      body: '<script>alert(1)</script>',
+    });
+
+    expect(res.status).toBe(400);
+    expect(queue.sent).toEqual([]);
+  });
+
+  it('returns 400 for a body left with nothing but empty tags', async () => {
+    mockFetch({tournament: IN_SCOPE_TOURNAMENT});
+    const cookie = await regionalStaffCookie();
+
+    const res = await postMail(cookie, {
+      ...MAIL_INPUT,
+      body: '<p><img src="https://example.com/a.png"></p><p>&nbsp;</p>',
+    });
+
+    expect(res.status).toBe(400);
+    expect(queue.sent).toEqual([]);
+  });
+
   it('no longer refuses a list over 80 recipients', async () => {
     const recipientCount = 250;
     mockFetch({
@@ -328,7 +396,12 @@ describe('POST /staff/tournaments/:tournamentId/mail', () => {
   });
 
   it('allows general staff for any tournament', async () => {
-    mockFetch({entries: [[entryRow('taro@example.com')]]});
+    // A tournament outside any regional scope: general staff aren't scoped,
+    // but the guard still reads the row to hand it to the handler (#123).
+    mockFetch({
+      tournament: [{region_id: OTHER_REGION_ID, type: 'shinjinou'}],
+      entries: [[entryRow('taro@example.com')]],
+    });
     const cookie = await generalStaffCookie();
 
     const res = await postMail(cookie);

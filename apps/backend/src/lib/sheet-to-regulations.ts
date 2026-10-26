@@ -3,11 +3,8 @@ import {
   RegulationSyncInputSchema,
   type RegulationUpsert,
 } from '@regional-quiz/shared';
+import {JST_OFFSET_MS} from './jst';
 import {fetchSheetValues, SheetFetchError} from './sheet-to-form-definition';
-
-// Japan Standard Time has no daylight saving, so a fixed offset converts a
-// wall-clock time on the sheet into an instant.
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 

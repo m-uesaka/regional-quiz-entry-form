@@ -1,6 +1,7 @@
 import {verify} from 'hono/jwt';
-import type {Cookies} from '@sveltejs/kit';
+import {redirect, type Cookies} from '@sveltejs/kit';
 import {StaffClaimsSchema, type StaffClaims} from '@regional-quiz/shared';
+import {staffLoginPath} from './staff-login';
 
 /**
  * Matches `STAFF_SESSION_COOKIE` in
@@ -28,10 +29,37 @@ export function clearStaffSession(cookies: Cookies, url: URL): void {
 }
 
 /**
+ * Sends a staff member whose session the API has just refused to the login
+ * form, dropping the dead cookie on the way.
+ *
+ * `readStaffClaims` below can only check the signature and the expiry, but
+ * the backend also refuses a session whose account's sessions have been
+ * revoked since it was issued, and one whose account is gone (see
+ * `isSessionCurrent()` in `apps/backend/src/middleware/staff-auth.ts`). Such
+ * a cookie still reads as a session here, so left in place it would keep the
+ * staff layout offering a logout to someone the API has already logged out,
+ * and let every `/admin` screen past its guard only to be refused again.
+ * Same idea as `redirectToParticipantLogin()` in `./participant-session.ts`.
+ *
+ * @param cookies `event.cookies`.
+ * @param url `event.url`: the page to come back to after logging in, and the
+ *     origin the deletion is issued from.
+ */
+export function redirectToStaffLogin(cookies: Cookies, url: URL): never {
+  clearStaffSession(cookies, url);
+  redirect(303, staffLoginPath(url));
+}
+
+/**
  * Verifies and parses the `staff_session` JWT issued by the backend on
  * staff login. Mirrors `apps/backend/src/middleware/staff-auth.ts`'s
- * private `readStaffClaims()` so the frontend recognizes the same session
- * cookie the backend does.
+ * `readStaffClaims()` so the frontend recognizes the same session cookie
+ * the backend does. Like that one, it can't tell a revoked session from a
+ * live one -- only the API can, by reading `staff_accounts` -- so a page has
+ * to treat the API's 401 as the final word (`redirectToStaffLogin()`).
+ *
+ * A cookie issued before the `sessionsValidFrom` claim existed fails the
+ * schema and so reads as logged out, which is also how the API treats it.
  *
  * @param token The raw `staff_session` cookie value, if present.
  * @param secret The `SESSION_SECRET` used to sign the token. May be

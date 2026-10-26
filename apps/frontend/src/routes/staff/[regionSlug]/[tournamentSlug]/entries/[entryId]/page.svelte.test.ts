@@ -24,6 +24,7 @@ const ENTRY: StaffEntryDetail = {
     {
       fieldKey: 't_shirt_size',
       label: 'Tシャツサイズ',
+      plainLabel: 'Tシャツサイズ',
       fieldType: 'radio',
       required: true,
       options: ['S', 'M', 'L'],
@@ -32,6 +33,7 @@ const ENTRY: StaffEntryDetail = {
     {
       fieldKey: 'allergies',
       label: 'アレルギー',
+      plainLabel: 'アレルギー',
       fieldType: 'checkbox',
       required: false,
       options: ['卵', '乳', '小麦'],
@@ -40,6 +42,7 @@ const ENTRY: StaffEntryDetail = {
     {
       fieldKey: 'agree_to_rules',
       label: '規約に同意する',
+      plainLabel: '規約に同意する',
       fieldType: 'checkbox',
       required: true,
       options: null,
@@ -57,7 +60,7 @@ describe('staff entry detail +page.svelte', () => {
           tournamentSlug: 'saikyoi',
           entryId: ENTRY.id,
         },
-        data: {loggedIn: true, entry: ENTRY},
+        data: {loggedIn: true, isGeneralStaff: false, entry: ENTRY},
         form: null,
       },
     });
@@ -80,13 +83,50 @@ describe('staff entry detail +page.svelte', () => {
           tournamentSlug: 'saikyoi',
           entryId: ENTRY.id,
         },
-        data: {loggedIn: true, entry: ENTRY},
+        data: {loggedIn: true, isGeneralStaff: false, entry: ENTRY},
         form: null,
       },
     });
 
     expect(screen.getByText('卵、乳')).toBeInTheDocument();
     expect(screen.getByText('L')).toBeInTheDocument();
+  });
+
+  it('shows a label and chosen options with links as their text only', () => {
+    const entry: StaffEntryDetail = {
+      ...ENTRY,
+      freeText: null,
+      customFieldValues: {
+        events: ['<a href="https://e.example/a">A</a>企画', 'B企画'],
+      },
+      formFieldDefs: [
+        {
+          fieldKey: 'events',
+          label: '<a href="https://e.example">企画</a>の希望',
+          plainLabel: '企画の希望',
+          fieldType: 'checkbox',
+          required: false,
+          options: ['<a href="https://e.example/a">A</a>企画', 'B企画'],
+          displayOrder: 0,
+        },
+      ],
+    };
+
+    render(Page, {
+      props: {
+        params: {
+          regionSlug: 'tokyo',
+          tournamentSlug: 'saikyoi',
+          entryId: entry.id,
+        },
+        data: {loggedIn: true, isGeneralStaff: false, entry},
+        form: null,
+      },
+    });
+
+    expect(screen.getByText('企画の希望')).toBeInTheDocument();
+    expect(screen.getByText('A企画、B企画')).toBeInTheDocument();
+    expect(screen.queryByText(/<a /)).toBeNull();
   });
 
   it('renders each custom field under its label instead of its raw key', () => {
@@ -97,7 +137,7 @@ describe('staff entry detail +page.svelte', () => {
           tournamentSlug: 'saikyoi',
           entryId: ENTRY.id,
         },
-        data: {loggedIn: true, entry: ENTRY},
+        data: {loggedIn: true, isGeneralStaff: false, entry: ENTRY},
         form: null,
       },
     });
@@ -116,7 +156,7 @@ describe('staff entry detail +page.svelte', () => {
           tournamentSlug: 'saikyoi',
           entryId: ENTRY.id,
         },
-        data: {loggedIn: true, entry: ENTRY},
+        data: {loggedIn: true, isGeneralStaff: false, entry: ENTRY},
         form: null,
       },
     });
@@ -139,6 +179,7 @@ describe('staff entry detail +page.svelte', () => {
         },
         data: {
           loggedIn: true,
+          isGeneralStaff: false,
           entry: {
             ...ENTRY,
             regulationIds: [
@@ -163,7 +204,7 @@ describe('staff entry detail +page.svelte', () => {
           tournamentSlug: 'saikyoi',
           entryId: ENTRY.id,
         },
-        data: {loggedIn: true, entry: ENTRY},
+        data: {loggedIn: true, isGeneralStaff: false, entry: ENTRY},
         form: null,
       },
     });

@@ -1,11 +1,13 @@
-import {describe, expect, it} from 'vitest';
+import {describe, expect, it, vi} from 'vitest';
 import type {HttpError} from '@sveltejs/kit';
 import type {
   FormFieldDef,
+  ParticipantClaims,
   Regulation,
   StaffClaims,
   Tournament,
 } from '@regional-quiz/shared';
+import {formatJstDateTime} from '$lib/jst-datetime';
 import {actions, load} from './+page.server';
 
 // Well in the past relative to any plausible test run time, so this is
@@ -40,6 +42,7 @@ const FORM_FIELD_DEFS: FormFieldDef[] = [
   {
     fieldKey: 'agree_rules',
     label: '規約に同意する',
+    plainLabel: '規約に同意する',
     fieldType: 'checkbox',
     required: true,
     options: null,
@@ -52,6 +55,7 @@ const GENERAL_STAFF: StaffClaims = {
   role: 'general',
   regionId: null,
   tournamentType: null,
+  sessionsValidFrom: 1756085025678,
 };
 
 /** 地域スタッフ covering exactly the tournament under test. */
@@ -60,6 +64,7 @@ const OWN_REGIONAL_STAFF: StaffClaims = {
   role: 'regional',
   regionId: OUT_OF_PERIOD_TOURNAMENT.regionId,
   tournamentType: OUT_OF_PERIOD_TOURNAMENT.type,
+  sessionsValidFrom: 1756085025678,
 };
 
 const OTHER_REGION_STAFF: StaffClaims = {
@@ -70,16 +75,28 @@ const OTHER_REGION_STAFF: StaffClaims = {
 const OTHER_TYPE_STAFF: StaffClaims = {
   ...OWN_REGIONAL_STAFF,
   tournamentType: 'shinjinou',
+  sessionsValidFrom: 1756085025678,
 };
 
 interface FakeApiOptions {
   tournament?: Tournament;
   /** When set, the tournament lookup answers with this status instead. */
   tournamentStatus?: number;
-  /** The `POST .../entries` response, defaulting to a created entry. */
+  /**
+   * The `POST .../entries` (or `.../entries/session`) response, defaulting
+   * to what each answers on success: 202 for an anonymous submission, 201
+   * with the entry for a logged-in one.
+   */
   entryResponse?: {status: number; body: unknown};
   /** The tournament's custom form field definitions. */
   formFieldDefs?: FormFieldDef[];
+  /** The tournament's regulations. */
+  regulations?: Regulation[];
+  /**
+   * The `GET .../entry-counts` response, defaulting to no entries; `'throw'`
+   * makes the request itself fail, as a network error would.
+   */
+  entryCounts?: {status: number; body: unknown} | 'throw';
   /** Collects every requested URL, for asserting which endpoints ran. */
   requests?: string[];
   /**
@@ -101,7 +118,17 @@ function fakeApi(options: FakeApiOptions = {}): typeof fetch {
       typeof input === 'string' ? input : new URL(String(input)).pathname;
     options.requests?.push(url);
     if (url.includes('/regulations')) {
-      return Response.json(REGULATIONS);
+      return Response.json(options.regulations ?? REGULATIONS);
+    }
+    if (url.includes('/entry-counts')) {
+      if (options.entryCounts === 'throw') {
+        throw new TypeError('fetch failed');
+      }
+      const counts = options.entryCounts ?? {
+        status: 200,
+        body: {confirmedCount: 0, waitlistedCount: 0},
+      };
+      return Response.json(counts.body, {status: counts.status});
     }
     if (url.includes('/form-definitions/')) {
       return Response.json(options.formFieldDefs ?? FORM_FIELD_DEFS);
@@ -110,7 +137,11 @@ function fakeApi(options: FakeApiOptions = {}): typeof fetch {
       options.turnstileTokens?.push(
         new Headers(init?.headers).get('cf-turnstile-response'),
       );
-      const entry = options.entryResponse ?? {status: 201, body: {id: 'entry'}};
+      const entry =
+        options.entryResponse ??
+        (url.endsWith('/entries/session')
+          ? {status: 201, body: {id: 'entry'}}
+          : {status: 202, body: {ok: true}});
       return Response.json(entry.body, {status: entry.status});
     }
     return Response.json(tournament, {status: options.tournamentStatus ?? 200});
@@ -122,6 +153,7 @@ function buildEvent(options: {
   fetch: typeof fetch;
   staff: StaffClaims | null;
   tournamentSlug?: string;
+  deletedCookies?: string[];
 }): Parameters<typeof load>[0] {
   return {
     params: {
@@ -129,8 +161,14 @@ function buildEvent(options: {
       tournamentSlug: options.tournamentSlug ?? 'saikyoi',
     },
     fetch: options.fetch,
-    locals: {staff: options.staff},
-  } as Parameters<typeof load>[0];
+    locals: {staff: options.staff, participant: null},
+    url: new URL('http://localhost/tokyo/saikyoi/entry'),
+    cookies: {
+      delete: (name: string) => {
+        options.deletedCookies?.push(name);
+      },
+    },
+  } as unknown as Parameters<typeof load>[0];
 }
 
 describe('entry +page.server load', () => {
@@ -151,7 +189,7 @@ describe('entry +page.server load', () => {
       staff: GENERAL_STAFF,
     });
 
-    await expect(load(event)).resolves.toEqual({
+    await expect(load(event)).resolves.toMatchObject({
       tournament: OUT_OF_PERIOD_TOURNAMENT,
       regulations: REGULATIONS,
       formFieldDefs: FORM_FIELD_DEFS,
@@ -207,18 +245,23 @@ describe('entry +page.server load', () => {
     } satisfies Partial<HttpError>);
   });
 
-  // A stale staff cookie earns a 401 from that gate instead of the 403
-  // above. On this page it means the same thing -- not staff, period
-  // closed -- so it must not fall through to the bad-gateway branch.
-  it('throws 403 when the tournament read reports a stale staff session', async () => {
+  // A stale or revoked staff cookie earns a 401 from that gate instead of
+  // the 403 above. Only staff hold one, so it is dropped and its holder sent
+  // to log in again, rather than told the period is closed while the dead
+  // cookie stays put.
+  it('drops a refused staff cookie and sends its holder to log in', async () => {
+    const deletedCookies: string[] = [];
     const event = buildEvent({
       fetch: fakeApi({tournamentStatus: 401}),
       staff: null,
+      deletedCookies,
     });
 
     await expect(load(event)).rejects.toMatchObject({
-      status: 403,
-    } satisfies Partial<HttpError>);
+      status: 303,
+      location: `/staff/login?redirectTo=${encodeURIComponent('/tokyo/saikyoi/entry')}`,
+    });
+    expect(deletedCookies).toEqual(['staff_session']);
   });
 
   it('returns the regulations and form field defs the form is built from', async () => {
@@ -228,7 +271,115 @@ describe('entry +page.server load', () => {
       tournament: OPEN_TOURNAMENT,
       regulations: REGULATIONS,
       formFieldDefs: FORM_FIELD_DEFS,
+      priorityNotices: [],
+      waitlistOpen: false,
+      loggedIn: false,
+      loginPath: '/mypage/login?redirectTo=%2Ftokyo%2Fsaikyoi%2Fentry',
     });
+  });
+
+  it('announces the 優先エントリー open now', async () => {
+    const day = 24 * 60 * 60 * 1000;
+    const endsAt = new Date(Date.now() + day);
+    const event = buildEvent({
+      fetch: fakeApi({
+        regulations: [
+          {
+            ...REGULATIONS[0],
+            priorityStartsAt: new Date(Date.now() - day).toISOString(),
+            priorityEndsAt: endsAt.toISOString(),
+          },
+        ],
+      }),
+      staff: null,
+    });
+
+    const data = await load(event);
+
+    expect(data?.priorityNotices).toEqual([
+      {
+        labels: [REGULATIONS[0].label],
+        endsAtLabel: formatJstDateTime(endsAt.toISOString()),
+      },
+    ]);
+  });
+
+  // A staff preview of a closed form: a window can outlast its form, and
+  // neither notice is about entries the form is taking any more.
+  it('announces neither notice outside the entry period', async () => {
+    const day = 24 * 60 * 60 * 1000;
+    const event = buildEvent({
+      fetch: fakeApi({
+        tournament: {...OUT_OF_PERIOD_TOURNAMENT, capacity: 30},
+        regulations: [
+          {
+            ...REGULATIONS[0],
+            priorityStartsAt: new Date(Date.now() - day).toISOString(),
+            priorityEndsAt: new Date(Date.now() + day).toISOString(),
+          },
+        ],
+        entryCounts: {
+          status: 200,
+          body: {confirmedCount: 30, waitlistedCount: 0},
+        },
+      }),
+      staff: GENERAL_STAFF,
+    });
+
+    await expect(load(event)).resolves.toMatchObject({
+      priorityNotices: [],
+      waitlistOpen: false,
+    });
+  });
+
+  it('says the waitlist is open once the capacity is reached', async () => {
+    const event = buildEvent({
+      fetch: fakeApi({
+        tournament: {...OPEN_TOURNAMENT, capacity: 30},
+        entryCounts: {
+          status: 200,
+          body: {confirmedCount: 30, waitlistedCount: 0},
+        },
+      }),
+      staff: null,
+    });
+
+    await expect(load(event)).resolves.toMatchObject({waitlistOpen: true});
+  });
+
+  // The counts only feed the notice, so the form stays usable without them.
+  it('leaves the waitlist notice out when the counts cannot be read', async () => {
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
+    const event = buildEvent({
+      fetch: fakeApi({
+        tournament: {...OPEN_TOURNAMENT, capacity: 30},
+        entryCounts: {status: 500, body: {error: 'boom'}},
+      }),
+      staff: null,
+    });
+
+    await expect(load(event)).resolves.toMatchObject({waitlistOpen: false});
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('500'));
+    consoleError.mockRestore();
+  });
+
+  it('keeps the form up when the counts request itself fails', async () => {
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
+    const event = buildEvent({
+      fetch: fakeApi({
+        tournament: {...OPEN_TOURNAMENT, capacity: 30},
+        entryCounts: 'throw',
+      }),
+      staff: null,
+    });
+
+    await expect(load(event)).resolves.toMatchObject({waitlistOpen: false});
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 
   it('throws 404 when the backend responds not-ok', async () => {
@@ -264,8 +415,8 @@ function validFormData(
     furigana: 'ヤマダタロウ',
     displayName: '太郎',
     email: 'taro@example.com',
-    password: 'password123',
-    passwordConfirm: 'password123',
+    password: 'quiz-entry-pass1',
+    passwordConfirm: 'quiz-entry-pass1',
     regulationIds: [REGULATIONS[0].id],
     freeText: '',
     'custom.agree_rules': 'on',
@@ -279,6 +430,9 @@ function validFormData(
 function buildActionEvent(options: {
   fetch: typeof fetch;
   fields: Record<string, string | string[]>;
+  participant?: ParticipantClaims | null;
+  /** Collects the names of the cookies the action deletes. */
+  deletedCookies?: string[];
 }): Parameters<typeof actions.default>[0] {
   const body = new FormData();
   for (const [key, value] of Object.entries(options.fields)) {
@@ -295,8 +449,138 @@ function buildActionEvent(options: {
       method: 'POST',
       body,
     }),
-  } as Parameters<typeof actions.default>[0];
+    locals: {staff: null, participant: options.participant ?? null},
+    url: new URL('http://localhost/tokyo/saikyoi/entry'),
+    cookies: {
+      delete: (name: string) => {
+        options.deletedCookies?.push(name);
+      },
+    },
+  } as unknown as Parameters<typeof actions.default>[0];
 }
+
+const PARTICIPANT: ParticipantClaims = {
+  sub: '00000000-0000-0000-0000-000000000005',
+  pwdChangedAt: 0,
+};
+
+/** What a form rendered for a logged-in participant submits. */
+function sessionFormData(
+  overrides: Record<string, string | string[]> = {},
+): Record<string, string | string[]> {
+  const fields = validFormData({entryMode: 'session', ...overrides});
+  delete fields.email;
+  delete fields.password;
+  delete fields.passwordConfirm;
+  return fields;
+}
+
+describe('entry +page.server default action for a logged-in participant', () => {
+  // Someone logged in in another tab after this anonymous form was opened.
+  // The address and password typed into it must not be dropped in favour of
+  // whoever that is.
+  it('keeps a form rendered anonymously on the anonymous path even with a session', async () => {
+    const requests: string[] = [];
+
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({requests}),
+        fields: validFormData(),
+        participant: PARTICIPANT,
+      }),
+    );
+
+    expect(result).toEqual({submitted: true, email: 'taro@example.com'});
+    expect(requests).toContain(
+      `/api/tournaments/${OPEN_TOURNAMENT.id}/entries`,
+    );
+    expect(requests.some(url => url.endsWith('/entries/session'))).toBe(false);
+  });
+
+  it('enters under the session without asking for credentials', async () => {
+    const requests: string[] = [];
+
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({requests}),
+        fields: sessionFormData(),
+        participant: PARTICIPANT,
+      }),
+    );
+
+    expect(result).toEqual({submitted: true, loggedIn: true});
+    expect(requests).toContain(
+      `/api/tournaments/${OPEN_TOURNAMENT.id}/entries/session`,
+    );
+  });
+
+  // The session already says who is asking, so the API refuses directly and
+  // the form can say why.
+  it('reports a refusal directly', async () => {
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          entryResponse: {status: 409, body: {error: 'already entered'}},
+        }),
+        fields: sessionFormData(),
+        participant: PARTICIPANT,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 409,
+      data: {error: 'この大会には既にエントリー済みです'},
+    });
+  });
+
+  it('sends a participant whose session lapsed while the form was open to log in', async () => {
+    const requests: string[] = [];
+
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({requests}),
+        fields: sessionFormData(),
+        participant: null,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 401,
+      data: {
+        loginPath: '/mypage/login?redirectTo=%2Ftokyo%2Fsaikyoi%2Fentry',
+      },
+    });
+    expect(requests.some(url => url.includes('/entries'))).toBe(false);
+  });
+
+  // The cookie still reads as valid here, but the API cut it (a password
+  // reset, a deleted participant). Left in place, `/mypage/login` would take
+  // the visitor for logged in and send them straight back to this form.
+  it('offers the login screen and drops the dead cookie when the API refuses the session', async () => {
+    const deletedCookies: string[] = [];
+
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          entryResponse: {status: 401, body: {error: 'unauthorized'}},
+        }),
+        fields: sessionFormData(),
+        participant: PARTICIPANT,
+        deletedCookies,
+      }),
+    );
+
+    expect(deletedCookies).toEqual(['participant_session']);
+    expect(result).toMatchObject({
+      status: 401,
+      data: {
+        error:
+          'ログインの有効期限が切れました。もう一度ログインしてからエントリーしてください',
+        loginPath: '/mypage/login?redirectTo=%2Ftokyo%2Fsaikyoi%2Fentry',
+      },
+    });
+  });
+});
 
 describe('entry +page.server default action', () => {
   it('reports the confirmation mail on success', async () => {
@@ -305,6 +589,22 @@ describe('entry +page.server default action', () => {
     );
 
     expect(result).toEqual({submitted: true, email: 'taro@example.com'});
+  });
+
+  // Answered before anything about the address is known (#117): the entry
+  // may or may not exist, so the result names the address mailed and claims
+  // nothing else.
+  it('posts an anonymous submission to the address-blind endpoint', async () => {
+    const requests: string[] = [];
+
+    await actions.default(
+      buildActionEvent({fetch: fakeApi({requests}), fields: validFormData()}),
+    );
+
+    expect(requests).toContain(
+      `/api/tournaments/${OPEN_TOURNAMENT.id}/entries`,
+    );
+    expect(requests.some(url => url.endsWith('/entries/session'))).toBe(false);
   });
 
   it('rejects a mismatched password confirmation before calling the API', async () => {
@@ -321,6 +621,24 @@ describe('entry +page.server default action', () => {
       status: 400,
       data: {fieldErrors: {passwordConfirm: ['パスワードが一致しません']}},
     });
+  });
+
+  // The same field is how a returning participant proves an existing
+  // password, which may predate the common-password rule, so the form lets
+  // one through and the backend refuses it only for a new address -- by
+  // mail, like every other answer that depends on the address (#117).
+  it('passes a common password on to the API', async () => {
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi(),
+        fields: validFormData({
+          password: 'Password123',
+          passwordConfirm: 'Password123',
+        }),
+      }),
+    );
+
+    expect(result).toEqual({submitted: true, email: 'taro@example.com'});
   });
 
   it('does not read the regulations while handling a submission', async () => {
@@ -378,12 +696,7 @@ describe('entry +page.server default action', () => {
     [
       409,
       'already registered in another region',
-      'このメールアドレスは別の地域で登録済みです',
-    ],
-    [
-      401,
-      'invalid password',
-      'このメールアドレスは登録済みです。登録時のパスワードを入力してください',
+      'このアカウントは別の地域で登録済みのため、この大会にはエントリーできません',
     ],
     [403, 'entry period closed', 'エントリー期間外です'],
     [
@@ -413,6 +726,7 @@ describe('entry +page.server default action', () => {
             {
               fieldKey: 'password',
               label: '合言葉',
+              plainLabel: '合言葉',
               fieldType: 'textarea',
               required: false,
               options: null,
@@ -448,6 +762,7 @@ describe('entry +page.server default action', () => {
             {
               fieldKey: 'workshops',
               label: '参加したい企画',
+              plainLabel: '参加したい企画',
               fieldType: 'checkbox',
               required: true,
               options: ['早押し', '筆記'],
@@ -482,6 +797,7 @@ describe('entry +page.server default action', () => {
             {
               fieldKey: 'workshops',
               label: '参加したい企画',
+              plainLabel: '参加したい企画',
               fieldType: 'checkbox',
               required: true,
               options: ['早押し', '筆記'],
@@ -490,6 +806,7 @@ describe('entry +page.server default action', () => {
             {
               fieldKey: 't_shirt_size',
               label: 'Tシャツサイズ',
+              plainLabel: 'Tシャツサイズ',
               fieldType: 'radio',
               required: true,
               options: ['S', 'M'],

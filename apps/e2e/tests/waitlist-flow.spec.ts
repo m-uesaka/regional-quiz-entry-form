@@ -4,8 +4,8 @@
 // the second confirmed entry is guaranteed to land on the waitlist.
 
 import {expect, test} from '@playwright/test';
-import {waitForMail} from '../support/api';
-import {FRONTEND_URL} from '../support/env';
+import {waitForMail, waitlistPromotionSubject} from '../support/api';
+import {FRONTEND_URL, MAIL_FROM_ADDRESS} from '../support/env';
 import {SAIKYOI} from '../support/fixtures';
 import {
   cancelEntryThroughMypage,
@@ -14,8 +14,6 @@ import {
   openVerificationLink,
   submitEntryForm,
 } from '../support/ui';
-
-const PROMOTION_MAIL_SUBJECT = 'キャンセル待ちからの繰り上げについて';
 
 test('a cancellation promotes the waitlisted entry behind it', async ({
   page,
@@ -36,14 +34,14 @@ test('a cancellation promotes the waitlisted entry behind it', async ({
     const seated = await submitEntryForm(page, SAIKYOI, {
       displayName: '先着さん',
     });
-    await openVerificationLink(page, request, seated.email);
+    await openVerificationLink(page, request, SAIKYOI, seated.email);
     await expect(page.getByText('エントリーが確定しました。')).toBeVisible();
 
     // The single seat is taken, so this one is queued rather than refused.
     const queued = await submitEntryForm(waitlistedPage, SAIKYOI, {
       displayName: '待機さん',
     });
-    await openVerificationLink(waitlistedPage, request, queued.email);
+    await openVerificationLink(waitlistedPage, request, SAIKYOI, queued.email);
     await expect(
       waitlistedPage.getByText(
         '定員に達していたため、キャンセル待ちになりました。',
@@ -54,7 +52,7 @@ test('a cancellation promotes the waitlisted entry behind it', async ({
     // Strings rather than regexes: `toHaveText` normalizes the whitespace
     // the template leaves between the name and the queue position only when
     // it is comparing against a string.
-    await expect(page.getByRole('listitem')).toHaveText([
+    await expect(page.getByRole('rowheader')).toHaveText([
       '先着さん',
       '待機さん (キャンセル待ち 1)',
     ]);
@@ -80,14 +78,17 @@ test('a cancellation promotes the waitlisted entry behind it', async ({
     const notification = await waitForMail(
       request,
       queued.email,
-      PROMOTION_MAIL_SUBJECT,
+      waitlistPromotionSubject(SAIKYOI),
     );
     expect(notification.html).toContain('エントリーが確定しました');
+    expect(notification.from).toBe(
+      `地域クイズ最強位・新人王 エントリー <${MAIL_FROM_ADDRESS}>`,
+    );
 
     // The cancelled entry keeps its row but loses its name, and the
     // promoted one no longer shows a queue position.
     await page.goto(entryListPath(SAIKYOI));
-    await expect(page.getByRole('listitem')).toHaveText([
+    await expect(page.getByRole('rowheader')).toHaveText([
       'キャンセル',
       '待機さん',
     ]);
