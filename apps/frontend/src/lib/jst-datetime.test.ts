@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest';
 import {
   datetimeLocalStep,
   formatJstDateTime,
+  formatJstDateTimeSeconds,
   fromJstDatetimeLocal,
   toJstDatetimeLocal,
 } from './jst-datetime';
@@ -95,5 +96,23 @@ describe('formatJstDateTime', () => {
 
   it('answers with an empty string for an unreadable instant', () => {
     expect(formatJstDateTime('not a date')).toBe('');
+  });
+});
+
+describe('formatJstDateTimeSeconds', () => {
+  it('shows an instant as its JST date, weekday and time to the second', () => {
+    expect(formatJstDateTimeSeconds('2026-11-01T00:00:05.123456+00:00')).toBe(
+      '2026年11月1日(日) 9:00:05',
+    );
+  });
+
+  it('carries the date across the day boundary', () => {
+    expect(formatJstDateTimeSeconds('2026-11-30T15:05:00Z')).toBe(
+      '2026年12月1日(火) 0:05:00',
+    );
+  });
+
+  it('answers with an empty string for an unreadable instant', () => {
+    expect(formatJstDateTimeSeconds('not a date')).toBe('');
   });
 });

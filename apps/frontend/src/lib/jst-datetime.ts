@@ -115,3 +115,39 @@ export function formatJstDateTime(iso: string): string {
   );
   return `${parts.year}年${parts.month}月${parts.day}日(${parts.weekday}) ${parts.hour}:${parts.minute}`;
 }
+
+// `JST_DISPLAY_FORMAT` down to the second, for the public entry list (one
+// instant per row).
+const JST_DISPLAY_FORMAT_SECONDS = new Intl.DateTimeFormat('ja-JP', {
+  timeZone: 'Asia/Tokyo',
+  year: 'numeric',
+  month: 'numeric',
+  day: 'numeric',
+  weekday: 'short',
+  hour: 'numeric',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+});
+
+/**
+ * `formatJstDateTime`, down to the second: `2026年11月1日(日) 9:00:05`.
+ *
+ * For instants whose order people compare -- on the entry list, two
+ * entries confirmed within the same minute would otherwise read as a tie.
+ *
+ * @param iso The instant to show.
+ * @return The formatted text, or an empty string when `iso` is not a
+ *     readable instant.
+ */
+export function formatJstDateTimeSeconds(iso: string): string {
+  const instant = new Date(iso);
+  if (Number.isNaN(instant.getTime())) return '';
+  const parts = Object.fromEntries(
+    JST_DISPLAY_FORMAT_SECONDS.formatToParts(instant).map(part => [
+      part.type,
+      part.value,
+    ]),
+  );
+  return `${parts.year}年${parts.month}月${parts.day}日(${parts.weekday}) ${parts.hour}:${parts.minute}:${parts.second}`;
+}

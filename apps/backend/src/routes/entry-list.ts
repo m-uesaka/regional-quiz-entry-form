@@ -30,6 +30,7 @@ interface EntryListRow {
   display_name: string;
   status: 'confirmed' | 'waitlisted' | 'cancelled';
   waitlist_position: number | null;
+  created_at: string;
 }
 
 function rowToEntryListItem(row: EntryListRow): EntryListItem {
@@ -42,6 +43,7 @@ function rowToEntryListItem(row: EntryListRow): EntryListItem {
     displayName: row.status === 'cancelled' ? 'キャンセル' : row.display_name,
     status: row.status,
     waitlistPosition: row.waitlist_position,
+    enteredAt: row.created_at,
   });
 }
 
@@ -71,7 +73,9 @@ async function respondWithEntryList(
     (from, to) =>
       db
         .from('entries')
-        .select('display_name, status, waitlist_position', {count: 'exact'})
+        .select('display_name, status, waitlist_position, created_at', {
+          count: 'exact',
+        })
         .eq('tournament_id', tournamentId)
         .in('status', ['confirmed', 'waitlisted', 'cancelled'])
         .order('created_at', {ascending: true})

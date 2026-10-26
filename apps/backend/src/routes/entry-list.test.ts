@@ -64,8 +64,12 @@ interface MockEntryRow {
   display_name: string;
   status: 'confirmed' | 'waitlisted' | 'cancelled';
   waitlist_position: number | null;
+  created_at: string;
   [extraPersonalField: string]: unknown;
 }
+
+/** When the mocked rows below were sent, as PostgREST spells it. */
+const CREATED_AT = '2026-11-01T00:00:05.123456+00:00';
 
 /** Shape of one page of the entry-list response. */
 interface EntryListPage {
@@ -116,6 +120,8 @@ function confirmedRows(count: number): MockEntryRow[] {
     display_name: `参加者${index}`,
     status: 'confirmed',
     waitlist_position: null,
+    // A second apart, in the order the rows are listed.
+    created_at: new Date(Date.UTC(2026, 10, 1, 0, 0, index)).toISOString(),
   }));
 }
 
@@ -141,6 +147,7 @@ describe('GET /tournaments/:tournamentId/entry-list (mocked Supabase)', () => {
         display_name: '太郎',
         status: 'confirmed',
         waitlist_position: null,
+        created_at: CREATED_AT,
         email: 'secret@example.com',
         name: '山田太郎',
         furigana: 'ヤマダタロウ',
@@ -166,7 +173,12 @@ describe('GET /tournaments/:tournamentId/entry-list (mocked Supabase)', () => {
 
   it('masks cancelled entries as "キャンセル"', async () => {
     mockEntriesFetch([
-      {display_name: '太郎', status: 'cancelled', waitlist_position: null},
+      {
+        display_name: '太郎',
+        status: 'cancelled',
+        waitlist_position: null,
+        created_at: CREATED_AT,
+      },
     ]);
 
     const res = await app.request(
@@ -184,7 +196,12 @@ describe('GET /tournaments/:tournamentId/entry-list (mocked Supabase)', () => {
 
   it('returns waitlistPosition for waitlisted entries', async () => {
     mockEntriesFetch([
-      {display_name: '次郎', status: 'waitlisted', waitlist_position: 3},
+      {
+        display_name: '次郎',
+        status: 'waitlisted',
+        waitlist_position: 3,
+        created_at: CREATED_AT,
+      },
     ]);
 
     const res = await app.request(
@@ -199,6 +216,27 @@ describe('GET /tournaments/:tournamentId/entry-list (mocked Supabase)', () => {
     expect(body.items[0].displayName).toBe('次郎');
     expect(body.items[0].status).toBe('waitlisted');
     expect(body.items[0].waitlistPosition).toBe(3);
+  });
+
+  it('returns when each entry was sent', async () => {
+    mockEntriesFetch([
+      {
+        display_name: '太郎',
+        status: 'confirmed',
+        waitlist_position: null,
+        created_at: CREATED_AT,
+      },
+    ]);
+
+    const res = await app.request(
+      `/api/tournaments/${tournamentId}/entry-list`,
+      {},
+      env,
+    );
+    const body = (await res.json()) as EntryListPage;
+
+    expect(res.status).toBe(200);
+    expect(body.items[0].enteredAt).toBe(CREATED_AT);
   });
 
   it('GET /entry-list returns the first page and the total count', async () => {
@@ -345,7 +383,12 @@ describe('the entry list stays public after the entry period', () => {
 
   it('serves GET /tournaments/:tournamentId/entry-list', async () => {
     mockClosedTournamentEntriesFetch([
-      {display_name: '太郎', status: 'confirmed', waitlist_position: null},
+      {
+        display_name: '太郎',
+        status: 'confirmed',
+        waitlist_position: null,
+        created_at: CREATED_AT,
+      },
     ]);
 
     const res = await app.request(
@@ -364,7 +407,12 @@ describe('the entry list stays public after the entry period', () => {
   // `GET /tournaments/:regionSlug/:tournamentSlug` is gated on the period.
   it('serves GET /tournaments/:regionSlug/:tournamentSlug/entry-list', async () => {
     mockClosedTournamentEntriesFetch([
-      {display_name: '太郎', status: 'confirmed', waitlist_position: null},
+      {
+        display_name: '太郎',
+        status: 'confirmed',
+        waitlist_position: null,
+        created_at: CREATED_AT,
+      },
     ]);
 
     const res = await app.request(
