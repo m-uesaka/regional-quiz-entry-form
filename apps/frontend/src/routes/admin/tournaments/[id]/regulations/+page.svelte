@@ -3,6 +3,7 @@
     REGULATION_LABEL_MAX_LENGTH,
     REGULATION_SHEET_NAME,
   } from '@regional-quiz/shared';
+  import ReorderControls from '$lib/components/ReorderControls.svelte';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
   import Button from '$lib/components/ui/atoms/Button.svelte';
@@ -12,6 +13,7 @@
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import Link from '$lib/components/ui/atoms/Link.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
+  import {dragReorder, moveItem, renumberRows} from '$lib/drag-reorder';
   import {datetimeLocalStep} from '$lib/jst-datetime';
   import {
     emptyRegulationRow,
@@ -19,6 +21,7 @@
     toRegulationRow,
   } from '$lib/regulation-rows';
   import type {RegulationRowValues} from '$lib/types/regulation-form';
+  import {tick} from 'svelte';
   import type {PageProps} from './$types';
 
   const {data, form, params}: PageProps = $props();
@@ -47,17 +50,56 @@
   // A refused save re-renders what was submitted and an import shows what
   // the spreadsheet holds; anything else shows the stored regulations, which
   // `load` re-reads after every successful save.
-  const rows = $derived(
-    withBlankRow(form?.rows ?? data.regulations.map(toRegulationRow)),
+  //
+  // Each row is keyed by where it started, so moving it moves its controls
+  // -- and whatever was typed into them -- with it. Saving submits the page
+  // as a plain form, so the next load starts over from the server's rows.
+  let rows = $derived(
+    withBlankRow(form?.rows ?? data.regulations.map(toRegulationRow)).map(
+      (row, key) => ({key, row}),
+    ),
   );
+  let list = $state<HTMLElement>();
+  // What a screen reader hears after a row is moved.
+  let announcement = $state('');
+  // The handles and buttons need scripting, so they only appear once it
+  // runs; without it the "表示順" numbers still reorder the rows.
+  let hydrated = $state(false);
+  $effect(() => {
+    hydrated = true;
+  });
+
+  /**
+   * What a row is called where it is announced or labelled: by position,
+   * as its legend is. Not by its label -- that is whatever is typed into
+   * the field now, which the page doesn't follow.
+   * @param index Its position on screen.
+   */
+  function rowName(index: number): string {
+    return `${index + 1} 番目のレギュレーション`;
+  }
+
+  /**
+   * Moves a row to another position, then numbers every row by where it now
+   * is -- a number typed in by hand, or echoed back by a refused save,
+   * included -- so what is saved is the order on screen.
+   * @param from Its current index.
+   * @param to The index it moves to.
+   */
+  async function move(from: number, to: number) {
+    const name = rowName(from);
+    rows = moveItem(rows, from, to);
+    announcement = `${name}を${to + 1}番目に移動しました`;
+    await tick();
+    if (list) renumberRows(list);
+  }
 </script>
 
 <PageContainer>
   <PageHeader title="レギュレーションの管理" />
 
   <p class="text-sm text-muted-foreground">
-    エントリーフォームには「表示順」の小さい順に表示されます。並び替えるには番号を
-    書き換えて保存してください。
+    エントリーフォームには「表示順」の小さい順に表示されます。並び替えるには、つまみをドラッグするか矢印のボタンで動かすか、番号を書き換えてから保存してください。
   </p>
 
   {#if form?.saved}
@@ -114,87 +156,107 @@
   </Card>
 
   <form method="POST" action="?/save" class="flex flex-col gap-4">
-    {#each rows as row, index (index)}
-      <fieldset
-        class="grid min-w-0 gap-4 rounded-lg border border-border p-4 shadow-xs sm:grid-cols-2 sm:p-6"
-      >
-        <legend class="px-1 text-sm font-bold">{index + 1} 番目</legend>
+    <div
+      bind:this={list}
+      class="flex flex-col gap-4"
+      {@attach dragReorder(move)}
+    >
+      {#each rows as {key, row}, index (key)}
+        <fieldset
+          data-drag-item
+          class="grid min-w-0 gap-4 rounded-lg border border-border bg-surface p-4 shadow-xs data-dragging:relative data-dragging:z-10 data-dragging:bg-accent data-dragging:shadow-md sm:grid-cols-2 sm:p-6"
+        >
+          <legend class="px-1 text-sm font-bold">{index + 1} 番目</legend>
 
-        <input type="hidden" name="regulations[{index}].id" value={row.id} />
+          {#if hydrated}
+            <div class="sm:col-span-2">
+              <ReorderControls
+                label={rowName(index)}
+                {index}
+                count={rows.length}
+                onmove={to => move(index, to)}
+              />
+            </div>
+          {/if}
 
-        <div class="flex flex-col gap-1.5">
-          <Label for="regulation-{index}-order">表示順</Label>
-          <!-- Pre-filled with the row's current position so the numbers read
-               as an absolute order the staff member can rewrite, rather than
-               as an offset they have to work out. -->
-          <Input
-            id="regulation-{index}-order"
-            class="w-full sm:w-32"
-            name="regulations[{index}].order"
-            type="number"
-            min="1"
-            value={row.order === '' ? String(index + 1) : row.order}
-          />
-        </div>
+          <input type="hidden" name="regulations[{index}].id" value={row.id} />
 
-        <div class="flex flex-col gap-1.5">
-          <Label for="regulation-{index}-label">レギュレーション名</Label>
-          <Input
-            id="regulation-{index}-label"
-            class="w-full"
-            name="regulations[{index}].label"
-            type="text"
-            maxlength={REGULATION_LABEL_MAX_LENGTH}
-            value={row.label}
-          />
-        </div>
-
-        <!-- Both ends are set together or not at all; the schema refuses a
-             half-filled window rather than guessing the missing end. The step
-             only drops to a second for a stored instant that falls mid-minute,
-             which the default minute step would refuse outright. -->
-        <div class="flex flex-col gap-1.5">
-          <Label for="regulation-{index}-priority-starts-at">
-            優先期間の開始 (JST)
-          </Label>
-          <Input
-            id="regulation-{index}-priority-starts-at"
-            class="w-full"
-            name="regulations[{index}].priorityStartsAt"
-            type="datetime-local"
-            step={datetimeLocalStep(row.priorityStartsAt)}
-            value={row.priorityStartsAt}
-          />
-        </div>
-
-        <div class="flex flex-col gap-1.5">
-          <Label for="regulation-{index}-priority-ends-at">
-            優先期間の終了 (JST)
-          </Label>
-          <Input
-            id="regulation-{index}-priority-ends-at"
-            class="w-full"
-            name="regulations[{index}].priorityEndsAt"
-            type="datetime-local"
-            step={datetimeLocalStep(row.priorityEndsAt)}
-            value={row.priorityEndsAt}
-          />
-        </div>
-
-        {#if row.id !== ''}
-          <div class="flex items-center gap-2 sm:col-span-2">
-            <Checkbox
-              id="regulation-{index}-remove"
-              name="regulations[{index}].remove"
-              checked={row.remove}
+          <div class="flex flex-col gap-1.5">
+            <Label for="regulation-{index}-order">表示順</Label>
+            <!-- Pre-filled with the row's current position so the numbers read
+                 as an absolute order the staff member can rewrite, rather than
+                 as an offset they have to work out. -->
+            <Input
+              id="regulation-{index}-order"
+              class="w-full sm:w-32"
+              name="regulations[{index}].order"
+              type="number"
+              min="1"
+              data-reorder-position
+              value={row.order === '' ? String(index + 1) : row.order}
             />
-            <Label for="regulation-{index}-remove">
-              削除する
-            </Label>
           </div>
-        {/if}
-      </fieldset>
-    {/each}
+
+          <div class="flex flex-col gap-1.5">
+            <Label for="regulation-{index}-label">レギュレーション名</Label>
+            <Input
+              id="regulation-{index}-label"
+              class="w-full"
+              name="regulations[{index}].label"
+              type="text"
+              maxlength={REGULATION_LABEL_MAX_LENGTH}
+              value={row.label}
+            />
+          </div>
+
+          <!-- Both ends are set together or not at all; the schema refuses a
+               half-filled window rather than guessing the missing end. The step
+               only drops to a second for a stored instant that falls mid-minute,
+               which the default minute step would refuse outright. -->
+          <div class="flex flex-col gap-1.5">
+            <Label for="regulation-{index}-priority-starts-at">
+              優先期間の開始 (JST)
+            </Label>
+            <Input
+              id="regulation-{index}-priority-starts-at"
+              class="w-full"
+              name="regulations[{index}].priorityStartsAt"
+              type="datetime-local"
+              step={datetimeLocalStep(row.priorityStartsAt)}
+              value={row.priorityStartsAt}
+            />
+          </div>
+
+          <div class="flex flex-col gap-1.5">
+            <Label for="regulation-{index}-priority-ends-at">
+              優先期間の終了 (JST)
+            </Label>
+            <Input
+              id="regulation-{index}-priority-ends-at"
+              class="w-full"
+              name="regulations[{index}].priorityEndsAt"
+              type="datetime-local"
+              step={datetimeLocalStep(row.priorityEndsAt)}
+              value={row.priorityEndsAt}
+            />
+          </div>
+
+          {#if row.id !== ''}
+            <div class="flex items-center gap-2 sm:col-span-2">
+              <Checkbox
+                id="regulation-{index}-remove"
+                name="regulations[{index}].remove"
+                checked={row.remove}
+              />
+              <Label for="regulation-{index}-remove">
+                削除する
+              </Label>
+            </div>
+          {/if}
+        </fieldset>
+      {/each}
+    </div>
+    <p class="sr-only" aria-live="polite">{announcement}</p>
 
     <div class="flex flex-wrap gap-2">
       <Button type="submit">保存</Button>

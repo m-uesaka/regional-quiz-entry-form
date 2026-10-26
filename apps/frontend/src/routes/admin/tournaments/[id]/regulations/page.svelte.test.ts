@@ -1,4 +1,5 @@
 import {render, screen} from '@testing-library/svelte';
+import userEvent from '@testing-library/user-event';
 import {describe, expect, it} from 'vitest';
 import type {Regulation, StaffClaims} from '@regional-quiz/shared';
 import Page from './+page.svelte';
@@ -201,5 +202,77 @@ describe('admin regulations +page.svelte', () => {
     );
     // Only the stored row can be removed, and the import ticked it.
     expect(screen.getByLabelText('削除する')).toBeChecked();
+  });
+
+  it('moves a row with the arrow buttons, keeping what was typed into it', async () => {
+    const user = userEvent.setup();
+    renderPage([GENERAL, STUDENT]);
+
+    const student = screen.getAllByLabelText('レギュレーション名')[1];
+    await user.clear(student);
+    await user.type(student, '学生の部(改)');
+    await user.click(
+      screen.getByRole('button', {name: '2 番目のレギュレーションを上へ移動'}),
+    );
+
+    const labels = screen.getAllByLabelText('レギュレーション名');
+    expect(labels.map(input => (input as HTMLInputElement).value)).toEqual([
+      '学生の部(改)',
+      '一般の部',
+      '',
+    ]);
+    // Named for its new position, so the save reads it as the first row.
+    expect(labels[0]).toHaveAttribute('name', 'regulations[0].label');
+    expect(
+      screen
+        .getAllByLabelText('表示順')
+        .map(input => (input as HTMLInputElement).value),
+    ).toEqual(['1', '2', '3']);
+  });
+
+  it('renumbers an echoed order once a row is moved', async () => {
+    const user = userEvent.setup();
+    renderPage([GENERAL, STUDENT], {
+      saved: false,
+      imported: false,
+      spreadsheetId: '',
+      error: 'レギュレーション名を入力してください',
+      rows: [
+        {
+          id: GENERAL.id,
+          order: '5',
+          label: '一般の部',
+          priorityStartsAt: '',
+          priorityEndsAt: '',
+          remove: false,
+        },
+        {
+          id: STUDENT.id,
+          order: '9',
+          label: '学生の部',
+          priorityStartsAt: '',
+          priorityEndsAt: '',
+          remove: false,
+        },
+      ],
+    });
+
+    await user.click(
+      screen.getByRole('button', {name: '2 番目のレギュレーションを上へ移動'}),
+    );
+
+    expect(
+      screen
+        .getAllByLabelText('表示順')
+        .map(input => (input as HTMLInputElement).value),
+    ).toEqual(['1', '2', '3']);
+  });
+
+  it('names the blank row by its position', () => {
+    renderPage([GENERAL]);
+
+    expect(
+      screen.getByRole('button', {name: '2 番目のレギュレーションを上へ移動'}),
+    ).toBeInTheDocument();
   });
 });
