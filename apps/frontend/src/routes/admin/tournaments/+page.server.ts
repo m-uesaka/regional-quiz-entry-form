@@ -21,17 +21,12 @@ export const load: PageServerLoad = async ({fetch, cookies, url}) => {
 
   const regions = await regionsRes.json();
   const regionNames = new Map(regions.map(region => [region.id, region.name]));
-  const tournaments = (await tournamentsRes.json())
-    .map(tournament => ({
-      ...tournament,
-      regionName: regionNames.get(tournament.regionId) ?? '',
-    }))
-    // Region, then 最強位 before 新人王 -- the order the dashboard uses.
-    .sort(
-      (a, b) =>
-        a.regionName.localeCompare(b.regionName, 'ja') ||
-        a.type.localeCompare(b.type),
-    );
+  // Kept in the order the API lists them: the 表示順 general staff set
+  // (`/admin/tournaments/order`), which every other list follows too.
+  const tournaments = (await tournamentsRes.json()).map(tournament => ({
+    ...tournament,
+    regionName: regionNames.get(tournament.regionId) ?? '',
+  }));
 
   return {
     tournaments,

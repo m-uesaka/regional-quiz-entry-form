@@ -1,4 +1,12 @@
-import {afterAll, afterEach, beforeEach, describe, expect, it} from 'bun:test';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from 'bun:test';
 import {SQL} from 'bun';
 import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
@@ -543,6 +551,109 @@ describe('GET /tournaments/:id and /:regionSlug/:tournamentSlug (queries)', () =
   });
 });
 
+describe('PUT /tournaments/order (mocked Supabase)', () => {
+  const A = '00000000-0000-0000-0000-00000000000a';
+  const B = '00000000-0000-0000-0000-00000000000b';
+  let rpcCalls: Array<{url: string; body: unknown}> = [];
+
+  /**
+   * Answers the `reorder_tournaments()` RPC with `response`, recording what
+   * it was called with.
+   * @param response What PostgREST answers.
+   */
+  function stubRpc(response: () => Response): void {
+    rpcCalls = [];
+    globalThis.fetch = staffSessionAwareFetch((async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      rpcCalls.push({
+        url: input.toString(),
+        body: JSON.parse(String(init?.body ?? 'null')),
+      });
+      return response();
+    }) as unknown as typeof fetch);
+  }
+
+  async function putOrder(
+    tournamentIds: unknown,
+    cookie?: string,
+  ): Promise<Response> {
+    return app.request(
+      '/api/tournaments/order',
+      {
+        method: 'PUT',
+        headers: {
+          cookie: cookie ?? (await generalStaffCookie()),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({tournamentIds}),
+      },
+      env,
+    );
+  }
+
+  it('hands the ids to reorder_tournaments() in the order given', async () => {
+    stubRpc(() => new Response(null, {status: 204}));
+
+    const res = await putOrder([B, A]);
+
+    expect(res.status).toBe(204);
+    expect(rpcCalls).toHaveLength(1);
+    expect(rpcCalls[0].url).toContain('/rest/v1/rpc/reorder_tournaments');
+    expect(rpcCalls[0].body).toEqual({p_tournament_ids: [B, A]});
+  });
+
+  it('refuses regional staff without touching the database', async () => {
+    stubRpc(() => new Response(null, {status: 204}));
+
+    const res = await putOrder([A], await regionalStaffCookie(TEST_REGION_ID));
+
+    expect(res.status).toBe(403);
+    expect(rpcCalls).toHaveLength(0);
+  });
+
+  it('refuses the same tournament twice before reaching the database', async () => {
+    stubRpc(() => new Response(null, {status: 204}));
+
+    const res = await putOrder([A, A]);
+
+    expect(res.status).toBe(400);
+    expect(rpcCalls).toHaveLength(0);
+  });
+
+  it('answers 409 in Japanese when the ids are not the tournaments there are', async () => {
+    stubRpc(() =>
+      Response.json(
+        {
+          code: 'P0003',
+          message: 'the tournament ids do not match the tournaments',
+          details: null,
+          hint: null,
+        },
+        {status: 400},
+      ),
+    );
+
+    const res = await putOrder([A]);
+
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as {error: string}).error).toContain(
+      'ページを読み込み直して',
+    );
+  });
+
+  it('answers any other database error with a generic 500', async () => {
+    stubRpc(() =>
+      Response.json({code: 'XX000', message: 'boom'}, {status: 500}),
+    );
+
+    const res = await putOrder([A]);
+
+    expect(res.status).toBe(500);
+  });
+});
+
 describe.skipIf(!(await isDbReachable()))(
   'tournaments routes (local Supabase integration)',
   () => {
@@ -939,6 +1050,99 @@ describe.skipIf(!(await isDbReachable()))(
       );
 
       expect(res.status).toBe(404);
+    });
+  },
+);
+
+describe.skipIf(!(await isDbReachable()))(
+  'PUT /tournaments/order (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const testRegionSlug = 'tournaments-order-test-region';
+    let originalOrder: string[] = [];
+
+    async function listIds(cookie: string): Promise<string[]> {
+      const res = await app.request(
+        '/api/tournaments',
+        {headers: {cookie}},
+        env,
+      );
+      return ((await res.json()) as Array<{id: string}>).map(t => t.id);
+    }
+
+    async function putOrder(
+      cookie: string,
+      tournamentIds: string[],
+    ): Promise<Response> {
+      return app.request(
+        '/api/tournaments/order',
+        {
+          method: 'PUT',
+          headers: {cookie, 'content-type': 'application/json'},
+          body: JSON.stringify({tournamentIds}),
+        },
+        env,
+      );
+    }
+
+    // Read straight from the table: the session stub the requests need is
+    // only installed per test (the file's `beforeEach`).
+    beforeAll(async () => {
+      const rows =
+        await sql`select id from tournaments order by display_order, id`;
+      originalOrder = rows.map((row: {id: string}) => row.id);
+    });
+
+    afterAll(async () => {
+      await sql`delete from tournaments where region_id in (
+        select id from regions where slug = ${testRegionSlug}
+      )`;
+      await sql`delete from regions where slug = ${testRegionSlug}`;
+      // Put the other tournaments back the way they were listed. The ids go
+      // over as a Postgres array literal, which Bun's `SQL` doesn't build
+      // from a JS array.
+      await sql`
+        update tournaments t
+          set display_order = (o.ordinality - 1)::integer
+          from unnest(${`{${originalOrder.join(',')}}`}::uuid[]) with ordinality as o(id, ordinality)
+          where t.id = o.id
+      `;
+      await sql.close();
+    });
+
+    it('lists the tournaments in the order set, and a new one last', async () => {
+      const cookie = await generalStaffCookie();
+      const [region] = await sql`
+        insert into regions (slug, name)
+        values (${testRegionSlug}, '並べ替えテスト地域')
+        on conflict (slug) do update set name = excluded.name
+        returning id
+      `;
+      const created = await sql`
+        insert into tournaments (region_id, type, entry_opens_at, entry_closes_at)
+        values
+          (${region.id}, 'saikyoi', now(), now() + interval '1 day'),
+          (${region.id}, 'shinjinou', now(), now() + interval '1 day')
+        returning id
+      `;
+      const before = await listIds(cookie);
+      expect(before.slice(-2)).toEqual(created.map((t: {id: string}) => t.id));
+
+      const reversed = [...before].reverse();
+      const res = await putOrder(cookie, reversed);
+
+      expect(res.status).toBe(204);
+      expect(await listIds(cookie)).toEqual(reversed);
+    });
+
+    it('refuses a list missing a tournament and leaves the order alone', async () => {
+      const cookie = await generalStaffCookie();
+      const before = await listIds(cookie);
+
+      const res = await putOrder(cookie, before.slice(1).reverse());
+
+      expect(res.status).toBe(409);
+      expect(await listIds(cookie)).toEqual(before);
     });
   },
 );

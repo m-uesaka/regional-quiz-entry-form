@@ -36,6 +36,20 @@ export const TournamentUpdateInputSchema =
   TournamentCreateInputSchema.partial();
 export type TournamentUpdateInput = z.infer<typeof TournamentUpdateInputSchema>;
 
+// Request body of `PUT /api/tournaments/order`: every tournament's id, in
+// the order general staff want them shown. The API refuses a list that
+// isn't exactly the tournaments there are, so a tournament created or
+// deleted since the screen was opened isn't placed by guesswork.
+export const TournamentOrderInputSchema = z.object({
+  tournamentIds: z
+    .array(z.string().uuid({message: '大会の id が正しくありません'}))
+    .min(1, {message: '並べ替える大会がありません'})
+    .refine(ids => new Set(ids).size === ids.length, {
+      message: '大会の id が重複しています',
+    }),
+});
+export type TournamentOrderInput = z.infer<typeof TournamentOrderInputSchema>;
+
 // Japanese display labels for each tournament type, shared so staff-facing
 // screens don't each carry their own copy of the wording.
 export const TOURNAMENT_TYPE_LABELS: Record<TournamentType, string> = {

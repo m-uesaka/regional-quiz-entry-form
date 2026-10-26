@@ -16,6 +16,7 @@ import {
   toRegulationRow,
 } from '$lib/regulation-rows';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
+import {sortBySubmittedOrder} from '$lib/submitted-order';
 import type {RegulationRowValues} from '$lib/types/regulation-form';
 import type {Actions, PageServerLoad} from './$types';
 
@@ -311,7 +312,7 @@ function mergeImportedRegulations(
  *
  * The controls are named `regulations[i].field`, so a row is assembled from
  * the controls sharing an index and the rows are then put in the order their
- * "表示順" asks for — see the note on the sort below. A gap in the indices is
+ * "表示順" asks for (`sortBySubmittedOrder()`). A gap in the indices is
  * fine: only the relative order matters.
  *
  * @param formData The submitted body.
@@ -352,50 +353,11 @@ function readRegulationRows(formData: FormData): RegulationRowValues[] {
     }
     rows.set(index, row);
   }
-  // Sorted by the "表示順" the form carries, which the page pre-fills with
-  // each row's current position — so a form nobody reordered saves in the
-  // order it was rendered in, and moving a row is a matter of rewriting its
-  // number.
-  //
-  // Ties are broken by whether the number was rewritten at all: a row asking
-  // for a position it was not already in takes it, and the rows left where
-  // they were close up behind it in the order they were displayed. Without
-  // that, typing `1` into the third of three rows — the one gesture the page
-  // tells staff to use — would leave it behind the row already numbered `1`,
-  // so nothing could ever be moved to the front.
-  return [...rows.entries()]
-    .sort(([leftIndex, left], [rightIndex, right]) => {
-      const byPosition =
-        rowPosition(leftIndex, left) - rowPosition(rightIndex, right);
-      if (byPosition !== 0) return byPosition;
-      const byMove = moveRank(leftIndex, left) - moveRank(rightIndex, right);
-      if (byMove !== 0) return byMove;
-      return leftIndex - rightIndex;
-    })
-    .map(([, row]) => row);
-}
-
-/**
- * How a row ranks among others claiming the same position: a row whose
- * "表示順" was rewritten goes ahead of one that still carries the number the
- * page pre-filled it with.
- * @param index The row's index in the rendered form.
- * @param row The submitted row.
- * @return 0 for a row that was moved, 1 for one that was left alone.
- */
-function moveRank(index: number, row: RegulationRowValues): number {
-  return rowPosition(index, row) === index + 1 ? 1 : 0;
-}
-
-/**
- * Where a row asked to be placed, on the 1-based scale the control shows.
- * @param index The row's index in the rendered form.
- * @param row The submitted row.
- * @return The requested position, or the row's own position when the
- *     control was left empty or holds something that isn't a number.
- */
-function rowPosition(index: number, row: RegulationRowValues): number {
-  if (row.order.trim() === '') return index + 1;
-  const requested = Number(row.order);
-  return Number.isFinite(requested) ? requested : index + 1;
+  return sortBySubmittedOrder(
+    [...rows.entries()].map(([index, row]) => ({
+      index,
+      order: row.order,
+      value: row,
+    })),
+  );
 }

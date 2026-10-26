@@ -3,6 +3,7 @@ import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
 import {
   TournamentCreateInputSchema,
+  TournamentOrderInputSchema,
   TournamentTypeSchema,
   TournamentUpdateInputSchema,
 } from '@regional-quiz/shared';
@@ -26,6 +27,12 @@ import {
 } from '../lib/tournaments';
 
 const TournamentIdParamSchema = z.object({id: z.string().uuid()});
+
+/**
+ * Raised by `reorder_tournaments()` (0032) when the ids it is given aren't
+ * exactly the tournaments there are.
+ */
+const TOURNAMENT_IDS_MISMATCH_SQLSTATE = 'P0003';
 
 /**
  * The constraint violations a tournament write can run into that the staff
@@ -114,6 +121,9 @@ export const tournamentsRoute = new Hono<StaffEnv>()
     const {data, error} = await db
       .from('tournaments')
       .select(TOURNAMENT_COLUMNS)
+      // The order general staff set with `PUT /order` below.
+      .order('display_order', {ascending: true})
+      .order('id', {ascending: true})
       .returns<TournamentRow[]>();
     if (error) {
       return c.json(
@@ -123,6 +133,42 @@ export const tournamentsRoute = new Hono<StaffEnv>()
     }
     return c.json(data.map(rowToTournament));
   })
+  // Sets the order every tournament list is shown in -- the portal, the
+  // entry-list index, the dashboard and this API's list above -- from every
+  // tournament's id in the order wanted. A PUT of the whole order rather
+  // than a move of one tournament, so the result is exactly what the staff
+  // member saw on screen; and a list that isn't exactly the tournaments
+  // there are (one created or deleted since the screen was opened) is
+  // refused with 409 rather than placed by guesswork.
+  //
+  // `/order` is one segment and a PUT, so it collides with neither
+  // `PATCH /:id` nor the `/:tournamentId/...` routes mounted beside this.
+  .put(
+    '/order',
+    requireGeneralStaff(),
+    zValidator('json', TournamentOrderInputSchema),
+    async c => {
+      const {error} = await createDbClient(c.env).rpc('reorder_tournaments', {
+        p_tournament_ids: c.req.valid('json').tournamentIds,
+      });
+      if (error) {
+        if (error.code === TOURNAMENT_IDS_MISMATCH_SQLSTATE) {
+          return c.json(
+            {
+              error:
+                '並べ替えの間に大会が追加または削除されました。ページを読み込み直してから、もう一度並べ替えてください',
+            },
+            409,
+          );
+        }
+        return c.json(
+          internalError('failed to reorder the tournaments', error),
+          500,
+        );
+      }
+      return c.body(null, 204);
+    },
+  )
   // For the edit screen, which used to fetch the whole list above just to
   // `find` one tournament in it (#123). One segment, so it can't collide
   // with the two-segment `/:regionSlug/:tournamentSlug` read below, nor with
