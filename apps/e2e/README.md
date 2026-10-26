@@ -55,7 +55,7 @@ Supabase は起動しません(Docker イメージの取得を毎回のテスト
 
 ## カバーしているフロー
 
-`tests/` の最初の3本が issue #41 の3フローに対応し、4本目は Task 10-4 で足した一斉メールの経路です。
+`tests/` の最初の3本が issue #41 の3フローに対応し、4本目は Task 10-4 で足した一斉メールの経路、5本目は表示順のドラッグ操作です。
 
 | ファイル | フロー |
 | --- | --- |
@@ -63,6 +63,7 @@ Supabase は起動しません(Docker イメージの取得を毎回のテスト
 | `waitlist-flow.spec.ts` | 定員超過時のキャンセル待ち登録 → キャンセル発生 → 繰り上げ確認 |
 | `staff-csv.spec.ts` | 地域スタッフのログイン → 参加者一覧確認 → CSV ダウンロード |
 | `staff-bulk-mail.spec.ts` | 地域スタッフの一斉メール送信 → Queue のコンシューマが送信 → 送信結果の確認 |
+| `staff-reorder.spec.ts` | 統括スタッフが大会の表示順・レギュレーションの表示順をドラッグで並べ替えて保存(マウスと、スマホ幅でのタッチの両方) |
 
 上の3本はブラウザ操作です。画面の掴み方(ラベル・ボタン・リンク)は `support/ui.ts` にまとめてあり、CSS クラスやテスト専用の属性には依存していません。
 
@@ -128,5 +129,7 @@ API を直接叩いているのは3箇所です(`support/api.ts`)。
 
 - `SAIKYOI`(定員 1): `waitlist-flow.spec.ts` 専用
 - `SHINJINOU`(定員なし): それ以外
+
+`staff-reorder.spec.ts` は大会と `SHINJINOU` のレギュレーションの順番を入れ替えますが、各テストの中で元の順に戻すので、後の spec はシードどおりの順番を見ます。タッチのドラッグは Playwright に API が無いため、DevTools プロトコルの `Input.dispatchTouchEvent` で送っています。
 
 参加者のメールアドレスは毎回 UUID 付きで生成するので、同じスタックに対して繰り返し実行しても `participants.email` の unique 制約に当たりません。
