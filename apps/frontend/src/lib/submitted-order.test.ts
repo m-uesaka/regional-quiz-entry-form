@@ -23,6 +23,39 @@ describe('sortBySubmittedOrder', () => {
     expect(sortBySubmittedOrder(rows('9', '2', '3'))).toEqual(['b', 'c', 'a']);
   });
 
+  it('puts a row at exactly the position typed into it', () => {
+    // Every move of one row among three, from the numbers 1, 2, 3.
+    const cases: Array<[string[], string[]]> = [
+      [
+        ['2', '2', '3'],
+        ['b', 'a', 'c'],
+      ],
+      [
+        ['3', '2', '3'],
+        ['b', 'c', 'a'],
+      ],
+      [
+        ['1', '1', '3'],
+        ['b', 'a', 'c'],
+      ],
+      [
+        ['1', '3', '3'],
+        ['a', 'c', 'b'],
+      ],
+      [
+        ['1', '2', '1'],
+        ['c', 'a', 'b'],
+      ],
+      [
+        ['1', '2', '2'],
+        ['a', 'c', 'b'],
+      ],
+    ];
+    for (const [orders, expected] of cases) {
+      expect(sortBySubmittedOrder(rows(...orders))).toEqual(expected);
+    }
+  });
+
   it('keeps a row in place when its number is blank or not a number', () => {
     expect(sortBySubmittedOrder(rows('', 'x', '3'))).toEqual(['a', 'b', 'c']);
   });

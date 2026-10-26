@@ -161,7 +161,29 @@ describe('admin tournament order +page.server action', () => {
       buildActionEvent(fakePut(bodies), new FormData()),
     );
 
-    expect(result).toMatchObject({status: 400});
+    expect(result).toMatchObject({
+      status: 400,
+      data: {saved: false, error: '並べ替える大会がありません'},
+    });
+    expect(bodies).toEqual([]);
+  });
+
+  it('refuses a duplicated id without calling the API', async () => {
+    const bodies: unknown[] = [];
+    const formData = new FormData();
+    formData.set('tournaments[0].id', A);
+    formData.set('tournaments[0].order', '1');
+    formData.set('tournaments[1].id', A);
+    formData.set('tournaments[1].order', '2');
+
+    const result = await actions.default(
+      buildActionEvent(fakePut(bodies), formData),
+    );
+
+    expect(result).toMatchObject({
+      status: 400,
+      data: {saved: false, error: '大会の id が重複しています'},
+    });
     expect(bodies).toEqual([]);
   });
 });

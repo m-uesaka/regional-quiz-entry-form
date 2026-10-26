@@ -6,7 +6,12 @@
 -- `order by r.name, t.type`)。以後はポータル・エントリーリスト一覧・
 -- ダッシュボード・管理画面の大会一覧のどれも `display_order` の昇順に並べる。
 --
--- 既存の大会には、ダッシュボードがこれまで並べていた順に 0 から番号を振る。
+-- 既存の大会には、ポータルがこれまで並べていた順(地域名の日本語の照合順 →
+-- 地域の slug → 種別)に 0 から番号を振る。参加者が見るポータルの並びを
+-- デプロイで変えないためで、地域名は `ja-x-icu` で比べる(ポータルの
+-- `localeCompare(..., 'ja')` と同じ順になる)。種別の enum は最強位・新人王の
+-- 順に定義されている(0001)ので、そのまま比べればポータルと同じ順になる。
+--
 -- 新しく作られた大会は列の既定値(シーケンス)で末尾に付く。大会の作成
 -- (`POST /api/tournaments`)と一括登録(`import_tournament()`、0028)の
 -- どちらも列を指定しないので、どちらにも手を入れずに済む。並べ替えは 0 から
@@ -17,7 +22,9 @@ alter table tournaments add column display_order integer;
 update tournaments t
   set display_order = o.n
   from (
-    select t2.id, (row_number() over (order by r.name, t2.type, t2.id) - 1)::integer as n
+    select t2.id, (row_number() over (
+        order by r.name collate "ja-x-icu", r.slug, t2.type, t2.id
+      ) - 1)::integer as n
       from tournaments t2
       join regions r on r.id = t2.region_id
   ) o
@@ -47,13 +54,16 @@ alter table tournaments
 --
 -- 全大会の行を id 順にロックしてから照合する。エントリー処理が大会の行を
 -- 複数ロックするとき(`lapse_expired_pending_entries()`、0030)と同じ順なので、
--- 互いにデッドロックしない。
+-- 互いにデッドロックしない。書き換えるのはキーでない `display_order` だけ
+-- なので、ロックは `for no key update` にする。`for update` だと、エントリーの
+-- 行を書くときの外部キーの確認(大会の行への `for key share`)まで待たせて
+-- しまう。並べ替え同士は、このロックどうしで順に処理される。
 create function reorder_tournaments(p_tournament_ids uuid[])
 returns void
 language plpgsql
 as $$
 begin
-  perform 1 from tournaments order by id for update;
+  perform 1 from tournaments order by id for no key update;
 
   if cardinality(p_tournament_ids) is distinct from (select count(*) from tournaments)
     or cardinality(p_tournament_ids) <> (

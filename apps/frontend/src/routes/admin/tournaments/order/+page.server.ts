@@ -1,5 +1,8 @@
 import {error, fail} from '@sveltejs/kit';
-import {TOURNAMENT_TYPE_LABELS} from '@regional-quiz/shared';
+import {
+  TOURNAMENT_TYPE_LABELS,
+  TournamentOrderInputSchema,
+} from '@regional-quiz/shared';
 import {createApiClient, isUnauthorized, readErrorMessage} from '$lib/api';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
 import {sortBySubmittedOrder} from '$lib/submitted-order';
@@ -57,13 +60,22 @@ export const load: PageServerLoad = async ({fetch, cookies, url}) => {
 
 export const actions = {
   default: async ({request, fetch, cookies, url}) => {
-    const tournamentIds = readTournamentOrder(await request.formData());
-    if (tournamentIds.length === 0) {
-      return fail(400, refusal('並べ替える大会がありません'));
+    const parsed = TournamentOrderInputSchema.safeParse({
+      tournamentIds: readTournamentOrder(await request.formData()),
+    });
+    if (!parsed.success) {
+      // The schema's messages are in Japanese and say what is wrong (no
+      // tournaments at all, or a duplicated or malformed id).
+      return fail(
+        400,
+        refusal(
+          parsed.error.issues[0]?.message ?? '入力内容を確認してください',
+        ),
+      );
     }
 
     const res = await createApiClient(fetch).api.tournaments.order.$put({
-      json: {tournamentIds},
+      json: parsed.data,
     });
     if (!res.ok) {
       if (isUnauthorized(res)) {

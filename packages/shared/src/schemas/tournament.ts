@@ -42,8 +42,8 @@ export type TournamentUpdateInput = z.infer<typeof TournamentUpdateInputSchema>;
 // deleted since the screen was opened isn't placed by guesswork.
 export const TournamentOrderInputSchema = z.object({
   tournamentIds: z
-    .array(z.string().uuid())
-    .min(1)
+    .array(z.string().uuid({message: '大会の id が正しくありません'}))
+    .min(1, {message: '並べ替える大会がありません'})
     .refine(ids => new Set(ids).size === ids.length, {
       message: '大会の id が重複しています',
     }),
