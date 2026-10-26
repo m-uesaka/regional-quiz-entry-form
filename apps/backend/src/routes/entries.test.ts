@@ -226,6 +226,11 @@ function mockSupabase(options: {
    * (none by default).
    */
   withdrawn?: string[];
+  /**
+   * What the participant row reads as once the takeover is refused: the
+   * account another submission took over and had confirmed in between.
+   */
+  verifiedMeanwhile?: Record<string, unknown>;
 }): MockSupabase {
   const recorded: MockSupabase = {calls: [], mails: [], takeOvers: []};
   const tournament = options.tournament ?? tournamentRow();
@@ -280,6 +285,9 @@ function mockSupabase(options: {
             password_hash: args.p_password_hash,
             region_id: args.p_region_id,
           };
+        }
+        if (!tookOver && options.verifiedMeanwhile) {
+          participant = {...options.verifiedMeanwhile};
         }
         return Response.json(tookOver ? (options.withdrawn ?? []) : null);
       }
@@ -694,6 +702,31 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     expect(recorded.mails).toHaveLength(1);
     expect(recorded.mails[0].subject).toBe(entryNoticeSubject(TOURNAMENT_NAME));
     expect(recorded.mails[0].html).toContain('パスワード');
+  });
+
+  // Another submission took the account over and had its link followed
+  // between this one's lookup and its takeover, so what decides is the
+  // account as it is now, not the row read before.
+  it('holds a refused takeover to the account as it is now', async () => {
+    const recorded = mockSupabase({
+      participant: await registeredParticipant({
+        password: 'someone-elses-password',
+        regionId: OTHER_REGION_ID,
+        verified: false,
+      }),
+      takeOver: false,
+      verifiedMeanwhile: await registeredParticipant(),
+    });
+
+    await postWithContext(TOURNAMENT_PATH, validBody);
+    await settleBackgroundWork();
+
+    expect(recorded.takeOvers).toHaveLength(1);
+    expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
+    expect(recorded.mails).toHaveLength(1);
+    expect(recorded.mails[0].subject).toBe(
+      verificationMailSubject(TOURNAMENT_NAME),
+    );
   });
 
   it('never takes over a verified account', async () => {

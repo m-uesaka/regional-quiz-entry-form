@@ -16,7 +16,7 @@ import {sendEntryNoticeEmail, type EntryNoticeReason} from './entry-notice';
 import {sendVerificationEmail} from './entry-verification';
 import {FORM_FIELD_DEF_COLUMNS, toFormFieldDef} from './form-field-defs';
 import type {FormFieldDefRow} from './form-field-defs';
-import {hashPassword, isPasswordHashUsable, verifyPassword} from './password';
+import {hashPassword, verifyPassword} from './password';
 import {tournamentDisplayName} from './tournaments';
 import {verifyAccountPassword} from './password-rehash';
 import {promoteNextWaitlistedEntry} from './waitlist';
@@ -142,6 +142,9 @@ interface ParticipantRow {
   // (migration 0034, #189).
   email_verified_at: string | null;
 }
+
+/** What `ParticipantRow` is selected with. */
+const PARTICIPANT_COLUMNS = 'id, region_id, password_hash, email_verified_at';
 
 /**
  * The participant's existing entry for the tournament, if there is one.
@@ -448,7 +451,7 @@ async function createEntryAfterCheck(
 
   const {data: existingParticipant, error: participantError} = await db
     .from('participants')
-    .select('id, region_id, password_hash, email_verified_at')
+    .select(PARTICIPANT_COLUMNS)
     .eq('email', input.email)
     .returns<ParticipantRow[]>()
     .maybeSingle();
@@ -540,10 +543,49 @@ async function createEntryAfterCheck(
     }
     // The address was verified since it was read above -- its owner
     // followed a link a moment ago -- so the account is theirs now, and
-    // this submission is held to it like any other below.
+    // this submission is held to it like any other. Read again, because
+    // what the takeover found verified need not be the row read above:
+    // another submission may have taken the account over in between, and
+    // had its own link followed, leaving another password and region.
+    const {data: verifiedParticipant, error: rereadError} = await db
+      .from('participants')
+      .select(PARTICIPANT_COLUMNS)
+      .eq('id', existingParticipant.id)
+      .returns<ParticipantRow[]>()
+      .single();
+    if (rereadError || !verifiedParticipant) {
+      return {
+        ok: false,
+        status: 500,
+        error: rereadError?.message ?? 'failed to read the participant',
+      };
+    }
+    return enterVerifiedParticipant(
+      env,
+      tournament,
+      verifiedParticipant,
+      input,
+    );
   }
 
-  if (existingParticipant.region_id !== tournament.region_id) {
+  return enterVerifiedParticipant(env, tournament, existingParticipant, input);
+}
+
+/**
+ * Enters a submission into a participant whose address has been verified,
+ * once it proves the account's password, for the account's own region.
+ * @param env The Worker bindings.
+ * @param tournament The checked tournament.
+ * @param participant The verified participant, as last read.
+ * @param input The validated entry form submission.
+ */
+async function enterVerifiedParticipant(
+  env: Bindings,
+  tournament: EntryTournamentRow,
+  participant: ParticipantRow,
+  input: EntryInput,
+): Promise<CreateEntryResult> {
+  if (participant.region_id !== tournament.region_id) {
     return {
       ok: false,
       status: 409,
@@ -565,7 +607,7 @@ async function createEntryAfterCheck(
   const valid = await verifyAccountPassword(
     env,
     'participants',
-    existingParticipant,
+    participant,
     input.password,
     pending => {
       upgrade = pending;
@@ -575,13 +617,7 @@ async function createEntryAfterCheck(
     return {ok: false, status: 401, error: INVALID_PASSWORD};
   }
   await upgrade;
-  return enterTournament(
-    env,
-    tournament,
-    existingParticipant.id,
-    input.email,
-    input,
-  );
+  return enterTournament(env, tournament, participant.id, input.email, input);
 }
 
 /**
@@ -600,9 +636,6 @@ async function isUnverifiedAccountPassword(
   account: ParticipantRow,
   password: string,
 ): Promise<boolean> {
-  if (!isPasswordHashUsable(account.password_hash)) {
-    return false;
-  }
   return (await verifyPassword(password, account.password_hash)).valid;
 }
 

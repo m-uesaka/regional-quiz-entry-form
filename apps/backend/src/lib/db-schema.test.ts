@@ -1308,5 +1308,46 @@ describe.skipIf(!dbReachable)(
 
       expect(tookOver).toBeNull();
     });
+
+    // A confirmation that commits while the takeover waits for the
+    // participant lock has to be seen by the verified-entry check, which a
+    // subquery of the locking statement would judge by the snapshot it
+    // started with. The confirmation here stamps only the entry, as one
+    // the backfill missed would look.
+    it('take_over_unverified_participant sees an entry confirmed while it waited for the lock', async () => {
+      const {participantId, regionId, enter} = await seed('takeover-waiting');
+      const entryId = await enter('pending_verification', null);
+
+      const confirming = await sql.reserve();
+      try {
+        await confirming`begin`;
+        await confirming`
+          select 1 from participants where id = ${participantId}
+          for no key update
+        `;
+        await confirming`
+          update entries
+          set status = 'confirmed', email_verified_at = now()
+          where id = ${entryId}
+        `;
+        const takeOver = sql`
+          select to_jsonb(take_over_unverified_participant(
+            ${participantId}, 'new-hash', ${regionId}
+          )) as "tookOver"
+        `.execute();
+        // Long enough for the takeover to be queued on the lock.
+        await Bun.sleep(300);
+        await confirming`commit`;
+
+        const [{tookOver}] = await takeOver;
+        expect(tookOver).toBeNull();
+      } finally {
+        confirming.release();
+      }
+      const [row] = await sql`
+        select password_hash from participants where id = ${participantId}
+      `;
+      expect(row.password_hash).toBe('old-hash');
+    });
   },
 );

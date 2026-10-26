@@ -254,17 +254,26 @@ begin
   perform 1 from participants p
     where p.id = p_participant_id
       and p.email_verified_at is null
-      -- Belt and braces: an entry only ever gets `email_verified_at` from
-      -- `confirm_entry_by_token()`, which verifies the participant in the
-      -- same transaction, so this only matters for a row the backfill above
-      -- missed.
-      and not exists (
-        select 1 from entries e
-          where e.participant_id = p.id and e.email_verified_at is not null
-      )
     for no key update;
 
   if not found then
+    return null;
+  end if;
+
+  -- Belt and braces: an entry only ever gets `email_verified_at` from
+  -- `confirm_entry_by_token()`, which verifies the participant in the same
+  -- transaction, so this only matters for a row the backfill above missed.
+  -- A statement of its own rather than part of the locking query above: a
+  -- query that had to wait for the lock re-checks only the locked row's own
+  -- columns against what committed meanwhile (READ COMMITTED's
+  -- EvalPlanQual), and would judge `entries` by the snapshot it started
+  -- with. This statement starts after the lock is held and sees every
+  -- confirmation committed before it.
+  if exists (
+    select 1 from entries e
+      where e.participant_id = p_participant_id
+        and e.email_verified_at is not null
+  ) then
     return null;
   end if;
 
