@@ -30,8 +30,12 @@ update tournaments t
   ) o
   where o.id = t.id;
 
+-- 大会がまだ 1 つも無いデータベース(新しく作った環境や CI)では、最初の
+-- 大会に 0 を振ることになるので、最小値を 0 にしておく(既定の最小値は 1 で、
+-- `setval` が 0 を範囲外として断る)。
 create sequence tournaments_display_order_seq
   as integer
+  minvalue 0
   owned by tournaments.display_order;
 select setval(
   'tournaments_display_order_seq',
