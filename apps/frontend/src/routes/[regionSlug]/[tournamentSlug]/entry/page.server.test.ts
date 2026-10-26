@@ -1,4 +1,4 @@
-import {describe, expect, it} from 'vitest';
+import {describe, expect, it, vi} from 'vitest';
 import type {HttpError} from '@sveltejs/kit';
 import type {
   FormFieldDef,
@@ -7,6 +7,7 @@ import type {
   StaffClaims,
   Tournament,
 } from '@regional-quiz/shared';
+import {formatJstDateTime} from '$lib/jst-datetime';
 import {actions, load} from './+page.server';
 
 // Well in the past relative to any plausible test run time, so this is
@@ -89,6 +90,10 @@ interface FakeApiOptions {
   entryResponse?: {status: number; body: unknown};
   /** The tournament's custom form field definitions. */
   formFieldDefs?: FormFieldDef[];
+  /** The tournament's regulations. */
+  regulations?: Regulation[];
+  /** The `GET .../entry-counts` response, defaulting to no entries. */
+  entryCounts?: {status: number; body: unknown};
   /** Collects every requested URL, for asserting which endpoints ran. */
   requests?: string[];
   /**
@@ -110,7 +115,14 @@ function fakeApi(options: FakeApiOptions = {}): typeof fetch {
       typeof input === 'string' ? input : new URL(String(input)).pathname;
     options.requests?.push(url);
     if (url.includes('/regulations')) {
-      return Response.json(REGULATIONS);
+      return Response.json(options.regulations ?? REGULATIONS);
+    }
+    if (url.includes('/entry-counts')) {
+      const counts = options.entryCounts ?? {
+        status: 200,
+        body: {confirmedCount: 0, waitlistedCount: 0},
+      };
+      return Response.json(counts.body, {status: counts.status});
     }
     if (url.includes('/form-definitions/')) {
       return Response.json(options.formFieldDefs ?? FORM_FIELD_DEFS);
@@ -253,9 +265,70 @@ describe('entry +page.server load', () => {
       tournament: OPEN_TOURNAMENT,
       regulations: REGULATIONS,
       formFieldDefs: FORM_FIELD_DEFS,
+      priorityNotices: [],
+      waitlistOpen: false,
       loggedIn: false,
       loginPath: '/mypage/login?redirectTo=%2Ftokyo%2Fsaikyoi%2Fentry',
     });
+  });
+
+  it('announces the 優先エントリー open now', async () => {
+    const day = 24 * 60 * 60 * 1000;
+    const endsAt = new Date(Date.now() + day);
+    const event = buildEvent({
+      fetch: fakeApi({
+        regulations: [
+          {
+            ...REGULATIONS[0],
+            priorityStartsAt: new Date(Date.now() - day).toISOString(),
+            priorityEndsAt: endsAt.toISOString(),
+          },
+        ],
+      }),
+      staff: null,
+    });
+
+    const data = await load(event);
+
+    expect(data?.priorityNotices).toEqual([
+      {
+        labels: [REGULATIONS[0].label],
+        endsAtLabel: formatJstDateTime(endsAt.toISOString()),
+      },
+    ]);
+  });
+
+  it('says the waitlist is open once the capacity is reached', async () => {
+    const event = buildEvent({
+      fetch: fakeApi({
+        tournament: {...OPEN_TOURNAMENT, capacity: 30},
+        entryCounts: {
+          status: 200,
+          body: {confirmedCount: 30, waitlistedCount: 0},
+        },
+      }),
+      staff: null,
+    });
+
+    await expect(load(event)).resolves.toMatchObject({waitlistOpen: true});
+  });
+
+  // The counts only feed the notice, so the form stays usable without them.
+  it('leaves the waitlist notice out when the counts cannot be read', async () => {
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
+    const event = buildEvent({
+      fetch: fakeApi({
+        tournament: {...OPEN_TOURNAMENT, capacity: 30},
+        entryCounts: {status: 500, body: {error: 'boom'}},
+      }),
+      staff: null,
+    });
+
+    await expect(load(event)).resolves.toMatchObject({waitlistOpen: false});
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('500'));
+    consoleError.mockRestore();
   });
 
   it('throws 404 when the backend responds not-ok', async () => {

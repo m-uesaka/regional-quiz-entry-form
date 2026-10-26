@@ -184,6 +184,16 @@ export const EntryListItemSchema = z.object({
 });
 export type EntryListItem = z.infer<typeof EntryListItemSchema>;
 
+// `GET /api/tournaments/:tournamentId/entry-counts`: how many entries hold a
+// seat and how many are waiting for one, which the entry form uses to say a
+// new entry would join the waitlist. Public like the entry list, which
+// already shows every confirmed and waitlisted entry one by one.
+export const TournamentEntryCountsSchema = z.object({
+  confirmedCount: z.number().int().nonnegative(),
+  waitlistedCount: z.number().int().nonnegative(),
+});
+export type TournamentEntryCounts = z.infer<typeof TournamentEntryCountsSchema>;
+
 // `GET /mypage/entries` response item: the logged-in participant's own
 // entry, so (unlike `EntryListItemSchema`) every internal status including
 // `pending_verification` is exposed, and the parent tournament is embedded

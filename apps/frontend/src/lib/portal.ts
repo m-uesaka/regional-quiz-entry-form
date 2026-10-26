@@ -5,6 +5,10 @@ import {
   type TournamentType,
 } from '@regional-quiz/shared';
 import {formatJstDateTime} from '$lib/jst-datetime';
+import {
+  priorityEntryNotices,
+  type PriorityEntryNotice,
+} from '$lib/priority-entry';
 
 /** Whether a tournament's entry form is taking entries. */
 export type PortalStatus = 'open' | 'upcoming' | 'closed';
@@ -23,6 +27,10 @@ export interface PortalTournamentView {
   status: PortalStatus;
   /** The entry period as the page prints it, in JST. */
   entryPeriodLabel: string;
+  /** `定員: 48名`, or null for a tournament without a capacity. */
+  capacityLabel: string | null;
+  /** The 優先エントリー going on now; empty unless the form is open. */
+  priorityNotices: PriorityEntryNotice[];
   /** The entry form, `/<regionSlug>/<tournamentType>/entry`. */
   entryPath: string;
   /** The published entry list, `/<regionSlug>/<tournamentType>/list`. */
@@ -107,11 +115,20 @@ export function groupPortalTournaments(
       };
       regions.set(tournament.regionSlug, region);
     }
+    const status = portalStatus(tournament, now);
     region.tournaments.push({
       name: tournament.tournamentName,
       typeLabel: TOURNAMENT_TYPE_LABELS[tournament.tournamentType],
-      status: portalStatus(tournament, now),
+      status,
       entryPeriodLabel: `${formatJstDateTime(tournament.entryOpensAt)} 〜 ${formatJstDateTime(tournament.entryClosesAt)}`,
+      capacityLabel:
+        tournament.capacity === null ? null : `定員: ${tournament.capacity}名`,
+      // A window can outlast the form it belongs to, and a closed form
+      // takes no entries, prioritised or not.
+      priorityNotices:
+        status === 'open'
+          ? priorityEntryNotices(tournament.priorityRegulations, now)
+          : [],
       entryPath: `${tournamentPublicPath(tournament.regionSlug, tournament.tournamentType)}/entry`,
       entryListPath: tournamentEntryListPath(
         tournament.regionSlug,

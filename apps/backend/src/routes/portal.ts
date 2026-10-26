@@ -1,6 +1,7 @@
 import {Hono} from 'hono';
 import {
   defaultTournamentName,
+  isWithinEntryPeriod,
   PortalTournamentSchema,
   type PortalTournament,
   type TournamentType,
@@ -15,6 +16,12 @@ interface PortalTournamentRow {
   name: string | null;
   entry_opens_at: string;
   entry_closes_at: string;
+  capacity: number | null;
+  regulations: Array<{
+    label: string;
+    priority_starts_at: string | null;
+    priority_ends_at: string | null;
+  }>;
   // `!inner` makes PostgREST drop a tournament without a region rather than
   // answer `null` here, but the type stays honest about the join.
   regions: {slug: string; name: string} | null;
@@ -28,7 +35,16 @@ interface PortalTournamentRow {
  */
 function rowToPortalTournament(
   row: PortalTournamentRow,
+  now: Date,
 ): PortalTournament | null {
+  // Only an open form's regulations are public (see `PortalTournamentSchema`).
+  const regulations = isWithinEntryPeriod(
+    row.entry_opens_at,
+    row.entry_closes_at,
+    now,
+  )
+    ? row.regulations
+    : [];
   const result = PortalTournamentSchema.safeParse({
     regionSlug: row.regions?.slug,
     regionName: row.regions?.name,
@@ -39,6 +55,19 @@ function rowToPortalTournament(
       (row.regions && defaultTournamentName(row.regions.name, row.type)),
     entryOpensAt: row.entry_opens_at,
     entryClosesAt: row.entry_closes_at,
+    capacity: row.capacity,
+    priorityRegulations: regulations.flatMap(regulation =>
+      regulation.priority_starts_at !== null &&
+      regulation.priority_ends_at !== null
+        ? [
+            {
+              label: regulation.label,
+              priorityStartsAt: regulation.priority_starts_at,
+              priorityEndsAt: regulation.priority_ends_at,
+            },
+          ]
+        : [],
+    ),
   });
   if (!result.success) {
     console.error(
@@ -53,8 +82,10 @@ function rowToPortalTournament(
 // Public on purpose, and not behind the entry-period gate
 // (`middleware/entry-period.ts`): the portal is where participants find the
 // forms, and listing the closed ones too is what lets it say when a form
-// opens. It answers only names, slugs and the entry period; whether a closed
-// form can be opened is still decided by that gate on the form's own routes.
+// opens. It answers only names, slugs, the entry period, the capacity and --
+// for a form that is open, and so already shows them -- the regulations'
+// priority windows; whether a closed form can be opened is still decided by
+// that gate on the form's own routes.
 //
 // That includes tournaments whose entry period hasn't started, which the
 // gate treats as unpublished: their name and dates are public here, as
@@ -67,18 +98,22 @@ export const portalRoute = new Hono<Env>().get('/tournaments', async c => {
   const {data, error} = await db
     .from('tournaments')
     .select(
-      'type, name, entry_opens_at, entry_closes_at, regions!inner(slug, name)',
+      'type, name, entry_opens_at, entry_closes_at, capacity, ' +
+        'regions!inner(slug, name), ' +
+        'regulations(label, priority_starts_at, priority_ends_at)',
     )
     // The order general staff set (`reorder_tournaments()`, 0032); `id`
     // only breaks a tie, which the column's sequence default never makes.
     .order('display_order', {ascending: true})
     .order('id', {ascending: true})
+    .order('display_order', {referencedTable: 'regulations', ascending: true})
     .returns<PortalTournamentRow[]>();
   if (error) {
     return c.json(internalError('failed to read the tournaments', error), 500);
   }
+  const now = new Date();
   const tournaments = data
-    .map(rowToPortalTournament)
+    .map(row => rowToPortalTournament(row, now))
     .filter(tournament => tournament !== null);
   return c.json(tournaments);
 });

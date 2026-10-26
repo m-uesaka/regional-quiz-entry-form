@@ -5,17 +5,38 @@ export interface RegulationWindow {
   priorityEndsAt: string | null;
 }
 
-interface ActiveRegulationWindow extends RegulationWindow {
+/** Just a regulation's priority window, both ends set. */
+export interface PriorityWindow {
   priorityStartsAt: string;
   priorityEndsAt: string;
 }
 
-function hasPriorityWindow(
-  regulation: RegulationWindow,
-): regulation is ActiveRegulationWindow {
+function hasPriorityWindow<T extends Omit<RegulationWindow, 'id'>>(
+  regulation: T,
+): regulation is T & PriorityWindow {
   return (
     regulation.priorityStartsAt !== null && regulation.priorityEndsAt !== null
   );
+}
+
+/**
+ * The regulations whose priority window is open at `now`, ends included --
+ * the regulations a participant has to pick at least one of while any is
+ * listed. Generic so a caller keeps whatever else its regulations carry
+ * (the label the entry form and the portal print).
+ * @param regulations The tournament's regulations.
+ * @param now The moment to check at.
+ */
+export function activePriorityRegulations<
+  T extends Omit<RegulationWindow, 'id'>,
+>(regulations: readonly T[], now: Date): Array<T & PriorityWindow> {
+  return regulations
+    .filter(hasPriorityWindow)
+    .filter(
+      regulation =>
+        now >= new Date(regulation.priorityStartsAt) &&
+        now <= new Date(regulation.priorityEndsAt),
+    );
 }
 
 /**
@@ -51,14 +72,9 @@ export function isRegulationSelectionAllowed(
   );
   if (!allKnown) return false;
 
-  const activePriorityIds = regulations
-    .filter(hasPriorityWindow)
-    .filter(
-      regulation =>
-        now >= new Date(regulation.priorityStartsAt) &&
-        now <= new Date(regulation.priorityEndsAt),
-    )
-    .map(regulation => regulation.id);
+  const activePriorityIds = activePriorityRegulations(regulations, now).map(
+    regulation => regulation.id,
+  );
 
   if (activePriorityIds.length === 0) return true;
   return selectedRegulationIds.some(selectedId =>

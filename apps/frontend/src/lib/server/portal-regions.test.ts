@@ -19,6 +19,8 @@ const TOURNAMENT: PortalTournament = {
   // Wide enough to be open whenever the test runs.
   entryOpensAt: '2000-01-01T00:00:00Z',
   entryClosesAt: '2999-12-31T00:00:00Z',
+  capacity: null,
+  priorityRegulations: [],
 };
 
 afterEach(() => {
@@ -40,6 +42,8 @@ describe('loadPortalRegions', () => {
             status: 'open',
             entryPeriodLabel:
               '2000年1月1日(土) 9:00 〜 2999年12月31日(火) 9:00',
+            capacityLabel: null,
+            priorityNotices: [],
             entryPath: '/tokyo/saikyoi/entry',
             entryListPath: '/tokyo/saikyoi/list',
           },

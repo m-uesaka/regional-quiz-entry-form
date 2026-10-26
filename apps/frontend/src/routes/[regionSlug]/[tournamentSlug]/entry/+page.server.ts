@@ -9,8 +9,10 @@ import {
   type FormFieldDef,
   type Regulation,
   type Tournament,
+  type TournamentEntryCounts,
 } from '@regional-quiz/shared';
 import {createApiClient, isUnauthorized} from '$lib/api';
+import {isWaitlistOpen, priorityEntryNotices} from '$lib/priority-entry';
 import {participantLoginPath} from '$lib/server/participant-login';
 import {clearParticipantSession} from '$lib/server/participant-session';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
@@ -214,6 +216,30 @@ async function fetchFormFieldDefs(
   return res.json();
 }
 
+/**
+ * Fetches how many entries hold a seat and how many are waiting. Only the
+ * waitlist notice depends on it, so a failed read leaves the notice out
+ * (logged) rather than taking the form down with it.
+ * @param tournamentId The tournament the form belongs to.
+ * @param fetch SvelteKit's `event.fetch`.
+ */
+async function fetchEntryCounts(
+  tournamentId: string,
+  fetch: RequestEvent['fetch'],
+): Promise<TournamentEntryCounts | null> {
+  const api = createApiClient(fetch);
+  const res = await api.api.tournaments[':tournamentId']['entry-counts'].$get({
+    param: {tournamentId},
+  });
+  if (!res.ok) {
+    console.error(
+      `GET /api/tournaments/${tournamentId}/entry-counts answered ${res.status}`,
+    );
+    return null;
+  }
+  return res.json();
+}
+
 export const load: PageServerLoad = async ({
   params,
   fetch,
@@ -234,16 +260,22 @@ export const load: PageServerLoad = async ({
     throw error(403, 'エントリー期間外です');
   }
 
-  // Both are public reads and neither depends on the other, so they run
+  // All public reads and none depends on another, so they run
   // concurrently.
-  const [regulations, formFieldDefs] = await Promise.all([
+  const [regulations, formFieldDefs, entryCounts] = await Promise.all([
     fetchRegulations(tournament.id, fetch),
     fetchFormFieldDefs(tournament.id, fetch),
+    fetchEntryCounts(tournament.id, fetch),
   ]);
   return {
     tournament,
     regulations,
     formFieldDefs,
+    // Worked out here rather than in the page, so the server rendering and
+    // the hydrated page read the same clock.
+    priorityNotices: priorityEntryNotices(regulations, new Date()),
+    waitlistOpen:
+      entryCounts !== null && isWaitlistOpen(tournament.capacity, entryCounts),
     // A logged-in participant enters under their session, so the form
     // leaves out the address and password; anyone else is offered the login
     // screen, which brings them back here (#117).

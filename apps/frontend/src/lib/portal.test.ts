@@ -20,6 +20,8 @@ function tournament(
     tournamentName: '東京大会',
     entryOpensAt: OPENS_AT,
     entryClosesAt: CLOSES_AT,
+    capacity: null,
+    priorityRegulations: [],
     ...overrides,
   };
 }
@@ -125,6 +127,44 @@ describe('groupPortalTournaments', () => {
     expect(regions[0].tournaments.map(t => t.name)).toEqual([
       '東京最強位',
       '東京新人王',
+    ]);
+  });
+
+  it('labels the capacity, or leaves it out when there is none', () => {
+    const [region] = groupPortalTournaments(
+      [tournament({capacity: 48}), tournament({tournamentType: 'shinjinou'})],
+      now,
+    );
+
+    expect(region.tournaments.map(t => t.capacityLabel)).toEqual([
+      '定員: 48名',
+      null,
+    ]);
+  });
+
+  it('announces a 優先エントリー only while its form is open', () => {
+    const priorityRegulations = [
+      {
+        label: '在住',
+        priorityStartsAt: '2026-10-01T00:00:00Z',
+        priorityEndsAt: '2026-12-31T00:00:00Z',
+      },
+    ];
+    const [region] = groupPortalTournaments(
+      [
+        tournament({priorityRegulations}),
+        tournament({
+          tournamentType: 'shinjinou',
+          entryOpensAt: '2026-11-20T00:00:00Z',
+          priorityRegulations,
+        }),
+      ],
+      now,
+    );
+
+    expect(region.tournaments.map(t => t.priorityNotices)).toEqual([
+      [{labels: ['在住'], endsAtLabel: '2026年12月31日(木) 9:00'}],
+      [],
     ]);
   });
 
