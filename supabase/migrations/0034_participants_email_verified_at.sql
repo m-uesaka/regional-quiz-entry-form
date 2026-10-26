@@ -46,15 +46,42 @@
 -- 適用後はログインできなくなり、そのセッションも切れる。そうした参加者は
 -- 確定したエントリーを持っていないので、マイページで失うものは確定待ちの
 -- エントリーだけで、確認メールのリンクを踏むか、エントリーし直せば戻れる。
+--
+-- ただし `entries.email_verified_at` は確定の記録として完全ではない。
+-- キャンセルした大会へエントリーし直すと、`enterTournament()` はその行を
+-- 再利用して `email_verified_at` を null に戻すので、確定 → キャンセル →
+-- 再エントリーした参加者は、確定した痕跡を行ごと失っている。そうした参加者を
+-- 未確認にすると、ログインできなくなるだけでなく、誰かがそのアドレスで
+-- 別のパスワードや地域のエントリーを送るだけで `take_over_unverified_participant()`
+-- にアカウントを奪われ、本人の再エントリーも消される。そこで、再利用された行を
+-- 持つ参加者も確認済みにする。再利用されたかどうかは、行の作成時刻
+-- (`entries.created_at`、最初のエントリーの時刻のまま)と、その行の確認トークンの
+-- 期限(発行時刻 + 24 時間、`entry-verification.ts` の `TOKEN_TTL_MS`)の差で
+-- 見分ける。新しく作った行は作成の直後にトークンを書くので差は 24 時間と数秒に
+-- 収まり、再利用した行は再エントリーの時刻からの 24 時間になる。再利用された行の
+-- 中には、確定しないままキャンセルされた(確定待ちのまま本人がキャンセルした、
+-- または期限切れで取り消された)ものも混ざるが、それを見分ける記録は残って
+-- いない。その参加者を確認済みにしても、この変更より前の扱いに留まるだけ
+-- なのに対し、確定したことのある参加者を未確認にすると上のようにアカウントを
+-- 失い得るので、確認済みの側に倒す。時刻は確定した時刻が残っていないため、
+-- それより前であることだけは確かな行の作成時刻で代える。
 alter table participants add column email_verified_at timestamptz;
 
 update participants p
   set email_verified_at = verified.first_verified_at
   from (
-    select e.participant_id, min(e.email_verified_at) as first_verified_at
-      from entries e
-      where e.email_verified_at is not null
-      group by e.participant_id
+    select evidence.participant_id, min(evidence.at) as first_verified_at
+      from (
+        select e.participant_id, e.email_verified_at as at
+          from entries e
+          where e.email_verified_at is not null
+        union all
+        select e.participant_id, e.created_at as at
+          from entries e
+          join email_verification_tokens evt on evt.entry_id = e.id
+          where evt.expires_at > e.created_at + interval '25 hours'
+      ) evidence
+      group by evidence.participant_id
   ) verified
   where p.id = verified.participant_id;
 

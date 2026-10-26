@@ -1187,6 +1187,53 @@ describe.skipIf(!dbReachable)(
       expect(byId.get(pendingOnly.participantId)).toBeNull();
     });
 
+    // Re-entering a cancelled tournament reuses its row and clears its
+    // `email_verified_at`, so a participant who confirmed, cancelled and
+    // entered again keeps no confirmed entry; the reused row is what tells.
+    it('backfills accounts whose entry row was reused, but not fresh ones', async () => {
+      const reused = await seed('backfill-reused');
+      const reusedEntryId = await reused.enter('pending_verification', null);
+      const fresh = await seed('backfill-fresh');
+      const freshEntryId = await fresh.enter('pending_verification', null);
+      const rollback = new Error('rollback');
+
+      let rows: Array<{id: string; email_verified_at: Date | null}> = [];
+      try {
+        await sql.begin(async tx => {
+          await tx`
+            update entries set created_at = '2026-05-01T00:00:00Z'
+            where id = ${reusedEntryId}
+          `;
+          await tx`
+            insert into email_verification_tokens (entry_id, token_hash, expires_at)
+            values
+              (${reusedEntryId}, ${'backfill-reused-' + reusedEntryId},
+               '2026-06-01T00:00:00Z'),
+              (${freshEntryId}, ${'backfill-fresh-' + freshEntryId},
+               now() + interval '24 hours')
+          `;
+          await tx`
+            update participants set email_verified_at = null
+            where id in (${reused.participantId}, ${fresh.participantId})
+          `;
+          await tx.unsafe(backfillStatement());
+          rows = await tx`
+            select id, email_verified_at from participants
+            where id in (${reused.participantId}, ${fresh.participantId})
+          `;
+          throw rollback;
+        });
+      } catch (error) {
+        if (error !== rollback) throw error;
+      }
+
+      const byId = new Map(rows.map(row => [row.id, row.email_verified_at]));
+      expect(byId.get(reused.participantId)).toEqual(
+        new Date('2026-05-01T00:00:00Z'),
+      );
+      expect(byId.get(fresh.participantId)).toBeNull();
+    });
+
     it('take_over_unverified_participant replaces an unverified account', async () => {
       const {participantId, enter} = await seed('takeover');
       const pendingId = await enter('pending_verification', null);
