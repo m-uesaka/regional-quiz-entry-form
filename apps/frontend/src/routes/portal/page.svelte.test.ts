@@ -13,6 +13,13 @@ const REGIONS: PortalRegionView[] = [
         typeLabel: '最強位',
         status: 'open',
         entryPeriodLabel: '2026年11月1日(日) 9:00 〜 2026年11月30日(月) 9:00',
+        capacityLabel: '定員: 48名',
+        priorityNotices: [
+          {
+            labels: ['開催地域に在住の方', '開催地域に在学の方'],
+            endsAtLabel: '2026年11月5日(木) 9:00',
+          },
+        ],
         entryPath: '/tokyo/saikyoi/entry',
         entryListPath: '/tokyo/saikyoi/list',
       },
@@ -21,6 +28,8 @@ const REGIONS: PortalRegionView[] = [
         typeLabel: '新人王',
         status: 'upcoming',
         entryPeriodLabel: '2026年12月1日(火) 9:00 〜 2026年12月31日(木) 9:00',
+        capacityLabel: null,
+        priorityNotices: [],
         entryPath: '/tokyo/shinjinou/entry',
         entryListPath: '/tokyo/shinjinou/list',
       },
@@ -35,6 +44,8 @@ const REGIONS: PortalRegionView[] = [
         typeLabel: '最強位',
         status: 'closed',
         entryPeriodLabel: '2026年9月1日(火) 9:00 〜 2026年9月30日(水) 9:00',
+        capacityLabel: null,
+        priorityNotices: [],
         entryPath: '/hokkaido/saikyoi/entry',
         entryListPath: '/hokkaido/saikyoi/list',
       },
@@ -68,6 +79,17 @@ describe('portal +page.svelte', () => {
     ).toBeVisible();
     expect(screen.getByText('東京新人王')).toBeInTheDocument();
     expect(screen.getByText('北海道最強位')).toBeInTheDocument();
+  });
+
+  it('shows the capacity and the 優先エントリー going on now', () => {
+    renderPage(REGIONS);
+
+    expect(screen.getByText('定員: 48名')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '現在優先エントリー実施中です。該当レギュレーション: 「開催地域に在住の方」「開催地域に在学の方」、〜2026年11月5日(木) 9:00まで',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('links only the forms that are taking entries', () => {

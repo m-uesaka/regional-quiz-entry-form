@@ -106,6 +106,11 @@ const ROUTE_POLICIES: Readonly<Record<string, Policy>> = {
     access: 'public',
     reason: '公開エントリーリスト(掲載名・ステータス・順位のみ)',
   },
+  'GET /api/tournaments/:tournamentId/entry-counts': {
+    access: 'public',
+    reason:
+      '確定・キャンセル待ちの件数のみ(公開エントリーリストから数えられる)',
+  },
   'GET /api/tournaments/:regionSlug/:tournamentSlug/entry-list': {
     access: 'public',
     reason: '公開エントリーリスト(掲載名・ステータス・順位のみ)',

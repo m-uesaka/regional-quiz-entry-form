@@ -666,3 +666,77 @@ describe.skipIf(!(await isDbReachable()))(
     });
   },
 );
+
+// Mocks the head-only count requests `@supabase/supabase-js` makes: the
+// count comes back in `Content-Range` (`*/<n>`), with no body.
+describe('GET /tournaments/:tournamentId/entry-counts (mocked Supabase)', () => {
+  const originalFetch = globalThis.fetch;
+  const TOURNAMENT_ID = '11111111-1111-4111-8111-111111111111';
+  let requestedUrls: string[] = [];
+
+  function mockCounts(counts: Record<string, number> | null): void {
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      const url = decodeURIComponent(
+        typeof input === 'string' ? input : input.toString(),
+      );
+      requestedUrls.push(url);
+      if (counts === null) {
+        return Promise.resolve(Response.json({message: 'boom'}, {status: 500}));
+      }
+      const status = /status=eq\.(\w+)/.exec(url)?.[1] ?? '';
+      return Promise.resolve(
+        new Response(null, {
+          status: 200,
+          headers: {'Content-Range': `*/${counts[status] ?? 0}`},
+        }),
+      );
+    }) as unknown as typeof fetch;
+  }
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    requestedUrls = [];
+  });
+
+  it('answers the confirmed and waitlisted counts without a session', async () => {
+    mockCounts({confirmed: 30, waitlisted: 2});
+
+    const res = await app.request(
+      `/api/tournaments/${TOURNAMENT_ID}/entry-counts`,
+      {},
+      env,
+    );
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as unknown).toEqual({
+      confirmedCount: 30,
+      waitlistedCount: 2,
+    });
+    expect(requestedUrls).toHaveLength(2);
+    for (const url of requestedUrls) {
+      expect(url).toContain(`tournament_id=eq.${TOURNAMENT_ID}`);
+    }
+  });
+
+  it('rejects a non-UUID tournamentId with 400', async () => {
+    const res = await app.request(
+      '/api/tournaments/not-a-uuid/entry-counts',
+      {},
+      env,
+    );
+
+    expect(res.status).toBe(400);
+  });
+
+  it('answers 500 when the entries cannot be counted', async () => {
+    mockCounts(null);
+
+    const res = await app.request(
+      `/api/tournaments/${TOURNAMENT_ID}/entry-counts`,
+      {},
+      env,
+    );
+
+    expect(res.status).toBe(500);
+  });
+});

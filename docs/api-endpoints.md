@@ -217,6 +217,7 @@ if ('yaml' in body) {
 | PUT | `/api/tournaments/:tournamentId/regulations` | 統括スタッフ |
 | GET | `/api/tournaments/:tournamentId/entry-list` | なし |
 | GET | `/api/tournaments/:regionSlug/:tournamentSlug/entry-list` | なし |
+| GET | `/api/tournaments/:tournamentId/entry-counts` | なし |
 | POST | `/api/tournaments/:tournamentId/entries` | なし(レート制限 + Turnstile) |
 | POST | `/api/tournaments/:tournamentId/entries/session` | 参加者(レート制限 + Turnstile) |
 | GET | `/api/entries/verify` | なし(トークン) |
@@ -661,6 +662,16 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 - 返すのは掲載名・ステータス・キャンセル待ち順位の**3項目のみ**。`name` / `furigana` / `email` / `freeText` / `customFieldValues` は一切含みません(`EntryListItemSchema` がそれを型で保証しています)。
 - `pending_verification` のエントリーは除外します(メール確認前の申し込みを公開しないため)。
 - `cancelled` の行は削除せず、`displayName` を `"キャンセル"` に**マスクして返します**。行自体を落とさないのは、繰り上げ処理が更新するのは繰り上がった側の行だけで、キャンセルされた行はそのまま残るためです。
+
+### `GET /api/tournaments/:tournamentId/entry-counts`
+
+認証不要の公開エンドポイント。その大会の `confirmed` と `waitlisted` のエントリー数を返します。エントリーフォームが冒頭で「キャンセル待ちが発生している」と案内するためのものです(#186。確定件数が定員に達しているとき。確定処理 `confirm_entry_by_token()` と同じ条件で、キャンセル待ちの件数だけでは判定しない)。
+
+- `200`: `{confirmedCount: number, waitlistedCount: number}`(`TournamentEntryCountsSchema`)
+- `400`: `:tournamentId` が UUID でない
+- `500`
+
+どちらの数も公開エントリーリストから数えられるので、エントリー期間のゲートは掛けていません。
 
 ## 9. フォーム定義管理(統括スタッフ)
 

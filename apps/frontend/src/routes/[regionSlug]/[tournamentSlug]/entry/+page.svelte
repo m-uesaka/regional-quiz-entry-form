@@ -1,6 +1,7 @@
 <script lang="ts">
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
+  import PriorityEntryNotices from '$lib/components/PriorityEntryNotices.svelte';
   import TournamentEntryForm from '$lib/components/TournamentEntryForm.svelte';
   import Card from '$lib/components/ui/atoms/Card.svelte';
   import Link from '$lib/components/ui/atoms/Link.svelte';
@@ -31,6 +32,22 @@
       {/if}
     </Message>
   {:else}
+    {#if data.priorityNotices.length > 0}
+      <Message>
+        <div class="flex flex-col gap-1">
+          <PriorityEntryNotices notices={data.priorityNotices} />
+        </div>
+      </Message>
+    {/if}
+
+    {#if data.waitlistOpen}
+      <Message variant="warning">
+        <p class="text-sm">
+          現在、定員に達しているためキャンセル待ちが発生しています。これからエントリーされる方はキャンセル待ちとなります。
+        </p>
+      </Message>
+    {/if}
+
     {#if form?.error}
       <Message variant="danger">
         <p role="alert" class="text-sm">{form.error}</p>

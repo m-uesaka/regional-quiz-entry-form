@@ -1,6 +1,7 @@
 <script lang="ts">
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
+  import PriorityEntryNotices from '$lib/components/PriorityEntryNotices.svelte';
   import {buttonVariants} from '$lib/components/ui/atoms/Button.svelte';
   import Card from '$lib/components/ui/atoms/Card.svelte';
   import Chip from '$lib/components/ui/atoms/Chip.svelte';
@@ -71,6 +72,13 @@
                   <p class="text-sm text-muted-foreground">
                     受付期間: {tournament.entryPeriodLabel}
                   </p>
+                  {#if tournament.capacityLabel}
+                    <p class="text-sm text-muted-foreground">{tournament.capacityLabel}</p>
+                  {/if}
+                  <PriorityEntryNotices
+                    notices={tournament.priorityNotices}
+                    class="font-medium text-primary"
+                  />
                 </div>
                 {#if tournament.status === 'open'}
                   <a

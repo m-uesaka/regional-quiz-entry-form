@@ -26,9 +26,29 @@ function row(
     name: null,
     entry_opens_at: '2026-11-01T00:00:00+00:00',
     entry_closes_at: '2026-11-30T00:00:00+00:00',
+    capacity: null,
     regions: {slug: regionSlug, name: regionName},
+    regulations: [],
   };
 }
+
+/** The entry period of a tournament whose form is open right now. */
+function openPeriod(): Record<string, string> {
+  const day = 24 * 60 * 60 * 1000;
+  return {
+    entry_opens_at: new Date(Date.now() - day).toISOString(),
+    entry_closes_at: new Date(Date.now() + day).toISOString(),
+  };
+}
+
+const PRIORITY_REGULATIONS = [
+  {
+    label: '開催地域に在住の方',
+    priority_starts_at: '2026-11-01T00:00:00+00:00',
+    priority_ends_at: '2026-11-05T00:00:00+00:00',
+  },
+  {label: 'どなたでも', priority_starts_at: null, priority_ends_at: null},
+];
 
 // Mocks the `fetch` call `@supabase/supabase-js` makes for the select (same
 // convention as `routes/entry-list.test.ts`), so this runs in CI without a
@@ -76,6 +96,8 @@ describe('GET /portal/tournaments (mocked Supabase)', () => {
         tournamentName: '東京最強位',
         entryOpensAt: '2026-11-01T00:00:00+00:00',
         entryClosesAt: '2026-11-30T00:00:00+00:00',
+        capacity: null,
+        priorityRegulations: [],
       },
       {
         regionSlug: 'tokyo',
@@ -84,6 +106,8 @@ describe('GET /portal/tournaments (mocked Supabase)', () => {
         tournamentName: '東京新人王',
         entryOpensAt: '2026-11-01T00:00:00+00:00',
         entryClosesAt: '2026-11-30T00:00:00+00:00',
+        capacity: null,
+        priorityRegulations: [],
       },
       {
         regionSlug: 'hokkaido',
@@ -92,8 +116,55 @@ describe('GET /portal/tournaments (mocked Supabase)', () => {
         tournamentName: '北海道最強位',
         entryOpensAt: '2026-11-01T00:00:00+00:00',
         entryClosesAt: '2026-11-30T00:00:00+00:00',
+        capacity: null,
+        priorityRegulations: [],
       },
     ]);
+  });
+
+  it('answers the capacity and, for an open form, its priority windows', async () => {
+    mockTournamentsFetch([
+      {
+        ...row('tokyo', '東京', 'saikyoi'),
+        ...openPeriod(),
+        capacity: 48,
+        regulations: PRIORITY_REGULATIONS,
+      },
+    ]);
+
+    const res = await app.request('/api/portal/tournaments', {}, env);
+    const [tournament] = (await res.json()) as Array<Record<string, unknown>>;
+
+    expect(res.status).toBe(200);
+    expect(decodeURIComponent(requestedUrl)).toContain(
+      'regulations.order=display_order.asc',
+    );
+    expect(tournament.capacity).toBe(48);
+    expect(tournament.priorityRegulations).toEqual([
+      {
+        label: '開催地域に在住の方',
+        priorityStartsAt: '2026-11-01T00:00:00+00:00',
+        priorityEndsAt: '2026-11-05T00:00:00+00:00',
+      },
+    ]);
+  });
+
+  // The regulations are part of the form the entry-period gate keeps
+  // unpublished, so the portal mustn't become a way round it.
+  it('leaves the regulations of a form that is not open unlisted', async () => {
+    mockTournamentsFetch([
+      {
+        ...row('tokyo', '東京', 'saikyoi'),
+        entry_opens_at: '2099-01-01T00:00:00+00:00',
+        entry_closes_at: '2099-01-31T00:00:00+00:00',
+        regulations: PRIORITY_REGULATIONS,
+      },
+    ]);
+
+    const res = await app.request('/api/portal/tournaments', {}, env);
+    const [tournament] = (await res.json()) as Array<Record<string, unknown>>;
+
+    expect(tournament.priorityRegulations).toEqual([]);
   });
 
   it('answers an empty list when there are no tournaments yet', async () => {

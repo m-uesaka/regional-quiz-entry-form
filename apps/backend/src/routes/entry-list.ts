@@ -5,6 +5,7 @@ import {z} from 'zod';
 import {
   EntryListItemSchema,
   PageQuerySchema,
+  TournamentEntryCountsSchema,
   TournamentTypeSchema,
   type EntryListItem,
   type PageQuery,
@@ -102,7 +103,50 @@ async function respondWithEntryList(
   return c.json(toPageResponse(rows.map(rowToEntryListItem), total, page));
 }
 
+/**
+ * Counts a tournament's entries in one status. Head-only, so no row is
+ * pulled into the Worker just to be counted.
+ * @param c The request context.
+ * @param tournamentId The tournament whose entries to count.
+ * @param status The status to count.
+ */
+async function countEntries(
+  c: Context<Env>,
+  tournamentId: string,
+  status: 'confirmed' | 'waitlisted',
+) {
+  return createDbClient(c.env)
+    .from('entries')
+    .select('id', {count: 'exact', head: true})
+    .eq('tournament_id', tournamentId)
+    .eq('status', status);
+}
+
 export const entryListRoute = new Hono<Env>()
+  // How full the tournament is, for the entry form to say that a new entry
+  // would join the waitlist. Ungated for the same reason as the list: both
+  // numbers can already be counted off the published list.
+  .get(
+    '/:tournamentId/entry-counts',
+    zValidator('param', TournamentIdParamSchema),
+    async c => {
+      const {tournamentId} = c.req.valid('param');
+      const [confirmed, waitlisted] = await Promise.all([
+        countEntries(c, tournamentId, 'confirmed'),
+        countEntries(c, tournamentId, 'waitlisted'),
+      ]);
+      const error = confirmed.error ?? waitlisted.error;
+      if (error) {
+        return c.json(internalError('failed to count the entries', error), 500);
+      }
+      return c.json(
+        TournamentEntryCountsSchema.parse({
+          confirmedCount: confirmed.count ?? 0,
+          waitlistedCount: waitlisted.count ?? 0,
+        }),
+      );
+    },
+  )
   .get(
     '/:tournamentId/entry-list',
     zValidator('param', TournamentIdParamSchema),

@@ -2,6 +2,7 @@ import {render, screen} from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import {describe, expect, it} from 'vitest';
 import type {FormFieldDef, Regulation, Tournament} from '@regional-quiz/shared';
+import type {PriorityEntryNotice} from '$lib/priority-entry';
 import Page from './+page.svelte';
 
 const TOURNAMENT: Tournament = {
@@ -63,7 +64,11 @@ const LOGIN_PATH = '/mypage/login?redirectTo=%2Ftokyo%2Fsaikyoi%2Fentry';
 
 function renderPage(
   form: ActionResult = null,
-  options: {loggedIn?: boolean} = {},
+  options: {
+    loggedIn?: boolean;
+    priorityNotices?: PriorityEntryNotice[];
+    waitlistOpen?: boolean;
+  } = {},
 ) {
   return render(Page, {
     props: {
@@ -72,6 +77,8 @@ function renderPage(
         tournament: TOURNAMENT,
         regulations: REGULATIONS,
         formFieldDefs: FORM_FIELD_DEFS,
+        priorityNotices: options.priorityNotices ?? [],
+        waitlistOpen: options.waitlistOpen ?? false,
         loggedIn: options.loggedIn ?? false,
         loginPath: LOGIN_PATH,
       },
@@ -91,6 +98,31 @@ const SUBMITTED_VALUES = {
 };
 
 describe('entry +page.svelte', () => {
+  it('opens with the 優先エントリー and the waitlist when there are any', () => {
+    renderPage(null, {
+      priorityNotices: [
+        {labels: ['一般の部'], endsAtLabel: '2026年11月5日(木) 9:00'},
+      ],
+      waitlistOpen: true,
+    });
+
+    expect(
+      screen.getByText(
+        '現在優先エントリー実施中です。該当レギュレーション: 「一般の部」、〜2026年11月5日(木) 9:00まで',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/キャンセル待ちが発生しています/),
+    ).toBeInTheDocument();
+  });
+
+  it('says nothing of either when there is neither', () => {
+    renderPage();
+
+    expect(screen.queryByText(/優先エントリー実施中/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/キャンセル待ち/)).not.toBeInTheDocument();
+  });
+
   it('renders the entry form fields', () => {
     renderPage();
 
@@ -262,6 +294,8 @@ describe('entry +page.svelte', () => {
         tournament: {...TOURNAMENT, id: OTHER_TOURNAMENT_ID, type: 'shinjinou'},
         regulations: REGULATIONS,
         formFieldDefs: FORM_FIELD_DEFS,
+        priorityNotices: [],
+        waitlistOpen: false,
         loggedIn: false,
         loginPath: LOGIN_PATH,
       },
