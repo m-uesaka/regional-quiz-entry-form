@@ -8,23 +8,23 @@ const ENTRIES: EntryListItem[] = [
     displayName: '参加者A',
     status: 'confirmed',
     waitlistPosition: null,
-    enteredAt: '2026-11-01T00:00:05.123456+00:00',
+    confirmedAt: '2026-11-01T00:00:05.123456+00:00',
   },
   {
     displayName: '参加者B',
     status: 'waitlisted',
     waitlistPosition: 2,
-    enteredAt: '2026-11-01T00:01:00+00:00',
+    confirmedAt: '2026-11-01T00:01:00+00:00',
   },
 ];
 
 const NOTICES = [
-  'エントリーした時間は，エントリーフォームを送信した時間のことです．',
+  'エントリーした時間は，確認メールのリンクをクリックしてエントリーが確定した時間のことです．',
   'エントリーリストにお名前がない場合，エントリー確認メールが来ていないか今一度確認ください．エントリー確認メールからエントリーを確定させたにもかかわらずエントリーリストに反映されない場合は，各地域の主催者にお問い合わせください．',
 ];
 
 describe('list +page.svelte', () => {
-  it('numbers each row and shows when it was sent, in JST', () => {
+  it('numbers each row and shows when it was confirmed, in JST', () => {
     render(Page, {
       props: {
         params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
@@ -48,6 +48,31 @@ describe('list +page.svelte', () => {
     expect(
       screen.getByRole('columnheader', {name: 'エントリーした時間'}),
     ).toBeInTheDocument();
+  });
+
+  it('shows a dash for the time of a cancelled entry', () => {
+    render(Page, {
+      props: {
+        params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
+        data: {
+          entries: [
+            {
+              displayName: 'キャンセル',
+              status: 'cancelled',
+              waitlistPosition: null,
+              confirmedAt: null,
+            },
+          ],
+          total: 1,
+          limit: 100,
+          offset: 0,
+        },
+        form: null,
+      },
+    });
+
+    const [row] = screen.getAllByRole('row').slice(1);
+    expect(row.lastElementChild).toHaveTextContent('—');
   });
 
   it('carries the numbering on from the earlier pages', () => {

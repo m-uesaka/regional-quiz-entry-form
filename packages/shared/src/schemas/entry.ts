@@ -177,11 +177,10 @@ export const EntryListItemSchema = z.object({
   displayName: z.string(),
   status: PublicEntryStatusSchema,
   waitlistPosition: z.number().int().nullable(),
-  // When the entry was sent (`created_at`); the list is ordered by it, and
-  // shows it so participants can check their place. Not when it was
-  // confirmed: a participant entering both of a region's tournaments may
-  // follow the two mailed links in either order.
-  enteredAt: z.string().datetime({offset: true}),
+  // When the entry was confirmed through its mailed link; the list is
+  // ordered by it, and shows it so participants can check their place.
+  // Null on a cancelled entry, whose time is masked like its name.
+  confirmedAt: z.string().datetime({offset: true}).nullable(),
 });
 export type EntryListItem = z.infer<typeof EntryListItemSchema>;
 

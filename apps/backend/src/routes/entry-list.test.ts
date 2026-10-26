@@ -64,12 +64,12 @@ interface MockEntryRow {
   display_name: string;
   status: 'confirmed' | 'waitlisted' | 'cancelled';
   waitlist_position: number | null;
-  created_at: string;
+  email_verified_at: string;
   [extraPersonalField: string]: unknown;
 }
 
-/** When the mocked rows below were sent, as PostgREST spells it. */
-const CREATED_AT = '2026-11-01T00:00:05.123456+00:00';
+/** When the mocked rows below were confirmed, as PostgREST spells it. */
+const VERIFIED_AT = '2026-11-01T00:00:05.123456+00:00';
 
 /** Shape of one page of the entry-list response. */
 interface EntryListPage {
@@ -121,7 +121,9 @@ function confirmedRows(count: number): MockEntryRow[] {
     status: 'confirmed',
     waitlist_position: null,
     // A second apart, in the order the rows are listed.
-    created_at: new Date(Date.UTC(2026, 10, 1, 0, 0, index)).toISOString(),
+    email_verified_at: new Date(
+      Date.UTC(2026, 10, 1, 0, 0, index),
+    ).toISOString(),
   }));
 }
 
@@ -147,7 +149,7 @@ describe('GET /tournaments/:tournamentId/entry-list (mocked Supabase)', () => {
         display_name: '太郎',
         status: 'confirmed',
         waitlist_position: null,
-        created_at: CREATED_AT,
+        email_verified_at: VERIFIED_AT,
         email: 'secret@example.com',
         name: '山田太郎',
         furigana: 'ヤマダタロウ',
@@ -177,7 +179,7 @@ describe('GET /tournaments/:tournamentId/entry-list (mocked Supabase)', () => {
         display_name: '太郎',
         status: 'cancelled',
         waitlist_position: null,
-        created_at: CREATED_AT,
+        email_verified_at: VERIFIED_AT,
       },
     ]);
 
@@ -192,6 +194,7 @@ describe('GET /tournaments/:tournamentId/entry-list (mocked Supabase)', () => {
     expect(body.items).toHaveLength(1);
     expect(body.items[0].displayName).toBe('キャンセル');
     expect(body.items[0].status).toBe('cancelled');
+    expect(body.items[0].confirmedAt).toBeNull();
   });
 
   it('returns waitlistPosition for waitlisted entries', async () => {
@@ -200,7 +203,7 @@ describe('GET /tournaments/:tournamentId/entry-list (mocked Supabase)', () => {
         display_name: '次郎',
         status: 'waitlisted',
         waitlist_position: 3,
-        created_at: CREATED_AT,
+        email_verified_at: VERIFIED_AT,
       },
     ]);
 
@@ -218,13 +221,13 @@ describe('GET /tournaments/:tournamentId/entry-list (mocked Supabase)', () => {
     expect(body.items[0].waitlistPosition).toBe(3);
   });
 
-  it('returns when each entry was sent', async () => {
-    mockEntriesFetch([
+  it('returns when each entry was confirmed, and asks only for confirmed ones', async () => {
+    const requests = mockEntriesFetch([
       {
         display_name: '太郎',
         status: 'confirmed',
         waitlist_position: null,
-        created_at: CREATED_AT,
+        email_verified_at: VERIFIED_AT,
       },
     ]);
 
@@ -236,7 +239,10 @@ describe('GET /tournaments/:tournamentId/entry-list (mocked Supabase)', () => {
     const body = (await res.json()) as EntryListPage;
 
     expect(res.status).toBe(200);
-    expect(body.items[0].enteredAt).toBe(CREATED_AT);
+    expect(body.items[0].confirmedAt).toBe(VERIFIED_AT);
+    expect(requests[0].searchParams.get('email_verified_at')).toBe(
+      'not.is.null',
+    );
   });
 
   it('GET /entry-list returns the first page and the total count', async () => {
@@ -298,8 +304,8 @@ describe('GET /tournaments/:tournamentId/entry-list (mocked Supabase)', () => {
   });
 
   it('GET /entry-list keeps a stable order across page boundaries', async () => {
-    // `created_at` alone is not unique, so entries created in the same
-    // instant could swap places between two page requests; the `id`
+    // `email_verified_at` alone is not unique, so entries confirmed in the
+    // same instant could swap places between two page requests; the `id`
     // tie-breaker is what makes adjacent pages neither overlap nor skip.
     const requests = mockEntriesFetch(confirmedRows(5));
 
@@ -320,7 +326,9 @@ describe('GET /tournaments/:tournamentId/entry-list (mocked Supabase)', () => {
 
     expect(requests).toHaveLength(2);
     for (const request of requests) {
-      expect(request.searchParams.get('order')).toBe('created_at.asc,id.asc');
+      expect(request.searchParams.get('order')).toBe(
+        'email_verified_at.asc,id.asc',
+      );
     }
     expect(
       [...first.items, ...second.items].map(item => item.displayName),
@@ -387,7 +395,7 @@ describe('the entry list stays public after the entry period', () => {
         display_name: '太郎',
         status: 'confirmed',
         waitlist_position: null,
-        created_at: CREATED_AT,
+        email_verified_at: VERIFIED_AT,
       },
     ]);
 
@@ -411,7 +419,7 @@ describe('the entry list stays public after the entry period', () => {
         display_name: '太郎',
         status: 'confirmed',
         waitlist_position: null,
-        created_at: CREATED_AT,
+        email_verified_at: VERIFIED_AT,
       },
     ]);
 
@@ -480,6 +488,12 @@ describe.skipIf(!(await isDbReachable()))(
       regulationId: string,
       status: 'pending_verification' | 'confirmed' | 'waitlisted' | 'cancelled',
       waitlistPosition: number | null,
+      // Every entry that got past verification has one; only a pending
+      // entry, or one that lapsed unverified, does not.
+      emailVerifiedAt: Date | null = status === 'pending_verification'
+        ? null
+        : new Date(),
+      displayName = '太郎',
     ): Promise<void> {
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       const [region] = await sql`
@@ -493,10 +507,11 @@ describe.skipIf(!(await isDbReachable()))(
       const [entry] = await sql`
         insert into entries (
           participant_id, tournament_id, name, furigana, display_name,
-          free_text, status, waitlist_position
+          free_text, status, waitlist_position, email_verified_at
         ) values (
-          ${participant.id}, ${tournamentId}, '山田太郎', 'ヤマダタロウ', '太郎',
-          '自由記述', ${status}, ${waitlistPosition}
+          ${participant.id}, ${tournamentId}, '山田太郎', 'ヤマダタロウ',
+          ${displayName}, '自由記述', ${status}, ${waitlistPosition},
+          ${emailVerifiedAt}
         )
         returning id
       `;
@@ -589,6 +604,65 @@ describe.skipIf(!(await isDbReachable()))(
 
       expect(res.status).toBe(200);
       expect(body).toHaveLength(0);
+    });
+
+    it('lists entries in the order they were confirmed, not sent', async () => {
+      const fixture = await createTournamentAndRegulation('confirmed-order');
+      // Sent first, but its link was followed last.
+      await createEntry(
+        fixture.tournamentId,
+        fixture.regulationId,
+        'confirmed',
+        null,
+        new Date('2026-11-01T00:00:10Z'),
+        '後から確定',
+      );
+      await createEntry(
+        fixture.tournamentId,
+        fixture.regulationId,
+        'confirmed',
+        null,
+        new Date('2026-11-01T00:00:05Z'),
+        '先に確定',
+      );
+
+      const res = await app.request(
+        `/api/tournaments/${fixture.tournamentId}/entry-list`,
+        {},
+        env,
+      );
+      const body = ((await res.json()) as EntryListPage).items;
+
+      expect(res.status).toBe(200);
+      expect(body.map(item => item.displayName)).toEqual([
+        '先に確定',
+        '後から確定',
+      ]);
+      expect(new Date(body[0].confirmedAt as string).toISOString()).toBe(
+        '2026-11-01T00:00:05.000Z',
+      );
+    });
+
+    it('leaves out an entry that lapsed without ever being confirmed', async () => {
+      const fixture = await createTournamentAndRegulation('lapsed');
+      await createEntry(
+        fixture.tournamentId,
+        fixture.regulationId,
+        'cancelled',
+        null,
+        null,
+      );
+
+      const res = await app.request(
+        `/api/tournaments/${fixture.tournamentId}/entry-list`,
+        {},
+        env,
+      );
+      const body = (await res.json()) as EntryListPage;
+
+      expect(res.status).toBe(200);
+      expect(body.items).toHaveLength(0);
+      expect(body.total).toBe(0);
     });
   },
 );
