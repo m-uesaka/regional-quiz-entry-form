@@ -117,4 +117,27 @@ describe('admin tournament order +page.svelte', () => {
     expect(document.querySelectorAll('tr[data-drag-item]')).toHaveLength(2);
     expect(document.querySelectorAll('[data-drag-handle]')).toHaveLength(2);
   });
+
+  it('numbers every row by its place once one is moved, typed numbers included', async () => {
+    const user = userEvent.setup();
+    renderPage([
+      ...TOURNAMENTS,
+      {id: 'c', regionName: '大阪', typeLabel: '最強位', name: '大阪最強位'},
+    ]);
+
+    // Typed into the first row, which the move below leaves where it is.
+    const first = screen.getByLabelText('東京新人王の表示順');
+    await user.clear(first);
+    await user.type(first, '3');
+    await user.click(
+      screen.getByRole('button', {name: '東京最強位を下へ移動'}),
+    );
+
+    expect(
+      ['東京新人王', '大阪最強位', '東京最強位'].map(
+        name =>
+          (screen.getByLabelText(`${name}の表示順`) as HTMLInputElement).value,
+      ),
+    ).toEqual(['1', '2', '3']);
+  });
 });

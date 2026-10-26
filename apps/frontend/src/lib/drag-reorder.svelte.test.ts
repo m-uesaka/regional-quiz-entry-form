@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import {dragReorder, dropIndex, moveItem} from './drag-reorder';
+import {dragReorder, dropIndex, moveItem, renumberRows} from './drag-reorder';
 
 /** Each test row is this tall, stacked from the top of the viewport. */
 const ROW_HEIGHT = 40;
@@ -140,19 +140,73 @@ describe('dragReorder', () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
-  it('scrolls while a row is held near the bottom of the viewport', () => {
-    const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {});
-    // Runs the first frame only; the loop would otherwise never return.
-    let frames = 0;
-    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => {
-      if (frames++ === 0) callback(0);
-      return frames;
+  it('leaves the list alone until the pointer has moved', () => {
+    pointer(handleOf('a'), 'pointerdown', {clientY: 20});
+    pointer(window, 'pointermove', {clientY: 22});
+
+    expect(moves).toEqual([]);
+  });
+
+  it('lets go of a field being typed in when a drag starts', () => {
+    const field = document.createElement('input');
+    document.body.appendChild(field);
+    field.focus();
+
+    pointer(handleOf('a'), 'pointerdown', {clientY: 20});
+
+    expect(field).not.toHaveFocus();
+    field.remove();
+  });
+
+  describe('near the edge of the viewport', () => {
+    let scrollBy: ReturnType<typeof vi.spyOn>;
+    const bottom = () => window.innerHeight - 4;
+
+    beforeEach(() => {
+      scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {});
+      // Runs the first frame only; the loop would otherwise never return.
+      let frames = 0;
+      vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => {
+        if (frames++ === 0) callback(0);
+        return frames;
+      });
     });
 
-    pointer(handleOf('a'), 'pointerdown', {clientY: window.innerHeight - 4});
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
 
-    expect(scrollBy).toHaveBeenCalledWith(0, expect.any(Number));
-    expect(scrollBy.mock.calls[0][1]).toBeGreaterThan(0);
-    vi.restoreAllMocks();
+    it('scrolls while a dragged row is held there', () => {
+      pointer(handleOf('c'), 'pointerdown', {clientY: bottom() - 20});
+      pointer(window, 'pointermove', {clientY: bottom()});
+
+      expect(scrollBy).toHaveBeenCalledTimes(1);
+      expect(scrollBy.mock.calls[0][1]).toBeGreaterThan(0);
+    });
+
+    it('does not scroll for a handle that is only pressed there', () => {
+      pointer(handleOf('c'), 'pointerdown', {clientY: bottom()});
+
+      expect(scrollBy).not.toHaveBeenCalled();
+      expect(moves).toEqual([]);
+    });
+  });
+});
+
+describe('renumberRows', () => {
+  it('numbers each row by its position, over whatever was typed', () => {
+    const list = document.createElement('div');
+    list.innerHTML = ['5', '', '1']
+      .map(
+        value =>
+          `<div data-drag-item><input data-reorder-position value="${value}"></div>`,
+      )
+      .join('');
+
+    renumberRows(list);
+
+    expect(
+      Array.from(list.querySelectorAll('input')).map(input => input.value),
+    ).toEqual(['1', '2', '3']);
   });
 });

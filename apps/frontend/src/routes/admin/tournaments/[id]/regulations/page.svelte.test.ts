@@ -211,7 +211,9 @@ describe('admin regulations +page.svelte', () => {
     const student = screen.getAllByLabelText('レギュレーション名')[1];
     await user.clear(student);
     await user.type(student, '学生の部(改)');
-    await user.click(screen.getByRole('button', {name: '学生の部を上へ移動'}));
+    await user.click(
+      screen.getByRole('button', {name: '2 番目のレギュレーションを上へ移動'}),
+    );
 
     const labels = screen.getAllByLabelText('レギュレーション名');
     expect(labels.map(input => (input as HTMLInputElement).value)).toEqual([
@@ -255,7 +257,9 @@ describe('admin regulations +page.svelte', () => {
       ],
     });
 
-    await user.click(screen.getByRole('button', {name: '学生の部を上へ移動'}));
+    await user.click(
+      screen.getByRole('button', {name: '2 番目のレギュレーションを上へ移動'}),
+    );
 
     expect(
       screen

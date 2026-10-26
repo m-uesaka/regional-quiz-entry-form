@@ -13,7 +13,7 @@
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import Link from '$lib/components/ui/atoms/Link.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
-  import {dragReorder, moveItem} from '$lib/drag-reorder';
+  import {dragReorder, moveItem, renumberRows} from '$lib/drag-reorder';
   import {datetimeLocalStep} from '$lib/jst-datetime';
   import {
     emptyRegulationRow,
@@ -21,6 +21,7 @@
     toRegulationRow,
   } from '$lib/regulation-rows';
   import type {RegulationRowValues} from '$lib/types/regulation-form';
+  import {tick} from 'svelte';
   import type {PageProps} from './$types';
 
   const {data, form, params}: PageProps = $props();
@@ -58,10 +59,7 @@
       (row, key) => ({key, row}),
     ),
   );
-  // Set once a row has been moved here. From then on every "表示順" shows
-  // its row's position on screen, rather than the number a refused save
-  // echoed back, which no longer matches where its row is.
-  let moved = $state(false);
+  let list = $state<HTMLElement>();
   // What a screen reader hears after a row is moved.
   let announcement = $state('');
   // The handles and buttons need scripting, so they only appear once it
@@ -72,24 +70,28 @@
   });
 
   /**
-   * What a row is called where it is announced or labelled.
-   * @param row The row.
+   * What a row is called where it is announced or labelled: by position,
+   * as its legend is. Not by its label -- that is whatever is typed into
+   * the field now, which the page doesn't follow.
    * @param index Its position on screen.
    */
-  function rowName(row: RegulationRowValues, index: number): string {
-    return row.label.trim() || `${index + 1} 番目のレギュレーション`;
+  function rowName(index: number): string {
+    return `${index + 1} 番目のレギュレーション`;
   }
 
   /**
-   * Moves a row to another position.
+   * Moves a row to another position, then numbers every row by where it now
+   * is -- a number typed in by hand, or echoed back by a refused save,
+   * included -- so what is saved is the order on screen.
    * @param from Its current index.
    * @param to The index it moves to.
    */
-  function move(from: number, to: number) {
-    const name = rowName(rows[from].row, from);
+  async function move(from: number, to: number) {
+    const name = rowName(from);
     rows = moveItem(rows, from, to);
-    moved = true;
     announcement = `${name}を${to + 1}番目に移動しました`;
+    await tick();
+    if (list) renumberRows(list);
   }
 </script>
 
@@ -154,7 +156,11 @@
   </Card>
 
   <form method="POST" action="?/save" class="flex flex-col gap-4">
-    <div class="flex flex-col gap-4" {@attach dragReorder(move)}>
+    <div
+      bind:this={list}
+      class="flex flex-col gap-4"
+      {@attach dragReorder(move)}
+    >
       {#each rows as {key, row}, index (key)}
         <fieldset
           data-drag-item
@@ -165,7 +171,7 @@
           {#if hydrated}
             <div class="sm:col-span-2">
               <ReorderControls
-                label={rowName(row, index)}
+                label={rowName(index)}
                 {index}
                 count={rows.length}
                 onmove={to => move(index, to)}
@@ -186,7 +192,8 @@
               name="regulations[{index}].order"
               type="number"
               min="1"
-              value={moved || row.order === '' ? String(index + 1) : row.order}
+              data-reorder-position
+              value={row.order === '' ? String(index + 1) : row.order}
             />
           </div>
 

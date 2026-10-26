@@ -10,7 +10,8 @@
   import TableData from '$lib/components/ui/atoms/TableData.svelte';
   import TableHead from '$lib/components/ui/atoms/TableHead.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
-  import {dragReorder, moveItem} from '$lib/drag-reorder';
+  import {tick} from 'svelte';
+  import {dragReorder, moveItem, renumberRows} from '$lib/drag-reorder';
   import type {PageProps} from './$types';
 
   const {data, form}: PageProps = $props();
@@ -18,6 +19,7 @@
   // Reordered on screen until saved. Saving submits the page as a plain form,
   // so the next load starts again from what the API has.
   let tournaments = $derived(data.tournaments);
+  let list = $state<HTMLElement>();
   // What a screen reader hears after a row is moved.
   let announcement = $state('');
   // The handles and buttons need scripting, so they only appear once it
@@ -28,15 +30,18 @@
   });
 
   /**
-   * Moves a tournament to another position. The numbers follow, since each
-   * is the row's position.
+   * Moves a tournament to another position, then numbers every row by
+   * where it now is -- a number typed in by hand included, so what is saved
+   * is the order on screen.
    * @param from Its current index.
    * @param to The index it moves to.
    */
-  function move(from: number, to: number) {
+  async function move(from: number, to: number) {
     const name = tournaments[from].name;
     tournaments = moveItem(tournaments, from, to);
     announcement = `${name}を${to + 1}番目に移動しました`;
+    await tick();
+    if (list) renumberRows(list);
   }
 </script>
 
@@ -83,7 +88,7 @@
               <TableHead size="small">大会名</TableHead>
             </tr>
           </thead>
-          <tbody {@attach dragReorder(move)}>
+          <tbody bind:this={list} {@attach dragReorder(move)}>
             {#each tournaments as tournament, index (tournament.id)}
               <tr
                 data-drag-item
@@ -111,6 +116,7 @@
                   <Input
                     class="w-16 sm:w-20"
                     name="tournaments[{index}].order"
+                    data-reorder-position
                     type="number"
                     min="1"
                     value={String(index + 1)}
