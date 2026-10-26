@@ -44,6 +44,8 @@ export const handleFetch: HandleFetch = async ({event, request, fetch}) => {
     frontendUrl: event.url,
     backendUrl: env.BACKEND_URL,
     cookie: event.request.headers.get('cookie'),
+    getClientAddress: () => event.getClientAddress(),
+    clientIpForwardSecret: env.CLIENT_IP_FORWARD_SECRET,
   });
   if (!rewritten) return fetch(request);
 

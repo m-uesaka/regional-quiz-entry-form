@@ -2,6 +2,7 @@ import {defineConfig, devices} from '@playwright/test';
 import {
   BACKEND_PORT,
   BACKEND_URL,
+  CLIENT_IP_FORWARD_SECRET,
   FRONTEND_PORT,
   FRONTEND_URL,
   MAIL_FROM_ADDRESS,
@@ -22,6 +23,7 @@ const BACKEND_VARS: Record<string, string> = {
   SUPABASE_URL,
   SUPABASE_SECRET_KEY,
   SESSION_SECRET,
+  CLIENT_IP_FORWARD_SECRET,
   MAIL_FROM_ADDRESS,
   FRONTEND_URL,
   // Points every send at the stub in `support/mail-sink.ts`.
@@ -48,6 +50,9 @@ const FRONTEND_ENV: Record<string, string> = {
   // session cookies it is handed and every `/staff/*` page bounces back to
   // the login screen.
   SESSION_SECRET,
+  // Must match the backend's too, or the address `handleFetch` forwards is
+  // ignored and the rate limits fall back to keying on the frontend.
+  CLIENT_IP_FORWARD_SECRET,
   // Turns off certificate verification for this `vite dev` process — and
   // only for it: Playwright passes this to the server it spawns here, not
   // to the developer's shell.

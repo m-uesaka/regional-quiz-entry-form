@@ -1,24 +1,98 @@
-import {describe, expect, it} from 'vitest';
+import {describe, expect, it, vi} from 'vitest';
 import type {Cookies} from '@sveltejs/kit';
 import {forwardBackendCookies, rewriteApiRequest} from './backend-fetch';
 
 const FRONTEND_URL = new URL('https://entry.example/staff/dashboard');
 const BACKEND_URL = 'https://backend.workers.example';
+const CLIENT_ADDRESS = '198.51.100.4';
+const FORWARD_SECRET = 'test-client-ip-forward-secret';
 
 /** Calls `rewriteApiRequest` with the defaults every case shares. */
 function rewrite(
   request: Request,
-  overrides: {backendUrl?: string | undefined; cookie?: string | null} = {},
+  overrides: {
+    backendUrl?: string | undefined;
+    cookie?: string | null;
+    clientIpForwardSecret?: string | undefined;
+  } = {},
 ): Request | null {
   return rewriteApiRequest({
     request,
     frontendUrl: FRONTEND_URL,
     backendUrl: 'backendUrl' in overrides ? overrides.backendUrl : BACKEND_URL,
     cookie: overrides.cookie ?? null,
+    getClientAddress: () => CLIENT_ADDRESS,
+    clientIpForwardSecret: overrides.clientIpForwardSecret,
   });
 }
 
 describe('rewriteApiRequest', () => {
+  it("forwards the browser's address with the shared secret", () => {
+    const rewritten = rewrite(
+      new Request('https://entry.example/api/entries'),
+      {
+        clientIpForwardSecret: FORWARD_SECRET,
+      },
+    );
+
+    expect(rewritten?.headers.get('x-client-ip')).toBe(CLIENT_ADDRESS);
+    expect(rewritten?.headers.get('x-client-ip-forward-secret')).toBe(
+      FORWARD_SECRET,
+    );
+  });
+
+  it('replaces a client-supplied address and secret', () => {
+    // Whatever the request already carried must never reach the backend
+    // under these names: the address is the one thing the backend takes on
+    // trust once the secret matches.
+    const rewritten = rewrite(
+      new Request('https://entry.example/api/entries', {
+        headers: {
+          'X-Client-IP': '203.0.113.99',
+          'X-Client-IP-Forward-Secret': 'forged',
+        },
+      }),
+      {clientIpForwardSecret: FORWARD_SECRET},
+    );
+
+    expect(rewritten?.headers.get('x-client-ip')).toBe(CLIENT_ADDRESS);
+    expect(rewritten?.headers.get('x-client-ip-forward-secret')).toBe(
+      FORWARD_SECRET,
+    );
+  });
+
+  it('strips client-supplied headers when no secret is configured', () => {
+    const rewritten = rewrite(
+      new Request('https://entry.example/api/entries', {
+        headers: {
+          'X-Client-IP': '203.0.113.99',
+          'X-Client-IP-Forward-Secret': 'forged',
+        },
+      }),
+    );
+
+    expect(rewritten?.headers.has('x-client-ip')).toBe(false);
+    expect(rewritten?.headers.has('x-client-ip-forward-secret')).toBe(false);
+  });
+
+  it('never sends the secret anywhere but the backend', () => {
+    const request = new Request('https://elsewhere.example/api/entries');
+    const getClientAddress = vi.fn(() => CLIENT_ADDRESS);
+
+    const rewritten = rewriteApiRequest({
+      request,
+      frontendUrl: FRONTEND_URL,
+      backendUrl: BACKEND_URL,
+      cookie: null,
+      getClientAddress,
+      clientIpForwardSecret: FORWARD_SECRET,
+    });
+
+    expect(rewritten).toBeNull();
+    expect(request.headers.has('x-client-ip-forward-secret')).toBe(false);
+    expect(getClientAddress).not.toHaveBeenCalled();
+  });
+
   it('points a same-origin /api request at the backend origin', () => {
     const rewritten = rewrite(
       new Request('https://entry.example/api/staff/dashboard'),

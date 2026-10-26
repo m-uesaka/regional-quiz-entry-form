@@ -5,6 +5,12 @@ import type {Cookies} from '@sveltejs/kit';
 // `hono/client` RPC client builds starts with this.
 const API_PATH = '/api';
 
+// Mirrors `CLIENT_IP_HEADER` / `CLIENT_IP_FORWARD_SECRET_HEADER` in
+// `apps/backend/src/middleware/rate-limit.ts`, which reads them in
+// `clientIp()`.
+const CLIENT_IP_HEADER = 'x-client-ip';
+const CLIENT_IP_FORWARD_SECRET_HEADER = 'x-client-ip-forward-secret';
+
 /**
  * Rewrites a same-origin `/api/*` request so it reaches the backend Worker.
  *
@@ -18,12 +24,28 @@ const API_PATH = '/api';
  * only forwards cookies to the frontend's own host and its subdomains, which
  * the backend Worker generally isn't.
  *
+ * The browser's address is passed on too. To the backend, a request made
+ * here comes from the frontend, so without it every login, entry and reset
+ * request would be counted against one shared per-IP rate limit (#188).
+ * It travels in `X-Client-IP` together with `CLIENT_IP_FORWARD_SECRET`,
+ * which is how the backend tells it from the same header sent by anybody
+ * else. Whatever the request already carried under those two names is
+ * dropped first, so a value can only ever have been put there by this
+ * function.
+ *
  * @param options.request The request `handleFetch` was handed.
  * @param options.frontendUrl `event.url`, i.e. the origin this app is served
  *     from.
  * @param options.backendUrl The backend origin (`BACKEND_URL`).
  * @param options.cookie The `Cookie` header of the request being served, if
  *     any.
+ * @param options.getClientAddress `event.getClientAddress`, i.e. what names
+ *     the browser the request is being served for. Taken as a function and
+ *     only called when the address is actually forwarded, because SvelteKit
+ *     throws from it where there is no client (prerendering), and most
+ *     `event.fetch` calls aren't to the backend at all.
+ * @param options.clientIpForwardSecret `CLIENT_IP_FORWARD_SECRET`. Unset, the
+ *     address is not forwarded at all: the backend would ignore it anyway.
  * @return The rewritten request, or `null` when the request isn't an API call
  *     and should be passed through untouched.
  */
@@ -32,8 +54,17 @@ export function rewriteApiRequest(options: {
   frontendUrl: URL;
   backendUrl: string | undefined;
   cookie: string | null;
+  getClientAddress: () => string;
+  clientIpForwardSecret: string | undefined;
 }): Request | null {
-  const {request, frontendUrl, backendUrl, cookie} = options;
+  const {
+    request,
+    frontendUrl,
+    backendUrl,
+    cookie,
+    getClientAddress,
+    clientIpForwardSecret,
+  } = options;
   const url = new URL(request.url);
   if (url.origin !== frontendUrl.origin || !isApiPath(url.pathname)) {
     return null;
@@ -44,6 +75,15 @@ export function rewriteApiRequest(options: {
   // A rewritten request keeps the headers of the original, which for a
   // same-origin request carries no cookies yet.
   if (cookie) rewritten.headers.set('cookie', cookie);
+  rewritten.headers.delete(CLIENT_IP_HEADER);
+  rewritten.headers.delete(CLIENT_IP_FORWARD_SECRET_HEADER);
+  if (clientIpForwardSecret) {
+    rewritten.headers.set(CLIENT_IP_HEADER, getClientAddress());
+    rewritten.headers.set(
+      CLIENT_IP_FORWARD_SECRET_HEADER,
+      clientIpForwardSecret,
+    );
+  }
   return rewritten;
 }
 

@@ -66,19 +66,85 @@ export function emailKey(email: string): string {
   return `email:${email.toLowerCase()}`;
 }
 
+// The pair of headers the frontend's SSR forwards a browser's address in
+// (`rewriteApiRequest` in `apps/frontend/src/lib/server/backend-fetch.ts`,
+// which spells the same two names). Lower-case, as `c.req.header()` is
+// case-insensitive anyway and the frontend sets them that way.
+export const CLIENT_IP_HEADER = 'x-client-ip';
+export const CLIENT_IP_FORWARD_SECRET_HEADER = 'x-client-ip-forward-secret';
+
 /**
- * The address the request came from, as Cloudflare saw it.
+ * The address the request came from.
  *
- * `CF-Connecting-IP` is set by Cloudflare on the way in and overwrites
- * whatever the client sent, so it cannot be forged the way `X-Forwarded-For`
- * can. It is absent only when the Worker is reached without going through
- * that edge -- in practice `wrangler dev` -- where a single shared bucket is
- * the right answer anyway: there is one caller.
+ * Normally that is `CF-Connecting-IP`, which Cloudflare sets on the way in
+ * and overwrites whatever the client sent, so it cannot be forged the way
+ * `X-Forwarded-For` can.
+ *
+ * Most of the requests the rate limits exist for do not come from the
+ * browser, though. Login, the entry form and the reset requests are form
+ * actions, so they reach this Worker as subrequests made by the frontend's
+ * SSR (`handleFetch` in `apps/frontend/src/hooks.server.ts`), and the
+ * address Cloudflare names for those is the frontend's, not the user's --
+ * one bucket for everybody, which one attacker could keep full to lock
+ * every user out of logging in (#188). So the frontend forwards the
+ * browser's address in `X-Client-IP`, and it is believed only when the
+ * request also carries `CLIENT_IP_FORWARD_SECRET`, a secret only the two
+ * deployments know. Anybody else can send the header too, and without the
+ * secret it is ignored rather than trusted. With the secret unset on this
+ * side it is never trusted at all, which is what local development and the
+ * tests get unless they opt in.
+ *
+ * Something has to prove the header came from the frontend, because the
+ * frontend reaches this Worker over its public `*.workers.dev` origin
+ * (`BACKEND_URL`), the same way anybody else can. A Service Binding would
+ * prove it by the route the request took instead, but it only exists on
+ * Cloudflare: `vite dev` and the end-to-end run would need a second way of
+ * reaching the backend, and the SSR path is the one this is about. A shared
+ * secret keeps the single `fetch(BACKEND_URL)` everywhere.
+ *
+ * `CF-Connecting-IP` is absent only when the Worker is reached without
+ * going through Cloudflare's edge -- in practice `wrangler dev` -- where a
+ * single shared bucket is the right answer anyway: there is one caller.
  *
  * @param c The request's context.
  */
 export function clientIp<I extends Input = Input>(
   c: Context<Env, string, I>,
 ): string {
+  const forwarded = c.req.header(CLIENT_IP_HEADER);
+  if (
+    forwarded &&
+    isForwardSecret(
+      c.req.header(CLIENT_IP_FORWARD_SECRET_HEADER),
+      c.env.CLIENT_IP_FORWARD_SECRET,
+    )
+  ) {
+    return forwarded;
+  }
   return c.req.header('cf-connecting-ip') ?? 'unknown';
+}
+
+/**
+ * Whether `presented` is the configured forwarding secret.
+ *
+ * Compared in constant time, so the response time of a login cannot be used
+ * to guess the secret a character at a time. Only the length can leak, which
+ * says nothing useful about a randomly generated value.
+ *
+ * @param presented The `X-Client-IP-Forward-Secret` header, if sent.
+ * @param expected `CLIENT_IP_FORWARD_SECRET`, if configured. Unset or empty
+ *     means no request is trusted, rather than every request that also
+ *     sends an empty header.
+ */
+function isForwardSecret(
+  presented: string | undefined,
+  expected: string | undefined,
+): boolean {
+  if (!expected || presented === undefined) return false;
+  if (presented.length !== expected.length) return false;
+  let diff = 0;
+  for (let i = 0; i < expected.length; i++) {
+    diff |= presented.charCodeAt(i) ^ expected.charCodeAt(i);
+  }
+  return diff === 0;
 }

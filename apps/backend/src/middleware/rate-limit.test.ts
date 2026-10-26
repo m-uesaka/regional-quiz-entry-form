@@ -2,7 +2,13 @@ import {describe, expect, it} from 'bun:test';
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
-import {clientIp, emailKey, rateLimit} from './rate-limit';
+import {
+  CLIENT_IP_FORWARD_SECRET_HEADER,
+  CLIENT_IP_HEADER,
+  clientIp,
+  emailKey,
+  rateLimit,
+} from './rate-limit';
 import type {Bindings, Env} from '../types/env';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
 
@@ -16,6 +22,26 @@ const ENV: Bindings = {
   FRONTEND_URL: 'https://entry.example.com',
   SESSION_SECRET: 'test-session-secret',
 };
+
+const FORWARD_SECRET = 'test-client-ip-forward-secret';
+
+// The address Cloudflare would name for a subrequest from the frontend.
+const FRONTEND_IP = '192.0.2.10';
+
+/**
+ * Headers for a request the frontend forwarded on behalf of `ip`.
+ * @param ip The browser's address.
+ * @param secret What to present as the forwarding secret, if anything.
+ */
+function forwardedFrom(ip: string, secret?: string): Record<string, string> {
+  return {
+    'cf-connecting-ip': FRONTEND_IP,
+    [CLIENT_IP_HEADER]: ip,
+    ...(secret === undefined
+      ? {}
+      : {[CLIENT_IP_FORWARD_SECRET_HEADER]: secret}),
+  };
+}
 
 /**
  * A limiter that records every key it was asked about and allows the first
@@ -160,6 +186,39 @@ describe('rateLimit', () => {
     expect(res.status).toBe(429);
     expect(keys).toEqual(['ip:unknown']);
   });
+
+  it('gives two forwarded addresses a bucket each', async () => {
+    // What #188 was about: every form action reaches the Worker from the
+    // frontend, so without the forwarded address two users behind it would
+    // be counted as one -- and the second refused once the first had spent
+    // the budget.
+    const {binding, keys} = recordingRateLimiter();
+    const app = new Hono<Env>().post(
+      '/login',
+      rateLimit(
+        env => env.LOGIN_IP_RATE_LIMITER,
+        c => `ip:${clientIp(c)}`,
+        60,
+      ),
+      c => c.json({ok: true}),
+    );
+    const env = {
+      ...ENV,
+      CLIENT_IP_FORWARD_SECRET: FORWARD_SECRET,
+      LOGIN_IP_RATE_LIMITER: binding,
+    };
+
+    for (const ip of ['198.51.100.1', '198.51.100.2']) {
+      const res = await app.request(
+        '/login',
+        {method: 'POST', headers: forwardedFrom(ip, FORWARD_SECRET)},
+        env,
+      );
+      expect(res.status).toBe(200);
+    }
+
+    expect(keys).toEqual(['ip:198.51.100.1', 'ip:198.51.100.2']);
+  });
 });
 
 describe('emailKey', () => {
@@ -195,5 +254,72 @@ describe('clientIp', () => {
 
     const body: unknown = await res.json();
     expect(body).toEqual({ip: 'unknown'});
+  });
+
+  describe('with a forwarded address', () => {
+    const app = new Hono<Env>().get('/x', c => c.json({ip: clientIp(c)}));
+
+    /**
+     * What `clientIp()` answers for the given headers and secret.
+     * @param headers The request's headers.
+     * @param secret `CLIENT_IP_FORWARD_SECRET`, if configured.
+     */
+    async function ipFor(
+      headers: Record<string, string>,
+      secret: string | undefined,
+    ): Promise<unknown> {
+      const res = await app.request(
+        '/x',
+        {headers},
+        {...ENV, CLIENT_IP_FORWARD_SECRET: secret},
+      );
+      return res.json();
+    }
+
+    it('trusts it when the secret matches', async () => {
+      await expect(
+        ipFor(forwardedFrom('198.51.100.4', FORWARD_SECRET), FORWARD_SECRET),
+      ).resolves.toEqual({ip: '198.51.100.4'});
+    });
+
+    it('ignores it when the secret is wrong', async () => {
+      // A browser can send `X-Client-IP` straight to the Worker's `/api/*`
+      // route; believing it would let a caller pick a fresh bucket for
+      // every request.
+      await expect(
+        ipFor(forwardedFrom('198.51.100.4', 'guessed'), FORWARD_SECRET),
+      ).resolves.toEqual({ip: FRONTEND_IP});
+    });
+
+    it('ignores it when the secret is a prefix of the real one', async () => {
+      await expect(
+        ipFor(
+          forwardedFrom('198.51.100.4', FORWARD_SECRET.slice(0, -1)),
+          FORWARD_SECRET,
+        ),
+      ).resolves.toEqual({ip: FRONTEND_IP});
+    });
+
+    it('ignores it when no secret is sent', async () => {
+      await expect(
+        ipFor(forwardedFrom('198.51.100.4'), FORWARD_SECRET),
+      ).resolves.toEqual({ip: FRONTEND_IP});
+    });
+
+    it('ignores it when the Worker has no secret configured', async () => {
+      // An empty header must not match an unset (or empty) secret.
+      await expect(
+        ipFor(forwardedFrom('198.51.100.4', ''), undefined),
+      ).resolves.toEqual({ip: FRONTEND_IP});
+      await expect(
+        ipFor(forwardedFrom('198.51.100.4', ''), ''),
+      ).resolves.toEqual({ip: FRONTEND_IP});
+    });
+
+    it('falls back to unknown when ignored off the edge', async () => {
+      await expect(
+        ipFor({[CLIENT_IP_HEADER]: '198.51.100.4'}, FORWARD_SECRET),
+      ).resolves.toEqual({ip: 'unknown'});
+    });
   });
 });
