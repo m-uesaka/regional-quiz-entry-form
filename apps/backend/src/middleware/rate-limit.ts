@@ -1,5 +1,10 @@
 import type {Context, Input, MiddlewareHandler} from 'hono';
 import {createMiddleware} from 'hono/factory';
+import {
+  CLIENT_IP_FORWARD_SECRET_HEADER,
+  CLIENT_IP_HEADER,
+} from '@regional-quiz/shared';
+import {timingSafeEqual} from '../lib/timing-safe';
 import type {Bindings, Env} from '../types/env';
 
 /**
@@ -66,15 +71,10 @@ export function emailKey(email: string): string {
   return `email:${email.toLowerCase()}`;
 }
 
-// The pair of headers the frontend's SSR forwards a browser's address in
-// (`rewriteApiRequest` in `apps/frontend/src/lib/server/backend-fetch.ts`,
-// which spells the same two names). Lower-case, as `c.req.header()` is
-// case-insensitive anyway and the frontend sets them that way.
-export const CLIENT_IP_HEADER = 'x-client-ip';
-export const CLIENT_IP_FORWARD_SECRET_HEADER = 'x-client-ip-forward-secret';
-
 /**
- * The address the request came from.
+ * The address the request came from, as the per-IP rate limits count it:
+ * an IPv4 address as it is, an IPv6 one cut to its /64 (see
+ * `rateLimitAddress()`).
  *
  * Normally that is `CF-Connecting-IP`, which Cloudflare sets on the way in
  * and overwrites whatever the client sent, so it cannot be forged the way
@@ -112,24 +112,103 @@ export function clientIp<I extends Input = Input>(
   c: Context<Env, string, I>,
 ): string {
   const forwarded = c.req.header(CLIENT_IP_HEADER);
-  if (
-    forwarded &&
-    isForwardSecret(
-      c.req.header(CLIENT_IP_FORWARD_SECRET_HEADER),
-      c.env.CLIENT_IP_FORWARD_SECRET,
-    )
-  ) {
-    return forwarded;
+  if (forwarded) {
+    const secret = c.env.CLIENT_IP_FORWARD_SECRET;
+    if (
+      isForwardSecret(c.req.header(CLIENT_IP_FORWARD_SECRET_HEADER), secret)
+    ) {
+      return rateLimitAddress(forwarded);
+    }
+    // A mismatch is silent otherwise: the request is simply counted against
+    // the frontend's address again, which is the shared bucket #188 is
+    // about. A secret registered with a stray newline, rotated on one side
+    // only, or not yet picked up by a Pages deploy would then go unnoticed
+    // for good, so it is logged. Only when a secret is configured here --
+    // without one the header is ignored by design -- and never the value.
+    if (secret) {
+      console.warn(
+        `${CLIENT_IP_HEADER} ignored: ${CLIENT_IP_FORWARD_SECRET_HEADER} ` +
+          'is missing or does not match CLIENT_IP_FORWARD_SECRET',
+      );
+    }
   }
-  return c.req.header('cf-connecting-ip') ?? 'unknown';
+  const connecting = c.req.header('cf-connecting-ip');
+  return connecting ? rateLimitAddress(connecting) : 'unknown';
+}
+
+/**
+ * The part of an address that names one caller for rate limiting.
+ *
+ * An IPv4 address is one. An IPv6 one isn't: an ordinary connection is
+ * handed a whole /64 (2^64 addresses), so keyed on the full address a single
+ * caller could take a fresh bucket for every request and never meet the
+ * limit. So an IPv6 address is cut to its first four groups, written out in
+ * one canonical spelling (`2001:db8:0:1::/64`) so every way of writing the
+ * same prefix lands in the same bucket. An IPv4-mapped address
+ * (`::ffff:192.0.2.1`) is counted as the IPv4 address it carries. Anything
+ * that doesn't parse is kept as it is: it still names *some* bucket, and
+ * guessing at it could merge callers that have nothing in common.
+ * @param address The address as a header carried it.
+ */
+export function rateLimitAddress(address: string): string {
+  if (!address.includes(':')) return address;
+  const groups = expandIpv6(address.toLowerCase());
+  if (!groups) return address;
+  if (groups.slice(0, 5).every(g => g === 0) && groups[5] === 0xffff) {
+    return `${groups[6] >> 8}.${groups[6] & 0xff}.${groups[7] >> 8}.${groups[7] & 0xff}`;
+  }
+  return `${groups
+    .slice(0, 4)
+    .map(g => g.toString(16))
+    .join(':')}::/64`;
+}
+
+/**
+ * The eight 16-bit groups of an IPv6 address, or null when it isn't one.
+ * Accepts `::` and a trailing dotted IPv4 part; a zone (`%eth0`) is dropped.
+ * @param address A lower-cased IPv6 address.
+ */
+function expandIpv6(address: string): number[] | null {
+  const [withoutZone] = address.split('%');
+  const halves = withoutZone.split('::');
+  if (halves.length > 2) return null;
+  const parse = (half: string): number[] | null => {
+    if (half === '') return [];
+    const groups: number[] = [];
+    const parts = half.split(':');
+    for (const [i, part] of parts.entries()) {
+      if (i === parts.length - 1 && part.includes('.')) {
+        const octets = part.split('.');
+        if (
+          octets.length !== 4 ||
+          !octets.every(o => /^\d{1,3}$/.test(o) && Number(o) <= 255)
+        ) {
+          return null;
+        }
+        const [a, b, c, d] = octets.map(Number);
+        groups.push((a << 8) | b, (c << 8) | d);
+      } else if (/^[0-9a-f]{1,4}$/.test(part)) {
+        groups.push(parseInt(part, 16));
+      } else {
+        return null;
+      }
+    }
+    return groups;
+  };
+  const head = parse(halves[0]);
+  const tail = halves.length === 2 ? parse(halves[1]) : [];
+  if (!head || !tail) return null;
+  if (halves.length === 1) return head.length === 8 ? head : null;
+  const missing = 8 - head.length - tail.length;
+  if (missing < 1) return null;
+  return [...head, ...new Array<number>(missing).fill(0), ...tail];
 }
 
 /**
  * Whether `presented` is the configured forwarding secret.
  *
- * Compared in constant time, so the response time of a login cannot be used
- * to guess the secret a character at a time. Only the length can leak, which
- * says nothing useful about a randomly generated value.
+ * Compared in constant time (`timingSafeEqual`), so the response time of a
+ * login cannot be used to guess the secret a character at a time.
  *
  * @param presented The `X-Client-IP-Forward-Secret` header, if sent.
  * @param expected `CLIENT_IP_FORWARD_SECRET`, if configured. Unset or empty
@@ -141,10 +220,5 @@ function isForwardSecret(
   expected: string | undefined,
 ): boolean {
   if (!expected || presented === undefined) return false;
-  if (presented.length !== expected.length) return false;
-  let diff = 0;
-  for (let i = 0; i < expected.length; i++) {
-    diff |= presented.charCodeAt(i) ^ expected.charCodeAt(i);
-  }
-  return diff === 0;
+  return timingSafeEqual(presented, expected);
 }

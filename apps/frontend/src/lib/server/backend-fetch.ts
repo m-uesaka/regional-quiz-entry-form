@@ -1,15 +1,13 @@
 import {parseSetCookie} from 'set-cookie-parser';
 import type {Cookies} from '@sveltejs/kit';
+import {
+  CLIENT_IP_FORWARD_SECRET_HEADER,
+  CLIENT_IP_HEADER,
+} from '@regional-quiz/shared';
 
 // Mirrors `basePath('/api')` in `apps/backend/src/index.ts`: every URL the
 // `hono/client` RPC client builds starts with this.
 const API_PATH = '/api';
-
-// Mirrors `CLIENT_IP_HEADER` / `CLIENT_IP_FORWARD_SECRET_HEADER` in
-// `apps/backend/src/middleware/rate-limit.ts`, which reads them in
-// `clientIp()`.
-const CLIENT_IP_HEADER = 'x-client-ip';
-const CLIENT_IP_FORWARD_SECRET_HEADER = 'x-client-ip-forward-secret';
 
 /**
  * Rewrites a same-origin `/api/*` request so it reaches the backend Worker.
@@ -33,6 +31,13 @@ const CLIENT_IP_FORWARD_SECRET_HEADER = 'x-client-ip-forward-secret';
  * dropped first, so a value can only ever have been put there by this
  * function.
  *
+ * Redirects are not followed (`redirect: 'manual'`): `fetch()` keeps custom
+ * headers when it follows one to another origin -- only `Authorization` is
+ * dropped -- so a backend answering with a 3xx elsewhere would hand that
+ * origin the secret, and with it the power to pick any `X-Client-IP`. No
+ * `/api/*` route redirects, so the 3xx, if one ever came, is simply passed
+ * back to the caller.
+ *
  * @param options.request The request `handleFetch` was handed.
  * @param options.frontendUrl `event.url`, i.e. the origin this app is served
  *     from.
@@ -41,9 +46,12 @@ const CLIENT_IP_FORWARD_SECRET_HEADER = 'x-client-ip-forward-secret';
  *     any.
  * @param options.getClientAddress `event.getClientAddress`, i.e. what names
  *     the browser the request is being served for. Taken as a function and
- *     only called when the address is actually forwarded, because SvelteKit
- *     throws from it where there is no client (prerendering), and most
- *     `event.fetch` calls aren't to the backend at all.
+ *     only called when the address is actually forwarded, because most
+ *     `event.fetch` calls aren't to the backend at all; and where SvelteKit
+ *     throws from it because there is no client (prerendering), or the
+ *     adapter has no address to give (a request that didn't come through
+ *     Cloudflare's edge), nothing is forwarded rather than the build failing
+ *     or every such request sharing an `X-Client-IP: null` bucket.
  * @param options.clientIpForwardSecret `CLIENT_IP_FORWARD_SECRET`. Unset, the
  *     address is not forwarded at all: the backend would ignore it anyway.
  * @return The rewritten request, or `null` when the request isn't an API call
@@ -71,20 +79,42 @@ export function rewriteApiRequest(options: {
   }
 
   const target = new URL(url.pathname + url.search, backendOrigin(backendUrl));
-  const rewritten = new Request(target, request);
+  // The original request is the init of the first copy, so that copy also
+  // takes its `redirect: 'follow'`; the second one overrides just that.
+  const rewritten = new Request(new Request(target, request), {
+    redirect: 'manual',
+  });
   // A rewritten request keeps the headers of the original, which for a
   // same-origin request carries no cookies yet.
   if (cookie) rewritten.headers.set('cookie', cookie);
   rewritten.headers.delete(CLIENT_IP_HEADER);
   rewritten.headers.delete(CLIENT_IP_FORWARD_SECRET_HEADER);
-  if (clientIpForwardSecret) {
-    rewritten.headers.set(CLIENT_IP_HEADER, getClientAddress());
+  const clientAddress = clientIpForwardSecret
+    ? readClientAddress(getClientAddress)
+    : null;
+  if (clientIpForwardSecret && clientAddress) {
+    rewritten.headers.set(CLIENT_IP_HEADER, clientAddress);
     rewritten.headers.set(
       CLIENT_IP_FORWARD_SECRET_HEADER,
       clientIpForwardSecret,
     );
   }
   return rewritten;
+}
+
+/**
+ * The browser's address, or null when there is none to forward: SvelteKit
+ * throws while prerendering, and the Cloudflare adapter answers whatever
+ * `CF-Connecting-IP` held, which off the edge is nothing at all.
+ * @param getClientAddress `event.getClientAddress`.
+ */
+function readClientAddress(getClientAddress: () => string): string | null {
+  try {
+    const address: unknown = getClientAddress();
+    return typeof address === 'string' && address !== '' ? address : null;
+  } catch {
+    return null;
+  }
 }
 
 function isApiPath(pathname: string): boolean {

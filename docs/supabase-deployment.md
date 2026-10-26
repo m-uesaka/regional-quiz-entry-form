@@ -194,13 +194,13 @@ Pages 側の値は次のデプロイから反映されるため、登録し直�
 >
 > このため `wrangler deploy --env <name>` は毎回 `"vars.TURNSTILE_SECRET_KEY" exists at the top level, but not on "env.<name>.vars"` と警告します。**想定どおりの警告で、指示どおりに追記してはいけません。**
 
-`CLIENT_IP_FORWARD_SECRET` は、フロントエンドが SSR から転送するリクエストに載せる利用者の IP(`X-Client-IP`)を、バックエンドが信用してよいかを判定する共有シークレットです(#188)。`SESSION_SECRET` と同じく環境ごとに `openssl rand -base64 32` で発行し、**6.3 で Pages にも同じ値を登録します**(手順は上の `SESSION_SECRET` と同じくクリップボード経由で)。未登録でも動作はしますが、その場合ログイン・エントリー送信・パスワード再設定申請の IP 単位のレート制限が全利用者で 1 つのバケツを共有し、1 人が上限まで叩くと全員が 429 になります。値がずれている場合も同じ状態になり、エラーは出ません。確認方法は 6.2.1 を参照してください。
+`CLIENT_IP_FORWARD_SECRET` は、フロントエンドが SSR から転送するリクエストに載せる利用者の IP(`X-Client-IP`)を、バックエンドが信用してよいかを判定する共有シークレットです(#188)。`SESSION_SECRET` と同じく環境ごとに `openssl rand -base64 32` で発行し、**6.3 で Pages にも同じ値を登録します**(手順は上の `SESSION_SECRET` と同じくクリップボード経由で)。未登録でも動作はしますが、その場合ログイン・エントリー送信・パスワード再設定申請の IP 単位のレート制限が全利用者で 1 つのバケツを共有し、1 人が上限まで叩くと全員が 429 になります。値がずれている場合も同じ状態になります。このときバックエンドは `X-Client-IP ignored: ...` という警告をログに出すので、`wrangler tail` で確認できます(Worker 側にシークレットが登録されている場合のみ)。確認方法は 6.2.1 を参照してください。
 
 ### 6.2.1 レート制限の binding
 
 `wrangler.toml` の各環境に `LOGIN_IP_RATE_LIMITER` / `LOGIN_EMAIL_RATE_LIMITER` / `MAIL_TRIGGER_IP_RATE_LIMITER` / `MAIL_TRIGGER_EMAIL_RATE_LIMITER`(Cloudflare の Rate Limiting binding)を定義済みです(#116)。**登録作業は不要**で、`namespace_id` は Cloudflare 側の資源を指すものではなく「どのカウンタか」を表すだけの識別子です。ただし環境をまたいで同じ id を使うと staging の負荷が production の枠を食うため、`wrangler.toml` では環境ごとに別の値にしてあります。ここを編集するときは、`period` に **10 か 60 しか指定できない**点にも注意してください。
 
-IP 鍵が利用者ごとに分かれているか(`CLIENT_IP_FORWARD_SECRET` が Worker と Pages で一致しているか)は、`cd apps/backend && bunx wrangler tail --env staging --format json` を流しながら、2 つの異なる回線(例: 自宅の回線とスマートフォンのモバイル回線)からフロントエンドのログイン画面でログインを試して確かめます。各イベントの `event.request.headers` の `x-client-ip` にそれぞれの回線のアドレスが入っていれば転送はされています(同じ `headers` に `x-client-ip-forward-secret` も載り得るので、この出力をそのまま共有しないでください)。シークレットの一致そのものはログに出ないので、確実に確かめるには片方の回線から 1 分以内にログインを 11 回失敗させ(`LOGIN_IP_RATE_LIMITER` は staging / production とも 10 回 / 60 秒)、429 になった直後にもう片方の回線からはログインできることを確認します。シークレットがずれていると、もう片方も 429 になります。
+IP 鍵が利用者ごとに分かれているか(`CLIENT_IP_FORWARD_SECRET` が Worker と Pages で一致しているか)は、`cd apps/backend && bunx wrangler tail --env staging --format json` を流しながら、2 つの異なる回線(例: 自宅の回線とスマートフォンのモバイル回線)からフロントエンドのログイン画面でログインを試して確かめます。各イベントの `event.request.headers` の `x-client-ip` にそれぞれの回線のアドレスが入っていれば転送はされています(同じ `headers` に `x-client-ip-forward-secret` も載り得るので、この出力をそのまま共有しないでください)。シークレットがずれていれば `x-client-ip ignored` の警告が出ます。警告が無いことに加えて、確実に確かめるには片方の回線から 1 分以内にログインを 11 回失敗させ(`LOGIN_IP_RATE_LIMITER` は staging / production とも 10 回 / 60 秒)、429 になった直後にもう片方の回線からはログインできることを確認します。シークレットがずれていると、もう片方も 429 になります。
 
 ### 6.2.2 一斉メール用の Queue
 

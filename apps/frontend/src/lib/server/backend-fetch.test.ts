@@ -14,6 +14,7 @@ function rewrite(
     backendUrl?: string | undefined;
     cookie?: string | null;
     clientIpForwardSecret?: string | undefined;
+    getClientAddress?: () => string;
   } = {},
 ): Request | null {
   return rewriteApiRequest({
@@ -21,7 +22,7 @@ function rewrite(
     frontendUrl: FRONTEND_URL,
     backendUrl: 'backendUrl' in overrides ? overrides.backendUrl : BACKEND_URL,
     cookie: overrides.cookie ?? null,
-    getClientAddress: () => CLIENT_ADDRESS,
+    getClientAddress: overrides.getClientAddress ?? (() => CLIENT_ADDRESS),
     clientIpForwardSecret: overrides.clientIpForwardSecret,
   });
 }
@@ -75,22 +76,65 @@ describe('rewriteApiRequest', () => {
     expect(rewritten?.headers.has('x-client-ip-forward-secret')).toBe(false);
   });
 
-  it('never sends the secret anywhere but the backend', () => {
-    const request = new Request('https://elsewhere.example/api/entries');
+  it('does not ask for the address of a request it leaves alone', () => {
     const getClientAddress = vi.fn(() => CLIENT_ADDRESS);
 
-    const rewritten = rewriteApiRequest({
-      request,
-      frontendUrl: FRONTEND_URL,
-      backendUrl: BACKEND_URL,
-      cookie: null,
-      getClientAddress,
-      clientIpForwardSecret: FORWARD_SECRET,
-    });
+    const rewritten = rewrite(
+      new Request('https://elsewhere.example/api/entries'),
+      {clientIpForwardSecret: FORWARD_SECRET, getClientAddress},
+    );
 
     expect(rewritten).toBeNull();
-    expect(request.headers.has('x-client-ip-forward-secret')).toBe(false);
     expect(getClientAddress).not.toHaveBeenCalled();
+  });
+
+  // The Cloudflare adapter answers whatever `CF-Connecting-IP` held, which
+  // off the edge is nothing; forwarding that would put every such request
+  // in one `X-Client-IP: null` bucket.
+  it('forwards nothing when there is no address to give', () => {
+    for (const address of [null, '']) {
+      const rewritten = rewrite(
+        new Request('https://entry.example/api/entries'),
+        {
+          clientIpForwardSecret: FORWARD_SECRET,
+          getClientAddress: () => address as unknown as string,
+        },
+      );
+
+      expect(rewritten?.headers.has('x-client-ip')).toBe(false);
+      expect(rewritten?.headers.has('x-client-ip-forward-secret')).toBe(false);
+    }
+  });
+
+  // SvelteKit throws from `getClientAddress()` while prerendering; a page
+  // prerendered with an API call in its `load` must still build.
+  it('forwards nothing when the address cannot be read', () => {
+    const rewritten = rewrite(
+      new Request('https://entry.example/api/entries'),
+      {
+        clientIpForwardSecret: FORWARD_SECRET,
+        getClientAddress: () => {
+          throw new Error('Cannot call getClientAddress() during prerendering');
+        },
+      },
+    );
+
+    expect(rewritten?.url).toBe('https://backend.workers.example/api/entries');
+    expect(rewritten?.headers.has('x-client-ip')).toBe(false);
+    expect(rewritten?.headers.has('x-client-ip-forward-secret')).toBe(false);
+  });
+
+  // `fetch()` keeps custom headers across a cross-origin redirect, so
+  // following one would hand the secret to wherever the backend pointed.
+  it('does not follow redirects', () => {
+    const rewritten = rewrite(
+      new Request('https://entry.example/api/entries'),
+      {
+        clientIpForwardSecret: FORWARD_SECRET,
+      },
+    );
+
+    expect(rewritten?.redirect).toBe('manual');
   });
 
   it('points a same-origin /api request at the backend origin', () => {

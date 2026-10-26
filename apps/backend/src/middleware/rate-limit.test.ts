@@ -1,14 +1,12 @@
-import {describe, expect, it} from 'bun:test';
+import {afterEach, beforeEach, describe, expect, it, spyOn} from 'bun:test';
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
 import {
   CLIENT_IP_FORWARD_SECRET_HEADER,
   CLIENT_IP_HEADER,
-  clientIp,
-  emailKey,
-  rateLimit,
-} from './rate-limit';
+} from '@regional-quiz/shared';
+import {clientIp, emailKey, rateLimit, rateLimitAddress} from './rate-limit';
 import type {Bindings, Env} from '../types/env';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
 
@@ -256,8 +254,30 @@ describe('clientIp', () => {
     expect(body).toEqual({ip: 'unknown'});
   });
 
+  it('counts an IPv6 caller by its /64', async () => {
+    const app = new Hono<Env>().get('/x', c => c.json({ip: clientIp(c)}));
+
+    const res = await app.request(
+      '/x',
+      {headers: {'cf-connecting-ip': '2001:db8:0:1:aaaa::5'}},
+      ENV,
+    );
+
+    const body: unknown = await res.json();
+    expect(body).toEqual({ip: '2001:db8:0:1::/64'});
+  });
+
   describe('with a forwarded address', () => {
     const app = new Hono<Env>().get('/x', c => c.json({ip: clientIp(c)}));
+    let warn: ReturnType<typeof spyOn>;
+
+    beforeEach(() => {
+      warn = spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      warn.mockRestore();
+    });
 
     /**
      * What `clientIp()` answers for the given headers and secret.
@@ -316,10 +336,88 @@ describe('clientIp', () => {
       ).resolves.toEqual({ip: FRONTEND_IP});
     });
 
+    // One /64 is one caller: a forwarded IPv6 address taking a fresh bucket
+    // per request is what the prefix is there to stop.
+    it('counts a forwarded IPv6 address by its /64', async () => {
+      await expect(
+        ipFor(
+          forwardedFrom('2001:db8::1:2:3:4', FORWARD_SECRET),
+          FORWARD_SECRET,
+        ),
+      ).resolves.toEqual({ip: '2001:db8:0:0::/64'});
+    });
+
+    // Otherwise a mismatched secret quietly leaves everybody in the
+    // frontend's bucket again (#188), with nothing to show for it.
+    it('warns, without the secret, when the secret does not match', async () => {
+      await ipFor(forwardedFrom('198.51.100.4', 'guessed'), FORWARD_SECRET);
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      const message = String(warn.mock.calls[0]?.[0]);
+      expect(message).toContain(CLIENT_IP_HEADER);
+      expect(message).not.toContain(FORWARD_SECRET);
+      expect(message).not.toContain('guessed');
+    });
+
+    it('does not warn when no secret is configured here', async () => {
+      await ipFor(forwardedFrom('198.51.100.4', 'guessed'), undefined);
+
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('does not warn when the secret matches', async () => {
+      await ipFor(
+        forwardedFrom('198.51.100.4', FORWARD_SECRET),
+        FORWARD_SECRET,
+      );
+
+      expect(warn).not.toHaveBeenCalled();
+    });
+
     it('falls back to unknown when ignored off the edge', async () => {
       await expect(
         ipFor({[CLIENT_IP_HEADER]: '198.51.100.4'}, FORWARD_SECRET),
       ).resolves.toEqual({ip: 'unknown'});
     });
+  });
+});
+
+describe('rateLimitAddress', () => {
+  it('keeps an IPv4 address as it is', () => {
+    expect(rateLimitAddress('198.51.100.4')).toBe('198.51.100.4');
+  });
+
+  it('cuts an IPv6 address to its /64', () => {
+    expect(rateLimitAddress('2001:db8:0:1:aaaa:bbbb:cccc:dddd')).toBe(
+      '2001:db8:0:1::/64',
+    );
+  });
+
+  it('gives every spelling of one /64 the same key', () => {
+    const keys = new Set(
+      [
+        '2001:DB8:0:1::1',
+        '2001:0db8:0000:0001:ffff::2',
+        '2001:db8:0:1:0:0:0:3',
+        '2001:db8:0:1::4%eth0',
+      ].map(rateLimitAddress),
+    );
+
+    expect([...keys]).toEqual(['2001:db8:0:1::/64']);
+  });
+
+  it('expands :: at the start', () => {
+    expect(rateLimitAddress('::1')).toBe('0:0:0:0::/64');
+  });
+
+  it('counts an IPv4-mapped address as its IPv4 address', () => {
+    expect(rateLimitAddress('::ffff:192.0.2.1')).toBe('192.0.2.1');
+    expect(rateLimitAddress('::ffff:c000:201')).toBe('192.0.2.1');
+  });
+
+  it('keeps what does not parse as it is', () => {
+    for (const odd of ['1::2::3', 'zz::1', '1:2:3:4:5:6:7:8:9', 'a:b']) {
+      expect(rateLimitAddress(odd)).toBe(odd);
+    }
   });
 });

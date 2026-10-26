@@ -48,6 +48,8 @@
 // - Hashing outside the Worker (a Supabase function, a separate service)
 //   moves the cost but adds a network hop and a secret to every login.
 
+import {timingSafeEqual} from './timing-safe';
+
 const ALGORITHM = 'pbkdf2-sha256';
 // What new hashes are made with. Raising it is safe for existing accounts
 // (see above), but read the Workers cap first.
@@ -103,17 +105,6 @@ async function deriveBits(
     key,
     HASH_BITS,
   );
-}
-
-// Constant-time comparison so a wrong-password response can't be timed to
-// leak how many leading hex digits of the hash matched.
-function timingSafeEqualHex(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) {
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return diff === 0;
 }
 
 function formatStoredHash(
@@ -251,7 +242,9 @@ export async function verifyPassword(
   );
   // Lowercased because `toHex()` writes lowercase and the stored value is
   // accepted in either case.
-  const valid = timingSafeEqualHex(toHex(bits), parsed.hashHex.toLowerCase());
+  // Constant-time, so a wrong-password response can't be timed to leak how
+  // many leading hex digits of the hash matched.
+  const valid = timingSafeEqual(toHex(bits), parsed.hashHex.toLowerCase());
   return {
     valid,
     needsRehash:
