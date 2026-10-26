@@ -1,15 +1,15 @@
 import {
   activePriorityRegulations,
+  type Regulation,
   type TournamentEntryCounts,
 } from '@regional-quiz/shared';
 import {formatJstDateTime} from '$lib/jst-datetime';
 
 /** A regulation's priority window, as both the portal and the form get it. */
-export interface PriorityRegulation {
-  label: string;
-  priorityStartsAt: string | null;
-  priorityEndsAt: string | null;
-}
+export type PriorityRegulation = Pick<
+  Regulation,
+  'label' | 'priorityStartsAt' | 'priorityEndsAt'
+>;
 
 /**
  * One 優先エントリー announcement: the regulations being given priority
@@ -26,6 +26,9 @@ export interface PriorityEntryNotice {
  * announce them. Regulations whose windows end together are announced
  * together; ones ending at different moments get one notice each, earliest
  * first, so no regulation is said to be prioritised longer than it is.
+ * "Together" is as the page prints it -- to the minute -- so two ends the
+ * page can't tell apart (seconds apart, or one instant spelt two ways) are
+ * one notice rather than two identical-looking lines.
  *
  * Worked out on the server, like the portal's statuses, so the server
  * rendering and the hydrated page agree.
@@ -36,23 +39,25 @@ export function priorityEntryNotices(
   regulations: readonly PriorityRegulation[],
   now: Date,
 ): PriorityEntryNotice[] {
+  const active = activePriorityRegulations(regulations, now).sort(
+    (a, b) => Date.parse(a.priorityEndsAt) - Date.parse(b.priorityEndsAt),
+  );
   const byEnd = new Map<string, string[]>();
-  for (const regulation of activePriorityRegulations(regulations, now)) {
-    const labels = byEnd.get(regulation.priorityEndsAt) ?? [];
+  for (const regulation of active) {
+    const endsAtLabel = formatJstDateTime(regulation.priorityEndsAt);
+    const labels = byEnd.get(endsAtLabel) ?? [];
     labels.push(regulation.label);
-    byEnd.set(regulation.priorityEndsAt, labels);
+    byEnd.set(endsAtLabel, labels);
   }
-  return [...byEnd]
-    .sort(([a], [b]) => Date.parse(a) - Date.parse(b))
-    .map(([endsAt, labels]) => ({
-      labels,
-      endsAtLabel: formatJstDateTime(endsAt),
-    }));
+  return [...byEnd].map(([endsAtLabel, labels]) => ({labels, endsAtLabel}));
 }
 
 /**
- * Whether a new entry would join the waitlist: entries are already waiting,
- * or every seat is taken. Only a tournament with a capacity has a waitlist.
+ * Whether a new entry would join the waitlist: every seat is taken. This is
+ * the rule `confirm_entry_by_token()` (0008) applies, so entries already
+ * waiting don't count by themselves -- after the capacity is raised there
+ * can be some while seats are free, and a new entry gets one of those.
+ * Only a tournament with a capacity has a waitlist.
  * @param capacity The tournament's capacity, or null when uncapped.
  * @param counts The tournament's confirmed and waitlisted entries.
  */
@@ -61,5 +66,5 @@ export function isWaitlistOpen(
   counts: TournamentEntryCounts,
 ): boolean {
   if (capacity === null) return false;
-  return counts.waitlistedCount > 0 || counts.confirmedCount >= capacity;
+  return counts.confirmedCount >= capacity;
 }

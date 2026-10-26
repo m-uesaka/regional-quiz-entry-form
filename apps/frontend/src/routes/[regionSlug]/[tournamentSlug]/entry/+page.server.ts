@@ -5,6 +5,7 @@ import {
   EntrySessionInputSchema,
   findCustomFieldValuesErrors,
   isWithinEntryPeriod,
+  TournamentEntryCountsSchema,
   TournamentTypeSchema,
   type FormFieldDef,
   type Regulation,
@@ -227,17 +228,28 @@ async function fetchEntryCounts(
   tournamentId: string,
   fetch: RequestEvent['fetch'],
 ): Promise<TournamentEntryCounts | null> {
-  const api = createApiClient(fetch);
-  const res = await api.api.tournaments[':tournamentId']['entry-counts'].$get({
-    param: {tournamentId},
-  });
-  if (!res.ok) {
-    console.error(
-      `GET /api/tournaments/${tournamentId}/entry-counts answered ${res.status}`,
+  const path = `GET /api/tournaments/${tournamentId}/entry-counts`;
+  try {
+    const api = createApiClient(fetch);
+    const res = await api.api.tournaments[':tournamentId']['entry-counts'].$get(
+      {param: {tournamentId}},
     );
+    if (!res.ok) {
+      console.error(`${path} answered ${res.status}`);
+      return null;
+    }
+    const counts = TournamentEntryCountsSchema.safeParse(await res.json());
+    if (!counts.success) {
+      console.error(`${path} answered an unreadable body`, counts.error.issues);
+      return null;
+    }
+    return counts.data;
+  } catch (e: unknown) {
+    // A network failure or a body that isn't JSON: still only the notice
+    // is lost.
+    console.error(`${path} failed`, e);
     return null;
   }
-  return res.json();
 }
 
 export const load: PageServerLoad = async ({
@@ -267,15 +279,26 @@ export const load: PageServerLoad = async ({
     fetchFormFieldDefs(tournament.id, fetch),
     fetchEntryCounts(tournament.id, fetch),
   ]);
+  // Worked out here rather than in the page, so the server rendering and
+  // the hydrated page read the same clock. Both notices are about the
+  // entries the form is taking, so a form staff preview outside its period
+  // shows neither -- as on the portal, where a priority window can outlast
+  // its form.
+  const now = new Date();
+  const open = isWithinEntryPeriod(
+    tournament.entryOpensAt,
+    tournament.entryClosesAt,
+    now,
+  );
   return {
     tournament,
     regulations,
     formFieldDefs,
-    // Worked out here rather than in the page, so the server rendering and
-    // the hydrated page read the same clock.
-    priorityNotices: priorityEntryNotices(regulations, new Date()),
+    priorityNotices: open ? priorityEntryNotices(regulations, now) : [],
     waitlistOpen:
-      entryCounts !== null && isWaitlistOpen(tournament.capacity, entryCounts),
+      open &&
+      entryCounts !== null &&
+      isWaitlistOpen(tournament.capacity, entryCounts),
     // A logged-in participant enters under their session, so the form
     // leaves out the address and password; anyone else is offered the login
     // screen, which brings them back here (#117).

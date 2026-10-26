@@ -92,8 +92,11 @@ interface FakeApiOptions {
   formFieldDefs?: FormFieldDef[];
   /** The tournament's regulations. */
   regulations?: Regulation[];
-  /** The `GET .../entry-counts` response, defaulting to no entries. */
-  entryCounts?: {status: number; body: unknown};
+  /**
+   * The `GET .../entry-counts` response, defaulting to no entries; `'throw'`
+   * makes the request itself fail, as a network error would.
+   */
+  entryCounts?: {status: number; body: unknown} | 'throw';
   /** Collects every requested URL, for asserting which endpoints ran. */
   requests?: string[];
   /**
@@ -118,6 +121,9 @@ function fakeApi(options: FakeApiOptions = {}): typeof fetch {
       return Response.json(options.regulations ?? REGULATIONS);
     }
     if (url.includes('/entry-counts')) {
+      if (options.entryCounts === 'throw') {
+        throw new TypeError('fetch failed');
+      }
       const counts = options.entryCounts ?? {
         status: 200,
         body: {confirmedCount: 0, waitlistedCount: 0},
@@ -298,6 +304,34 @@ describe('entry +page.server load', () => {
     ]);
   });
 
+  // A staff preview of a closed form: a window can outlast its form, and
+  // neither notice is about entries the form is taking any more.
+  it('announces neither notice outside the entry period', async () => {
+    const day = 24 * 60 * 60 * 1000;
+    const event = buildEvent({
+      fetch: fakeApi({
+        tournament: {...OUT_OF_PERIOD_TOURNAMENT, capacity: 30},
+        regulations: [
+          {
+            ...REGULATIONS[0],
+            priorityStartsAt: new Date(Date.now() - day).toISOString(),
+            priorityEndsAt: new Date(Date.now() + day).toISOString(),
+          },
+        ],
+        entryCounts: {
+          status: 200,
+          body: {confirmedCount: 30, waitlistedCount: 0},
+        },
+      }),
+      staff: GENERAL_STAFF,
+    });
+
+    await expect(load(event)).resolves.toMatchObject({
+      priorityNotices: [],
+      waitlistOpen: false,
+    });
+  });
+
   it('says the waitlist is open once the capacity is reached', async () => {
     const event = buildEvent({
       fetch: fakeApi({
@@ -328,6 +362,23 @@ describe('entry +page.server load', () => {
 
     await expect(load(event)).resolves.toMatchObject({waitlistOpen: false});
     expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('500'));
+    consoleError.mockRestore();
+  });
+
+  it('keeps the form up when the counts request itself fails', async () => {
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
+    const event = buildEvent({
+      fetch: fakeApi({
+        tournament: {...OPEN_TOURNAMENT, capacity: 30},
+        entryCounts: 'throw',
+      }),
+      staff: null,
+    });
+
+    await expect(load(event)).resolves.toMatchObject({waitlistOpen: false});
+    expect(consoleError).toHaveBeenCalled();
     consoleError.mockRestore();
   });
 

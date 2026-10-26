@@ -665,7 +665,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 
 ### `GET /api/tournaments/:tournamentId/entry-counts`
 
-認証不要の公開エンドポイント。その大会の `confirmed` と `waitlisted` のエントリー数を返します。エントリーフォームが冒頭で「キャンセル待ちが発生している」と案内するためのものです(#186。定員に達している、またはキャンセル待ちが1件以上あるとき)。
+認証不要の公開エンドポイント。その大会の `confirmed` と `waitlisted` のエントリー数を返します。エントリーフォームが冒頭で「キャンセル待ちが発生している」と案内するためのものです(#186。確定件数が定員に達しているとき。確定処理 `confirm_entry_by_token()` と同じ条件で、キャンセル待ちの件数だけでは判定しない)。
 
 - `200`: `{confirmedCount: number, waitlistedCount: number}`(`TournamentEntryCountsSchema`)
 - `400`: `:tournamentId` が UUID でない
