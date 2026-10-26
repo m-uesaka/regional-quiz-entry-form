@@ -161,13 +161,18 @@ describe.skipIf(!(await isDbReachable()))(
       return regulation.id as string;
     }
 
+    /**
+     * A participant whose address is verified: `requireParticipant()`
+     * refuses any session of one that isn't (#189).
+     */
     async function createParticipant(
       regionId: string,
       email: string,
     ): Promise<string> {
       const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${regionId}, ${email}, 'hash')
+        insert into participants (
+          region_id, email, password_hash, email_verified_at
+        ) values (${regionId}, ${email}, 'hash', now())
         returning id
       `;
       return participant.id as string;

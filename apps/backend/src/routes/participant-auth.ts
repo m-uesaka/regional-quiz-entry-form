@@ -29,6 +29,7 @@ interface ParticipantRow {
   id: string;
   password_hash: string;
   password_changed_at: string;
+  email_verified_at: string | null;
 }
 
 // The period both login limiters count over (`wrangler.toml`), which is
@@ -70,7 +71,7 @@ export const participantAuthRoute = new Hono<Env>()
       const db = createDbClient(c.env);
       const {data: participant, error} = await db
         .from('participants')
-        .select('id, password_hash, password_changed_at')
+        .select('id, password_hash, password_changed_at, email_verified_at')
         .eq('email', email)
         .returns<ParticipantRow[]>()
         .maybeSingle();
@@ -79,17 +80,24 @@ export const participantAuthRoute = new Hono<Env>()
         return c.json({error: 'internal server error'}, 500);
       }
 
+      // An account whose address was never verified is not anyone's yet:
+      // its password is whatever the last unconfirmed entry submitted under
+      // that address chose, which may have been someone other than its
+      // owner (#189). It is checked as if it didn't exist -- against the
+      // dummy hash, refused with the same answer -- so a login can't tell
+      // an unverified account from a wrong password or an unknown address.
+      const account = participant?.email_verified_at ? participant : null;
       // The same work whether or not the address is registered, and the
       // hash moved to the current parameters after the response if it is
       // older: see `verifyAccountPassword()`.
       const valid = await verifyAccountPassword(
         c.env,
         'participants',
-        participant,
+        account,
         password,
         upgrade => c.executionCtx.waitUntil(upgrade),
       );
-      if (!participant || !valid) {
+      if (!account || !valid) {
         return c.json({error: 'invalid credentials'}, 401);
       }
 
@@ -101,8 +109,8 @@ export const participantAuthRoute = new Hono<Env>()
       const issuedAt = Math.floor(Date.now() / 1000);
       const token = await sign(
         {
-          sub: participant.id,
-          pwdChangedAt: Date.parse(participant.password_changed_at),
+          sub: account.id,
+          pwdChangedAt: Date.parse(account.password_changed_at),
           iat: issuedAt,
           exp: issuedAt + SESSION_TTL_SECONDS,
         },

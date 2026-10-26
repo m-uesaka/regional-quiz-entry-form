@@ -4,7 +4,7 @@ import type {Bindings} from '../types/env';
 import {app} from '../index';
 import {entryNoticeSubject} from '../lib/entry-notice';
 import {verificationMailSubject} from '../lib/entry-verification';
-import {hashPassword} from '../lib/password';
+import {hashPassword, verifyPassword} from '../lib/password';
 import {legacyHashPassword} from '../test-support/password';
 import {
   PERMISSIVE_PLATFORM_BINDINGS,
@@ -201,6 +201,8 @@ interface SentMail {
 interface MockSupabase {
   calls: SupabaseCall[];
   mails: SentMail[];
+  /** The arguments each `take_over_unverified_participant()` call got. */
+  takeOvers: Array<Record<string, unknown>>;
 }
 
 /**
@@ -214,9 +216,28 @@ function mockSupabase(options: {
   participant: Record<string, unknown> | null;
   /** Makes storing the verification token fail, so no link can be sent. */
   failVerificationToken?: boolean;
+  /**
+   * What `take_over_unverified_participant()` answers: false when the
+   * address was verified in the meantime.
+   */
+  takeOver?: boolean;
+  /**
+   * The tournaments whose pending entries the takeover reports withdrawn
+   * (none by default).
+   */
+  withdrawn?: string[];
+  /**
+   * What the participant row reads as once the takeover is refused: the
+   * account another submission took over and had confirmed in between.
+   */
+  verifiedMeanwhile?: Record<string, unknown>;
 }): MockSupabase {
-  const recorded: MockSupabase = {calls: [], mails: []};
+  const recorded: MockSupabase = {calls: [], mails: [], takeOvers: []};
   const tournament = options.tournament ?? tournamentRow();
+  // Written to by the account creation and the takeover, so the re-read
+  // after the entry is written (`isStillUnverifiedAccountOf()`) sees the
+  // hash this submission set, as it would against Postgres.
+  let participant = options.participant ? {...options.participant} : null;
   globalThis.fetch = turnstileAwareFetch((async (
     input: RequestInfo | URL,
     init?: RequestInit,
@@ -247,9 +268,29 @@ function mockSupabase(options: {
       case 'GET form_field_defs':
         return rows([]);
       case 'GET participants':
-        return rows(options.participant ? [options.participant] : []);
+        return rows(participant ? [participant] : []);
       case 'POST participants':
+        participant = {
+          ...(JSON.parse(String(init?.body)) as Record<string, unknown>),
+          id: NEW_PARTICIPANT_ID,
+        };
         return rows([{id: NEW_PARTICIPANT_ID}]);
+      case 'POST rpc/take_over_unverified_participant': {
+        const args = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        recorded.takeOvers.push(args);
+        const tookOver = options.takeOver ?? true;
+        if (tookOver && participant) {
+          participant = {
+            ...participant,
+            password_hash: args.p_password_hash,
+            region_id: args.p_region_id,
+          };
+        }
+        if (!tookOver && options.verifiedMeanwhile) {
+          participant = {...options.verifiedMeanwhile};
+        }
+        return Response.json(tookOver ? (options.withdrawn ?? []) : null);
+      }
       // The rehash of a registered participant's legacy hash.
       case 'PATCH participants':
         return new Response(null, {status: 204});
@@ -276,9 +317,12 @@ function mockSupabase(options: {
   return recorded;
 }
 
-/** A participant registered under `validBody.email`. */
+/**
+ * A participant registered under `validBody.email`, by default one whose
+ * address has been verified.
+ */
 async function registeredParticipant(
-  overrides: {password?: string; regionId?: string} = {},
+  overrides: {password?: string; regionId?: string; verified?: boolean} = {},
 ): Promise<Record<string, unknown>> {
   return {
     id: PARTICIPANT_ID,
@@ -286,6 +330,8 @@ async function registeredParticipant(
     region_id: overrides.regionId ?? REGION_ID,
     password_hash: await hashPassword(overrides.password ?? 'quiz-entry-pass1'),
     password_changed_at: PASSWORD_CHANGED_AT,
+    email_verified_at:
+      overrides.verified === false ? null : PASSWORD_CHANGED_AT,
   };
 }
 
@@ -534,6 +580,165 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
       subject: entryNoticeSubject(TOURNAMENT_NAME),
     });
     expect(recorded.mails[0].html).toContain('もう一度エントリーしてください');
+  });
+
+  // An account nobody has verified may have been made by someone who typed
+  // another person's address to hold it in a far region (#189). Its password
+  // and region carry no weight: the submission replaces them.
+  it('takes over an unverified account, whatever its password and region', async () => {
+    const recorded = mockSupabase({
+      participant: await registeredParticipant({
+        password: 'someone-elses-password',
+        regionId: OTHER_REGION_ID,
+        verified: false,
+      }),
+    });
+
+    const res = await observable(
+      await postWithContext(TOURNAMENT_PATH, validBody),
+    );
+    await settleBackgroundWork();
+
+    // Nothing in the answer says the address was in any particular state.
+    expect(res).toEqual({status: 202, body: JSON.stringify({ok: true})});
+    expect(recorded.takeOvers).toHaveLength(1);
+    const [takeOver] = recorded.takeOvers;
+    expect(takeOver.p_participant_id).toBe(PARTICIPANT_ID);
+    expect(takeOver.p_region_id).toBe(REGION_ID);
+    expect(
+      await verifyPassword(
+        validBody.password,
+        String(takeOver.p_password_hash),
+      ),
+    ).toEqual({valid: true, needsRehash: false});
+    expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
+    expect(recorded.mails).toHaveLength(1);
+    expect(recorded.mails[0]).toMatchObject({
+      to: validBody.email,
+      subject: verificationMailSubject(TOURNAMENT_NAME),
+    });
+    // Nothing was withdrawn, so nothing is reported as such.
+    expect(recorded.mails[0].html).not.toContain('取り消しました');
+  });
+
+  // The withdrawn entries may have been the owner's own, made under a
+  // password they mistyped this time or in another region, so the mail that
+  // only reaches the owner says which ones went.
+  it('tells the owner which pending entries a takeover withdrew', async () => {
+    const recorded = mockSupabase({
+      participant: await registeredParticipant({
+        password: 'someone-elses-password',
+        verified: false,
+      }),
+      // The other tournament, plus this one, which is entered again and so
+      // not reported.
+      withdrawn: ['88888888-8888-8888-8888-888888888888', TOURNAMENT_ID],
+    });
+
+    await postWithContext(TOURNAMENT_PATH, validBody);
+    await settleBackgroundWork();
+
+    expect(recorded.mails).toHaveLength(1);
+    expect(recorded.mails[0].subject).toBe(
+      verificationMailSubject(TOURNAMENT_NAME),
+    );
+    // The mock answers every tournament lookup with the same row, so the
+    // name is this tournament's, but it comes from the withdrawn-list read.
+    expect(recorded.mails[0].html).toContain(`「${TOURNAMENT_NAME}」への`);
+    expect(recorded.mails[0].html).toContain('取り消しました');
+  });
+
+  it('enters an unverified account under its own password and region without a takeover', async () => {
+    const recorded = mockSupabase({
+      participant: await registeredParticipant({verified: false}),
+    });
+
+    await postWithContext(TOURNAMENT_PATH, validBody);
+    await settleBackgroundWork();
+
+    expect(recorded.takeOvers).toHaveLength(0);
+    expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
+    expect(recorded.mails[0].subject).toBe(
+      verificationMailSubject(TOURNAMENT_NAME),
+    );
+  });
+
+  it('holds a takeover to the rules for setting a password', async () => {
+    const recorded = mockSupabase({
+      participant: await registeredParticipant({verified: false}),
+    });
+
+    await postWithContext(TOURNAMENT_PATH, {
+      ...validBody,
+      password: 'Password123',
+      passwordConfirm: 'Password123',
+    });
+    await settleBackgroundWork();
+
+    expect(recorded.takeOvers).toHaveLength(0);
+    expect(recorded.mails).toHaveLength(1);
+    expect(recorded.mails[0].html).toContain('よく使われている');
+  });
+
+  // The owner followed a link between the lookup and the takeover, so the
+  // account is theirs, and the submission has to prove it like any other.
+  it('falls back to the password check when the address was verified meanwhile', async () => {
+    const recorded = mockSupabase({
+      participant: await registeredParticipant({
+        password: 'the-real-one',
+        verified: false,
+      }),
+      takeOver: false,
+    });
+
+    await postWithContext(TOURNAMENT_PATH, validBody);
+    await settleBackgroundWork();
+
+    expect(recorded.takeOvers).toHaveLength(1);
+    expect(recorded.calls).not.toContainEqual({
+      table: 'entries',
+      method: 'POST',
+    });
+    expect(recorded.mails).toHaveLength(1);
+    expect(recorded.mails[0].subject).toBe(entryNoticeSubject(TOURNAMENT_NAME));
+    expect(recorded.mails[0].html).toContain('パスワード');
+  });
+
+  // Another submission took the account over and had its link followed
+  // between this one's lookup and its takeover, so what decides is the
+  // account as it is now, not the row read before.
+  it('holds a refused takeover to the account as it is now', async () => {
+    const recorded = mockSupabase({
+      participant: await registeredParticipant({
+        password: 'someone-elses-password',
+        regionId: OTHER_REGION_ID,
+        verified: false,
+      }),
+      takeOver: false,
+      verifiedMeanwhile: await registeredParticipant(),
+    });
+
+    await postWithContext(TOURNAMENT_PATH, validBody);
+    await settleBackgroundWork();
+
+    expect(recorded.takeOvers).toHaveLength(1);
+    expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
+    expect(recorded.mails).toHaveLength(1);
+    expect(recorded.mails[0].subject).toBe(
+      verificationMailSubject(TOURNAMENT_NAME),
+    );
+  });
+
+  it('never takes over a verified account', async () => {
+    const recorded = mockSupabase({
+      participant: await registeredParticipant({regionId: OTHER_REGION_ID}),
+    });
+
+    await postWithContext(TOURNAMENT_PATH, validBody);
+    await settleBackgroundWork();
+
+    expect(recorded.takeOvers).toHaveLength(0);
+    expect(recorded.mails[0].html).toContain('別の地域');
   });
 
   // These refusals don't depend on the address, so reporting them leaks

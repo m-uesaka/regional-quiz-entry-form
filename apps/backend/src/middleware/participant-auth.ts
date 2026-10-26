@@ -12,6 +12,7 @@ export const PARTICIPANT_SESSION_COOKIE = 'participant_session';
 
 interface ParticipantSessionRow {
   password_changed_at: string;
+  email_verified_at: string | null;
 }
 
 async function readParticipantClaims(
@@ -57,7 +58,7 @@ export function requireParticipant() {
     const db = createDbClient(c.env);
     const {data: participant, error} = await db
       .from('participants')
-      .select('password_changed_at')
+      .select('password_changed_at, email_verified_at')
       .eq('id', claims.sub)
       .returns<ParticipantSessionRow[]>()
       .maybeSingle();
@@ -77,8 +78,14 @@ export function requireParticipant() {
     // rather than an "issued before?" comparison that would need the Worker's
     // clock to agree with Postgres'. An unparseable timestamp yields `NaN`,
     // which compares unequal to everything and so fails closed.
+    //
+    // An unverified account is refused too. The login no longer issues a
+    // session for one, but sessions issued before migration 0034 (#189)
+    // may still name one -- possibly held by someone who registered another
+    // person's address -- and must not outlive the change.
     if (
       !participant ||
+      !participant.email_verified_at ||
       Date.parse(participant.password_changed_at) !== claims.pwdChangedAt
     ) {
       return c.json({error: 'unauthorized'}, 401);

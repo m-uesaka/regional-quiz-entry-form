@@ -26,6 +26,10 @@ const ENV: Bindings = {
 
 const PARTICIPANT_ID = '44444444-4444-4444-4444-444444444444';
 
+// When the participants below verified their address. Only an account with
+// one can log in (#189).
+const VERIFIED_AT = '2026-08-01T00:00:00.000+00:00';
+
 function mockParticipantFetch(row: Record<string, unknown> | null): void {
   globalThis.fetch = (() =>
     Promise.resolve(
@@ -46,6 +50,7 @@ describe('POST /login', () => {
       id: PARTICIPANT_ID,
       password_hash: await hashPassword('correct-password'),
       password_changed_at: passwordChangedAt,
+      email_verified_at: VERIFIED_AT,
     });
 
     const res = await participantAuthRoute.request(
@@ -102,6 +107,38 @@ describe('POST /login', () => {
     expect(res.status).toBe(401);
   });
 
+  // Its password is whatever the last unconfirmed entry under the address
+  // chose, possibly someone else's, so even the right one is refused -- and
+  // refused exactly like a wrong one, so the answer doesn't say the address
+  // is registered but unverified.
+  it('refuses an unverified account with the wrong-credentials answer', async () => {
+    mockParticipantFetch({
+      id: PARTICIPANT_ID,
+      password_hash: await hashPassword('correct-password'),
+      password_changed_at: '2026-08-25T01:23:45.678+00:00',
+      email_verified_at: null,
+    });
+
+    const res = await participantAuthRoute.request(
+      '/login',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          email: 'participant@example.com',
+          password: 'correct-password',
+        }),
+      },
+      ENV,
+    );
+
+    expect(res.status).toBe(401);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'invalid credentials',
+    });
+    expect(res.headers.get('set-cookie')).toBeNull();
+  });
+
   it('returns 401 for a non-existent email', async () => {
     mockParticipantFetch(null);
 
@@ -128,6 +165,7 @@ describe('POST /login', () => {
       id: PARTICIPANT_ID,
       password_hash: await hashPassword('correct-password'),
       password_changed_at: '2026-08-25T01:23:45.678+00:00',
+      email_verified_at: VERIFIED_AT,
     });
 
     const res = await participantAuthRoute.request(
@@ -212,6 +250,7 @@ describe('POST /login', () => {
         id: PARTICIPANT_ID,
         password_hash: legacyHash,
         password_changed_at: '2026-08-25T01:23:45.678+00:00',
+        email_verified_at: VERIFIED_AT,
       });
       const {ctx, settle} = collectingExecutionContext();
 
@@ -245,6 +284,7 @@ describe('POST /login', () => {
           id: PARTICIPANT_ID,
           password_hash: await legacyHashPassword('correct-password'),
           password_changed_at: '2026-08-25T01:23:45.678+00:00',
+          email_verified_at: VERIFIED_AT,
         },
         {failUpdate: true},
       );
@@ -269,6 +309,7 @@ describe('POST /login', () => {
         id: PARTICIPANT_ID,
         password_hash: await hashPassword('correct-password'),
         password_changed_at: '2026-08-25T01:23:45.678+00:00',
+        email_verified_at: VERIFIED_AT,
       });
       const {ctx, settle} = collectingExecutionContext();
 
@@ -284,6 +325,7 @@ describe('POST /login', () => {
         id: PARTICIPANT_ID,
         password_hash: await legacyHashPassword('correct-password'),
         password_changed_at: '2026-08-25T01:23:45.678+00:00',
+        email_verified_at: VERIFIED_AT,
       });
       const {ctx, settle} = collectingExecutionContext();
 
@@ -342,6 +384,7 @@ describe('POST /logout', () => {
       id: PARTICIPANT_ID,
       password_hash: await hashPassword('correct-password'),
       password_changed_at: '2026-08-25T01:23:45.678+00:00',
+      email_verified_at: VERIFIED_AT,
     });
 
     const res = await participantAuthRoute.request(

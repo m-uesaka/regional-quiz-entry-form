@@ -16,7 +16,7 @@ import {sendEntryNoticeEmail, type EntryNoticeReason} from './entry-notice';
 import {sendVerificationEmail} from './entry-verification';
 import {FORM_FIELD_DEF_COLUMNS, toFormFieldDef} from './form-field-defs';
 import type {FormFieldDefRow} from './form-field-defs';
-import {hashPassword} from './password';
+import {hashPassword, verifyPassword} from './password';
 import {tournamentDisplayName} from './tournaments';
 import {verifyAccountPassword} from './password-rehash';
 import {promoteNextWaitlistedEntry} from './waitlist';
@@ -106,6 +106,13 @@ const ALREADY_ENTERED = 'already entered';
  */
 const ENTRY_PENDING_VERIFICATION = 'entry pending verification';
 const COMMON_PASSWORD = 'password too common';
+/**
+ * A later submission under the same unverified address took the account
+ * over while this one was being entered (`isStillUnverifiedAccountOf()`).
+ * Not one of the notice reasons: the later submission sends its own mail,
+ * and this one is answered like any other failure on our side.
+ */
+const SUPERSEDED_BY_LATER_SUBMISSION = 'superseded by a later submission';
 
 /**
  * The SQLSTATE `check_region_dual_entry()` (migration 0016) raises. The
@@ -131,7 +138,13 @@ interface ParticipantRow {
   id: string;
   region_id: string;
   password_hash: string;
+  // Null until the owner of the address follows a verification link
+  // (migration 0034, #189).
+  email_verified_at: string | null;
 }
+
+/** What `ParticipantRow` is selected with. */
+const PARTICIPANT_COLUMNS = 'id, region_id, password_hash, email_verified_at';
 
 /**
  * The participant's existing entry for the tournament, if there is one.
@@ -414,8 +427,17 @@ export async function checkEntrySubmission(
 /**
  * The address-dependent half of `createEntry()`, for a submission that
  * already passed `checkEntrySubmission()`: finds or creates the participant
- * the address belongs to -- proving ownership by password when it already
- * exists -- and enters them.
+ * the address belongs to and enters them.
+ *
+ * A participant whose address has been verified must prove ownership by
+ * password, and stays in the region it registered in. One whose address
+ * never was (#189) is taken over instead: the account was made by a
+ * submission nobody has confirmed, possibly from someone who typed another
+ * person's address to lock them into a far region, so its password and
+ * region carry no weight. The submission at hand replaces them, the same
+ * way it would have created the account had it come first -- unless it
+ * comes with the account's own password for the account's own region, which
+ * makes it a further entry from whoever made the account.
  * @param env The Worker bindings.
  * @param tournament The checked tournament.
  * @param input The validated entry form submission.
@@ -427,16 +449,143 @@ async function createEntryAfterCheck(
 ): Promise<CreateEntryResult> {
   const db = createDbClient(env);
 
-  const {data: existingParticipant} = await db
+  const {data: existingParticipant, error: participantError} = await db
     .from('participants')
-    .select('id, region_id, password_hash')
+    .select(PARTICIPANT_COLUMNS)
     .eq('email', input.email)
     .returns<ParticipantRow[]>()
     .maybeSingle();
+  if (participantError) {
+    return {ok: false, status: 500, error: participantError.message};
+  }
+
   if (
-    existingParticipant &&
-    existingParticipant.region_id !== tournament.region_id
+    existingParticipant?.email_verified_at === null &&
+    existingParticipant.region_id === tournament.region_id &&
+    (await isUnverifiedAccountPassword(existingParticipant, input.password))
   ) {
+    // Whoever made the account is still the one submitting, for the same
+    // region: nothing to take over, and the entries they made earlier stand
+    // -- a participant entering both of a region's tournaments before
+    // following either link keeps both (or is refused the second, where the
+    // region allows only one). Every link of the account still belongs to a
+    // submission made with its current password and region.
+    return enterTournament(
+      env,
+      tournament,
+      existingParticipant.id,
+      input.email,
+      input,
+      {passwordHash: existingParticipant.password_hash},
+    );
+  }
+
+  if (!existingParticipant || existingParticipant.email_verified_at === null) {
+    // Whoever this account is about to belong to is setting its password,
+    // so they are held to the rules for setting one. The form's own schema
+    // can't apply them (the same field is how a returning participant proves
+    // an older password), and doing it here keeps the refusal behind the
+    // address like every other answer that depends on it.
+    if (isCommonPassword(input.password)) {
+      return {ok: false, status: 400, error: COMMON_PASSWORD};
+    }
+    const passwordHash = await hashPassword(input.password);
+    if (!existingParticipant) {
+      const {data: created, error} = await db
+        .from('participants')
+        .insert({
+          email: input.email,
+          region_id: tournament.region_id,
+          password_hash: passwordHash,
+        })
+        .select('id')
+        .single();
+      if (error || !created) {
+        return {
+          ok: false,
+          status: 409,
+          error: error?.message ?? 'failed to create participant',
+        };
+      }
+      return enterTournament(env, tournament, created.id, input.email, input, {
+        passwordHash,
+      });
+    }
+    // A different password, or another region: the account is handed to
+    // this submission, and what the earlier ones made goes with the old
+    // password (see the migration for why it is deleted rather than kept).
+    const {data: withdrawn, error: takeOverError} = await db.rpc(
+      'take_over_unverified_participant',
+      {
+        p_participant_id: existingParticipant.id,
+        p_password_hash: passwordHash,
+        p_region_id: tournament.region_id,
+      },
+    );
+    if (takeOverError) {
+      return {ok: false, status: 500, error: takeOverError.message};
+    }
+    if (Array.isArray(withdrawn)) {
+      return enterTournament(
+        env,
+        tournament,
+        existingParticipant.id,
+        input.email,
+        input,
+        {
+          passwordHash,
+          withdrawnTournaments: await withdrawnTournamentNames(
+            db,
+            (withdrawn as string[]).filter(id => id !== tournament.id),
+          ),
+        },
+      );
+    }
+    // The address was verified since it was read above -- its owner
+    // followed a link a moment ago -- so the account is theirs now, and
+    // this submission is held to it like any other. Read again, because
+    // what the takeover found verified need not be the row read above:
+    // another submission may have taken the account over in between, and
+    // had its own link followed, leaving another password and region.
+    const {data: verifiedParticipant, error: rereadError} = await db
+      .from('participants')
+      .select(PARTICIPANT_COLUMNS)
+      .eq('id', existingParticipant.id)
+      .returns<ParticipantRow[]>()
+      .single();
+    if (rereadError || !verifiedParticipant) {
+      return {
+        ok: false,
+        status: 500,
+        error: rereadError?.message ?? 'failed to read the participant',
+      };
+    }
+    return enterVerifiedParticipant(
+      env,
+      tournament,
+      verifiedParticipant,
+      input,
+    );
+  }
+
+  return enterVerifiedParticipant(env, tournament, existingParticipant, input);
+}
+
+/**
+ * Enters a submission into a participant whose address has been verified,
+ * once it proves the account's password, for the account's own region.
+ * @param env The Worker bindings.
+ * @param tournament The checked tournament.
+ * @param participant The verified participant, as last read.
+ * @param input The validated entry form submission.
+ */
+async function enterVerifiedParticipant(
+  env: Bindings,
+  tournament: EntryTournamentRow,
+  participant: ParticipantRow,
+  input: EntryInput,
+): Promise<CreateEntryResult> {
+  if (participant.region_id !== tournament.region_id) {
     return {
       ok: false,
       status: 409,
@@ -444,62 +593,94 @@ async function createEntryAfterCheck(
     };
   }
 
-  let participantId: string;
-  if (existingParticipant) {
-    // Re-entering under an already-registered email must prove ownership of
-    // that account, otherwise anyone who learns a participant's email could
-    // attach unauthorized entries to it.
-    //
-    // A correct password on an older hash is upgraded the same way the login
-    // does it (`verifyAccountPassword()`): some participants only ever come
-    // back through this form, and their hash would otherwise never move.
-    // Awaited rather than handed to `waitUntil()` because the
-    // address-and-password route already runs all of this after its
-    // response (#117); it never rejects, so the entry goes ahead whatever
-    // happens to it.
-    let upgrade: Promise<void> | undefined;
-    const valid = await verifyAccountPassword(
-      env,
-      'participants',
-      existingParticipant,
-      input.password,
-      pending => {
-        upgrade = pending;
-      },
-    );
-    if (!valid) {
-      return {ok: false, status: 401, error: INVALID_PASSWORD};
-    }
-    await upgrade;
-    participantId = existingParticipant.id;
-  } else {
-    // A new account is held to the rules for setting a password. The form's
-    // own schema can't apply them (the same field is how a returning
-    // participant proves an older password), and doing it here keeps the
-    // refusal behind the address like every other answer that depends on it.
-    if (isCommonPassword(input.password)) {
-      return {ok: false, status: 400, error: COMMON_PASSWORD};
-    }
-    const {data: created, error} = await db
-      .from('participants')
-      .insert({
-        email: input.email,
-        region_id: tournament.region_id,
-        password_hash: await hashPassword(input.password),
-      })
-      .select('id')
-      .single();
-    if (error || !created) {
-      return {
-        ok: false,
-        status: 409,
-        error: error?.message ?? 'failed to create participant',
-      };
-    }
-    participantId = created.id;
+  // Re-entering under a verified address must prove ownership of that
+  // account, otherwise anyone who learns a participant's email could attach
+  // unauthorized entries to it.
+  //
+  // A correct password on an older hash is upgraded the same way the login
+  // does it (`verifyAccountPassword()`): some participants only ever come
+  // back through this form, and their hash would otherwise never move.
+  // Awaited rather than handed to `waitUntil()` because the
+  // address-and-password route already runs all of this after its response
+  // (#117); it never rejects, so the entry goes ahead whatever happens to it.
+  let upgrade: Promise<void> | undefined;
+  const valid = await verifyAccountPassword(
+    env,
+    'participants',
+    participant,
+    input.password,
+    pending => {
+      upgrade = pending;
+    },
+  );
+  if (!valid) {
+    return {ok: false, status: 401, error: INVALID_PASSWORD};
   }
+  await upgrade;
+  return enterTournament(env, tournament, participant.id, input.email, input);
+}
 
-  return enterTournament(env, tournament, participantId, input.email, input);
+/**
+ * Whether `password` is the password of an unverified account.
+ *
+ * Not `verifyAccountPassword()`: that would also move an older hash to the
+ * current parameters, and the hash of an unverified account is what
+ * `isStillUnverifiedAccountOf()` compares against to tell whether a later
+ * submission took the account over in the meantime -- an upgrade made here
+ * would read as exactly that. The account is either taken over or verified
+ * before long, and the upgrade can wait for a login after that.
+ * @param account The unverified account.
+ * @param password The submitted password.
+ */
+async function isUnverifiedAccountPassword(
+  account: ParticipantRow,
+  password: string,
+): Promise<boolean> {
+  return (await verifyPassword(password, account.password_hash)).valid;
+}
+
+/**
+ * The display names of the tournaments whose pending entries a takeover
+ * withdrew, for the verification mail of the entry that took over.
+ *
+ * Those entries may well have been the address owner's own -- a mistyped
+ * password, or a tournament in another region, is enough for a takeover --
+ * and the verification mail is the one message that reaches only the owner,
+ * so it is where they learn which entries to make again.
+ * @param db The Supabase client to read with.
+ * @param tournamentIds The tournaments `take_over_unverified_participant()`
+ *     reported, less the one being entered now.
+ * @return `undefined` when nothing was withdrawn. A failed read still
+ *     reports the withdrawal, without the names (an empty list).
+ */
+async function withdrawnTournamentNames(
+  db: ReturnType<typeof createDbClient>,
+  tournamentIds: string[],
+): Promise<string[] | undefined> {
+  if (tournamentIds.length === 0) {
+    return undefined;
+  }
+  const {data, error} = await db
+    .from('tournaments')
+    .select('name, type, regions(name)')
+    .in('id', tournamentIds)
+    .returns<
+      Array<{
+        name: string | null;
+        type: TournamentType;
+        regions: {name: string};
+      }>
+    >();
+  if (error || !data) {
+    console.error('failed to look up the withdrawn tournaments', {
+      tournamentIds,
+      error: error?.message,
+    });
+    return [];
+  }
+  return data.map(row =>
+    tournamentDisplayName(row.name, row.regions.name, row.type),
+  );
 }
 
 /**
@@ -514,6 +695,11 @@ async function createEntryAfterCheck(
  * @param participantId The participant being entered.
  * @param email The participant's address, where the link is sent.
  * @param input The entry itself.
+ * @param unverifiedAccount For a participant whose address is not verified
+ *     yet, the password hash this submission just gave the account (see
+ *     `isStillUnverifiedAccountOf()` for what it guards against) and, when
+ *     it took the account over, the tournaments whose pending entries that
+ *     withdrew (see `withdrawnTournamentNames()`).
  */
 async function enterTournament(
   env: Bindings,
@@ -521,6 +707,10 @@ async function enterTournament(
   participantId: string,
   email: string,
   input: EntrySessionInput,
+  unverifiedAccount?: {
+    passwordHash: string;
+    withdrawnTournaments?: string[];
+  },
 ): Promise<CreateEntryResult> {
   const db = createDbClient(env);
   const tournamentId = tournament.id;
@@ -689,6 +879,18 @@ async function enterTournament(
       : {ok: false, status: 500, error: regulationsError.message};
   }
 
+  if (
+    unverifiedAccount &&
+    !(await isStillUnverifiedAccountOf(
+      db,
+      participantId,
+      unverifiedAccount.passwordHash,
+    ))
+  ) {
+    await rollbackEntry(db, entry.id, tournamentId, existingEntry);
+    return {ok: false, status: 409, error: SUPERSEDED_BY_LATER_SUBMISSION};
+  }
+
   try {
     await sendVerificationEmail(
       env,
@@ -700,6 +902,7 @@ async function enterTournament(
         tournament.type,
       ),
       tournament.capacity !== null,
+      unverifiedAccount?.withdrawnTournaments,
     );
   } catch (mailError) {
     // Rolled back because the participant never received a usable
@@ -715,6 +918,47 @@ async function enterTournament(
     };
   }
   return {ok: true, entry: {id: entry.id}};
+}
+
+/**
+ * Whether the unverified account an entry was just written for still has
+ * the password this submission gave it.
+ *
+ * Every link mailed for an unverified account has to belong to a
+ * submission made with the account's current password and region, because
+ * following it is what verifies the account with them (migration 0034).
+ * `take_over_unverified_participant()` keeps that by deleting the earlier
+ * submissions' entries, but it can only delete entries that exist: one
+ * written after a later submission took the account over would carry a link
+ * that verifies the account with that later submission's password -- and
+ * the later submitter is not necessarily the owner of the address.
+ *
+ * Read after the entry is written, which leaves no gap: a takeover that
+ * commits before this read is seen here, and one that commits after it
+ * deletes the entry (and with it the link) itself.
+ *
+ * A takeover is the only thing that changes an unverified account's hash:
+ * a password reset is refused for one (`reset_participant_password()`,
+ * migration 0034), so a reset made while this entry was being written can't
+ * be mistaken for a later submission and withdraw it.
+ * @param db The Supabase client to read with.
+ * @param participantId The account the entry was written for.
+ * @param passwordHash The hash this submission set on it.
+ */
+async function isStillUnverifiedAccountOf(
+  db: ReturnType<typeof createDbClient>,
+  participantId: string,
+  passwordHash: string,
+): Promise<boolean> {
+  const {data} = await db
+    .from('participants')
+    .select('password_hash')
+    .eq('id', participantId)
+    .returns<Array<{password_hash: string}>>()
+    .maybeSingle();
+  // A failed read counts as taken over: mailing a link that might verify
+  // someone else's password is worse than asking the owner to try again.
+  return data?.password_hash === passwordHash;
 }
 
 /**
@@ -740,7 +984,11 @@ const ENTRY_NOTICE_REASONS: Record<string, EntryNoticeReason> = {
  * visible either.
  *
  * - An unregistered address gets an account and the entry, as before.
- * - A registered address with the matching password gets the entry.
+ * - A registered address that was never verified has its account taken
+ *   over -- password and region replaced, earlier submissions' entries
+ *   dropped -- and gets the entry (#189). With the account's own password
+ *   and region it is simply entered, like a verified one.
+ * - A verified address with the matching password gets the entry.
  * - Anything about the address's own account that would otherwise have
  *   been an error -- a wrong password, registration in another region, an
  *   entry already made -- is mailed to that address instead, so only its

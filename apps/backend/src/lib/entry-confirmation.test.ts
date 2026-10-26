@@ -175,6 +175,82 @@ describe.skipIf(!(await isDbReachable()))(
       expect(entryRow.email_verified_at).not.toBeNull();
     });
 
+    // Following the link proves the address, and the link belongs to a
+    // submission made with the account's current password and region (#189).
+    it('marks the participant verified, keeping the first verification time', async () => {
+      const fixture = await createTournamentAndRegulation(
+        'verify-account',
+        null,
+      );
+      const entryId = await createEntryFixture(
+        fixture.regionId,
+        fixture.tournamentId,
+        fixture.regulationId,
+      );
+      const [{participant_id: participantId}] = await sql`
+        select participant_id from entries where id = ${entryId}
+      `;
+      const [before] = await sql`
+        select email_verified_at from participants where id = ${participantId}
+      `;
+      expect(before.email_verified_at).toBeNull();
+
+      expect(
+        await confirmEntryByToken(env, await createTokenFixture(entryId)),
+      ).toMatchObject({ok: true});
+
+      const [after] = await sql`
+        select email_verified_at from participants where id = ${participantId}
+      `;
+      expect(after.email_verified_at).not.toBeNull();
+
+      // A later confirmation of another entry leaves the original time alone.
+      const otherFixture = await createTournamentAndRegulation(
+        'verify-account-again',
+        null,
+      );
+      const [otherEntry] = await sql`
+        insert into entries (
+          participant_id, tournament_id, name, furigana, display_name
+        ) values (
+          ${participantId}, ${otherFixture.tournamentId}, '山田太郎',
+          'ヤマダタロウ', '太郎'
+        )
+        returning id
+      `;
+      expect(
+        await confirmEntryByToken(env, await createTokenFixture(otherEntry.id)),
+      ).toMatchObject({ok: true});
+      const [later] = await sql`
+        select email_verified_at from participants where id = ${participantId}
+      `;
+      expect(later.email_verified_at).toEqual(after.email_verified_at);
+    });
+
+    it('leaves the participant unverified when the token is refused', async () => {
+      const fixture = await createTournamentAndRegulation(
+        'verify-account-refused',
+        null,
+      );
+      const entryId = await createEntryFixture(
+        fixture.regionId,
+        fixture.tournamentId,
+        fixture.regulationId,
+      );
+      const token = await createTokenFixture(entryId, {
+        expiresAt: '2020-01-01T00:00:00Z',
+      });
+
+      expect(await confirmEntryByToken(env, token)).toMatchObject({ok: false});
+
+      const [participant] = await sql`
+        select p.email_verified_at from participants p
+        join entries e on e.participant_id = p.id
+        where e.id = ${entryId}
+      `;
+      expect(participant.email_verified_at).toBeNull();
+    });
+
     it('waitlists an entry when capacity is full', async () => {
       const fixture = await createTournamentAndRegulation('capacity', 1);
       await createEntryFixture(
