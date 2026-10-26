@@ -30,6 +30,7 @@ interface EntryListRow {
   display_name: string;
   status: 'confirmed' | 'waitlisted' | 'cancelled';
   waitlist_position: number | null;
+  email_verified_at: string;
 }
 
 function rowToEntryListItem(row: EntryListRow): EntryListItem {
@@ -42,6 +43,10 @@ function rowToEntryListItem(row: EntryListRow): EntryListItem {
     displayName: row.status === 'cancelled' ? 'キャンセル' : row.display_name,
     status: row.status,
     waitlistPosition: row.waitlist_position,
+    // Masked along with the name: a cancelled row's exact time would tell
+    // anyone who knew when someone entered that they were the one who
+    // cancelled.
+    confirmedAt: row.status === 'cancelled' ? null : row.email_verified_at,
   });
 }
 
@@ -66,15 +71,26 @@ async function respondWithEntryList(
   // embedded in the SSR'd HTML, so answering with all of them made the page
   // grow with the tournament's size. `count: 'exact'` brings the total in
   // the same round trip, so the pager's "m–k of n" costs no extra query.
-  // `created_at, id` is a total order, so plain offsets page stably.
+  //
+  // Listed in the order the entries were confirmed -- the moment the mailed
+  // link was followed, which is also when the seat or the waitlist place
+  // was decided (`confirm_entry_by_token()`) -- rather than when the form
+  // was sent, so the list's numbering agrees with who got in first. An entry
+  // that was never confirmed has no such moment and is left out: that is
+  // one that lapsed unverified (`lapse_expired_pending_entries()`) and was
+  // never on the list. `email_verified_at, id` is a total order, so plain
+  // offsets page stably.
   const {rows, total, error} = await fetchPage<EntryListRow>(
     (from, to) =>
       db
         .from('entries')
-        .select('display_name, status, waitlist_position', {count: 'exact'})
+        .select('display_name, status, waitlist_position, email_verified_at', {
+          count: 'exact',
+        })
         .eq('tournament_id', tournamentId)
         .in('status', ['confirmed', 'waitlisted', 'cancelled'])
-        .order('created_at', {ascending: true})
+        .not('email_verified_at', 'is', null)
+        .order('email_verified_at', {ascending: true})
         .order('id', {ascending: true})
         .range(from, to)
         .returns<EntryListRow[]>(),

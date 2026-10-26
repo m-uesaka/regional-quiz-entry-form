@@ -52,7 +52,7 @@ test('a cancellation promotes the waitlisted entry behind it', async ({
     // Strings rather than regexes: `toHaveText` normalizes the whitespace
     // the template leaves between the name and the queue position only when
     // it is comparing against a string.
-    await expect(page.getByRole('listitem')).toHaveText([
+    await expect(page.getByRole('rowheader')).toHaveText([
       '先着さん',
       '待機さん (キャンセル待ち 1)',
     ]);
@@ -88,7 +88,7 @@ test('a cancellation promotes the waitlisted entry behind it', async ({
     // The cancelled entry keeps its row but loses its name, and the
     // promoted one no longer shows a queue position.
     await page.goto(entryListPath(SAIKYOI));
-    await expect(page.getByRole('listitem')).toHaveText([
+    await expect(page.getByRole('rowheader')).toHaveText([
       'キャンセル',
       '待機さん',
     ]);

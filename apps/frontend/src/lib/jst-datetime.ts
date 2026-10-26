@@ -81,9 +81,10 @@ export function fromJstDatetimeLocal(value: string): string | null {
   return new Date(instant).toISOString();
 }
 
-// Read once: building an `Intl.DateTimeFormat` is far costlier than using
-// one, and the portal formats two instants per tournament.
-const JST_DISPLAY_FORMAT = new Intl.DateTimeFormat('ja-JP', {
+// What both display formats below share. Read once: building an
+// `Intl.DateTimeFormat` is far costlier than using one, and the portal
+// formats two instants per tournament.
+const JST_DISPLAY_OPTIONS: Intl.DateTimeFormatOptions = {
   timeZone: 'Asia/Tokyo',
   year: 'numeric',
   month: 'numeric',
@@ -92,6 +93,14 @@ const JST_DISPLAY_FORMAT = new Intl.DateTimeFormat('ja-JP', {
   hour: 'numeric',
   minute: '2-digit',
   hourCycle: 'h23',
+};
+const JST_DISPLAY_FORMAT = new Intl.DateTimeFormat(
+  'ja-JP',
+  JST_DISPLAY_OPTIONS,
+);
+const JST_DISPLAY_FORMAT_SECONDS = new Intl.DateTimeFormat('ja-JP', {
+  ...JST_DISPLAY_OPTIONS,
+  second: '2-digit',
 });
 
 /**
@@ -105,13 +114,35 @@ const JST_DISPLAY_FORMAT = new Intl.DateTimeFormat('ja-JP', {
  *     readable instant.
  */
 export function formatJstDateTime(iso: string): string {
+  return formatJst(iso, JST_DISPLAY_FORMAT);
+}
+
+/**
+ * `formatJstDateTime`, down to the second: `2026年11月1日(日) 9:00:05`.
+ *
+ * For instants whose order people compare -- on the entry list, two
+ * entries confirmed within the same minute would otherwise read as a tie.
+ *
+ * @param iso The instant to show.
+ * @return The formatted text, or an empty string when `iso` is not a
+ *     readable instant.
+ */
+export function formatJstDateTimeSeconds(iso: string): string {
+  return formatJst(iso, JST_DISPLAY_FORMAT_SECONDS);
+}
+
+/**
+ * Lays an instant out with one of the display formats above, appending
+ * the seconds when the format carries them.
+ * @param iso The instant to show.
+ * @param format `JST_DISPLAY_FORMAT` or `JST_DISPLAY_FORMAT_SECONDS`.
+ */
+function formatJst(iso: string, format: Intl.DateTimeFormat): string {
   const instant = new Date(iso);
   if (Number.isNaN(instant.getTime())) return '';
   const parts = Object.fromEntries(
-    JST_DISPLAY_FORMAT.formatToParts(instant).map(part => [
-      part.type,
-      part.value,
-    ]),
+    format.formatToParts(instant).map(part => [part.type, part.value]),
   );
-  return `${parts.year}年${parts.month}月${parts.day}日(${parts.weekday}) ${parts.hour}:${parts.minute}`;
+  const seconds = parts.second === undefined ? '' : `:${parts.second}`;
+  return `${parts.year}年${parts.month}月${parts.day}日(${parts.weekday}) ${parts.hour}:${parts.minute}${seconds}`;
 }

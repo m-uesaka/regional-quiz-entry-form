@@ -53,7 +53,7 @@ test('an entry is confirmed through its mailed link and shows up on mypage', asy
   // Confirmed, so the entry is now the participant's public listing too.
   await page.goto(entryListPath(SHINJINOU));
   await expect(
-    page.getByRole('listitem').filter({hasText: participant.displayName}),
+    page.getByRole('rowheader').filter({hasText: participant.displayName}),
   ).toHaveCount(1);
 });
 

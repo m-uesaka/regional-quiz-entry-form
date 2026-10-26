@@ -177,6 +177,10 @@ export const EntryListItemSchema = z.object({
   displayName: z.string(),
   status: PublicEntryStatusSchema,
   waitlistPosition: z.number().int().nullable(),
+  // When the entry was confirmed through its mailed link; the list is
+  // ordered by it, and shows it so participants can check their place.
+  // Null on a cancelled entry, whose time is masked like its name.
+  confirmedAt: z.string().datetime({offset: true}).nullable(),
 });
 export type EntryListItem = z.infer<typeof EntryListItemSchema>;
 

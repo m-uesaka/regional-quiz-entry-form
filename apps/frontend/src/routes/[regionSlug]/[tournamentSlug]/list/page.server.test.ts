@@ -9,8 +9,18 @@ import {
 import {load} from './+page.server';
 
 const ENTRIES: EntryListItem[] = [
-  {displayName: '参加者A', status: 'confirmed', waitlistPosition: null},
-  {displayName: '参加者B', status: 'waitlisted', waitlistPosition: 1},
+  {
+    displayName: '参加者A',
+    status: 'confirmed',
+    waitlistPosition: null,
+    confirmedAt: '2026-11-01T00:00:05.123456+00:00',
+  },
+  {
+    displayName: '参加者B',
+    status: 'waitlisted',
+    waitlistPosition: 1,
+    confirmedAt: '2026-11-01T00:01:00+00:00',
+  },
 ];
 
 /**
