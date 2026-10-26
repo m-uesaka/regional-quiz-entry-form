@@ -93,11 +93,16 @@ describe.skipIf(!(await isDbReachable()))(
 
     async function createParticipantFixture(
       password = 'original-password',
+      options: {verified?: boolean} = {},
     ): Promise<{id: string; email: string}> {
       const email = `participant-${crypto.randomUUID()}@${testEmailDomain}`;
+      const verifiedAt = options.verified === false ? null : new Date();
       const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${regionId}, ${email}, ${await hashPassword(password)})
+        insert into participants (
+          region_id, email, password_hash, email_verified_at
+        ) values (
+          ${regionId}, ${email}, ${await hashPassword(password)}, ${verifiedAt}
+        )
         returning id
       `;
       return {id: participant.id as string, email};
@@ -219,23 +224,47 @@ describe.skipIf(!(await isDbReachable()))(
     // A reset proves the address but leaves the region as it was, and an
     // unverified account's region was chosen by a submission nobody
     // confirmed -- possibly by someone holding the owner's address in a far
-    // region (#189). Verifying here would lock the owner into it; entering
-    // again is how they take the account back.
-    it('confirmPasswordReset leaves an unverified account unverified', async () => {
-      const participant = await createParticipantFixture();
+    // region (#189). Verifying here would lock the owner into it, and
+    // resetting without verifying would leave a password the login still
+    // refuses; entering again is how they take the account back.
+    it('requestPasswordReset tells an unverified account how to get it back instead of mailing a link', async () => {
+      const participant = await createParticipantFixture('original-password', {
+        verified: false,
+      });
+      const mailsBefore = sentMails.length;
+
+      await requestPasswordReset(env, participant.email);
+
+      expect(sentMails.length).toBe(mailsBefore + 1);
+      const mail = sentMails[sentMails.length - 1];
+      expect(mail.to).toBe(participant.email);
+      expect(mail.html).not.toContain('password-reset?token=');
+      expect(mail.html).toContain('エントリー');
+      expect(
+        await sql`
+          select id from password_reset_tokens
+          where participant_id = ${participant.id}
+        `,
+      ).toHaveLength(0);
+    });
+
+    // A link mailed before the account check existed is refused like a dead
+    // one, and the password stays as it was.
+    it('confirmPasswordReset refuses a token for an unverified account', async () => {
+      const participant = await createParticipantFixture('original-password', {
+        verified: false,
+      });
       const token = await createTokenFixture(participant.id);
+      const before = await readPasswordHash(participant.id);
 
       expect(
         await confirmPasswordReset(env, {
           token,
           newPassword: 'brand-new-password',
         }),
-      ).toEqual({ok: true});
+      ).toEqual({ok: false, status: 400, error: 'invalid or expired token'});
 
-      const [row] = await sql`
-        select email_verified_at from participants where id = ${participant.id}
-      `;
-      expect(row.email_verified_at).toBeNull();
+      expect(await readPasswordHash(participant.id)).toBe(before);
     });
 
     it('requestPasswordReset drops the participant’s expired tokens', async () => {

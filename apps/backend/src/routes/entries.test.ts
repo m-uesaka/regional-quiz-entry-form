@@ -221,6 +221,11 @@ function mockSupabase(options: {
    * address was verified in the meantime.
    */
   takeOver?: boolean;
+  /**
+   * The tournaments whose pending entries the takeover reports withdrawn
+   * (none by default).
+   */
+  withdrawn?: string[];
 }): MockSupabase {
   const recorded: MockSupabase = {calls: [], mails: [], takeOvers: []};
   const tournament = options.tournament ?? tournamentRow();
@@ -276,7 +281,7 @@ function mockSupabase(options: {
             region_id: args.p_region_id,
           };
         }
-        return Response.json(tookOver);
+        return Response.json(tookOver ? (options.withdrawn ?? []) : null);
       }
       // The rehash of a registered participant's legacy hash.
       case 'PATCH participants':
@@ -604,6 +609,35 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
       to: validBody.email,
       subject: verificationMailSubject(TOURNAMENT_NAME),
     });
+    // Nothing was withdrawn, so nothing is reported as such.
+    expect(recorded.mails[0].html).not.toContain('取り消しました');
+  });
+
+  // The withdrawn entries may have been the owner's own, made under a
+  // password they mistyped this time or in another region, so the mail that
+  // only reaches the owner says which ones went.
+  it('tells the owner which pending entries a takeover withdrew', async () => {
+    const recorded = mockSupabase({
+      participant: await registeredParticipant({
+        password: 'someone-elses-password',
+        verified: false,
+      }),
+      // The other tournament, plus this one, which is entered again and so
+      // not reported.
+      withdrawn: ['88888888-8888-8888-8888-888888888888', TOURNAMENT_ID],
+    });
+
+    await postWithContext(TOURNAMENT_PATH, validBody);
+    await settleBackgroundWork();
+
+    expect(recorded.mails).toHaveLength(1);
+    expect(recorded.mails[0].subject).toBe(
+      verificationMailSubject(TOURNAMENT_NAME),
+    );
+    // The mock answers every tournament lookup with the same row, so the
+    // name is this tournament's, but it comes from the withdrawn-list read.
+    expect(recorded.mails[0].html).toContain(`「${TOURNAMENT_NAME}」への`);
+    expect(recorded.mails[0].html).toContain('取り消しました');
   });
 
   it('enters an unverified account under its own password and region without a takeover', async () => {

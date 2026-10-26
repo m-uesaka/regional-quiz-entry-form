@@ -1237,6 +1237,9 @@ describe.skipIf(!dbReachable)(
     it('take_over_unverified_participant replaces an unverified account', async () => {
       const {participantId, enter} = await seed('takeover');
       const pendingId = await enter('pending_verification', null);
+      const [tournament] = await sql`
+        select tournament_id from entries where id = ${pendingId}
+      `;
       await sql`
         insert into email_verification_tokens (entry_id, token_hash, expires_at)
         values (${pendingId}, 'db-schema-takeover-token', now() + interval '1 day')
@@ -1247,13 +1250,16 @@ describe.skipIf(!dbReachable)(
         returning id
       `;
 
+      // As JSON, the way PostgREST hands the array to the app; Bun's client
+      // would otherwise leave a `uuid[]` as its text literal.
       const [{tookOver}] = await sql`
-        select take_over_unverified_participant(
+        select to_jsonb(take_over_unverified_participant(
           ${participantId}, 'new-hash', ${other.id}
-        ) as "tookOver"
+        )) as "tookOver"
       `;
 
-      expect(tookOver).toBe(true);
+      // The pending entry it withdrew, for the new entry's mail to report.
+      expect(tookOver).toEqual([tournament.tournament_id]);
       const [row] = await sql`
         select region_id, password_hash, email_verified_at from participants
         where id = ${participantId}
@@ -1281,7 +1287,7 @@ describe.skipIf(!dbReachable)(
         ) as "tookOver"
       `;
 
-      expect(tookOver).toBe(false);
+      expect(tookOver).toBeNull();
       const [row] = await sql`
         select password_hash from participants where id = ${participantId}
       `;
@@ -1300,7 +1306,7 @@ describe.skipIf(!dbReachable)(
         ) as "tookOver"
       `;
 
-      expect(tookOver).toBe(false);
+      expect(tookOver).toBeNull();
     });
   },
 );

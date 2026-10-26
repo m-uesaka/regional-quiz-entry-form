@@ -37,6 +37,15 @@
 -- アドレスの持ち主は、再設定をしなくても、自分の地域の大会にエントリーし
 -- 直せば(パスワードを問われずに)アカウントを取り戻せる。
 --
+-- かといって未確認のまま再設定だけを通すと、新しいパスワードでもログインは
+-- 断られ(上記)、持ち主には「パスワードが違う」としか見えない。しかも再設定は
+-- `password_hash` を書き換えるので、同時に走っている持ち主自身のエントリーを
+-- `isStillUnverifiedAccountOf()` が「後の送信に取って代わられた」として
+-- 取り下げてしまう。そこで未確認のアカウントは再設定もさせない。再設定の
+-- 申し込みには、リンクの代わりに、確認メールのリンクを開くかエントリーし直す
+-- よう案内するメールを送り(`requestPasswordReset()`)、この変更より前に
+-- 送ったリンクは `reset_participant_password()`(下記)が無効なリンクとして断る。
+--
 -- 既存行の埋め戻しは、確認リンクで確定したことのあるエントリー
 -- (`entries.email_verified_at` が null でない行)を持つ参加者だけを、その
 -- 最も早い時刻で確認済みにする。過去にパスワードを再設定した参加者は、
@@ -218,7 +227,13 @@ grant execute on function confirm_entry_by_token(text) to service_role;
 -- どれも確認されたことのないエントリーで、定員(`confirmed` の数)にも
 -- キャンセル待ちの順位にも関わらないので、消しても繰り上げ等は要らない。
 --
--- 確認済みのアカウント(確定したエントリーを持つものを含む)は触らずに false を
+-- 消した確定待ちエントリーの大会 id を(大会 id 順に、無ければ空の配列で)
+-- 返す。消したエントリーは、アドレスの持ち主自身がパスワードを打ち間違えた
+-- だけ、あるいは別の地域の大会を選んだだけのものでもあり得るので、呼び出し側は
+-- 新しいエントリーの確認メール(届くのはそのアドレスだけ)で、どの大会の
+-- エントリーを取り消したかを知らせる。
+--
+-- 確認済みのアカウント(確定したエントリーを持つものを含む)は触らずに null を
 -- 返す。呼び出し側はそのまま、パスワードを照合する今までの経路に進む。参加者行を
 -- `for no key update` で取った後に条件を評価するので、同時に走った確定が先に
 -- コミットしていれば、確認済みとして断られる(ロック順は
@@ -230,9 +245,11 @@ create function take_over_unverified_participant(
   p_password_hash text,
   p_region_id uuid
 )
-returns boolean
+returns uuid[]
 language plpgsql
 as $$
+declare
+  v_withdrawn uuid[];
 begin
   perform 1 from participants p
     where p.id = p_participant_id
@@ -248,7 +265,7 @@ begin
     for no key update;
 
   if not found then
-    return false;
+    return null;
   end if;
 
   update participants
@@ -263,6 +280,16 @@ begin
     order by e.tournament_id, e.id, evt.id
     for update of evt;
 
+  -- Read after the token locks, so an entry a concurrent lapse or
+  -- cancellation moved out of `pending_verification` meanwhile is not
+  -- reported as withdrawn by this call.
+  v_withdrawn := array(
+    select e.tournament_id from entries e
+      where e.participant_id = p_participant_id
+        and e.status = 'pending_verification'
+      order by e.tournament_id
+  );
+
   delete from email_verification_tokens evt
     using entries e
     where e.id = evt.entry_id and e.participant_id = p_participant_id;
@@ -270,7 +297,7 @@ begin
   -- `entry_regulations` goes with each row (`on delete cascade`, 0018).
   delete from entries e where e.participant_id = p_participant_id;
 
-  return true;
+  return v_withdrawn;
 end;
 $$;
 
@@ -278,3 +305,63 @@ revoke all on function take_over_unverified_participant(uuid, text, uuid)
   from public;
 grant execute on function take_over_unverified_participant(uuid, text, uuid)
   to service_role;
+
+-- `0011` の定義に、未確認のアカウントを断る検査だけを足したもの(理由は冒頭)。
+-- 参加者行のロックを取った後に見るので、同時に走った
+-- `take_over_unverified_participant()` や確定とも食い違わない(確認済みは
+-- 未確認に戻らない)。断るときは、使えないリンクと同じ応答にする。この変更
+-- より前に未確認のアカウントへ送ったリンクだけが該当し、それも 1 時間で
+-- 期限が切れる。
+create or replace function reset_participant_password(
+  p_token_hash text,
+  p_password_hash text
+)
+returns void
+language plpgsql
+as $$
+declare
+  v_participant_id uuid;
+  v_expires_at timestamptz;
+  v_used_at timestamptz;
+begin
+  select prt.participant_id
+    into v_participant_id
+    from password_reset_tokens prt
+    where prt.token_hash = p_token_hash;
+
+  if v_participant_id is null then
+    raise exception 'invalid or expired token' using errcode = 'P0003';
+  end if;
+
+  perform 1 from participants p
+    where p.id = v_participant_id and p.email_verified_at is not null
+    for update;
+
+  if not found then
+    raise exception 'invalid or expired token' using errcode = 'P0003';
+  end if;
+
+  select prt.participant_id, prt.expires_at, prt.used_at
+    into v_participant_id, v_expires_at, v_used_at
+    from password_reset_tokens prt
+    where prt.token_hash = p_token_hash
+    for update;
+
+  if v_participant_id is null or v_used_at is not null
+    or v_expires_at < now() then
+    raise exception 'invalid or expired token' using errcode = 'P0003';
+  end if;
+
+  update participants
+    set password_hash = p_password_hash,
+        password_changed_at = now()
+    where id = v_participant_id;
+
+  update password_reset_tokens
+    set used_at = now()
+    where participant_id = v_participant_id and used_at is null;
+end;
+$$;
+
+revoke all on function reset_participant_password(text, text) from public;
+grant execute on function reset_participant_password(text, text) to service_role;

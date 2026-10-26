@@ -511,7 +511,7 @@ async function createEntryAfterCheck(
     // A different password, or another region: the account is handed to
     // this submission, and what the earlier ones made goes with the old
     // password (see the migration for why it is deleted rather than kept).
-    const {data: tookOver, error: takeOverError} = await db.rpc(
+    const {data: withdrawn, error: takeOverError} = await db.rpc(
       'take_over_unverified_participant',
       {
         p_participant_id: existingParticipant.id,
@@ -522,14 +522,20 @@ async function createEntryAfterCheck(
     if (takeOverError) {
       return {ok: false, status: 500, error: takeOverError.message};
     }
-    if (tookOver === true) {
+    if (Array.isArray(withdrawn)) {
       return enterTournament(
         env,
         tournament,
         existingParticipant.id,
         input.email,
         input,
-        {passwordHash},
+        {
+          passwordHash,
+          withdrawnTournaments: await withdrawnTournamentNames(
+            db,
+            (withdrawn as string[]).filter(id => id !== tournament.id),
+          ),
+        },
       );
     }
     // The address was verified since it was read above -- its owner
@@ -601,6 +607,50 @@ async function isUnverifiedAccountPassword(
 }
 
 /**
+ * The display names of the tournaments whose pending entries a takeover
+ * withdrew, for the verification mail of the entry that took over.
+ *
+ * Those entries may well have been the address owner's own -- a mistyped
+ * password, or a tournament in another region, is enough for a takeover --
+ * and the verification mail is the one message that reaches only the owner,
+ * so it is where they learn which entries to make again.
+ * @param db The Supabase client to read with.
+ * @param tournamentIds The tournaments `take_over_unverified_participant()`
+ *     reported, less the one being entered now.
+ * @return `undefined` when nothing was withdrawn. A failed read still
+ *     reports the withdrawal, without the names (an empty list).
+ */
+async function withdrawnTournamentNames(
+  db: ReturnType<typeof createDbClient>,
+  tournamentIds: string[],
+): Promise<string[] | undefined> {
+  if (tournamentIds.length === 0) {
+    return undefined;
+  }
+  const {data, error} = await db
+    .from('tournaments')
+    .select('name, type, regions(name)')
+    .in('id', tournamentIds)
+    .returns<
+      Array<{
+        name: string | null;
+        type: TournamentType;
+        regions: {name: string};
+      }>
+    >();
+  if (error || !data) {
+    console.error('failed to look up the withdrawn tournaments', {
+      tournamentIds,
+      error: error?.message,
+    });
+    return [];
+  }
+  return data.map(row =>
+    tournamentDisplayName(row.name, row.regions.name, row.type),
+  );
+}
+
+/**
  * Enters a participant whose identity is already settled -- by password in
  * `createEntryAfterCheck()`, or by session in `createEntryForParticipant()`
  * -- into a checked tournament: lapses their entries whose verification
@@ -613,8 +663,10 @@ async function isUnverifiedAccountPassword(
  * @param email The participant's address, where the link is sent.
  * @param input The entry itself.
  * @param unverifiedAccount For a participant whose address is not verified
- *     yet, the password hash this submission just gave the account. See
- *     `isStillUnverifiedAccountOf()` for what it guards against.
+ *     yet, the password hash this submission just gave the account (see
+ *     `isStillUnverifiedAccountOf()` for what it guards against) and, when
+ *     it took the account over, the tournaments whose pending entries that
+ *     withdrew (see `withdrawnTournamentNames()`).
  */
 async function enterTournament(
   env: Bindings,
@@ -622,7 +674,10 @@ async function enterTournament(
   participantId: string,
   email: string,
   input: EntrySessionInput,
-  unverifiedAccount?: {passwordHash: string},
+  unverifiedAccount?: {
+    passwordHash: string;
+    withdrawnTournaments?: string[];
+  },
 ): Promise<CreateEntryResult> {
   const db = createDbClient(env);
   const tournamentId = tournament.id;
@@ -814,6 +869,7 @@ async function enterTournament(
         tournament.type,
       ),
       tournament.capacity !== null,
+      unverifiedAccount?.withdrawnTournaments,
     );
   } catch (mailError) {
     // Rolled back because the participant never received a usable
@@ -847,6 +903,11 @@ async function enterTournament(
  * Read after the entry is written, which leaves no gap: a takeover that
  * commits before this read is seen here, and one that commits after it
  * deletes the entry (and with it the link) itself.
+ *
+ * A takeover is the only thing that changes an unverified account's hash:
+ * a password reset is refused for one (`reset_participant_password()`,
+ * migration 0034), so a reset made while this entry was being written can't
+ * be mistaken for a later submission and withdraw it.
  * @param db The Supabase client to read with.
  * @param participantId The account the entry was written for.
  * @param passwordHash The hash this submission set on it.

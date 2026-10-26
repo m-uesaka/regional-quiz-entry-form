@@ -19,6 +19,7 @@ type ConfirmResult = {ok: true} | {ok: false; status: 400 | 500; error: string};
 
 interface ParticipantRow {
   id: string;
+  email_verified_at: string | null;
 }
 
 interface ResetTokenRow {
@@ -62,7 +63,7 @@ export async function requestPasswordReset(
 
   const {data: participant, error} = await db
     .from('participants')
-    .select('id')
+    .select('id, email_verified_at')
     .eq('email', email)
     .returns<ParticipantRow[]>()
     .maybeSingle();
@@ -73,6 +74,31 @@ export async function requestPasswordReset(
     return;
   }
   if (!participant) {
+    return;
+  }
+
+  const mailer = createMailSender(env);
+
+  if (!participant.email_verified_at) {
+    // An unverified account can't be reset (`reset_participant_password()`,
+    // migration 0034): a new password would still be refused at login, and
+    // the region would stay whatever an unconfirmed submission chose (#189).
+    // What does get it back is the entry form, so that is what the owner is
+    // told. Only this address receives it, like the link it replaces.
+    try {
+      await mailer.send(
+        buildSystemMail(email, systemMailSubject('パスワードの再設定'), [
+          'パスワード再設定のお申し込みを受け付けましたが、このメールアドレスで登録されたアカウントは、まだメールアドレスの確認が済んでいないため、パスワードを再設定できません。',
+          'エントリーの確認メールのリンクを開いてエントリーを確定すると、そのエントリーで設定したパスワードでログインできるようになります。リンクの期限が切れた場合や、パスワードを変えたい場合は、エントリーフォームからもう一度エントリーしてください。そのとき入力したパスワードがアカウントのパスワードになります。',
+          'パスワードの再設定を申し込んだ覚えがない場合は、このメールを破棄してください。',
+        ]),
+      );
+    } catch (mailError) {
+      console.error('failed to send the unverified-account reset mail', {
+        participantId: participant.id,
+        error: mailError,
+      });
+    }
     return;
   }
 
@@ -112,7 +138,6 @@ export async function requestPasswordReset(
     return;
   }
 
-  const mailer = createMailSender(env);
   try {
     await mailer.send(
       buildSystemMail(email, systemMailSubject('パスワードの再設定'), [
