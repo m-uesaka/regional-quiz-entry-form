@@ -9,7 +9,7 @@ import {
   createEntryUnauthenticated,
   updateOwnEntry,
 } from './entries';
-import {hashPassword} from './password';
+import {hashPassword, verifyPassword} from './password';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
 
 // Local Supabase Postgres connection (`supabase start` default), same
@@ -202,6 +202,19 @@ describe.skipIf(!(await isDbReachable()))(
     }
 
     /**
+     * Marks the account under `email` as verified, the way following any of
+     * its verification links would (`confirm_entry_by_token()`). Without it
+     * a second submission under the same address takes the account over
+     * instead of being held to it (#189).
+     */
+    async function verifyAddress(email: string): Promise<void> {
+      await sql`
+        update participants set email_verified_at = now()
+        where email = ${email}
+      `;
+    }
+
+    /**
      * Adds a required `t_shirt_size` radio and an optional `topics` checkbox
      * to the fixture's tournament, so `createEntry()` has a form definition
      * to check the submitted answers against.
@@ -365,8 +378,9 @@ describe.skipIf(!(await isDbReachable()))(
       const fixtureB = await createFixture('region-b');
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${fixtureA.regionId}, ${email}, ${await hashPassword('quiz-entry-pass1')})
+        insert into participants (
+          region_id, email, password_hash, email_verified_at
+        ) values (${fixtureA.regionId}, ${email}, ${await hashPassword('quiz-entry-pass1')}, now())
       `;
 
       const result = await createEntry(
@@ -383,8 +397,9 @@ describe.skipIf(!(await isDbReachable()))(
       const fixture = await createFixture('wrong-password');
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${fixture.regionId}, ${email}, ${await hashPassword('the-real-password')})
+        insert into participants (
+          region_id, email, password_hash, email_verified_at
+        ) values (${fixture.regionId}, ${email}, ${await hashPassword('the-real-password')}, now())
       `;
 
       const result = await createEntry(
@@ -421,8 +436,9 @@ describe.skipIf(!(await isDbReachable()))(
       const fixture = await createFixture('unauth-wrong-password');
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${fixture.regionId}, ${email}, ${await hashPassword('the-real-password')})
+        insert into participants (
+          region_id, email, password_hash, email_verified_at
+        ) values (${fixture.regionId}, ${email}, ${await hashPassword('the-real-password')}, now())
       `;
       mailSendCount = 0;
 
@@ -445,8 +461,9 @@ describe.skipIf(!(await isDbReachable()))(
       const fixtureB = await createFixture('unauth-region-b');
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${fixtureA.regionId}, ${email}, ${await hashPassword('quiz-entry-pass1')})
+        insert into participants (
+          region_id, email, password_hash, email_verified_at
+        ) values (${fixtureA.regionId}, ${email}, ${await hashPassword('quiz-entry-pass1')}, now())
       `;
       mailSendCount = 0;
 
@@ -463,8 +480,9 @@ describe.skipIf(!(await isDbReachable()))(
       const fixture = await createFixture('unauth-no-entry');
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${fixture.regionId}, ${email}, ${await hashPassword('the-real-password')})
+        insert into participants (
+          region_id, email, password_hash, email_verified_at
+        ) values (${fixture.regionId}, ${email}, ${await hashPassword('the-real-password')}, now())
         returning id
       `;
 
@@ -686,6 +704,7 @@ describe.skipIf(!(await isDbReachable()))(
       const input = validInput({regulationIds: [fixture.regulationId]});
       const firstResult = await createEntry(env, fixture.tournamentId, input);
       expect(firstResult.ok).toBe(true);
+      await verifyAddress(input.email);
 
       const secondResult = await createEntry(env, fixture.tournamentId, input);
 
@@ -699,6 +718,7 @@ describe.skipIf(!(await isDbReachable()))(
       const firstResult = await createEntry(env, fixture.tournamentId, input);
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
+      await verifyAddress(input.email);
       await sql`
         update entries
         set status = 'cancelled', cancelled_at = now(), email_verified_at = now()
@@ -735,6 +755,7 @@ describe.skipIf(!(await isDbReachable()))(
       const firstResult = await createEntry(env, fixture.tournamentId, input);
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
+      await verifyAddress(input.email);
       await sql`
         update entries
         set status = 'cancelled', cancelled_at = now(), email_verified_at = now()
@@ -796,6 +817,7 @@ describe.skipIf(!(await isDbReachable()))(
       );
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
+      await verifyAddress(email);
       await sql`
         update entries set status = 'confirmed', email_verified_at = now()
         where id = ${firstResult.entry.id}
@@ -881,6 +903,7 @@ describe.skipIf(!(await isDbReachable()))(
       );
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
+      await verifyAddress(email);
       const [firstRow] = await sql`
         select status from entries where id = ${firstResult.entry.id}
       `;
@@ -913,6 +936,7 @@ describe.skipIf(!(await isDbReachable()))(
       const input = validInput({regulationIds: [fixture.regulationId]});
       const firstResult = await createEntry(env, fixture.tournamentId, input);
       expect(firstResult.ok).toBe(true);
+      await verifyAddress(input.email);
 
       const result = await createEntry(env, fixture.tournamentId, input);
 
@@ -927,6 +951,7 @@ describe.skipIf(!(await isDbReachable()))(
       expect((await createEntry(env, fixture.tournamentId, input)).ok).toBe(
         true,
       );
+      await verifyAddress(input.email);
       mailSendCount = 0;
 
       const outcome = await enterUnauthenticated(fixture.tournamentId, input);
@@ -944,6 +969,7 @@ describe.skipIf(!(await isDbReachable()))(
       const firstResult = await createEntry(env, fixture.tournamentId, input);
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
+      await verifyAddress(input.email);
       await expireVerificationLinks(firstResult.entry.id);
       mailSendCount = 0;
 
@@ -985,6 +1011,7 @@ describe.skipIf(!(await isDbReachable()))(
       );
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
+      await verifyAddress(email);
       await expireVerificationLinks(firstResult.entry.id);
 
       const result = await createEntry(
@@ -1017,6 +1044,7 @@ describe.skipIf(!(await isDbReachable()))(
       );
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
+      await verifyAddress(email);
       await sql`
         delete from email_verification_tokens
         where entry_id = ${firstResult.entry.id}
@@ -1041,6 +1069,7 @@ describe.skipIf(!(await isDbReachable()))(
       const firstResult = await createEntry(env, fixture.tournamentId, input);
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
+      await verifyAddress(input.email);
       await sql`
         update entries set status = 'confirmed', email_verified_at = now()
         where id = ${firstResult.entry.id}
@@ -1056,6 +1085,309 @@ describe.skipIf(!(await isDbReachable()))(
       expect(row.status).toBe('confirmed');
     });
 
+    /** The account registered under `email`, as the takeover tests read it. */
+    async function readParticipant(email: string): Promise<{
+      id: string;
+      region_id: string;
+      password_hash: string;
+      password_changed_at: Date;
+      email_verified_at: Date | null;
+    }> {
+      const [row] = await sql`
+        select id, region_id, password_hash, password_changed_at,
+               email_verified_at
+        from participants where email = ${email}
+      `;
+      return row;
+    }
+
+    // The attack in #189: an entry under someone else's address in a far
+    // region, never confirmed, must not keep the owner out of their own
+    // region or leave the account with the first submitter's password.
+    it('takes an unverified account over: password, region and earlier entries', async () => {
+      const far = await createFixture('takeover-far');
+      const near = await createFixture('takeover-near');
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      const first = await createEntry(
+        env,
+        far.tournamentId,
+        validInput({
+          email,
+          password: 'someone-elses-password',
+          passwordConfirm: 'someone-elses-password',
+          regulationIds: [far.regulationId],
+        }),
+      );
+      expect(first.ok).toBe(true);
+      if (!first.ok) return;
+      const before = await readParticipant(email);
+
+      const result = await createEntry(
+        env,
+        near.tournamentId,
+        validInput({email, regulationIds: [near.regulationId]}),
+      );
+
+      expect(result.ok).toBe(true);
+      const after = await readParticipant(email);
+      expect(after.id).toBe(before.id);
+      expect(after.region_id).toBe(near.regionId);
+      expect(after.email_verified_at).toBeNull();
+      expect(
+        (await verifyPassword('quiz-entry-pass1', after.password_hash)).valid,
+      ).toBe(true);
+      expect(
+        (await verifyPassword('someone-elses-password', after.password_hash))
+          .valid,
+      ).toBe(false);
+      expect(after.password_changed_at.getTime()).toBeGreaterThan(
+        before.password_changed_at.getTime(),
+      );
+      // The first submission's entry and its link are gone, so following
+      // that link can no longer verify the account with this password.
+      const earlier = await sql`
+        select id from entries where id = ${first.entry.id}
+      `;
+      expect(earlier.length).toBe(0);
+      const earlierTokens = await sql`
+        select id from email_verification_tokens where entry_id = ${first.entry.id}
+      `;
+      expect(earlierTokens.length).toBe(0);
+    });
+
+    it('lets a takeover enter the tournaments the earlier submission held', async () => {
+      const {saikyoi, shinjinou} = await createRegionPair(
+        'takeover-dual-off',
+        false,
+      );
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      expect(
+        (
+          await createEntry(
+            env,
+            saikyoi.tournamentId,
+            validInput({
+              email,
+              password: 'someone-elses-password',
+              passwordConfirm: 'someone-elses-password',
+              regulationIds: [saikyoi.regulationId],
+            }),
+          )
+        ).ok,
+      ).toBe(true);
+
+      // Neither the same tournament nor the region's other one is held by
+      // an entry nobody confirmed.
+      const same = await createEntry(
+        env,
+        saikyoi.tournamentId,
+        validInput({email, regulationIds: [saikyoi.regulationId]}),
+      );
+      expect(same.ok).toBe(true);
+      const other = await createEntry(
+        env,
+        shinjinou.tournamentId,
+        validInput({
+          email,
+          password: 'a-third-password',
+          passwordConfirm: 'a-third-password',
+          regulationIds: [shinjinou.regulationId],
+        }),
+      );
+      expect(other.ok).toBe(true);
+      const [{count}] = await sql`
+        select count(*)::int as count from entries e
+        join participants p on p.id = e.participant_id
+        where p.email = ${email}
+      `;
+      expect(count).toBe(1);
+    });
+
+    // Entering both of a region's tournaments before following either link
+    // is ordinary, and a submission with the account's own password for its
+    // own region can only come from whoever made it.
+    it('keeps an unverified account and its entries for its own password and region', async () => {
+      const {saikyoi, shinjinou} = await createRegionPair(
+        'unverified-same-password',
+        true,
+      );
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      const first = await createEntry(
+        env,
+        saikyoi.tournamentId,
+        validInput({email, regulationIds: [saikyoi.regulationId]}),
+      );
+      expect(first.ok).toBe(true);
+      const before = await readParticipant(email);
+
+      const second = await createEntry(
+        env,
+        shinjinou.tournamentId,
+        validInput({email, regulationIds: [shinjinou.regulationId]}),
+      );
+
+      expect(second.ok).toBe(true);
+      expect(await readParticipant(email)).toEqual(before);
+      const rows = await sql`
+        select status from entries where participant_id = ${before.id}
+      `;
+      expect(rows.map((row: {status: string}) => row.status)).toEqual([
+        'pending_verification',
+        'pending_verification',
+      ]);
+    });
+
+    it('takes an unverified account over for its own password in another region', async () => {
+      const far = await createFixture('same-password-far');
+      const near = await createFixture('same-password-near');
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      const first = await createEntry(
+        env,
+        far.tournamentId,
+        validInput({email, regulationIds: [far.regulationId]}),
+      );
+      expect(first.ok).toBe(true);
+
+      const second = await createEntry(
+        env,
+        near.tournamentId,
+        validInput({email, regulationIds: [near.regulationId]}),
+      );
+
+      expect(second.ok).toBe(true);
+      const after = await readParticipant(email);
+      expect(after.region_id).toBe(near.regionId);
+      const [{count}] = await sql`
+        select count(*)::int as count from entries
+        where participant_id = ${after.id}
+      `;
+      expect(count).toBe(1);
+    });
+
+    it('createEntryUnauthenticated takes an unverified account over without a notice', async () => {
+      const far = await createFixture('unauth-takeover-far');
+      const near = await createFixture('unauth-takeover-near');
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      await sql`
+        insert into participants (region_id, email, password_hash)
+        values (${far.regionId}, ${email}, ${await hashPassword('someone-elses-password')})
+      `;
+      mailSendCount = 0;
+
+      const outcome = await enterUnauthenticated(
+        near.tournamentId,
+        validInput({email, regulationIds: [near.regulationId]}),
+      );
+
+      expect(outcome.kind).toBe('created');
+      // The verification mail, and nothing else.
+      expect(mailSendCount).toBe(1);
+      expect((await readParticipant(email)).region_id).toBe(near.regionId);
+    });
+
+    it('holds a verified account to its password and region, unchanged', async () => {
+      const far = await createFixture('verified-far');
+      const near = await createFixture('verified-near');
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      await sql`
+        insert into participants (
+          region_id, email, password_hash, email_verified_at
+        ) values (
+          ${far.regionId}, ${email},
+          ${await hashPassword('the-real-password')}, now()
+        )
+      `;
+      const before = await readParticipant(email);
+
+      const otherRegion = await createEntry(
+        env,
+        near.tournamentId,
+        validInput({email, regulationIds: [near.regulationId]}),
+      );
+      const wrongPassword = await createEntry(
+        env,
+        far.tournamentId,
+        validInput({email, regulationIds: [far.regulationId]}),
+      );
+
+      expect(!otherRegion.ok && otherRegion.error).toBe(
+        'already registered in another region',
+      );
+      expect(!wrongPassword.ok && wrongPassword.error).toBe('invalid password');
+      expect(await readParticipant(email)).toEqual(before);
+    });
+
+    it('holds a takeover to the rules for setting a password', async () => {
+      const fixture = await createFixture('takeover-common-password');
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      await sql`
+        insert into participants (region_id, email, password_hash)
+        values (${fixture.regionId}, ${email}, ${await hashPassword('someone-elses-password')})
+      `;
+      const before = await readParticipant(email);
+
+      const result = await createEntry(
+        env,
+        fixture.tournamentId,
+        validInput({
+          email,
+          password: 'Password123',
+          passwordConfirm: 'Password123',
+          regulationIds: [fixture.regulationId],
+        }),
+      );
+
+      expect(!result.ok && result.error).toBe('password too common');
+      expect(await readParticipant(email)).toEqual(before);
+    });
+
+    // A later submission under the same unverified address took the account
+    // over between this one's takeover and its entry. The entry written
+    // after that must not go out with a link: following it would verify the
+    // account with the later submitter's password.
+    it('withdraws an entry whose account was taken over while it was written', async () => {
+      const fixture = await createFixture('takeover-superseded');
+      const input = validInput({regulationIds: [fixture.regulationId]});
+      const previousFetch = globalThis.fetch;
+      globalThis.fetch = (async (
+        requestInput: RequestInfo | URL,
+        init?: RequestInit,
+      ) => {
+        const url =
+          typeof requestInput === 'string'
+            ? requestInput
+            : requestInput.toString();
+        const response = await previousFetch(requestInput, init);
+        if (
+          url.includes('/rest/v1/entry_regulations') &&
+          init?.method === 'POST'
+        ) {
+          await sql`
+            update participants set password_hash = 'a-later-submission'
+            where email = ${input.email}
+          `;
+        }
+        return response;
+      }) as typeof fetch;
+      mailSendCount = 0;
+
+      let result: Awaited<ReturnType<typeof createEntry>>;
+      try {
+        result = await createEntry(env, fixture.tournamentId, input);
+      } finally {
+        globalThis.fetch = previousFetch;
+      }
+
+      expect(!result.ok && result.error).toBe(
+        'superseded by a later submission',
+      );
+      expect(mailSendCount).toBe(0);
+      const rows = await sql`
+        select id from entries where tournament_id = ${fixture.tournamentId}
+      `;
+      expect(rows.length).toBe(0);
+    });
+
     it('still allows re-entering the same tournament after cancelling', async () => {
       // The dual-entry check looks at the region's *other* tournaments, so
       // it must not stand in the way of the reuse path above — the entry
@@ -1067,6 +1399,7 @@ describe.skipIf(!(await isDbReachable()))(
       const firstResult = await createEntry(env, fixture.tournamentId, input);
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
+      await verifyAddress(input.email);
       await sql`
         update entries set status = 'cancelled', cancelled_at = now()
         where id = ${firstResult.entry.id}

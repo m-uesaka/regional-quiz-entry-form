@@ -322,10 +322,18 @@ function classifyRead(url: URL): GuardRead | null {
       body: [staffSessionRow(TEST_SESSIONS_VALID_FROM)],
     };
   }
-  if (table === 'participants' && select === 'password_changed_at') {
+  if (
+    table === 'participants' &&
+    select === 'password_changed_at,email_verified_at'
+  ) {
     return {
       kind: 'participant-session',
-      body: [{password_changed_at: PASSWORD_CHANGED_AT}],
+      body: [
+        {
+          password_changed_at: PASSWORD_CHANGED_AT,
+          email_verified_at: PASSWORD_CHANGED_AT,
+        },
+      ],
     };
   }
   if (table === 'entries' && select === 'tournaments(region_id,type)') {

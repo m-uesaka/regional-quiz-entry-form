@@ -36,9 +36,14 @@ function mockParticipantRows(rows: Record<string, unknown>[]): void {
     Promise.resolve(Response.json(rows))) as unknown as typeof fetch;
 }
 
-/** Answers that lookup with a participant whose password changed at `at`. */
+/**
+ * Answers that lookup with a verified participant whose password changed at
+ * `at`.
+ */
 function mockPasswordChangedAt(at: string): void {
-  mockParticipantRows([{password_changed_at: at}]);
+  mockParticipantRows([
+    {password_changed_at: at, email_verified_at: '2026-08-01T00:00:00.000Z'},
+  ]);
 }
 
 async function tokenFor(claims: Record<string, unknown>): Promise<string> {
@@ -163,6 +168,20 @@ describe('requireParticipant', () => {
     const res = await app.request('/x', {headers: cookieHeader(token)}, ENV);
 
     expect(res.status).toBe(200);
+  });
+
+  // A session issued before migration 0034 may name an account whose
+  // address was never verified, possibly held by whoever registered someone
+  // else's address (#189).
+  it('returns 401 for an otherwise current session of an unverified account', async () => {
+    mockParticipantRows([
+      {password_changed_at: PASSWORD_CHANGED_AT, email_verified_at: null},
+    ]);
+    const token = await currentSessionToken();
+
+    const res = await app.request('/x', {headers: cookieHeader(token)}, ENV);
+
+    expect(res.status).toBe(401);
   });
 
   it('returns 401 when the participant no longer exists', async () => {

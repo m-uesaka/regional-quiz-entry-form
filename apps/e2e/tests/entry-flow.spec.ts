@@ -94,10 +94,13 @@ test('refuses the second tournament of a region that disallows dual entry, by ma
 // ログイン済みなら本人確認が済んでいるので、断った理由をその場で示してよい(#117)。
 test('a logged-in participant enters without credentials and is told refusals directly', async ({
   page,
+  request,
 }) => {
   const participant = await submitEntryForm(page, SHINJINOU, {
     displayName: '重複次郎',
   });
+  // Only an address that has been verified can log in (#189).
+  await openVerificationLink(page, request, SHINJINOU, participant.email);
   await loginParticipantThroughForm(page, participant);
 
   await page.goto(entryFormPath(SAIKYOI));
@@ -192,8 +195,10 @@ test('accepts a required checkbox group answered before the client bundle took o
 
 test('logging out ends the session, so mypage asks to log in again', async ({
   page,
+  request,
 }) => {
   const participant = await submitEntryForm(page, SHINJINOU);
+  await openVerificationLink(page, request, SHINJINOU, participant.email);
   await loginParticipantThroughForm(page, participant);
 
   await logoutParticipantThroughButton(page);

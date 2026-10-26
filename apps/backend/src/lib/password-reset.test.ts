@@ -216,6 +216,28 @@ describe.skipIf(!(await isDbReachable()))(
       );
     });
 
+    // A reset proves the address but leaves the region as it was, and an
+    // unverified account's region was chosen by a submission nobody
+    // confirmed -- possibly by someone holding the owner's address in a far
+    // region (#189). Verifying here would lock the owner into it; entering
+    // again is how they take the account back.
+    it('confirmPasswordReset leaves an unverified account unverified', async () => {
+      const participant = await createParticipantFixture();
+      const token = await createTokenFixture(participant.id);
+
+      expect(
+        await confirmPasswordReset(env, {
+          token,
+          newPassword: 'brand-new-password',
+        }),
+      ).toEqual({ok: true});
+
+      const [row] = await sql`
+        select email_verified_at from participants where id = ${participant.id}
+      `;
+      expect(row.email_verified_at).toBeNull();
+    });
+
     it('requestPasswordReset drops the participant’s expired tokens', async () => {
       const participant = await createParticipantFixture();
       const expired = await createTokenFixture(participant.id, {

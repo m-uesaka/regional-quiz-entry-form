@@ -1,5 +1,6 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
+import {readFileSync} from 'node:fs';
 
 // Local Supabase Postgres connection (`supabase start` default). Overridable
 // via SUPABASE_DB_URL for other local setups.
@@ -1055,3 +1056,204 @@ describe.skipIf(!dbReachable)('indexes (local Supabase integration)', () => {
     ]);
   });
 });
+
+// Migration 0034 (#189): which existing accounts count as verified, and the
+// takeover of one that doesn't.
+describe.skipIf(!dbReachable)(
+  'participants.email_verified_at (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const testEmailDomain = 'db-schema-verified-test.example.com';
+    const testRegionSlug = 'db-schema-verified-test-region';
+
+    async function cleanup() {
+      await sql`delete from email_verification_tokens where entry_id in (
+        select e.id from entries e
+        join participants p on p.id = e.participant_id
+        where p.email like ${'%@' + testEmailDomain}
+      )`;
+      await sql`delete from entries where participant_id in (
+        select id from participants where email like ${'%@' + testEmailDomain}
+      )`;
+      await sql`delete from participants where email like ${'%@' + testEmailDomain}`;
+      await sql`delete from tournaments where region_id in (
+        select id from regions where slug like ${testRegionSlug + '%'}
+      )`;
+      await sql`delete from regions where slug like ${testRegionSlug + '%'}`;
+    }
+
+    beforeEach(cleanup);
+
+    afterAll(async () => {
+      await cleanup();
+      await sql.close();
+    });
+
+    /**
+     * A region with one tournament, and an unverified participant in it.
+     * @param suffix Tells this test's rows apart from the others'.
+     */
+    async function seed(suffix: string) {
+      const [region] = await sql`
+        insert into regions (slug, name)
+        values (${testRegionSlug + '-' + suffix}, 'テスト地域')
+        returning id
+      `;
+      const [tournament] = await sql`
+        insert into tournaments (
+          region_id, type, name, entry_opens_at, entry_closes_at
+        ) values (${region.id}, 'saikyoi', 'テスト大会', now(), now())
+        returning id
+      `;
+      const [participant] = await sql`
+        insert into participants (region_id, email, password_hash)
+        values (${region.id}, ${suffix + '@' + testEmailDomain}, 'old-hash')
+        returning id
+      `;
+      /**
+       * Enters the participant with `status`, verified at `verifiedAt`.
+       * @param status The entry's status.
+       * @param verifiedAt Its `email_verified_at`.
+       */
+      const enter = async (status: string, verifiedAt: string | null) => {
+        const [entry] = await sql`
+          insert into entries (
+            participant_id, tournament_id, name, furigana, display_name,
+            status, email_verified_at
+          ) values (
+            ${participant.id}, ${tournament.id}, '山田太郎', 'ヤマダタロウ',
+            '太郎', ${status}, ${verifiedAt}
+          )
+          returning id
+        `;
+        return entry.id as string;
+      };
+      return {
+        regionId: region.id as string,
+        participantId: participant.id as string,
+        enter,
+      };
+    }
+
+    /**
+     * The backfill statement of the migration, read from the file itself so
+     * the test runs what was actually applied.
+     */
+    function backfillStatement(): string {
+      const migration = readFileSync(
+        new URL(
+          '../../../../supabase/migrations/0034_participants_email_verified_at.sql',
+          import.meta.url,
+        ),
+        'utf8',
+      );
+      const start = migration.indexOf('update participants p');
+      return migration.slice(start, migration.indexOf(';', start) + 1);
+    }
+
+    it('backfills accounts with a confirmed entry, at its earliest time', async () => {
+      const verified = await seed('backfill-verified');
+      // A cancelled entry that was confirmed before still proves the address.
+      await verified.enter('cancelled', '2026-05-01T00:00:00Z');
+      const pendingOnly = await seed('backfill-pending');
+      await pendingOnly.enter('pending_verification', null);
+      const rollback = new Error('rollback');
+
+      // Run inside a transaction that is rolled back, so the statement --
+      // which touches every participant -- leaves the rest of the local
+      // database as it found it.
+      let rows: Array<{id: string; email_verified_at: Date | null}> = [];
+      try {
+        await sql.begin(async tx => {
+          await tx`
+            update participants set email_verified_at = null
+            where id in (${verified.participantId}, ${pendingOnly.participantId})
+          `;
+          await tx.unsafe(backfillStatement());
+          rows = await tx`
+            select id, email_verified_at from participants
+            where id in (${verified.participantId}, ${pendingOnly.participantId})
+          `;
+          throw rollback;
+        });
+      } catch (error) {
+        if (error !== rollback) throw error;
+      }
+
+      const byId = new Map(rows.map(row => [row.id, row.email_verified_at]));
+      expect(byId.get(verified.participantId)).toEqual(
+        new Date('2026-05-01T00:00:00Z'),
+      );
+      expect(byId.get(pendingOnly.participantId)).toBeNull();
+    });
+
+    it('take_over_unverified_participant replaces an unverified account', async () => {
+      const {participantId, enter} = await seed('takeover');
+      const pendingId = await enter('pending_verification', null);
+      await sql`
+        insert into email_verification_tokens (entry_id, token_hash, expires_at)
+        values (${pendingId}, 'db-schema-takeover-token', now() + interval '1 day')
+      `;
+      const [other] = await sql`
+        insert into regions (slug, name)
+        values (${testRegionSlug + '-takeover-other'}, '別の地域')
+        returning id
+      `;
+
+      const [{tookOver}] = await sql`
+        select take_over_unverified_participant(
+          ${participantId}, 'new-hash', ${other.id}
+        ) as "tookOver"
+      `;
+
+      expect(tookOver).toBe(true);
+      const [row] = await sql`
+        select region_id, password_hash, email_verified_at from participants
+        where id = ${participantId}
+      `;
+      expect(row).toEqual({
+        region_id: other.id,
+        password_hash: 'new-hash',
+        email_verified_at: null,
+      });
+      expect(
+        await sql`select id from entries where participant_id = ${participantId}`,
+      ).toHaveLength(0);
+    });
+
+    it('take_over_unverified_participant leaves a verified account alone', async () => {
+      const {participantId, regionId} = await seed('takeover-verified');
+      await sql`
+        update participants set email_verified_at = now()
+        where id = ${participantId}
+      `;
+
+      const [{tookOver}] = await sql`
+        select take_over_unverified_participant(
+          ${participantId}, 'new-hash', ${regionId}
+        ) as "tookOver"
+      `;
+
+      expect(tookOver).toBe(false);
+      const [row] = await sql`
+        select password_hash from participants where id = ${participantId}
+      `;
+      expect(row.password_hash).toBe('old-hash');
+    });
+
+    // Belt and braces for an account the backfill missed: a confirmed entry
+    // proves the address whatever the participant row says.
+    it('take_over_unverified_participant leaves an account with a confirmed entry alone', async () => {
+      const {participantId, regionId, enter} = await seed('takeover-confirmed');
+      await enter('confirmed', '2026-05-01T00:00:00Z');
+
+      const [{tookOver}] = await sql`
+        select take_over_unverified_participant(
+          ${participantId}, 'new-hash', ${regionId}
+        ) as "tookOver"
+      `;
+
+      expect(tookOver).toBe(false);
+    });
+  },
+);
