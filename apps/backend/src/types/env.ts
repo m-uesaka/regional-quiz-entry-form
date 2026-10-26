@@ -30,6 +30,13 @@ export interface Bindings {
   // environments on purpose -- a `var` of the same name would overwrite the
   // secret on the next deploy.
   TURNSTILE_SECRET_KEY: string;
+  // Secret, and optional: shared with the frontend, which sends it alongside
+  // the browser's address (`X-Client-IP`) on the subrequests its SSR makes.
+  // `clientIp()` in `middleware/rate-limit.ts` believes that header only
+  // when this matches, so the per-IP limits count the user rather than the
+  // frontend (#188). Unset -- local development, the tests -- the header is
+  // never trusted and every limit keys on `CF-Connecting-IP` as before.
+  CLIENT_IP_FORWARD_SECRET?: string;
   // Cloudflare's Rate Limiting bindings, declared in `wrangler.toml`. Each
   // is shared by several endpoints, which is why every key built for them
   // says what it is keyed on (see `middleware/rate-limit.ts`):

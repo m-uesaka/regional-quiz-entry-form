@@ -43,6 +43,11 @@ declare global {
 // appears in `wrangler.jsonc`.
 interface Env {
   SESSION_SECRET: string;
+  // Secret, provisioned the same way as `SESSION_SECRET` and with the same
+  // value as the backend Worker's: `handleFetch` sends it with the browser's
+  // address so the backend's per-IP rate limits can trust that address
+  // (#188). Optional -- unset, the address is simply not forwarded.
+  CLIENT_IP_FORWARD_SECRET?: string;
   // The origin of the backend Worker that `hooks.server.ts` forwards
   // `/api/*` to. Not a secret, but it differs per environment (preview vs.
   // production), so it is set as a Pages environment variable rather than

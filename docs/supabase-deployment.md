@@ -160,6 +160,7 @@ bunx wrangler secret put MAIL_API_KEY --env staging
 bunx wrangler secret put GOOGLE_SHEETS_API_KEY --env staging
 bunx wrangler secret put SESSION_SECRET --env staging
 bunx wrangler secret put TURNSTILE_SECRET_KEY --env staging
+bunx wrangler secret put CLIENT_IP_FORWARD_SECRET --env staging
 
 # production
 bunx wrangler secret put SUPABASE_URL --env production
@@ -168,6 +169,7 @@ bunx wrangler secret put MAIL_API_KEY --env production
 bunx wrangler secret put GOOGLE_SHEETS_API_KEY --env production
 bunx wrangler secret put SESSION_SECRET --env production
 bunx wrangler secret put TURNSTILE_SECRET_KEY --env production
+bunx wrangler secret put CLIENT_IP_FORWARD_SECRET --env production
 ```
 
 `SESSION_SECRET` は staging/production で必ず異なる値を発行してください。6.3 で Pages にも同じ値を登録するので、シークレット管理ツールに保存しておきます。
@@ -192,9 +194,13 @@ Pages 側の値は次のデプロイから反映されるため、登録し直�
 >
 > このため `wrangler deploy --env <name>` は毎回 `"vars.TURNSTILE_SECRET_KEY" exists at the top level, but not on "env.<name>.vars"` と警告します。**想定どおりの警告で、指示どおりに追記してはいけません。**
 
+`CLIENT_IP_FORWARD_SECRET` は、フロントエンドが SSR から転送するリクエストに載せる利用者の IP(`X-Client-IP`)を、バックエンドが信用してよいかを判定する共有シークレットです(#188)。`SESSION_SECRET` と同じく環境ごとに `openssl rand -base64 32` で発行し、**6.3 で Pages にも同じ値を登録します**(手順は上の `SESSION_SECRET` と同じくクリップボード経由で)。未登録でも動作はしますが、その場合ログイン・エントリー送信・パスワード再設定申請の IP 単位のレート制限が全利用者で 1 つのバケツを共有し、1 人が上限まで叩くと全員が 429 になります。値がずれている場合も同じ状態になります。このときバックエンドは `X-Client-IP ignored: ...` という警告をログに出すので、`wrangler tail` で確認できます(Worker 側にシークレットが登録されている場合のみ)。確認方法は 6.2.1 を参照してください。
+
 ### 6.2.1 レート制限の binding
 
 `wrangler.toml` の各環境に `LOGIN_IP_RATE_LIMITER` / `LOGIN_EMAIL_RATE_LIMITER` / `MAIL_TRIGGER_IP_RATE_LIMITER` / `MAIL_TRIGGER_EMAIL_RATE_LIMITER`(Cloudflare の Rate Limiting binding)を定義済みです(#116)。**登録作業は不要**で、`namespace_id` は Cloudflare 側の資源を指すものではなく「どのカウンタか」を表すだけの識別子です。ただし環境をまたいで同じ id を使うと staging の負荷が production の枠を食うため、`wrangler.toml` では環境ごとに別の値にしてあります。ここを編集するときは、`period` に **10 か 60 しか指定できない**点にも注意してください。
+
+IP 鍵が利用者ごとに分かれているか(`CLIENT_IP_FORWARD_SECRET` が Worker と Pages で一致しているか)は、`cd apps/backend && bunx wrangler tail --env staging --format json` を流しながら、2 つの異なる回線(例: 自宅の回線とスマートフォンのモバイル回線)からフロントエンドのログイン画面でログインを試して確かめます。各イベントの `event.request.headers` の `x-client-ip` にそれぞれの回線のアドレスが入っていれば転送はされています(同じ `headers` に `x-client-ip-forward-secret` も載り得るので、この出力をそのまま共有しないでください)。シークレットがずれていれば `x-client-ip ignored` の警告が出ます。警告が無いことに加えて、確実に確かめるには片方の回線から 1 分以内にログインを 11 回失敗させ(`LOGIN_IP_RATE_LIMITER` は staging / production とも 10 回 / 60 秒)、429 になった直後にもう片方の回線からはログインできることを確認します。シークレットがずれていると、もう片方も 429 になります。
 
 ### 6.2.2 一斉メール用の Queue
 
@@ -231,12 +237,13 @@ bunx wrangler pages project create regional-quiz-frontend-staging --production-b
 bunx wrangler pages project create regional-quiz-frontend --production-branch main
 ```
 
-`src/hooks.server.ts` は `$env/dynamic/private` から 2 つの値を、`Turnstile.svelte` は `$env/dynamic/public` から 1 つを読むので、Pages プロジェクトの変数として登録します。
+`src/hooks.server.ts` は `$env/dynamic/private` から 3 つの値を、`Turnstile.svelte` は `$env/dynamic/public` から 1 つを読むので、Pages プロジェクトの変数として登録します。
 
 | 名前 | 種別 | 値 |
 | --- | --- | --- |
 | `BACKEND_URL` | 通常の変数 | **その環境のバックエンド Worker 自身のオリジン**。production は `https://regional-quiz-backend.<subdomain>.workers.dev`、staging は `https://regional-quiz-backend-staging.<subdomain>.workers.dev`(`<subdomain>` は Cloudflare アカウントごとの workers.dev サブドメイン)。SSR の `handleFetch` が `/api/*` の転送先に使う。**フロントエンドのホスト名ではない**(6.4)。末尾の `/` や `/api` は付けない |
 | `SESSION_SECRET` | シークレット | **同じ環境の Worker に登録したものと同一の値**。ズレるとログイン直後のセッションが読めず `/staff/*` がログイン画面に跳ね返される |
+| `CLIENT_IP_FORWARD_SECRET` | シークレット | **同じ環境の Worker に登録したものと同一の値**(6.2)。`handleFetch` が利用者の IP と一緒にバックエンドへ送る。未登録・不一致でも画面は動くが、IP 単位のレート制限が全利用者共通になる |
 | `PUBLIC_TURNSTILE_SITE_KEY` | 通常の変数 | 6.2 で作成した Turnstile widget の **Site Key**。エントリーフォームとパスワード再設定要求フォームのウィジェットが読む。未設定だとウィジェットが描画されず、トークンが無い送信をバックエンドが 400 で拒否するため、**この 2 つのフォームが誰にも使えなくなる** |
 
 ```bash
@@ -246,17 +253,19 @@ cd apps/frontend
 bunx wrangler pages secret put SESSION_SECRET --project-name regional-quiz-frontend-staging
 bunx wrangler pages secret put BACKEND_URL --project-name regional-quiz-frontend-staging
 bunx wrangler pages secret put PUBLIC_TURNSTILE_SITE_KEY --project-name regional-quiz-frontend-staging
+bunx wrangler pages secret put CLIENT_IP_FORWARD_SECRET --project-name regional-quiz-frontend-staging
 
 # production
 bunx wrangler pages secret put SESSION_SECRET --project-name regional-quiz-frontend
 bunx wrangler pages secret put BACKEND_URL --project-name regional-quiz-frontend
 bunx wrangler pages secret put PUBLIC_TURNSTILE_SITE_KEY --project-name regional-quiz-frontend
+bunx wrangler pages secret put CLIENT_IP_FORWARD_SECRET --project-name regional-quiz-frontend
 
-# 確認(3 つ並べば OK)
+# 確認(4 つ並べば OK)
 bunx wrangler pages secret list --project-name <プロジェクト名>
 ```
 
-`BACKEND_URL` / `PUBLIC_TURNSTILE_SITE_KEY` は機密ではありませんが、**3 つとも CLI(`pages secret put`)で登録してください**。表の「種別」は値の性質で、登録方法とは別です。
+`BACKEND_URL` / `PUBLIC_TURNSTILE_SITE_KEY` は機密ではありませんが、**すべて CLI(`pages secret put`)で登録してください**。表の「種別」は値の性質で、登録方法とは別です。
 
 - `pages secret put` は Production 環境に暗号化された変数として登録します。ワークフローは `--branch main` でアップロードするので、デプロイは Pages の production 環境として扱われ、Preview 側の変数は読まれません。CLI ならこの取り違えが起きません
 - 暗号化された変数も、SvelteKit からは `$env/dynamic/private` / `$env/dynamic/public` のどちらでも通常の変数と同じように読めます(`PUBLIC_` で始まる値はページに埋め込まれます)
@@ -531,6 +540,7 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 - [ ] secret key で疎通を確認した後、Legacy API Keys(`anon` / `service_role`)を無効化した
 - [ ] `Project Settings > General` の project ref を控えた
 - [ ] `SESSION_SECRET` を環境ごとに個別発行した
+- [ ] `CLIENT_IP_FORWARD_SECRET` を環境ごとに個別発行し、Worker と Pages の両方に同じ値を登録した(6.2 / 6.3)
 - [ ] GitHub の `staging` / `production` Environments を作成し、Secrets を登録した
 - [ ] `SUPABASE_ACCESS_TOKEN` を環境ごとに対象プロジェクトへスコープを絞って発行した(6.5。`api_gateway_keys_read` を含める)
 - [ ] production Environment に Required reviewers を設定した
@@ -538,7 +548,7 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 - [ ] 環境ごとに Turnstile widget を作成し、Secret Key を Worker に登録した(6.2)
 - [ ] 一斉メール用の Queue と dead letter queue を環境ごとに作成した(6.2.2。Free プランでは保持期間 24 時間を指定)
 - [ ] Pages プロジェクトを production branch `main` で作成した(6.3)
-- [ ] Pages プロジェクトに `BACKEND_URL` / `SESSION_SECRET` / `PUBLIC_TURNSTILE_SITE_KEY` を CLI で登録し、`pages secret list` で 3 つとも確認した(6.3)
+- [ ] Pages プロジェクトに `BACKEND_URL` / `SESSION_SECRET` / `CLIENT_IP_FORWARD_SECRET` / `PUBLIC_TURNSTILE_SITE_KEY` を CLI で登録し、`pages secret list` で 4 つとも確認した(6.3)
 - [ ] ドメインを取得し、Cloudflare のゾーンに追加した(6.4)
 - [ ] Pages プロジェクト(production / staging)にカスタムドメインを割り当てた(6.3 / 6.4)
 - [ ] GitHub の各 Environment に `FRONTEND_HOST` 変数を登録し、`/api/*` が Worker に届くことを確認した(6.4 / 6.5 / #101)

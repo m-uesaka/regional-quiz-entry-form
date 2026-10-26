@@ -102,7 +102,13 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 
 ### レート制限と Turnstile
 
-未認証で叩ける 5 本には、Cloudflare の Rate Limiting binding によるレート制限が掛かっています(#116 / [Task 11-1](../tasks/task-11-1.md))。**IP(`CF-Connecting-IP`)とメールアドレスの 2 つの鍵**で別々に数えます。1 つの IP から多数のアカウントを試す攻撃は IP 鍵でしか、多数の IP から 1 アカウントを試す攻撃はメール鍵でしか止まらないためです。メール鍵はバリデーション通過後に数えるので、スキーマに合わない本文で他人のメール枠を減らすことはできません。また鍵に載せる前に**小文字化**します(`middleware/rate-limit.ts` の `emailKey()`)。`Victim@example.com` と `victim@example.com` は同じ受信箱なので、そのまま数えるとバケツが分かれ、大文字小文字を変えた分だけ上限を取り直せてしまうためです。
+未認証で叩ける 5 本には、Cloudflare の Rate Limiting binding によるレート制限が掛かっています(#116 / [Task 11-1](../tasks/task-11-1.md))。**IP とメールアドレスの 2 つの鍵**で別々に数えます(IP の決め方は下記「IP 鍵の IP」)。1 つの IP から多数のアカウントを試す攻撃は IP 鍵でしか、多数の IP から 1 アカウントを試す攻撃はメール鍵でしか止まらないためです。メール鍵はバリデーション通過後に数えるので、スキーマに合わない本文で他人のメール枠を減らすことはできません。また鍵に載せる前に**小文字化**します(`middleware/rate-limit.ts` の `emailKey()`)。`Victim@example.com` と `victim@example.com` は同じ受信箱なので、そのまま数えるとバケツが分かれ、大文字小文字を変えた分だけ上限を取り直せてしまうためです。
+
+**IP 鍵の IP**(`middleware/rate-limit.ts` の `clientIp()`、#188): ログイン・エントリー送信・パスワード再設定申請はフロントエンドのフォーム action から送られるので、バックエンドには SvelteKit の SSR(`hooks.server.ts` の `handleFetch`)からのサブリクエストとして届きます。このとき `CF-Connecting-IP` に入るのは利用者ではなくフロントエンド側のアドレスなので、そのまま数えると全利用者が 1 つのバケツを共有してしまいます。そこでフロントエンドは `event.getClientAddress()` を `X-Client-IP` に、共有シークレット `CLIENT_IP_FORWARD_SECRET` を `X-Client-IP-Forward-Secret` に載せて転送し、バックエンドは**シークレットが一致したとき(定数時間比較)だけ** `X-Client-IP` を採用します。一致しない・送られていない・バックエンド側でシークレット未設定のときはヘッダーを無視し、従来どおり `CF-Connecting-IP`(無ければ `unknown`)で数えます。フロントエンドはリクエストに元から付いていた同名のヘッダーを転送前に必ず消すので、ブラウザが値を差し込むことはできません。利用者の IP が取れないとき(prerender 中や、エッジを通らないリクエスト)は何も転送しません。シークレットを載せたリクエストはリダイレクトを追わない(`redirect: 'manual'`)ので、別オリジンへシークレットが渡ることもありません。ヘッダー名は `packages/shared` の `CLIENT_IP_HEADER` / `CLIENT_IP_FORWARD_SECRET_HEADER` を両側で使います。
+
+IP 鍵は、IPv4 はアドレスそのまま、IPv6 は**先頭 /64**(`2001:db8:0:1::/64` の形に正規化)で数えます。通常の回線には /64 がまるごと割り当てられるので、アドレス単位だと 1 人がリクエストごとに別のバケツを使えてしまうためです。IPv4 射影アドレス(`::ffff:192.0.2.1`)は IPv4 として数えます。
+
+`X-Client-IP` が届いたのにシークレットが一致しない場合(バックエンド側にシークレットが設定されているときのみ)は、`console.warn` で警告を出します(シークレットの値は出しません)。これが出ていれば、Worker と Pages のシークレットがずれていて、全利用者が 1 つのバケツを共有している状態です。Service Binding ではなく共有シークレットにしたのは、`vite dev` / E2E を含めてどこでも同じ `fetch(BACKEND_URL)` 1 本の経路で済むためです。
 
 **鍵ごとに別の limiter に載せています。** Rate Limiting binding は上限を binding 単位でしか持てないので、IP 鍵とメール鍵に別々の数字を与えるには binding を分けるしかありません。
 
@@ -1100,6 +1106,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 | `GOOGLE_SHEETS_API_KEY` | ✅ | Google Sheets API v4 の API キー |
 | `FRONTEND_URL` | | フロントエンドの URL。メール本文中のリンク(確認リンク等)の組み立てと、状態変更リクエストの Origin 検証(「CSRF 対策(Origin 検証)とセキュリティヘッダ」参照)に使う |
 | `CSRF_TRUSTED_ORIGINS` | | 任意。`FRONTEND_URL` 以外に Origin 検証で許すオリジン(カンマ区切り)。ローカル開発では `dev` スクリプトが `http://127.0.0.1:5173` を渡す。通常の staging / production では設定しない |
+| `CLIENT_IP_FORWARD_SECRET` | ✅ | 任意。フロントエンドと共有するシークレット。一致したリクエストに限り `X-Client-IP` を IP 鍵に使う(1 章「レート制限と Turnstile」)。未設定ならヘッダーを信用しない。フロントエンド側にも**同じ値**を登録する |
 | `TURNSTILE_SECRET_KEY` | ✅ | Turnstile の siteverify に渡すシークレット。`[env.*.vars]` には**置かない**(同名の var はシークレットを上書きします) |
 | `LOGIN_IP_RATE_LIMITER` | | Rate Limiting binding。ログイン 2 本に IP 単位で 10 回 / 60 秒 |
 | `LOGIN_EMAIL_RATE_LIMITER` | | Rate Limiting binding。ログイン 2 本にアカウント単位で 60 回 / 60 秒 |

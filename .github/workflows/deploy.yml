@@ -195,10 +195,10 @@ jobs:
       # rather than inferred, and both Pages projects are created with `main`
       # as their production branch (`docs/supabase-deployment.md` §6.3).
       #
-      # Like the Worker, this uploads no secrets: `BACKEND_URL` and
-      # `SESSION_SECRET` are Pages project variables (`wrangler pages secret
-      # put`), read at runtime through `$env/dynamic/private` in
-      # `src/hooks.server.ts`.
+      # Like the Worker, this uploads no secrets: `BACKEND_URL`,
+      # `SESSION_SECRET` and `CLIENT_IP_FORWARD_SECRET` are Pages project
+      # variables (`wrangler pages secret put`), read at runtime through
+      # `$env/dynamic/private` in `src/hooks.server.ts`.
       - name: Deploy the frontend to Cloudflare Pages
         run: >-
           bunx wrangler pages deploy .svelte-kit/cloudflare

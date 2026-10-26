@@ -58,6 +58,12 @@ export const FRONTEND_URL = `http://127.0.0.1:${FRONTEND_PORT}`;
 /** The HS256 key the backend signs session JWTs with during the run. */
 export const SESSION_SECRET = 'e2e-session-secret';
 
+// Shared by the two servers so the backend's `clientIp()` takes the address
+// `handleFetch` forwards (#188), which is the path a deployment runs. Every
+// request in the run comes from loopback either way; this is about the
+// forwarding itself not breaking a form.
+export const CLIENT_IP_FORWARD_SECRET = 'e2e-client-ip-forward-secret';
+
 export const MAIL_FROM_ADDRESS = 'entry@example.test';
 
 // Cloudflare's published Turnstile testing keys (#116). The site key renders

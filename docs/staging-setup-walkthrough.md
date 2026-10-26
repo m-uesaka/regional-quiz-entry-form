@@ -26,6 +26,7 @@ flowchart LR
 | `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` | CI(`wrangler deploy` / `pages deploy`) | GitHub Environment `staging` の Secrets | 2 |
 | `SUPABASE_URL` / `SUPABASE_SECRET_KEY` / `SESSION_SECRET` / `MAIL_API_KEY` / `GOOGLE_SHEETS_API_KEY` | Worker(実行時) | `wrangler secret put --env staging` | 3 |
 | `TURNSTILE_SECRET_KEY` | Worker(実行時) | `wrangler secret put --env staging` | 4 |
+| `CLIENT_IP_FORWARD_SECRET`(#188。この手順書の作成後に追加) | Worker と Pages の両方(実行時)。**同じ値** | `wrangler secret put --env staging` / `wrangler pages secret put` | 手順書 6.2 / 6.3 |
 | `BACKEND_URL` / `SESSION_SECRET` / `PUBLIC_TURNSTILE_SITE_KEY` | Pages(実行時) | Pages プロジェクトの Production 環境の変数 | 6 |
 | `FRONTEND_HOST`(機密ではない) | CI(`--route` / `--var FRONTEND_URL` と smoke test) | GitHub Environment `staging` の **Variables** | 9 |
 
