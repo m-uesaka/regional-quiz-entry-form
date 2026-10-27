@@ -261,6 +261,49 @@ describe('entry +page.svelte', () => {
     );
   });
 
+  // The entry only counts once the link is followed, which a one-line
+  // "sent" message left easy to miss.
+  it('tells the participant the entry is not done until the mail link is opened', () => {
+    renderPage({submitted: true, loggedIn: true}, {loggedIn: true});
+
+    expect(
+      screen.getByRole('heading', {name: '確認メールを送信しました'}),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'エントリーはまだ確定していません',
+    );
+    expect(
+      screen.getByText(/「エントリーを確定する」のリンクを開く/),
+    ).toHaveTextContent('有効期限はメールの送信から24時間');
+    expect(screen.getByText('メールが届かない場合')).toBeInTheDocument();
+  });
+
+  it('points a logged-in participant at their entries on the my page', () => {
+    renderPage({submitted: true, loggedIn: true}, {loggedIn: true});
+
+    expect(
+      screen.getByRole('link', {name: 'マイページでエントリー状況を確認する'}),
+    ).toHaveAttribute('href', '/mypage');
+  });
+
+  // No account may exist behind an anonymous submission (#117), so there is
+  // no my page to send it to; a mistyped address is what it can still fix.
+  it('offers an anonymous participant a retry for a mistyped address instead', () => {
+    renderPage({submitted: true, email: 'taro@example.com'});
+
+    expect(
+      screen.getByRole('heading', {name: 'メールを送信しました'}),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', {
+        name: 'マイページでエントリー状況を確認する',
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/メールアドレスに誤りがある場合/),
+    ).toBeInTheDocument();
+  });
+
   it('offers the login screen when the session lapsed', () => {
     renderPage(
       {

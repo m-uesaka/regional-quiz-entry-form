@@ -101,13 +101,23 @@
      rejected submission is reported with `fail()`, which re-renders this
      form in place with the token it already spent still in it, and the
      retry the message invites would then fail the challenge rather than
-     whatever it was actually refused for. See `Turnstile.svelte`. -->
+     whatever it was actually refused for. See `Turnstile.svelte`.
+
+     An accepted submission replaces this form with the notice telling the
+     participant to open their mail, and the page is scrolled back to the
+     top for it: the submit button sits at the bottom of a long form, and
+     `update()` keeps the scroll position, which would otherwise leave the
+     notice's heading above the fold. -->
 <form
   method="POST"
   class="flex flex-col gap-4"
   use:enhance={() => {
-    return async ({update}) => {
+    return async ({result, update}) => {
       await update();
+      if (result.type === 'success') {
+        window.scrollTo({top: 0});
+        return;
+      }
       turnstile?.reset();
     };
   }}

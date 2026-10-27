@@ -2,6 +2,7 @@
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
   import PriorityEntryNotices from '$lib/components/PriorityEntryNotices.svelte';
+  import EntrySubmittedNotice from '$lib/components/EntrySubmittedNotice.svelte';
   import TournamentEntryForm from '$lib/components/TournamentEntryForm.svelte';
   import Card from '$lib/components/ui/atoms/Card.svelte';
   import Link from '$lib/components/ui/atoms/Link.svelte';
@@ -15,22 +16,7 @@
   <PageHeader title={`${data.tournament.name} へのエントリー`} />
 
   {#if form?.submitted}
-    <Message variant="success">
-      {#if form.loggedIn}
-        <p role="status" class="text-sm">
-          エントリーを受け付けました。登録済みのメールアドレス宛に確認メールを送信したので、
-          メール内のリンクを開いてエントリーを確定してください。
-        </p>
-      {:else}
-        <!-- Worded the same whatever happened to the submission: whether it
-             became an entry depends on the address, and only the owner of
-             the address is told which (#117). -->
-        <p role="status" class="text-sm">
-          {form.email} 宛にメールを送信しました。メールの案内に従って、エントリーの手続きを進めてください。
-          メールが届かない場合は、迷惑メールフォルダもご確認ください。
-        </p>
-      {/if}
-    </Message>
+    <EntrySubmittedNotice email={form.loggedIn ? undefined : form.email} />
   {:else}
     {#if data.priorityNotices.length > 0}
       <Message>

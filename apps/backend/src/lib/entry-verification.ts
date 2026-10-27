@@ -1,3 +1,4 @@
+import {ENTRY_VERIFICATION_TOKEN_TTL_MS} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import {createMailSender} from './mailer';
@@ -7,8 +8,6 @@ import {
   systemMailSubject,
 } from './system-mail';
 import {generateToken, hashToken} from './token';
-
-const TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Issues a one-time email verification token for `entryId` and mails a
@@ -37,7 +36,9 @@ export async function sendVerificationEmail(
   const {error} = await db.from('email_verification_tokens').insert({
     entry_id: entryId,
     token_hash: await hashToken(token),
-    expires_at: new Date(Date.now() + TOKEN_TTL_MS).toISOString(),
+    expires_at: new Date(
+      Date.now() + ENTRY_VERIFICATION_TOKEN_TTL_MS,
+    ).toISOString(),
   });
   if (error) {
     // Don't send a link whose token was never persisted -- the recipient
@@ -62,7 +63,7 @@ export async function sendVerificationEmail(
       // An expired link's entry is cancelled by the next entry the
       // participant submits (`lapse_expired_pending_entries()`, #172), so
       // entering again is all it takes.
-      `${describeLinkLifetime(TOKEN_TTL_MS)}期限が切れた場合は、エントリーフォームからもう一度エントリーしてください。`,
+      `${describeLinkLifetime(ENTRY_VERIFICATION_TOKEN_TTL_MS)}期限が切れた場合は、エントリーフォームからもう一度エントリーしてください。`,
       ...(withdrawnTournaments ? [withdrawalNotice(withdrawnTournaments)] : []),
       'このエントリーに心当たりがない場合は、このメールを破棄してください。リンクを開かない限り、エントリーは確定しません。',
     ]),
