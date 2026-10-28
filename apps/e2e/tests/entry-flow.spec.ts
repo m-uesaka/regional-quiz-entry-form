@@ -6,6 +6,7 @@ import {SAIKYOI, SHINJINOU} from '../support/fixtures';
 import {
   entryFormPath,
   entryListPath,
+  expectAnonymousEntryNotice,
   fillEntryForm,
   holdClientBundle,
   loginParticipantThroughForm,
@@ -78,7 +79,7 @@ test('refuses the second tournament of a region that disallows dual entry, by ma
 
   // The same notice a new entry gets: nothing on the page tells the
   // submitter whether this address was registered, or where.
-  await expect(page.getByRole('status')).toContainText(participant.email);
+  await expectAnonymousEntryNotice(page, participant.email);
   await expect(page.getByRole('alert')).toHaveCount(0);
 
   const notice = await waitForMail(
@@ -111,7 +112,9 @@ test('a logged-in participant enters without credentials and is told refusals di
   await expect(page.getByRole('alert')).toHaveText(
     'この地域では、最強位と新人王のどちらか一方にのみエントリーできます',
   );
-  await expect(page.getByRole('status')).toHaveCount(0);
+  await expect(
+    page.getByRole('heading', {name: '確認メールを送信しました'}),
+  ).toHaveCount(0);
 });
 
 test('a verification link cannot be followed twice', async ({
@@ -189,7 +192,7 @@ test('accepts a required checkbox group answered before the client bundle took o
   // the client bundle still held.
   await page.getByRole('button', {name: 'エントリーする'}).click();
 
-  await expect(page.getByRole('status')).toContainText(participant.email);
+  await expectAnonymousEntryNotice(page, participant.email);
   releaseClientBundle();
 });
 

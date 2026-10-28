@@ -1,3 +1,4 @@
+import {formatLinkLifetime} from '@regional-quiz/shared';
 import {escapeHtml} from './html';
 import {MAIL_FROM_NAME, SITE_NAME, type SendMailInput} from './mailer';
 
@@ -6,9 +7,6 @@ import {MAIL_FROM_NAME, SITE_NAME, type SendMailInput} from './mailer';
  * apart in an inbox at a glance (#170).
  */
 const SUBJECT_PREFIX = `【${SITE_NAME}】`;
-
-const MINUTE_MS = 60 * 1000;
-const HOUR_MS = 60 * MINUTE_MS;
 
 const FOOTER_NOTE =
   'このメールは送信専用のアドレスから送信しています。ご返信いただいてもお答えできません。';
@@ -39,18 +37,13 @@ export function systemMailSubject(title: string): string {
 }
 
 /**
- * How long a mailed link stays usable, in the words its mail states it in:
- * in hours when it is a whole number of them, in minutes otherwise, so a
- * lifetime that isn't never reads as 「1.5時間」. Minutes round down, so the
- * mail never promises longer than the link actually lasts.
+ * The sentence a mail states its link's lifetime in. The lifetime itself is
+ * worded by the shared `formatLinkLifetime()`, which the entry form also
+ * uses, so the page and the mail never put it differently.
  * @param ttlMs The link's lifetime.
  */
 export function describeLinkLifetime(ttlMs: number): string {
-  const lifetime =
-    ttlMs % HOUR_MS === 0
-      ? `${ttlMs / HOUR_MS}時間`
-      : `${Math.floor(ttlMs / MINUTE_MS)}分`;
-  return `このリンクの有効期限は、メールの送信から${lifetime}です。`;
+  return `このリンクの有効期限は、メールの送信から${formatLinkLifetime(ttlMs)}です。`;
 }
 
 function blockToHtml(block: SystemMailBlock): string {

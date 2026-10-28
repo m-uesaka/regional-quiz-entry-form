@@ -16,7 +16,10 @@
   <PageHeader title={`${data.tournament.name} へのエントリー`} />
 
   {#if form?.submitted}
-    <EntrySubmittedNotice email={form.loggedIn ? undefined : form.email} />
+    <EntrySubmittedNotice
+      loggedIn={form.loggedIn === true}
+      email={form.email}
+    />
   {:else}
     {#if data.priorityNotices.length > 0}
       <Message>

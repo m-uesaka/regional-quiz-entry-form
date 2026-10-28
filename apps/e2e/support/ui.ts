@@ -250,6 +250,25 @@ async function waitForTurnstileToken(page: Page): Promise<void> {
 }
 
 /**
+ * Waits for the notice an anonymous entry form turns into once submitted,
+ * naming the address the mail went to. The notice reads as its heading,
+ * which takes focus and describes itself by the paragraph naming the
+ * address.
+ * @param page The page to drive.
+ * @param email The address the form was submitted with.
+ */
+export async function expectAnonymousEntryNotice(
+  page: Page,
+  email: string,
+): Promise<void> {
+  const heading = page.getByRole('heading', {name: 'メールを送信しました'});
+  await expect(heading).toBeFocused();
+  await expect(heading).toHaveAccessibleDescription(
+    new RegExp(email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+  );
+}
+
+/**
  * Opens the tournament's entry form, fills it in as a brand-new
  * participant and submits it.
  *
@@ -274,7 +293,7 @@ export async function submitEntryForm(
   const participant = await fillEntryForm(page, tournament, input);
 
   await page.getByRole('button', {name: 'エントリーする'}).click();
-  await expect(page.getByRole('status')).toContainText(participant.email);
+  await expectAnonymousEntryNotice(page, participant.email);
   // The page answers before the entry is made (#117); the confirmation mail
   // is the last thing the background work does, so once it is in, the
   // account and the entry exist for whatever the spec does next.
