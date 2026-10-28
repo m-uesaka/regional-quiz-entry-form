@@ -192,7 +192,7 @@ test('accepts a required checkbox group answered before the client bundle took o
   // the client bundle still held.
   await page.getByRole('button', {name: 'エントリーする'}).click();
 
-  await expectAnonymousEntryNotice(page, participant.email);
+  await expectAnonymousEntryNotice(page, participant.email, {hydrated: false});
   releaseClientBundle();
 });
 

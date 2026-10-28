@@ -252,17 +252,23 @@ async function waitForTurnstileToken(page: Page): Promise<void> {
 /**
  * Waits for the notice an anonymous entry form turns into once submitted,
  * naming the address the mail went to. The notice reads as its heading,
- * which takes focus and describes itself by the paragraph naming the
- * address.
+ * which describes itself by the paragraph naming the address and takes
+ * focus once the client bundle has hydrated the page.
  * @param page The page to drive.
  * @param email The address the form was submitted with.
+ * @param options.hydrated Whether the page answering the submission is
+ *     hydrated. A spec holding the client bundle back gets the server's
+ *     HTML only, where nothing moves focus, so it passes `false`.
  */
 export async function expectAnonymousEntryNotice(
   page: Page,
   email: string,
+  {hydrated = true}: {hydrated?: boolean} = {},
 ): Promise<void> {
   const heading = page.getByRole('heading', {name: 'メールを送信しました'});
-  await expect(heading).toBeFocused();
+  if (hydrated) {
+    await expect(heading).toBeFocused();
+  }
   await expect(heading).toHaveAccessibleDescription(
     new RegExp(email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
   );
