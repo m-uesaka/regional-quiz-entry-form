@@ -232,7 +232,7 @@ export function extractVerificationUrl(html: string): string {
  * API, confirming the entry.
  *
  * Only the arrangement in `staff-csv.spec.ts` uses this; the flow of
- * following the link in a browser is `openVerificationLink()` in `./ui.ts`.
+ * following the link in a browser is `followVerificationLink()` in `./ui.ts`.
  * @param request The API context to confirm through.
  * @param tournament The tournament the entry was made to.
  * @param email The address the confirmation mail went to.
@@ -249,22 +249,14 @@ export async function verifyEntry(
     email,
     verificationMailSubject(tournament),
   );
-  const response = await request.get(
-    `${BACKEND_URL}${extractVerificationPath(mail.html)}`,
-  );
+  const {searchParams} = new URL(extractVerificationUrl(mail.html));
+  // A POST, like the `/verify` page's confirm button sends (#190).
+  const response = await request.post(`${BACKEND_URL}/api/entries/verify`, {
+    data: {token: searchParams.get('token')},
+  });
   expect(response.status(), await response.text()).toBe(200);
   const body = (await response.json()) as {status: EntryStatus};
   return body.status;
-}
-
-/**
- * The API path that confirms the entry the mailed link belongs to. The link
- * itself points at the frontend's `/verify` page, which calls this.
- * @param html The mail body.
- */
-function extractVerificationPath(html: string): string {
-  const {searchParams} = new URL(extractVerificationUrl(html));
-  return `/api/entries/verify?token=${searchParams.get('token')}`;
 }
 
 /**

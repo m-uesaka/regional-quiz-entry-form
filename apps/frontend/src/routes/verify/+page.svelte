@@ -1,17 +1,40 @@
 <script lang="ts">
+  import {enhance} from '$app/forms';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
-  import {buttonVariants} from '$lib/components/ui/atoms/Button.svelte';
+  import Button, {
+    buttonVariants,
+  } from '$lib/components/ui/atoms/Button.svelte';
   import Card from '$lib/components/ui/atoms/Card.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
   import type {PageProps} from './$types';
-  let {data}: PageProps = $props();
+  let {data, form}: PageProps = $props();
 </script>
 
 <PageContainer>
   <PageHeader title="エントリーの確認" />
 
-  {#if data.status === 'confirmed'}
+  {#if form?.error}
+    <Message variant="danger">
+      <p role="alert" class="text-sm">{form.error}</p>
+    </Message>
+  {/if}
+
+  {#if data.status === 'ready'}
+    <!-- Opening the link only gets the participant this far: a mail scanner
+         fetching it never presses the button, so it confirms nothing (#190).
+         The token stays in an httpOnly cookie the action reads. -->
+    <Card class="gap-4">
+      <p class="text-sm">
+        下のボタンを押すと、エントリーが確定します。このエントリーに心当たりがない場合は、ボタンを押さずにこのページを閉じてください。
+      </p>
+      <form method="POST" use:enhance>
+        <Button type="submit" variant="primary" tone="solid" class="w-full">
+          エントリーを確定する
+        </Button>
+      </form>
+    </Card>
+  {:else if data.status === 'confirmed'}
     <Message variant="success">
       <div class="flex flex-col gap-1 text-sm">
         <p class="font-semibold">エントリーが確定しました。</p>
@@ -50,19 +73,21 @@
     </Message>
   {/if}
 
-  <Card class="gap-3">
-    <p>
-      <a
-        href="/mypage"
-        class={buttonVariants({variant: 'primary', tone: 'solid', size: 'medium'})}
-        >マイページへ</a
-      >
-    </p>
-    <!-- Entry creation doesn't start a participant session, so a participant
-         arriving from the confirmation mail is usually logged out and will be
-         sent to /mypage/login first. -->
-    <p class="text-sm text-muted-foreground">
-      マイページの閲覧にはログインが必要です。ログインしていない場合はログイン画面に移動します。
-    </p>
-  </Card>
+  {#if data.status !== 'ready'}
+    <Card class="gap-3">
+      <p>
+        <a
+          href="/mypage"
+          class={buttonVariants({variant: 'primary', tone: 'solid', size: 'medium'})}
+          >マイページへ</a
+        >
+      </p>
+      <!-- Entry creation doesn't start a participant session, so a participant
+           arriving from the confirmation mail is usually logged out and will be
+           sent to /mypage/login first. -->
+      <p class="text-sm text-muted-foreground">
+        マイページの閲覧にはログインが必要です。ログインしていない場合はログイン画面に移動します。
+      </p>
+    </Card>
+  {/if}
 </PageContainer>

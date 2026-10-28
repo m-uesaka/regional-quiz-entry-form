@@ -16,10 +16,26 @@ const env: Bindings = {
   SESSION_SECRET: 'test-session-secret',
 };
 
-describe('GET /entries/verify (request validation)', () => {
-  it('rejects a request missing the token query param with 400', async () => {
-    const res = await app.request('/api/entries/verify', {}, env);
+describe('POST /entries/verify (request validation)', () => {
+  it('rejects a request missing the token with 400', async () => {
+    const res = await app.request(
+      '/api/entries/verify',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({}),
+      },
+      env,
+    );
 
     expect(res.status).toBe(400);
+  });
+
+  // A mail scanner or link preview fetching the old link shape must not
+  // reach anything that confirms an entry (#190).
+  it('does not confirm on a GET carrying the token', async () => {
+    const res = await app.request('/api/entries/verify?token=abc', {}, env);
+
+    expect(res.status).toBe(404);
   });
 });

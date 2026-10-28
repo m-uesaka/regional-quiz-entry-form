@@ -1,13 +1,16 @@
 import {redirect, type Cookies} from '@sveltejs/kit';
+import {ENTRY_VERIFICATION_TOKEN_TTL_MS} from '@regional-quiz/shared';
 
-// The one-time token the password reset mails put in the link they send
-// (`/password-reset?token=...`, `/staff/password-reset?token=...`).
+// The one-time token a mailed link carries: the password reset mails'
+// (`/password-reset?token=...`, `/staff/password-reset?token=...`) and the
+// entry verification mail's (`/verify?token=...`).
 //
 // A mailed link can only carry it in the URL, but a URL is also what ends up
 // in the browser's history, in a `Referer`, and on a screen someone else can
 // read (#120). So the page's `load` moves the token into an httpOnly cookie
-// scoped to that page and redirects to the bare URL, the way `/verify`
-// already consumes its token before redirecting. From then on the token
+// scoped to that page and redirects to the bare URL. Nothing is spent on the
+// way: only the page's form action uses the token, so a mail scanner that
+// fetches the link changes nothing (#190). From then on the token
 // lives only in the cookie: never in the address bar, the page source or the
 // serialized `load` data. It also survives a reload or a tab the browser
 // restores -- the link is still good, so the page must keep working -- and it
@@ -37,6 +40,13 @@ export const STAFF_RESET_TOKEN_COOKIE: ResetTokenCookie = {
   name: 'staff_password_reset_token',
   path: '/staff/password-reset',
   maxAgeSeconds: 24 * 60 * 60,
+};
+
+/** The entry verification link's, `ENTRY_VERIFICATION_TOKEN_TTL_MS`. */
+export const ENTRY_VERIFICATION_TOKEN_COOKIE: ResetTokenCookie = {
+  name: 'entry_verification_token',
+  path: '/verify',
+  maxAgeSeconds: ENTRY_VERIFICATION_TOKEN_TTL_MS / 1000,
 };
 
 /**

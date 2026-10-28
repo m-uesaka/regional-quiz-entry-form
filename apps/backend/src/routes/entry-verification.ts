@@ -1,15 +1,20 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {z} from 'zod';
+import {EntryVerificationInputSchema} from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {confirmEntryByToken} from '../lib/entry-confirmation';
 import {internalError} from '../lib/errors';
 
-export const entryVerificationRoute = new Hono<Env>().get(
+// A POST, not a GET: confirming spends the token and puts the entry on the
+// public list, and a GET is what mail gateways (Outlook Safe Links and the
+// like) and chat link previews send to a mailed link before its recipient
+// ever clicks it (#190). The frontend's `/verify` page only calls this from
+// the form its confirm button submits.
+export const entryVerificationRoute = new Hono<Env>().post(
   '/verify',
-  zValidator('query', z.object({token: z.string().min(1)})),
+  zValidator('json', EntryVerificationInputSchema),
   async c => {
-    const result = await confirmEntryByToken(c.env, c.req.valid('query').token);
+    const result = await confirmEntryByToken(c.env, c.req.valid('json').token);
     if (!result.ok) {
       // Only a token the database actually refused is reported as a client
       // error: a 400 is what tells the participant their link is dead and

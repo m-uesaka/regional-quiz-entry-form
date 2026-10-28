@@ -52,7 +52,9 @@ export async function sendVerificationEmail(
   await createMailSender(env).send(
     buildSystemMail(email, verificationMailSubject(tournamentName), [
       `「${tournamentName}」へのエントリーを受け付けました。エントリーはまだ確定していません。`,
-      '下のリンクを開いて、エントリーを確定してください。' +
+      // Opening the link only shows a confirm button: a mail scanner
+      // fetching it must not confirm anything (#190).
+      '下のリンクを開き、表示されるページのボタンを押してエントリーを確定してください。' +
         (capped
           ? '定員に達している場合は、キャンセル待ちとして受け付けます。'
           : ''),
@@ -65,7 +67,7 @@ export async function sendVerificationEmail(
       // entering again is all it takes.
       `${describeLinkLifetime(ENTRY_VERIFICATION_TOKEN_TTL_MS)}期限が切れた場合は、エントリーフォームからもう一度エントリーしてください。`,
       ...(withdrawnTournaments ? [withdrawalNotice(withdrawnTournaments)] : []),
-      'このエントリーに心当たりがない場合は、このメールを破棄してください。リンクを開かない限り、エントリーは確定しません。',
+      'このエントリーに心当たりがない場合は、このメールを破棄してください。リンク先のページでボタンを押さない限り、エントリーは確定しません。',
     ]),
   );
 }

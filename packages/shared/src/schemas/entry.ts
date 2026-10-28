@@ -119,6 +119,17 @@ export const EntryEditInputSchema = EntryInputSchema.innerType().pick({
 });
 export type EntryEditInput = z.infer<typeof EntryEditInputSchema>;
 
+// The body of `POST /api/entries/verify`: the one-time token from the
+// verification mail. A body rather than a query string, because confirming
+// is a change a mail scanner fetching the link must not be able to make
+// (#190).
+export const EntryVerificationInputSchema = z.object({
+  token: z.string().min(1),
+});
+export type EntryVerificationInput = z.infer<
+  typeof EntryVerificationInputSchema
+>;
+
 export const EntryStatusSchema = z.enum([
   'pending_verification',
   'confirmed',
