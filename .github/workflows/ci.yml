@@ -31,6 +31,17 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    env:
+      # Pull the stack's images from GHCR rather than the CLI's default,
+      # public.ecr.aws. ECR's anonymous quota is shared by everything on the
+      # runner's egress IP, and in most runs it answered every pull with
+      # `toomanyrequests: Data limit exceeded`; the CLI retried for ~15s and
+      # only then fell back to GHCR, which is where the images came from
+      # anyway. Naming GHCR up front skips that dead time. The variable is the
+      # CLI's own (`SUPABASE_INTERNAL_IMAGE_REGISTRY`, read by 2.115.0); if an
+      # upgrade stops honouring it, the symptom is those retries reappearing at
+      # the top of the `supabase start` log, not a failure.
+      SUPABASE_INTERNAL_IMAGE_REGISTRY: ghcr.io
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
