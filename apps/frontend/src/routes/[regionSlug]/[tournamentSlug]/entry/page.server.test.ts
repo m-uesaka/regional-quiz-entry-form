@@ -695,6 +695,11 @@ describe('entry +page.server default action', () => {
     [409, 'already entered', 'この大会には既にエントリー済みです'],
     [
       409,
+      'concurrent submission',
+      'この大会へのエントリーが同時に送信されていました。マイページでエントリー状況をご確認ください',
+    ],
+    [
+      409,
       'already registered in another region',
       'このアカウントは別の地域で登録済みのため、この大会にはエントリーできません',
     ],

@@ -7,6 +7,7 @@ import {
 import {actions, load} from './+page.server';
 
 const COOKIE_NAME = 'entry_verification_token';
+const OUTCOME_COOKIE_NAME = 'entry_verification_outcome';
 
 /** A cookie jar backed by a `Map`, recording what the page sets. */
 function fakeCookies(initial: Record<string, string> = {}): {
@@ -107,6 +108,32 @@ describe('verify +page.server load (opening the mailed link)', () => {
     },
   );
 
+  // Back from the outcome lands on the bare `/verify` the button was on, and
+  // the token is spent by then: it must not call the link invalid.
+  it.each(['confirmed', 'waitlisted'] as const)(
+    'shows the last %s outcome on the bare URL once the token is spent',
+    status => {
+      const {cookies} = fakeCookies({[OUTCOME_COOKIE_NAME]: status});
+
+      expect(load(buildLoadEvent(cookies))).toEqual({status});
+    },
+  );
+
+  it('offers the button for a newly opened link over an earlier outcome', () => {
+    const {cookies} = fakeCookies({
+      [COOKIE_NAME]: 'abc123',
+      [OUTCOME_COOKIE_NAME]: 'confirmed',
+    });
+
+    expect(load(buildLoadEvent(cookies))).toEqual({status: 'ready'});
+  });
+
+  it('ignores an outcome cookie it does not recognise', () => {
+    const {cookies} = fakeCookies({[OUTCOME_COOKIE_NAME]: 'nope'});
+
+    expect(load(buildLoadEvent(cookies))).toEqual({status: 'invalid'});
+  });
+
   it('falls back to invalid with neither a token nor an outcome', () => {
     const {cookies} = fakeCookies();
 
@@ -124,7 +151,7 @@ describe('verify +page.server load (opening the mailed link)', () => {
 
 describe('verify +page.server action (pressing the confirm button)', () => {
   it('POSTs the held token and redirects to the token-less outcome', async () => {
-    const {cookies, jar} = fakeCookies({[COOKIE_NAME]: 'abc123'});
+    const {cookies, jar, options} = fakeCookies({[COOKIE_NAME]: 'abc123'});
     const requests: Array<{url: string; init: RequestInit | undefined}> = [];
     const event = buildActionEvent({
       cookies,
@@ -146,6 +173,11 @@ describe('verify +page.server action (pressing the confirm button)', () => {
     });
     // Spent, so a later visit doesn't offer the button for it again.
     expect(jar.has(COOKIE_NAME)).toBe(false);
+    expect(jar.get(OUTCOME_COOKIE_NAME)).toBe('confirmed');
+    expect(options.get(OUTCOME_COOKIE_NAME)).toMatchObject({
+      path: '/verify',
+      httpOnly: true,
+    });
   });
 
   it('redirects with waitlisted when the tournament was full', async () => {
@@ -212,6 +244,7 @@ describe('verify +page.server action (pressing the confirm button)', () => {
       location: '/verify?status=invalid',
     } satisfies Partial<Redirect>);
     expect(jar.has(COOKIE_NAME)).toBe(false);
+    expect(jar.get(OUTCOME_COOKIE_NAME)).toBe('invalid');
   });
 
   it('keeps the token for another try when the backend fails', async () => {
@@ -229,6 +262,7 @@ describe('verify +page.server action (pressing the confirm button)', () => {
     expect(result.status).toBe(502);
     expect(result.data.error).toContain('もう一度お試しください');
     expect(jar.get(COOKIE_NAME)).toBe('abc123');
+    expect(jar.has(OUTCOME_COOKIE_NAME)).toBe(false);
   });
 
   it('redirects with invalid without calling the API when no token is held', async () => {

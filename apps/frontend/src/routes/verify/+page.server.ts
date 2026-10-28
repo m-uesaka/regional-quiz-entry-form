@@ -1,4 +1,4 @@
-import {fail, redirect} from '@sveltejs/kit';
+import {fail, redirect, type Cookies} from '@sveltejs/kit';
 import {createApiClient} from '$lib/api';
 import {dropCachedEntryList} from '$lib/server/entry-list-cache';
 import {
@@ -33,6 +33,21 @@ const VERIFY_STATUSES: readonly VerifyStatus[] = [
 ];
 
 /**
+ * Where the action leaves the outcome of the last button press, so the bare
+ * `/verify` still shows it. That URL is the confirm page's own, and it stays
+ * in the history below the outcome: pressing Back to it after the token was
+ * spent would otherwise call a just-confirmed entry's link invalid.
+ */
+const OUTCOME_COOKIE = 'entry_verification_outcome';
+
+/**
+ * Long enough for Back and a restored tab, short enough that a later,
+ * unrelated visit to `/verify` falls back to "invalid" rather than to an
+ * old outcome.
+ */
+const OUTCOME_MAX_AGE_SECONDS = 60 * 60;
+
+/**
  * Opening the mailed link confirms nothing (#190). Mail gateways (Outlook
  * Safe Links and the like) and chat link previews fetch a link before its
  * recipient clicks it, so a GET that spent the token would confirm entries
@@ -56,7 +71,11 @@ export const load: PageServerLoad = ({
   if (status !== null) {
     return {status: isVerifyStatus(status) ? status : 'invalid'};
   }
-  return {status: token === null ? 'invalid' : 'ready'};
+  if (token !== null) {
+    return {status: 'ready'};
+  }
+  const outcome = cookies.get(OUTCOME_COOKIE);
+  return {status: outcome && isVerifyStatus(outcome) ? outcome : 'invalid'};
 };
 
 export const actions = {
@@ -70,7 +89,7 @@ export const actions = {
     if (token === null) {
       // The cookie expired with the link, or the button was submitted from a
       // page left open after the token was spent.
-      throw redirect(303, '/verify?status=invalid');
+      redirectToOutcome(cookies, url, 'invalid');
     }
 
     const api = createApiClient(fetch);
@@ -84,7 +103,7 @@ export const actions = {
       // `pending_verification`.
       if (res.status === 400) {
         clearResetToken(cookies, url, ENTRY_VERIFICATION_TOKEN_COOKIE);
-        throw redirect(303, '/verify?status=invalid');
+        redirectToOutcome(cookies, url, 'invalid');
       }
       return fail(502, {
         error:
@@ -99,11 +118,29 @@ export const actions = {
     if (tournament) {
       await dropCachedEntryList(platform, url.origin, tournament);
     }
-    // The outcome is carried into the URL, so a reload shows it again rather
-    // than re-submitting a spent token and calling the link invalid.
-    throw redirect(303, `/verify?status=${status}`);
+    redirectToOutcome(cookies, url, status);
   },
 } satisfies Actions;
+
+/**
+ * Shows `status` as the outcome of the button press. It is carried into the
+ * URL, so a reload shows it again rather than re-submitting a spent token,
+ * and into `OUTCOME_COOKIE`, so Back to the bare `/verify` does too.
+ */
+function redirectToOutcome(
+  cookies: Cookies,
+  url: URL,
+  status: VerifyStatus,
+): never {
+  cookies.set(OUTCOME_COOKIE, status, {
+    path: ENTRY_VERIFICATION_TOKEN_COOKIE.path,
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: url.protocol === 'https:',
+    maxAge: OUTCOME_MAX_AGE_SECONDS,
+  });
+  redirect(303, `/verify?status=${status}`);
+}
 
 function isVerifyStatus(value: string): value is VerifyStatus {
   return VERIFY_STATUSES.includes(value as VerifyStatus);

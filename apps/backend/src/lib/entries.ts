@@ -119,7 +119,8 @@ const SUPERSEDED_BY_LATER_SUBMISSION = 'superseded by a later submission';
  * Spelled out instead of passing the refusal on: Postgres' message names the
  * table and the constraint, and the logged-in route answers 4xx messages as
  * they are (#191). Like `SUPERSEDED_BY_LATER_SUBMISSION`, not a notice
- * reason: the submission that won sends the mail.
+ * reason: the anonymous route answers it like any other failure on our side,
+ * logging it and mailing `processing-failed` alongside the winner's own mail.
  */
 const CONCURRENT_SUBMISSION = 'concurrent submission';
 

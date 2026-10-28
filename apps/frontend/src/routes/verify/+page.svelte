@@ -9,7 +9,19 @@
   import Message from '$lib/components/ui/items/Message.svelte';
   import type {PageProps} from './$types';
   let {data, form}: PageProps = $props();
+
+  // Pressed twice, the second request would find the token already spent
+  // and its "invalid" could be the answer the page ends up showing, so the
+  // button stays disabled until the first answer arrives. `pageshow` resets
+  // it when the page comes back from the bfcache mid-request.
+  let submitting = $state(false);
 </script>
+
+<svelte:window
+  onpageshow={() => {
+    submitting = false;
+  }}
+/>
 
 <PageContainer>
   <PageHeader title="エントリーの確認" />
@@ -28,9 +40,24 @@
       <p class="text-sm">
         下のボタンを押すと、エントリーが確定します。このエントリーに心当たりがない場合は、ボタンを押さずにこのページを閉じてください。
       </p>
-      <form method="POST" use:enhance>
-        <Button type="submit" variant="primary" tone="solid" class="w-full">
-          エントリーを確定する
+      <form
+        method="POST"
+        use:enhance={() => {
+          submitting = true;
+          return async ({update}) => {
+            await update();
+            submitting = false;
+          };
+        }}
+      >
+        <Button
+          type="submit"
+          variant="primary"
+          tone="solid"
+          class="w-full"
+          disabled={submitting}
+        >
+          {submitting ? '確定しています…' : 'エントリーを確定する'}
         </Button>
       </form>
     </Card>

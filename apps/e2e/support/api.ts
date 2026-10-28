@@ -250,9 +250,11 @@ export async function verifyEntry(
     verificationMailSubject(tournament),
   );
   const {searchParams} = new URL(extractVerificationUrl(mail.html));
+  const token = searchParams.get('token');
+  expect(token, 'the verification link carries no token').toBeTruthy();
   // A POST, like the `/verify` page's confirm button sends (#190).
   const response = await request.post(`${BACKEND_URL}/api/entries/verify`, {
-    data: {token: searchParams.get('token')},
+    data: {token},
   });
   expect(response.status(), await response.text()).toBe(200);
   const body = (await response.json()) as {status: EntryStatus};
