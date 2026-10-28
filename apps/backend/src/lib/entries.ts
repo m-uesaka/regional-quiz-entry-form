@@ -113,6 +113,15 @@ const COMMON_PASSWORD = 'password too common';
  * and this one is answered like any other failure on our side.
  */
 const SUPERSEDED_BY_LATER_SUBMISSION = 'superseded by a later submission';
+/**
+ * Another submission for the same address -- or the same participant and
+ * tournament -- wrote its row first, and the database refused this one's.
+ * Spelled out instead of passing the refusal on: Postgres' message names the
+ * table and the constraint, and the logged-in route answers 4xx messages as
+ * they are (#191). Like `SUPERSEDED_BY_LATER_SUBMISSION`, not a notice
+ * reason: the submission that won sends the mail.
+ */
+const CONCURRENT_SUBMISSION = 'concurrent submission';
 
 /**
  * The SQLSTATE `check_region_dual_entry()` (migration 0016) raises. The
@@ -133,6 +142,19 @@ const REGION_DUAL_ENTRY_SQLSTATE = 'P0005';
  * that will fail again in exactly the same way.
  */
 const FOREIGN_KEY_VIOLATION_SQLSTATE = '23503';
+
+/**
+ * Postgres' own `unique_violation`: a concurrent submission inserted the
+ * same participant (`participants.email`) or the same entry
+ * (`entries (participant_id, tournament_id)`) first.
+ */
+const UNIQUE_VIOLATION_SQLSTATE = '23505';
+
+/**
+ * PostgREST's code for a `.single()` that matched no row. On the re-entry
+ * update it means a concurrent re-entry already took the cancelled row.
+ */
+const NO_ROW_PGRST_CODE = 'PGRST116';
 
 interface ParticipantRow {
   id: string;
@@ -500,10 +522,15 @@ async function createEntryAfterCheck(
         })
         .select('id')
         .single();
+      if (error?.code === UNIQUE_VIOLATION_SQLSTATE) {
+        return {ok: false, status: 409, error: CONCURRENT_SUBMISSION};
+      }
       if (error || !created) {
+        // Anything else is a fault on our side, and its message describes
+        // the database: a 500 keeps it in the log (#191).
         return {
           ok: false,
-          status: 409,
+          status: 500,
           error: error?.message ?? 'failed to create participant',
         };
       }
@@ -846,10 +873,19 @@ async function enterTournament(
     // participant from holding both seats.
     return {ok: false, status: 409, error: ALREADY_ENTERED_ANOTHER_TOURNAMENT};
   }
+  if (
+    error?.code === UNIQUE_VIOLATION_SQLSTATE ||
+    (existingEntry && error?.code === NO_ROW_PGRST_CODE)
+  ) {
+    return {ok: false, status: 409, error: CONCURRENT_SUBMISSION};
+  }
   if (error || !entry) {
+    // Anything else -- a check constraint (0021's length limits), Supabase
+    // being down -- is ours to fix, and its message names the table and
+    // the constraint, so it goes to the log behind a 500 (#191).
     return {
       ok: false,
-      status: 409,
+      status: 500,
       error: error?.message ?? 'failed to create entry',
     };
   }
