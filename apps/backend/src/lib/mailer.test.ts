@@ -1,4 +1,5 @@
 import {afterEach, describe, expect, it} from 'bun:test';
+import {MAIL_SENDER_DOMAIN} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {MailSendError, ResendMailSender, createMailSender} from './mailer';
 
@@ -133,5 +134,28 @@ describe('createMailSender', () => {
     expect(body.from).toBe(
       '地域クイズ最強位・新人王 エントリー <entry@example.com>',
     );
+  });
+});
+
+// The entry form tells participants whose carrier filters by sender domain
+// to allow `MAIL_SENDER_DOMAIN`, so every environment's sending address has
+// to sit under it.
+describe('MAIL_FROM_ADDRESS in wrangler.toml', () => {
+  it('sends mail in every environment from under the domain the entry form names', async () => {
+    const config = await Bun.file(
+      `${import.meta.dir}/../../wrangler.toml`,
+    ).text();
+    const addresses = [
+      ...config.matchAll(/^MAIL_FROM_ADDRESS = "([^"]+)"/gm),
+    ].map(match => match[1]);
+
+    expect(addresses.length).toBeGreaterThan(0);
+    for (const address of addresses) {
+      const domain = address.split('@')[1];
+      expect(
+        domain === MAIL_SENDER_DOMAIN ||
+          domain.endsWith(`.${MAIL_SENDER_DOMAIN}`),
+      ).toBe(true);
+    }
   });
 });
