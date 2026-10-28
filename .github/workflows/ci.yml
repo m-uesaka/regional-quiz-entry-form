@@ -31,17 +31,6 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
-    env:
-      # Pull the stack's images from GHCR rather than the CLI's default,
-      # public.ecr.aws. ECR's anonymous quota is shared by everything on the
-      # runner's egress IP, and in most runs it answered every pull with
-      # `toomanyrequests: Data limit exceeded`; the CLI retried for ~15s and
-      # only then fell back to GHCR, which is where the images came from
-      # anyway. Naming GHCR up front skips that dead time. The variable is the
-      # CLI's own (`SUPABASE_INTERNAL_IMAGE_REGISTRY`, read by 2.115.0); if an
-      # upgrade stops honouring it, the symptom is those retries reappearing at
-      # the top of the `supabase start` log, not a failure.
-      SUPABASE_INTERNAL_IMAGE_REGISTRY: ghcr.io
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -92,6 +81,20 @@ jobs:
       # ignored silently rather than erroring, so a rename would show up as
       # this step getting slower again, not as a failure.
       #
+      # The images are pulled from GHCR first. The CLI's default is
+      # public.ecr.aws, whose anonymous quota is shared by everything on the
+      # runner's egress IP: in most runs it answered every pull with
+      # `toomanyrequests: Data limit exceeded`, and the CLI retried for ~15s
+      # before falling back to GHCR, where the images came from anyway.
+      # `SUPABASE_INTERNAL_IMAGE_REGISTRY` names GHCR up front and skips that
+      # dead time, but it also makes GHCR the *only* registry the CLI tries
+      # (2.115.0 drops its ECR -> GHCR -> Docker Hub list once the variable is
+      # set). So a failed start is retried once without it, giving back that
+      # whole list at the cost of the old delay. The variable is set on the
+      # first attempt only, not job-wide, so nothing else loses the fallback.
+      # If an upgrade stops honouring it, the symptom is the ECR retries
+      # reappearing at the top of the `supabase start` log, not a failure.
+      #
       # ---- `playwright install` ----
       #
       # Chromium only: the specs drive one browser, and downloading the
@@ -111,10 +114,18 @@ jobs:
           # to download behind whichever error happened to come first. Both
           # statuses are collected, the log is always flushed, and the step
           # fails afterwards if either side did.
+          excluded=mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
           supabase_status=0
-          supabase start \
-            -x mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor \
+          SUPABASE_INTERNAL_IMAGE_REGISTRY=ghcr.io supabase start -x "$excluded" \
             || supabase_status=$?
+          if [ "$supabase_status" -ne 0 ]; then
+            echo "::warning::supabase start from GHCR failed (exit $supabase_status); retrying with the CLI's default registry list"
+            # Clears whatever the failed attempt left half-started, so the
+            # retry does not trip over its containers.
+            supabase stop --no-backup || true
+            supabase_status=0
+            supabase start -x "$excluded" || supabase_status=$?
+          fi
 
           # `wait` exits with the background job's status, so a browser that
           # failed to download fails the step here rather than surfacing as an
