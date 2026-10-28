@@ -17,6 +17,7 @@ import {expect, type APIRequestContext} from '@playwright/test';
 import type {
   EntryStatus,
   StaffMailJob,
+  StaffMailInput,
   StaffMailResult,
 } from '@regional-quiz/shared';
 import {BACKEND_URL, MAIL_SINK_URL} from './env';
@@ -302,19 +303,20 @@ export async function loginStaff(
 }
 
 /**
- * Asks for a bulk send to every entry of `tournamentId`, as the signed-in
- * staff member.
+ * Asks for a bulk send to the entries of `tournamentId`, as the signed-in
+ * staff member: the confirmed and waitlisted ones, unless `mail.statusFilter`
+ * names another status.
  *
  * Answers as soon as the recipients are enqueued: what it returns is the
  * job to watch, not a delivery report.
  * @param request The API context, already holding a staff session.
  * @param tournamentId The tournament whose entries to mail.
- * @param mail The subject and HTML body to send.
+ * @param mail The subject, HTML body and optional status filter to send.
  */
 export async function sendBulkMail(
   request: APIRequestContext,
   tournamentId: string,
-  mail: {subject: string; body: string},
+  mail: StaffMailInput,
 ): Promise<StaffMailResult> {
   const response = await request.post(
     `${BACKEND_URL}/api/staff/tournaments/${tournamentId}/mail`,

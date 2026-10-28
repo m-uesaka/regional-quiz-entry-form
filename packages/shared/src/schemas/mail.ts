@@ -21,9 +21,12 @@ export const STAFF_MAIL_BODY_MAX_LENGTH = 20000;
  * (#122). A body left empty by that is refused with 400.
  *
  * `statusFilter` narrows the recipients to the entries in one status.
- * Omitting it mails every entry of the tournament **except the cancelled
- * ones** -- someone who withdrew shouldn't keep receiving announcements,
- * and mailing them takes a deliberate `statusFilter: 'cancelled'`.
+ * Omitting it mails the **`confirmed` and `waitlisted`** entries only
+ * (`DEFAULT_RECIPIENT_STATUSES` in `apps/backend/src/lib/entry-recipients.ts`):
+ * an unconfirmed entry may have been made under a stranger's address (#192),
+ * and someone who withdrew shouldn't keep receiving announcements. Mailing
+ * either takes a deliberate `statusFilter: 'pending_verification'` or
+ * `'cancelled'`.
  */
 export const StaffMailInputSchema = z.object({
   subject: z.string().min(1).max(STAFF_MAIL_SUBJECT_MAX_LENGTH),

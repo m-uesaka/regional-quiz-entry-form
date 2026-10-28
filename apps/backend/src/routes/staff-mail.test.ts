@@ -372,7 +372,7 @@ describe('POST /staff/tournaments/:tournamentId/mail', () => {
     expect(queue.sent.map(message => message.to)).toEqual(['taro@example.com']);
   });
 
-  it('sends to all but cancelled entries when no statusFilter is given', async () => {
+  it('sends to confirmed and waitlisted entries when no statusFilter is given', async () => {
     const log = mockFetch({
       tournament: IN_SCOPE_TOURNAMENT,
       entries: [[entryRow('taro@example.com')]],
@@ -381,8 +381,11 @@ describe('POST /staff/tournaments/:tournamentId/mail', () => {
 
     await postMail(cookie);
 
-    // Cancelled entries are left out unless they are asked for by name.
-    expect(log.entryQueries[0]).toContain('status=neq.cancelled');
+    // Unconfirmed (#192) and cancelled entries are left out unless they are
+    // asked for by name.
+    expect(decodeURIComponent(log.entryQueries[0])).toContain(
+      'status=in.(confirmed,waitlisted)',
+    );
   });
 
   it('returns 403 for staff outside their scope', async () => {

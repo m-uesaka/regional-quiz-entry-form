@@ -46,14 +46,26 @@ describe('fetchTournamentRecipients', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('excludes cancelled entries when no status filter is given', async () => {
+  // #192: an unconfirmed entry may carry a stranger's address.
+  it('reaches only confirmed and waitlisted entries when no status filter is given', async () => {
     const urls = mockFetch([[row('taro@example.com')]]);
 
     const result = await fetchTournamentRecipients(ENV, TOURNAMENT_ID);
 
     expect(result).toEqual({ok: true, recipients: ['taro@example.com']});
     expect(urls[0]).toContain(`tournament_id=eq.${TOURNAMENT_ID}`);
-    expect(urls[0]).toContain('status=neq.cancelled');
+    expect(decodeURIComponent(urls[0])).toContain(
+      'status=in.(confirmed,waitlisted)',
+    );
+  });
+
+  it('reaches unconfirmed entries only when asked for by name', async () => {
+    const urls = mockFetch([[row('taro@example.com')]]);
+
+    await fetchTournamentRecipients(ENV, TOURNAMENT_ID, 'pending_verification');
+
+    expect(urls[0]).toContain('status=eq.pending_verification');
+    expect(urls[0]).not.toContain('status=in.');
   });
 
   it('narrows to one status when a status filter is given', async () => {
@@ -67,7 +79,7 @@ describe('fetchTournamentRecipients', () => {
 
     expect(result).toEqual({ok: true, recipients: ['taro@example.com']});
     expect(urls[0]).toContain('status=eq.cancelled');
-    expect(urls[0]).not.toContain('status=neq.');
+    expect(urls[0]).not.toContain('status=in.');
   });
 
   it('keeps paging until a short page arrives', async () => {

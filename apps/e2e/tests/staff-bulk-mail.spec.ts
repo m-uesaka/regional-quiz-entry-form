@@ -5,6 +5,7 @@ import {expect, test} from '@playwright/test';
 import {
   enterAndVerify,
   loginStaff,
+  readMails,
   sendBulkMail,
   submitEntry,
   waitForMail,
@@ -18,7 +19,7 @@ const MAIL = {
   body: '<p>当日は 9:30 集合です。</p>',
 };
 
-test('staff mail every entrant of their tournament through the queue', async ({
+test('staff mail the confirmed entrants of their tournament through the queue', async ({
   request,
 }) => {
   // Arranged through the API: this spec is about what happens after the
@@ -29,8 +30,8 @@ test('staff mail every entrant of their tournament through the queue', async ({
     displayName: 'たろう',
   });
   expect(confirmed.status).toBe('confirmed');
-  // Left unverified, because a bulk send with no `statusFilter` goes to
-  // every entry but the cancelled ones -- including this one.
+  // Left unverified, because a bulk send with no `statusFilter` must pass
+  // this one over: its address may be a stranger's (#192).
   const pending = await submitEntry(request, SHINJINOU, {
     name: '未確認花子',
     displayName: 'はなこ',
@@ -49,17 +50,15 @@ test('staff mail every entrant of their tournament through the queue', async ({
 
   // The response only says the recipients were taken on: the messages are
   // still in the queue at this point, and nothing has been sent.
-  expect(accepted).toBeGreaterThanOrEqual(2);
+  expect(accepted).toBeGreaterThanOrEqual(1);
 
   // Which is what makes these two arrivals the end-to-end evidence -- the
   // request that asked for them has long since answered, so they can only
   // have been sent by the queue's consumer.
-  for (const recipient of [confirmed, pending]) {
-    const mail = await waitForMail(request, recipient.email, MAIL.subject);
-    expect(mail.html).toBe(MAIL.body);
-    // One message per recipient, so nobody sees anybody else's address.
-    expect(mail.to).toEqual([recipient.email]);
-  }
+  const mail = await waitForMail(request, confirmed.email, MAIL.subject);
+  expect(mail.html).toBe(MAIL.body);
+  // One message per recipient, so nobody sees anybody else's address.
+  expect(mail.to).toEqual([confirmed.email]);
 
   // And the job is where staff read how it went, which used to exist only
   // as a line in the Worker's log (Task 10-4).
@@ -71,4 +70,24 @@ test('staff mail every entrant of their tournament through the queue', async ({
     sent: accepted,
     failed: 0,
   });
+  // The job has finished, so a message to the unconfirmed address would
+  // already be in the sink: its absence now is the answer.
+  const toPending = await readMails(request, pending.email);
+  expect(toPending.map(received => received.subject)).not.toContain(
+    MAIL.subject,
+  );
+
+  // Staff can still reach the unconfirmed entries, by asking for them.
+  const reminder = {
+    subject: '【テスト】エントリーの確定をお願いします',
+    body: '<p>確認メールのリンクからエントリーを確定してください。</p>',
+    statusFilter: 'pending_verification' as const,
+  };
+  await sendBulkMail(request, SHINJINOU.id, reminder);
+  const reminderMail = await waitForMail(
+    request,
+    pending.email,
+    reminder.subject,
+  );
+  expect(reminderMail.html).toBe(reminder.body);
 });
