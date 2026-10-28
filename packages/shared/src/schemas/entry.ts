@@ -20,16 +20,43 @@ export const ENTRY_NAME_MAX_LENGTH = 100;
 export const ENTRY_FREE_TEXT_MAX_LENGTH = 2_000;
 
 /**
+ * Characters a name has no use for, refused so a name on the public entry
+ * list can't display reversed, split over lines, or as something it isn't
+ * (#193):
+ *
+ * - control and format characters (`\p{Cc}` / `\p{Cf}`): C0/C1 controls,
+ *   line breaks among them, zero-width characters, and the bidirectional
+ *   overrides (U+202E and the like);
+ * - the line and paragraph separators (`\p{Zl}` / `\p{Zp}`, U+2028 /
+ *   U+2029), which are line breaks without being controls;
+ * - lone surrogates (`\p{Cs}`): half of a pair, which is not valid text,
+ *   and which the database refuses with a 500 rather than a field error.
+ *
+ * Two format characters are let through, because emoji are built from them:
+ * the zero-width joiner (U+200D) of a composed emoji such as a family, and
+ * the tag characters (U+E0020-U+E007F) of a subdivision flag such as
+ * England's. Neither reorders or breaks the text around it.
+ */
+const NAME_FORBIDDEN_CHARACTERS =
+  /(?![\u200D\u{E0020}-\u{E007F}])[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u;
+
+/**
  * A required single-line name field (`name` / `furigana` / `displayName`),
- * refused in Japanese when empty or longer than `ENTRY_NAME_MAX_LENGTH`.
+ * trimmed, then refused in Japanese when empty -- or only whitespace, before
+ * the trim -- longer than `ENTRY_NAME_MAX_LENGTH`, or carrying a character
+ * in `NAME_FORBIDDEN_CHARACTERS`.
  * @param label The field's Japanese name, as the messages call it.
  */
 function nameFieldSchema(label: string) {
   return z
     .string()
+    .trim()
     .min(1, {message: `${label}を入力してください`})
     .max(ENTRY_NAME_MAX_LENGTH, {
       message: `${label}は${ENTRY_NAME_MAX_LENGTH}文字以内で入力してください`,
+    })
+    .refine(value => !NAME_FORBIDDEN_CHARACTERS.test(value), {
+      message: `${label}に使用できない文字が含まれています`,
     });
 }
 

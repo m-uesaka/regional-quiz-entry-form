@@ -580,6 +580,8 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 
   長さの上限(#122)は `packages/shared/src/schemas/entry.ts` の定数(`ENTRY_NAME_MAX_LENGTH` / `ENTRY_FREE_TEXT_MAX_LENGTH`)と `packages/shared/src/logic/custom-field-values.ts` の定数(`CUSTOM_FIELD_VALUE_MAX_LENGTH` / `CUSTOM_FIELD_VALUES_TOTAL_MAX_LENGTH`)にあり、`POST .../entries/session` と `PATCH /api/mypage/entries/:entryId` も同じスキーマで同じ上限を掛けます。上限が無いと 1 リクエストで数 MB を保存でき、公開エントリーリスト・スタッフ一覧・CSV にそのまま乗るためです。DB にも同じ値の check 制約があります(`database-schema.md` の `entries`)。超過は Zod のバリデーションエラー(400)です。
 
+  氏名・ふりがな・掲載名は前後の空白(全角スペースを含む)を除いてから検証し、空白だけの値は未入力として、制御文字・書式文字(Unicode の `Cc` / `Cf`。改行、ゼロ幅文字、U+202E などの双方向制御文字)を含む値は 400 で断ります(#193)。掲載名は認証不要の公開エントリーリストにそのまま載るため、表示を反転・偽装できる文字を通さないためです。メールアドレスは全エンドポイント共通で 254 文字までです(`EMAIL_MAX_LENGTH`、`packages/shared/src/schemas/email.ts`)。
+
   加えて **`cf-turnstile-response` ヘッダ**(Turnstile のトークン)が必須です。1 章「レート制限と Turnstile」を参照してください。
 
 - `202`: `{"ok": true}`(アドレスの状態によらず同じ。上記参照)

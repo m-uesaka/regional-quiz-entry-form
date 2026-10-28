@@ -210,6 +210,134 @@ describe('EntryInputSchema length limits', () => {
   });
 });
 
+// #193: the display name is shown on the public entry list, so what it may
+// contain is part of what that list can be made to show.
+describe('EntryInputSchema name characters', () => {
+  const VALID_ENTRY = {
+    name: '山田太郎',
+    furigana: 'やまだたろう',
+    displayName: '太郎',
+    email: 'taro@example.com',
+    password: 'quiz-pass-one',
+    passwordConfirm: 'quiz-pass-one',
+    regulationIds: ['00000000-0000-0000-0000-000000000000'],
+    customFieldValues: {},
+  };
+
+  it('trims surrounding whitespace, full-width spaces included', () => {
+    const parsed = EntryInputSchema.parse({
+      ...VALID_ENTRY,
+      name: '\u3000山田 太郎 ',
+      displayName: ' 太郎\u3000',
+    });
+
+    expect(parsed.name).toBe('山田 太郎');
+    expect(parsed.displayName).toBe('太郎');
+  });
+
+  it('rejects a name of whitespace alone as empty', () => {
+    const result = EntryInputSchema.safeParse({
+      ...VALID_ENTRY,
+      displayName: ' \u3000 ',
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.flatten().fieldErrors).toEqual({
+        displayName: ['エントリーリスト掲載名を入力してください'],
+      });
+    }
+  });
+
+  it('applies the maximum length after trimming', () => {
+    const result = EntryInputSchema.safeParse({
+      ...VALID_ENTRY,
+      name: ` ${'あ'.repeat(ENTRY_NAME_MAX_LENGTH)} `,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    ['a right-to-left override', '太郎\u202Eabc'],
+    ['a zero-width space', '太\u200B郎'],
+    ['a byte order mark inside the name', '太\uFEFF郎'],
+    ['a line break', '太\n郎'],
+    ['a NUL', '太\u0000郎'],
+    ['a C1 control', '太\u0085郎'],
+    ['a line separator', '太\u2028郎'],
+    ['a paragraph separator', '太\u2029郎'],
+    ['a lone surrogate', '太\uD800郎'],
+  ])('rejects %s', (_label, displayName) => {
+    const result = EntryInputSchema.safeParse({...VALID_ENTRY, displayName});
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.flatten().fieldErrors).toEqual({
+        displayName: [
+          'エントリーリスト掲載名に使用できない文字が含まれています',
+        ],
+      });
+    }
+  });
+
+  it('checks the name and furigana as well', () => {
+    const result = EntryInputSchema.safeParse({
+      ...VALID_ENTRY,
+      name: '山田\u202E太郎',
+      furigana: 'やまだ\u200Bたろう',
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.flatten().fieldErrors).toEqual({
+        name: ['氏名に使用できない文字が含まれています'],
+        furigana: ['ふりがなに使用できない文字が含まれています'],
+      });
+    }
+  });
+
+  it('accepts names with emoji, symbols and mixed scripts', () => {
+    const result = EntryInputSchema.safeParse({
+      ...VALID_ENTRY,
+      name: 'Taro・山田 Jr.',
+      displayName: '太郎🎉(東京)',
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts composed emoji built with a joiner or tag characters', () => {
+    const result = EntryInputSchema.safeParse({
+      ...VALID_ENTRY,
+      // A family (joined with U+200D), and England's flag (tag characters).
+      name: '太郎👨\u200D👩\u200D👧',
+      displayName:
+        '太郎🏴\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}',
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('applies the same rules to the mypage edit form', () => {
+    const result = EntryEditInputSchema.safeParse({
+      name: ' 山田太郎 ',
+      furigana: 'やまだたろう',
+      displayName: '\u202E太郎',
+      customFieldValues: {},
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.flatten().fieldErrors).toEqual({
+        displayName: [
+          'エントリーリスト掲載名に使用できない文字が含まれています',
+        ],
+      });
+    }
+  });
+});
+
 describe('EntryInputSchema password', () => {
   // The same field is how a returning participant proves an existing
   // password, which may predate the common-password rule; the backend

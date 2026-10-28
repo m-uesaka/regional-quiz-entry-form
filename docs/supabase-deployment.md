@@ -146,7 +146,7 @@ having sum(char_length(v.element)) > 10000;
 `apps/backend/wrangler.toml` に `staging` / `production` の 2 環境を定義済みです。実ファイルを参照してください。編集する際の注意点は 2 つです。
 
 - **`vars` と `routes` は環境に継承されない**。`[env.staging]` に `[env.staging.vars]` を書かないと、トップレベルの `[vars]` ではなく「vars なし」でデプロイされます(Wrangler の non-inheritable key)。そのため両環境がそれぞれ自分の `vars` を持っており、トップレベルの `[vars]` は `wrangler dev`(無名環境)専用です。
-- **`[env.production]` で `name` を上書きしている**。`--env production` はデフォルトで Worker 名に `-production` を付けるため、明示しないと `regional-quiz-backend-production` にデプロイされます。
+- **最上位の `name` は `regional-quiz-backend-dev` で、`[env.production]` で `regional-quiz-backend` に上書きしている**。最上位の設定は `wrangler dev` 用(テスト用の Turnstile シークレットと緩いレート制限)なので、`--env` を付け忘れた `wrangler deploy` が本番 Worker を上書きしないよう、本番とは別の名前にしてあります(#194)。付け忘れた場合は `regional-quiz-backend-dev` という別の Worker ができるだけです(最上位は `workers_dev = false` なので `workers.dev` の URL も付きません。各環境は自分で `workers_dev = true` を持っています)。Cloudflare のダッシュボードから削除してください。また `--env production` はデフォルトで Worker 名に `-production` を付けるため、`[env.production]` で明示しないと `regional-quiz-backend-dev-production` にデプロイされます。
 
 各環境に対して、`apps/backend/src/types/env.ts` の `Bindings` のうち機密であるものをシークレットとして登録します(`MAIL_FROM_ADDRESS` / `FRONTEND_URL` は `wrangler.toml` の `vars` 側なので不要)。
 

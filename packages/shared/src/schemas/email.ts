@@ -1,6 +1,13 @@
 import {z} from 'zod';
 
 /**
+ * The longest address SMTP can carry (RFC 5321's 256-octet path, less its
+ * angle brackets). Without a bound, a request could put kilobytes into a rate
+ * limit key or a `participants` row (#193).
+ */
+export const EMAIL_MAX_LENGTH = 254;
+
+/**
  * An email address as an account is identified by it: validated, then
  * lowercased (#133).
  *
@@ -25,11 +32,20 @@ import {z} from 'zod';
  * describing a response keeps a plain `z.string().email()`: the address it
  * carries was already lowercased on the way in.
  * @param message The message to show for a malformed address, for schemas
- *     whose errors reach a Japanese form as-is.
+ *     whose errors reach a Japanese form as-is. Given, the over-long refusal
+ *     is spelled out in Japanese too.
  */
 export function emailAddressSchema(message?: string) {
   return z
     .string()
+    .max(
+      EMAIL_MAX_LENGTH,
+      message === undefined
+        ? undefined
+        : {
+            message: `メールアドレスは${EMAIL_MAX_LENGTH}文字以内で入力してください`,
+          },
+    )
     .email(message === undefined ? undefined : {message})
     .toLowerCase();
 }
