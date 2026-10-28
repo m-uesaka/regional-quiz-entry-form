@@ -341,6 +341,8 @@ grant select, insert, update, delete on all tables in schema public to service_r
 
 この `all tables in schema public` は**実行時点の**テーブルにしか効きません。あとから足したテーブル(`0015` の `staff_password_reset_tokens`、`0019` の `mail_jobs`)は、同じ `enable row level security` / `revoke` / `grant` をそのマイグレーション内で自分で書く必要があります。Supabase の default privileges は新しいテーブルを `anon` / `authenticated` にも渡すので、`revoke` を書き忘れると `0001` で剥がした権限が復活します。
 
+実際に `0018` の `entry_regulations` と `0032` の `tournaments_display_order_seq` には権限が残っており、各関数の `revoke all on function ... from public` も `anon` / `authenticated` への名指しの GRANT は消しません。そこで `0035_revoke_data_api_default_privileges.sql`(#194)で `public` の全テーブル・シーケンス・関数から両ロール(関数は PUBLIC も)の権限を剥がし、`alter default privileges for role postgres in schema public` でこれから作るオブジェクトにも渡らないようにしました。以降のマイグレーションは `revoke` を書かなくても両ロールに権限は付きませんが、`service_role` への `grant` はこれまでどおり自分で書く必要があります。両ロールに何も付いていないことは `apps/backend/src/lib/db-privileges.test.ts` がローカル DB で確かめます。
+
 設計方針:
 
 - **`anon` / `authenticated` ロールからは一切アクセスできません。** RLS を有効化した上で、そもそも権限自体を剥奪しています(RLS ポリシーは1つも定義していないため、仮に権限が残っていても全行が不可視になります)。

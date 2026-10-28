@@ -1,4 +1,10 @@
-name = "regional-quiz-backend"
+# Not the production Worker's name (#194). This top level is the local
+# development configuration -- the always-passing Turnstile secret, the loose
+# rate limits -- and a `wrangler deploy` or `wrangler secret put` run here
+# without `--env` deploys it under this name. Were it `regional-quiz-backend`,
+# that slip would overwrite production with it; under this name it creates a
+# separate, unrouted Worker instead, which can simply be deleted.
+name = "regional-quiz-backend-dev"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
 
@@ -27,16 +33,16 @@ workers_dev = true
 # restate them gets none at all rather than the top-level ones. So each named
 # environment below carries its own copy.
 #
-# This top-level block is what `wrangler dev` runs — but note it shares `name`
-# with `[env.production]`, so a bare `wrangler deploy` or `wrangler secret put`
-# in this directory (no `--env`) targets the *production* Worker. The deploy
-# workflows always pass `--env`; pass it by hand too.
+# This top-level block is what `wrangler dev` runs. A bare `wrangler deploy`
+# (no `--env`) ships it to `regional-quiz-backend-dev`, not to either real
+# environment (see `name` above). The deploy workflows always pass `--env`;
+# pass it by hand too.
 [vars]
 # 非機密の設定値のみここに記載し、機密情報は `wrangler secret put` で登録する
 MAIL_FROM_ADDRESS = "no-reply@mail.regional-quiz-project.app"
-# 本番の値のままにしておく: 上のとおり `--env` を付け忘れた `wrangler deploy` は
-# このブロックで本番 Worker を上書きするため、ここにローカル用の値を書くと
-# 本番のメールのリンクと `src/index.ts` の Origin 検証が localhost を向いてしまう。
+# 本番の値のままにしておく: 最上位の `name` が本番と同じだった頃は、`--env` を
+# 付け忘れた `wrangler deploy` がこのブロックで本番 Worker を上書きしていた。
+# 今は別名の Worker に入るだけだが、念のため localhost は書かない。
 # ローカル開発の値(`vite dev` のオリジン)は `package.json` の `dev` スクリプトが
 # `--var` で渡し、E2E は `apps/e2e/playwright.config.ts` が同じく `--var` で渡す。
 FRONTEND_URL = "https://regional-quiz-project.app"
@@ -77,9 +83,9 @@ TURNSTILE_SECRET_KEY = "1x0000000000000000000000000000000AA"
 # an end-to-end run seeding a waitlist, straight into a 429. The real policy
 # is in `[env.staging]` / `[env.production]` below.
 #
-# This is one more thing a bare `wrangler deploy` (no `--env`) would get
-# wrong, on top of the `vars` warned about above: it would ship these limits
-# to the production Worker. Always pass `--env`.
+# This is one more reason the top-level `name` is not production's: a bare
+# `wrangler deploy` (no `--env`) ships these limits along with the `vars`
+# above. Always pass `--env`.
 [[unsafe.bindings]]
 name = "LOGIN_IP_RATE_LIMITER"
 type = "ratelimit"
@@ -258,8 +264,9 @@ max_concurrency = 1
 dead_letter_queue = "regional-quiz-bulk-mail-staging-dlq"
 
 # Deployed by `.github/workflows/deploy-production.yml` on a push to `main`.
-# `name` is set back to the unsuffixed one: without it, `--env production`
-# would deploy a Worker called `regional-quiz-backend-production`.
+# `name` is set explicitly, to the unsuffixed one: without it, `--env
+# production` would deploy a Worker called
+# `regional-quiz-backend-dev-production`.
 #
 # Like staging, this block carries no `routes` key: the `/api/*` route is
 # passed at deploy time from the environment's `FRONTEND_HOST` variable. See
