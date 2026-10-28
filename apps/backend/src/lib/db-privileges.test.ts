@@ -66,29 +66,43 @@ describe.skipIf(!dbReachable)(
       expect(rows).toEqual([]);
     });
 
+    // Checked on objects actually created, not on `pg_default_acl`: PUBLIC's
+    // EXECUTE on a new function is a built-in default that never shows up
+    // there, so reading the catalog alone would miss it coming back.
     it('creates new objects in public without granting them to anon or authenticated', async () => {
-      // The default privileges the migrations' own objects are created
-      // under; `pg_default_acl` holds only the entries that differ from the
-      // built-in defaults, under which a function is executable by PUBLIC.
-      const rows = await sql`
-        select a.defaclobjtype, a.defaclacl::text as acl
-        from pg_default_acl a
-        join pg_namespace n on n.oid = a.defaclnamespace
-        where n.nspname = 'public'
-          and pg_get_userbyid(a.defaclrole) = 'postgres'
-      `;
-      const byType = new Map(
-        rows.map((row: {defaclobjtype: string; acl: string}) => [
-          row.defaclobjtype,
-          row.acl,
-        ]),
-      );
-      for (const type of ['r', 'S', 'f']) {
-        expect(byType.get(type)).toBeDefined();
-        expect(byType.get(type)).not.toMatch(/(^|[{,])(anon|authenticated)=/);
-      }
-      // A grant to PUBLIC is spelled `=X/postgres`, with no grantee.
-      expect(byType.get('f')).not.toMatch(/(^|[{,])=/);
+      const rolledBack = new Error('rolled back');
+      let rows: unknown[] = [];
+      await sql
+        .begin(async tx => {
+          await tx`create table public.db_privileges_probe (id int)`;
+          await tx`create sequence public.db_privileges_probe_seq`;
+          await tx`
+            create function public.db_privileges_probe()
+            returns int language sql as 'select 1'
+          `;
+          rows = await tx`
+            select r.rolname, privilege
+            from pg_roles r
+            cross join lateral (values
+              ('table', has_table_privilege(
+                r.oid, 'public.db_privileges_probe',
+                'select, insert, update, delete, truncate, references, trigger'
+              )),
+              ('sequence', has_sequence_privilege(
+                r.oid, 'public.db_privileges_probe_seq', 'usage, select, update'
+              )),
+              ('function', has_function_privilege(
+                r.oid, 'public.db_privileges_probe()', 'execute'
+              ))
+            ) as p(privilege, granted)
+            where r.rolname in ${sql(DATA_API_ROLES)} and p.granted
+          `;
+          throw rolledBack;
+        })
+        .catch(error => {
+          if (error !== rolledBack) throw error;
+        });
+      expect(rows).toEqual([]);
     });
   },
 );

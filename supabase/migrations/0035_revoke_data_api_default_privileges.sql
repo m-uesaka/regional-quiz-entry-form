@@ -35,9 +35,20 @@ revoke all on all functions in schema public from public, anon, authenticated;
 -- API roles at all, instead of relying on its migration to remember the
 -- revoke; it still has to grant `service_role` what the backend needs, as
 -- every migration so far does.
+--
+-- The schema-level entries take away what Supabase's own schema-level
+-- defaults hand the two roles by name.
 alter default privileges for role postgres in schema public
   revoke all on tables from anon, authenticated;
 alter default privileges for role postgres in schema public
   revoke all on sequences from anon, authenticated;
 alter default privileges for role postgres in schema public
-  revoke all on functions from public, anon, authenticated;
+  revoke all on functions from anon, authenticated;
+-- PUBLIC's EXECUTE on a new function is not one of those: it is Postgres'
+-- built-in default, and a schema-level entry can only add to the built-in
+-- defaults, never take from them -- `in schema public` here would be
+-- accepted and change nothing. So this one is revoked globally, for every
+-- function `postgres` creates in any schema. The migrations create functions
+-- in `public` only.
+alter default privileges for role postgres
+  revoke execute on functions from public;

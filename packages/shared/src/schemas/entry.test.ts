@@ -265,6 +265,9 @@ describe('EntryInputSchema name characters', () => {
     ['a line break', '太\n郎'],
     ['a NUL', '太\u0000郎'],
     ['a C1 control', '太\u0085郎'],
+    ['a line separator', '太\u2028郎'],
+    ['a paragraph separator', '太\u2029郎'],
+    ['a lone surrogate', '太\uD800郎'],
   ])('rejects %s', (_label, displayName) => {
     const result = EntryInputSchema.safeParse({...VALID_ENTRY, displayName});
 
@@ -282,7 +285,7 @@ describe('EntryInputSchema name characters', () => {
     const result = EntryInputSchema.safeParse({
       ...VALID_ENTRY,
       name: '山田\u202E太郎',
-      furigana: 'やまだ\u200Dたろう',
+      furigana: 'やまだ\u200Bたろう',
     });
 
     expect(result.success).toBe(false);
@@ -299,6 +302,18 @@ describe('EntryInputSchema name characters', () => {
       ...VALID_ENTRY,
       name: 'Taro・山田 Jr.',
       displayName: '太郎🎉(東京)',
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts composed emoji built with a joiner or tag characters', () => {
+    const result = EntryInputSchema.safeParse({
+      ...VALID_ENTRY,
+      // A family (joined with U+200D), and England's flag (tag characters).
+      name: '太郎👨\u200D👩\u200D👧',
+      displayName:
+        '太郎🏴\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}',
     });
 
     expect(result.success).toBe(true);
