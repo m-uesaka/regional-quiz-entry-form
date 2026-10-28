@@ -878,7 +878,11 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 - `400`: ボディが `StaffMailInputSchema` に合わない、または許可タグに絞った結果 `body` に読める文字が残らなかった(空タグと空白だけになった場合を含む。`{"error": "mail body is empty after sanitizing"}`)
 - `401` / `403` / `500`
 
-**`statusFilter` を省略した場合、`cancelled` 以外の全エントリー**が対象です。キャンセルした人に案内を送り続けないためで、キャンセル者に送るには `statusFilter: "cancelled"` を明示する必要があります。
+**`statusFilter` を省略した場合、`confirmed` と `waitlisted` のエントリーだけ**が対象です(`apps/backend/src/lib/entry-recipients.ts` の `DEFAULT_RECIPIENT_STATUSES`)。
+
+- `pending_verification`(メール未確認)を外すのは #192 のためです。誰でも他人のアドレスでエントリーして確定せずに放置できるので、絞り込みなしの告知(会場や集合時刻など)が、同意していない第三者に届いてしまいます。送信ドメインの評判にも響きます
+- `cancelled` を外すのは、キャンセルした人に案内を送り続けないためです
+- どちらも、送るには `statusFilter: "pending_verification"` / `"cancelled"` を明示します
 
 **`200` ではなく `202` を返し、`accepted` は「送信を受け付けた宛先数」であって「届いた通数」ではありません。** このエンドポイントがするのは宛先の確定・`mail_jobs` 行の作成・**Cloudflare Queues への投入まで**で、送信そのものはキューのコンシューマ(`lib/bulk-mail-queue.ts`、Worker の `queue` ハンドラ)が後から行います(Task 10-4 / #114)。どこまで届いたかは下の `GET .../mail/:jobId` で確認します。
 

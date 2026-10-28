@@ -9,6 +9,22 @@ import {createDbClient} from './db';
 // each page would be dropped rather than paged over.
 export const RECIPIENT_PAGE_SIZE = 500;
 
+/**
+ * Who a send with no `statusFilter` reaches: the entries whose owner proved
+ * the address theirs by confirming it, seated or waiting.
+ *
+ * Not `pending_verification` (#192): anyone can enter under a stranger's
+ * address and leave the entry unconfirmed, and an announcement -- the venue,
+ * the meeting time -- would then reach someone who never agreed to it, from
+ * the organization's sending domain. Nor `cancelled`: someone who withdrew
+ * shouldn't keep receiving announcements. Either is still reachable by
+ * naming it in `statusFilter`.
+ */
+export const DEFAULT_RECIPIENT_STATUSES: readonly EntryStatus[] = [
+  'confirmed',
+  'waitlisted',
+];
+
 type RecipientsResult =
   {ok: true; recipients: string[]} | {ok: false; error: string};
 
@@ -20,9 +36,9 @@ interface RecipientRow {
 /**
  * Collects the addresses to mail for one tournament's entries.
  *
- * With no `statusFilter`, every status but `cancelled` is included:
- * someone who withdrew shouldn't keep receiving announcements, so reaching
- * them takes an explicit `statusFilter: 'cancelled'`.
+ * With no `statusFilter`, the entries in `DEFAULT_RECIPIENT_STATUSES` are
+ * included -- not the unconfirmed or the cancelled ones, which take an
+ * explicit `statusFilter` to reach.
  *
  * Addresses are de-duplicated, so a participant holding more than one
  * matching entry is still mailed once.
@@ -58,7 +74,7 @@ export async function fetchTournamentRecipients(
       .eq('tournament_id', tournamentId);
     query = statusFilter
       ? query.eq('status', statusFilter)
-      : query.neq('status', 'cancelled');
+      : query.in('status', [...DEFAULT_RECIPIENT_STATUSES]);
 
     const {data, error} = await query
       // Ordered by the primary key so the pages partition the rows instead
