@@ -372,7 +372,9 @@ async function answerCustomField(
 
 /**
  * Waits for a participant's confirmation mail and opens the link in it, the
- * way following it out of a mail client would.
+ * way following it out of a mail client -- or a mail scanner fetching it
+ * first -- would. That alone confirms nothing (#190): the page only offers
+ * the button `pressConfirmEntryButton()` presses.
  *
  * The link's origin is the `FRONTEND_URL` the backend was started with, so
  * it lands on the same `vite dev` server the rest of the flow is on.
@@ -395,6 +397,35 @@ export async function openVerificationLink(
   );
   const link = extractVerificationUrl(mail.html);
   await page.goto(link);
+  return link;
+}
+
+/**
+ * Presses the button `/verify` shows for the link it was opened with, which
+ * is what spends the token and confirms the entry.
+ * @param page A page on `/verify`, opened from a verification link.
+ */
+export async function pressConfirmEntryButton(page: Page): Promise<void> {
+  await page.getByRole('button', {name: 'エントリーを確定する'}).click();
+}
+
+/**
+ * Opens the participant's confirmation link and confirms the entry with it,
+ * as the participant does.
+ * @param page The page to open it in.
+ * @param request An API context, used to read the mail stub.
+ * @param tournament The tournament the entry was made to.
+ * @param email The address the confirmation mail went to.
+ * @return The link that was opened, so a spec can follow it a second time.
+ */
+export async function followVerificationLink(
+  page: Page,
+  request: APIRequestContext,
+  tournament: TournamentFixture,
+  email: string,
+): Promise<string> {
+  const link = await openVerificationLink(page, request, tournament, email);
+  await pressConfirmEntryButton(page);
   return link;
 }
 

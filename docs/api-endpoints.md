@@ -177,7 +177,7 @@ IP 鍵は、IPv4 はアドレスそのまま、IPv6 は**先頭 /64**(`2001:db8:
 
 **`no-referrer` を使っていないのは意図的です。** `Referrer-Policy: no-referrer` のページから送られたフォーム送信(JavaScript 無しの通常の POST)には、ブラウザが `Origin: null` を付けます。SvelteKit 自身の CSRF チェックはこれを別サイトからの送信とみなして 403 を返すため、ハイドレーション前や JavaScript 無しでも送れるようにしてあるフォーム(#95)が壊れます。トークン付きページの `same-origin` は、外部サイトへの Referer を止めるという目的は `no-referrer` と同じで、自サイトへのフォーム送信の `Origin` は残ります。また Turnstile は別オリジンの iframe なので、全ページを `same-origin` にはしていません。
 
-**トークンを URL から消す。** パスワード再設定の 2 ページ(`/password-reset`・`/staff/password-reset`)は、`?token=` 付きで開かれると `load` がトークンを**そのページのパスに限定した httpOnly Cookie**(`SameSite=Lax`、有効期限はバックエンドのトークンと同じ 1 時間 / 24 時間)に移し、`?token=` を除いた URL へ 303 でリダイレクトします(`apps/frontend/src/lib/server/reset-token.ts`)。以降トークンは Cookie にしか無く、アドレスバー・履歴・ページの HTML・シリアライズされた `load` データのどれにも載りません。再読み込みやブラウザによるタブの復元でもリンクはそのまま使え、JavaScript も要りません。設定が完了したとき、または API がトークンを拒否したときに Cookie を消し、拒否された場合は再設定フォームの代わりに(参加者は)リンクの再送フォームを出します。`/verify` はもともとサーバー側でトークンを消費した直後に `/verify?status=...` へリダイレクトしているので、トークン付きの URL がページとして描画されることはありません。
+**トークンを URL から消す。** パスワード再設定の 2 ページ(`/password-reset`・`/staff/password-reset`)は、`?token=` 付きで開かれると `load` がトークンを**そのページのパスに限定した httpOnly Cookie**(`SameSite=Lax`、有効期限はバックエンドのトークンと同じ 1 時間 / 24 時間)に移し、`?token=` を除いた URL へ 303 でリダイレクトします(`apps/frontend/src/lib/server/reset-token.ts`)。以降トークンは Cookie にしか無く、アドレスバー・履歴・ページの HTML・シリアライズされた `load` データのどれにも載りません。再読み込みやブラウザによるタブの復元でもリンクはそのまま使え、JavaScript も要りません。設定が完了したとき、または API がトークンを拒否したときに Cookie を消し、拒否された場合は再設定フォームの代わりに(参加者は)リンクの再送フォームを出します。エントリー確認の `/verify` も同じ仕組みでトークンを Cookie に移します(トークンを消費するのはページを開いたときではなく、ボタンの form action です。#190)。
 
 ### エラー応答の形式
 
@@ -226,7 +226,7 @@ if ('yaml' in body) {
 | GET | `/api/tournaments/:tournamentId/entry-counts` | なし |
 | POST | `/api/tournaments/:tournamentId/entries` | なし(レート制限 + Turnstile) |
 | POST | `/api/tournaments/:tournamentId/entries/session` | 参加者(レート制限 + Turnstile) |
-| GET | `/api/entries/verify` | なし(トークン) |
+| POST | `/api/entries/verify` | なし(トークン) |
 | GET | `/api/form-definitions/:tournamentId` | 期間中はなし / 期間外は担当スタッフ |
 | PUT | `/api/form-definitions/:tournamentId` | 統括スタッフ |
 | POST | `/api/sheet-import/preview` | 統括スタッフ |
@@ -641,15 +641,17 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 
 メール送信に失敗した場合はエントリーを**ロールバック**します。放置すると、参加者は使えるリンクを受け取っていないのに一意制約や「already entered」で再試行を永久に阻まれるためです。ロールバックは「確認トークンの削除 → 新規行なら削除 / 再利用行なら元の値へ復元」の順に行います(トークンが FK で参照している間はエントリーを削除できないため)。再利用行は削除ではなく**キャンセル状態へ復元**することで、元のエントリーの記録が消えないようにしています。
 
-### `GET /api/entries/verify?token=...`
+### `POST /api/entries/verify`
 
-メール本文の確認リンクから叩かれるエンドポイント。DB 関数 `confirm_entry_by_token()` を呼び、エントリーを確定またはキャンセル待ちに載せます。
+フロントエンドの `/verify` ページで「エントリーを確定する」ボタンを押したときに叩かれるエンドポイント。DB 関数 `confirm_entry_by_token()` を呼び、エントリーを確定またはキャンセル待ちに載せます。
 
-- クエリ: `token`(非空文字列。生トークン。サーバ側で SHA-256 化して照合)
-- `200`: `{"status": "confirmed" | "waitlisted"}`
+- ボディ: `{"token": string}`(`EntryVerificationInputSchema`。非空文字列。生トークン。サーバ側で SHA-256 化して照合)
+- `200`: `{"status": "confirmed" | "waitlisted", "tournament": {regionSlug, type} | null}`
 - `400`: `{"error": "invalid or expired token"}` — 未知 / 期限切れ(発行から24時間)/ 使用済みトークン、またはエントリーが `pending_verification` でなくなっている場合
 
 定員に空きがあれば `confirmed`、埋まっていれば `waitlisted`(順位付き)になります。
+
+**GET では確定しません(#190)。** Outlook Safe Links などのメールゲートウェイやチャットのリンクプレビューは、受信者がクリックする前にリンクを GET で取得します。GET で確定すると、本人が選んでいないエントリー(第三者が本人のアドレスで申し込んだものを含む)まで確定してしまうため、確定はボタンが送る POST に限っています。メールのリンク(`/verify?token=...`)を開いても、ページの `load` はトークンを `/verify` に限定した httpOnly Cookie(有効期限は確認トークンと同じ 24 時間)に移して `/verify` へリダイレクトし、ボタンを表示するだけです。ボタンの form action が Cookie のトークンでこの API を呼び、結果に応じて `/verify?status=...` へリダイレクトします。API が 400 を返したとき、または確定できたときに Cookie を消します。500 のときはトークンを残し、もう一度押せるようにします。
 
 ## 8. 公開エントリーリスト
 

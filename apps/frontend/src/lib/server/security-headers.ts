@@ -18,10 +18,9 @@ const PRIVATE_PATH_PREFIXES: readonly string[] = [
 /**
  * Pages a mailed link opens with a one-time token in the query string
  * (`?token=...`): the entry confirmation and the two password reset screens.
- * Each answers that request with a redirect to a URL without the token
- * (`/verify` after consuming it, the reset screens after moving it into a
- * cookie: `$lib/server/reset-token.ts`), so these headers are on that
- * redirect.
+ * Each answers that request with a redirect to a URL without the token,
+ * after moving it into a cookie (`$lib/server/reset-token.ts`), so these
+ * headers are on that redirect.
  * `/staff/password-reset` is also covered by `/staff` above, but is listed
  * here for the referrer policy, which `/staff` alone does not get.
  */

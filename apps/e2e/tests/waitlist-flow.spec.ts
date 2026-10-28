@@ -11,7 +11,7 @@ import {
   cancelEntryThroughMypage,
   entryListPath,
   loginParticipantThroughForm,
-  openVerificationLink,
+  followVerificationLink,
   submitEntryForm,
 } from '../support/ui';
 
@@ -34,14 +34,19 @@ test('a cancellation promotes the waitlisted entry behind it', async ({
     const seated = await submitEntryForm(page, SAIKYOI, {
       displayName: '先着さん',
     });
-    await openVerificationLink(page, request, SAIKYOI, seated.email);
+    await followVerificationLink(page, request, SAIKYOI, seated.email);
     await expect(page.getByText('エントリーが確定しました。')).toBeVisible();
 
     // The single seat is taken, so this one is queued rather than refused.
     const queued = await submitEntryForm(waitlistedPage, SAIKYOI, {
       displayName: '待機さん',
     });
-    await openVerificationLink(waitlistedPage, request, SAIKYOI, queued.email);
+    await followVerificationLink(
+      waitlistedPage,
+      request,
+      SAIKYOI,
+      queued.email,
+    );
     await expect(
       waitlistedPage.getByText(
         '定員に達していたため、キャンセル待ちになりました。',

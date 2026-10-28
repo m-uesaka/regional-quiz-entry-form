@@ -1,13 +1,42 @@
 import {render, screen} from '@testing-library/svelte';
 import {describe, expect, it} from 'vitest';
 import Page from './+page.svelte';
-import type {VerifyStatus} from './+page.server';
+import type {VerifyPageStatus} from './+page.server';
 
-function renderPage(status: VerifyStatus) {
-  render(Page, {props: {params: {}, data: {status}, form: null}});
+function renderPage(
+  status: VerifyPageStatus,
+  form: {error: string} | null = null,
+) {
+  render(Page, {props: {params: {}, data: {status}, form}});
 }
 
 describe('verify +page.svelte', () => {
+  // Opening the link only gets this far: nothing is confirmed until the
+  // button is pressed (#190).
+  it('asks for the confirm button while a token is held', () => {
+    renderPage('ready');
+
+    expect(
+      screen.getByRole('button', {name: 'エントリーを確定する'}),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/ボタンを押さずにこのページを閉じて/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('エントリーが確定しました。')).toBeNull();
+    expect(screen.queryByRole('link', {name: 'マイページへ'})).toBeNull();
+  });
+
+  it('keeps the button next to the error when confirming failed', () => {
+    renderPage('ready', {error: 'エントリーの確定に失敗しました'});
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'エントリーの確定に失敗しました',
+    );
+    expect(
+      screen.getByRole('button', {name: 'エントリーを確定する'}),
+    ).toBeInTheDocument();
+  });
+
   it('reports a confirmed entry', () => {
     renderPage('confirmed');
 

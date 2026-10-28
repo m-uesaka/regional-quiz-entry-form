@@ -13,7 +13,9 @@ import {
   logoutParticipantThroughButton,
   MYPAGE_PATH,
   openVerificationLink,
+  followVerificationLink,
   PARTICIPANT_LOGIN_PATH,
+  pressConfirmEntryButton,
   submitEntryForm,
 } from '../support/ui';
 
@@ -38,7 +40,7 @@ test('an entry is confirmed through its mailed link and shows up on mypage', asy
   await page.goto(entryListPath(SHINJINOU));
   await expect(page.getByText(participant.displayName)).toHaveCount(0);
 
-  await openVerificationLink(page, request, SHINJINOU, participant.email);
+  await followVerificationLink(page, request, SHINJINOU, participant.email);
   // The tournament is uncapped, so there is always a seat.
   await expect(page.getByText('エントリーが確定しました。')).toBeVisible();
   // The token is spent by the time the page renders: `/verify` carries the
@@ -101,7 +103,7 @@ test('a logged-in participant enters without credentials and is told refusals di
     displayName: '重複次郎',
   });
   // Only an address that has been verified can log in (#189).
-  await openVerificationLink(page, request, SHINJINOU, participant.email);
+  await followVerificationLink(page, request, SHINJINOU, participant.email);
   await loginParticipantThroughForm(page, participant);
 
   await page.goto(entryFormPath(SAIKYOI));
@@ -125,7 +127,7 @@ test('a verification link cannot be followed twice', async ({
     displayName: '二度目さん',
   });
 
-  const link = await openVerificationLink(
+  const link = await followVerificationLink(
     page,
     request,
     SHINJINOU,
@@ -134,7 +136,35 @@ test('a verification link cannot be followed twice', async ({
   await expect(page.getByText('エントリーが確定しました。')).toBeVisible();
 
   await page.goto(link);
+  await pressConfirmEntryButton(page);
   await expect(page.getByText('この確認リンクは無効です。')).toBeVisible();
+});
+
+// #190 の回帰テスト。メールのセキュリティ機能やチャットのリンクプレビューは、
+// 受信者がクリックする前にリンクを取得する。開いただけでは確定しない。
+test('opening a verification link alone does not confirm the entry', async ({
+  page,
+  request,
+}) => {
+  const participant = await submitEntryForm(page, SHINJINOU, {
+    displayName: '未確定さん',
+  });
+
+  // A scanner fetching the link stops here, at the button.
+  await openVerificationLink(page, request, SHINJINOU, participant.email);
+  await expect(
+    page.getByRole('button', {name: 'エントリーを確定する'}),
+  ).toBeVisible();
+  // The token went into a cookie, not into the page's address.
+  await expect(page).toHaveURL('/verify');
+
+  await page.goto(entryListPath(SHINJINOU));
+  await expect(page.getByText(participant.displayName)).toHaveCount(0);
+
+  // The token is still good for the participant who does press the button.
+  await page.goto('/verify');
+  await pressConfirmEntryButton(page);
+  await expect(page.getByText('エントリーが確定しました。')).toBeVisible();
 });
 
 // #90 の回帰テスト。
@@ -201,7 +231,7 @@ test('logging out ends the session, so mypage asks to log in again', async ({
   request,
 }) => {
   const participant = await submitEntryForm(page, SHINJINOU);
-  await openVerificationLink(page, request, SHINJINOU, participant.email);
+  await followVerificationLink(page, request, SHINJINOU, participant.email);
   await loginParticipantThroughForm(page, participant);
 
   await logoutParticipantThroughButton(page);
