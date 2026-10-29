@@ -304,7 +304,7 @@ function mockSupabase(options: {
       case 'POST email_verification_tokens':
         return options.failVerificationToken
           ? Response.json({message: 'boom'}, {status: 500})
-          : new Response(null, {status: 201});
+          : Response.json({id: 'token-id'}, {status: 201});
       // The last two are the rollback after a failed verification mail.
       case 'DELETE entry_regulations':
       case 'POST entry_regulations':

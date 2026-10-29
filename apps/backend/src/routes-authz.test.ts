@@ -137,6 +137,9 @@ const ROUTE_POLICIES: Readonly<Record<string, Policy>> = {
   },
   'GET /api/staff/entries/:entryId': {access: 'scoped-staff'},
   'POST /api/staff/tournaments/:tournamentId/mail': {access: 'scoped-staff'},
+  'POST /api/staff/tournaments/:tournamentId/verification-mail': {
+    access: 'scoped-staff',
+  },
   'GET /api/staff/tournaments/:tournamentId/mail/:jobId': {
     access: 'scoped-staff',
   },

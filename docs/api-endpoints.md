@@ -236,6 +236,7 @@ if ('yaml' in body) {
 | GET | `/api/staff/tournaments/:tournamentId/entries.csv` | スタッフ(担当範囲) |
 | GET | `/api/staff/entries/:entryId` | スタッフ(担当範囲) |
 | POST | `/api/staff/tournaments/:tournamentId/mail` | スタッフ(担当範囲) |
+| POST | `/api/staff/tournaments/:tournamentId/verification-mail` | スタッフ(担当範囲) |
 | GET | `/api/staff/tournaments/:tournamentId/mail/:jobId` | スタッフ(担当範囲) |
 | GET | `/api/staff/dashboard` | 統括スタッフ |
 | GET | `/api/staff/accounts` | 統括スタッフ |
@@ -872,17 +873,17 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 | --- | --- | --- |
 | `subject` | ✅ | 件名。1〜200 文字 |
 | `body` | ✅ | 本文(HTML)。1〜20000 文字。**許可したタグだけに絞ってから**保存・送信します(後述) |
-| `statusFilter` | | `EntryStatus`(`pending_verification` / `confirmed` / `waitlisted` / `cancelled`)。指定するとそのステータスのエントリーだけに絞り込みます |
+| `statusFilter` | | `StaffMailStatusFilter`(`confirmed` / `waitlisted` / `cancelled`)。指定するとそのステータスのエントリーだけに絞り込みます。**`pending_verification` は指定できません(400)** |
 
 - `202`: `StaffMailResult` = `{"jobId": string, "accepted": number}`
 - `400`: ボディが `StaffMailInputSchema` に合わない、または許可タグに絞った結果 `body` に読める文字が残らなかった(空タグと空白だけになった場合を含む。`{"error": "mail body is empty after sanitizing"}`)
 - `401` / `403` / `500`
 
-**`statusFilter` を省略した場合、`confirmed` と `waitlisted` のエントリーだけ**が対象です(`apps/backend/src/lib/entry-recipients.ts` の `DEFAULT_RECIPIENT_STATUSES`)。
+**`statusFilter` を省略した場合、`confirmed` と `waitlisted` のエントリーだけ**が対象です(`apps/backend/src/lib/entry-recipients.ts` の `DEFAULT_RECIPIENT_STATUSES`)。`cancelled` を外すのは、キャンセルした人に案内を送り続けないためで、送るには `statusFilter: "cancelled"` を明示します。
 
-- `pending_verification`(メール未確認)を外すのは #192 のためです。誰でも他人のアドレスでエントリーして確定せずに放置できるので、絞り込みなしの告知(会場や集合時刻など)が、同意していない第三者に届いてしまいます。送信ドメインの評判にも響きます
-- `cancelled` を外すのは、キャンセルした人に案内を送り続けないためです
-- どちらも、送るには `statusFilter: "pending_verification"` / `"cancelled"` を明示します
+**メール未確認(`pending_verification`)のエントリーには、一斉メールは一切送れません(#192)。** 誰でも他人のアドレスでエントリーして確定せずに放置できるので、スタッフが書いた本文(会場や集合時刻、リンクなど)が、同意していない第三者に組織の送信ドメインから届いてしまいます。未確認の人への催促は、本文を書けない定型の確認メールの再送(下の `POST .../verification-mail`)で行います。
+
+さらに、**どの `statusFilter` でも、アドレスを確認済みの参加者(`participants.email_verified_at` が null でない)にしか送りません。** `confirmed` / `waitlisted` には確認リンクを経て入るのが今の仕組みですが、ステータスだけで判定すると、スタッフによる変更や取り込みなど確認を経ない経路が将来できたときに #192 が再発するためです。
 
 **`200` ではなく `202` を返し、`accepted` は「送信を受け付けた宛先数」であって「届いた通数」ではありません。** このエンドポイントがするのは宛先の確定・`mail_jobs` 行の作成・**Cloudflare Queues への投入まで**で、送信そのものはキューのコンシューマ(`lib/bulk-mail-queue.ts`、Worker の `queue` ハンドラ)が後から行います(Task 10-4 / #114)。どこまで届いたかは下の `GET .../mail/:jobId` で確認します。
 
@@ -910,9 +911,26 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 **Cloudflare Queues は有料プラン限定**です。`wrangler dev` はローカルでキューを模擬するので開発と E2E には課金は要りませんが、キューの無いアカウントへのデプロイは `wrangler.toml` の `[[queues.*]]` で失敗します。作成手順は `docs/supabase-deployment.md` の §6.2.2 を参照してください。
 
+### `POST /api/staff/tournaments/:tournamentId/verification-mail`
+
+`routes/staff-mail.ts`。担当大会のメール未確認(`pending_verification`)のエントリーに、**エントリー時と同じ定型の確認メールを、新しい確認リンク付きで再送**します(#192)。リクエストボディはありません。一斉メールで未確認の人に送れなくした代わりの催促手段で、件名も本文もスタッフは書けません。本文には「心当たりがなければ破棄してください」が入っているので、他人のアドレスで登録されたエントリーに届いても、エントリー時に届いたものと同じ 1 通が増えるだけです。
+
+- `202`: `StaffMailResult` = `{"jobId": string, "accepted": number}`。`accepted` は再送を受け付けたエントリー数
+- `404`: `{"error": "tournament not found"}`
+- `401` / `403` / `500`(キューへの投入に失敗した場合の扱いは一斉メールと同じで、`jobId` が付きます)
+
+**確認リンクがまだ有効なエントリーには送りません**(`lib/entry-verification.ts` の `fetchResendableEntryIds()`)。有効なリンクの入ったメールは既に手元にあるためです。これにより、ボタンを何度押しても、1 つのエントリーに届く再送はリンクの有効期限(24 時間)あたり 1 通までに抑えられます。リンクが切れたエントリーは、次のエントリー送信で `lapse_expired_pending_entries()` に取り消されるまでは `pending_verification` のまま残っており、新しいリンクで確定できます。
+
+一斉メールと同じキューと `mail_jobs` を使い、進み具合は同じ `GET .../mail/:jobId` で読めます。違いは次のとおりです。
+
+- メッセージが運ぶのは `{jobId, entryId}` で、**アドレスもトークンも運びません**。確認トークンはコンシューマが送信の直前に発行します(`prepareVerificationResend()`)。使えるトークンがキュー(やデッドレターキュー)に残らないようにするためです
+- `mail_jobs` 行の件名は確認メールの件名で、`body_html` は空です(本文はメッセージごとにリンクが違うため、コンシューマが組み立てます)
+- コンシューマはエントリーを読み直し、**既に確定・キャンセルされたエントリーや、その間に有効なリンクを得たエントリー(ボタンの二度押しなど)には送りません**。これらは「送らなかった」としてジョブの `failed` に数えます(`sent + failed` を `total` に届かせるため)
+- 送信に失敗した再送のトークンは削除します。残すと有効なリンクとして数えられ、429 で再配信されたメッセージも、次の再送も、そのエントリーを飛ばしてしまうためです
+
 ### `GET /api/staff/tournaments/:tournamentId/mail/:jobId`
 
-一斉メール 1 件の送信状況。`POST` が返した `jobId` を渡します。同じ `requireStaffForTournament()` で保護されており、**別大会のジョブは `404`** です(`tournamentId` を条件に含めて引いているため、権限のある大会のジョブしか読めません)。
+一斉メール 1 件の送信状況。`POST .../mail` または `POST .../verification-mail` が返した `jobId` を渡します。同じ `requireStaffForTournament()` で保護されており、**別大会のジョブは `404`** です(`tournamentId` を条件に含めて引いているため、権限のある大会のジョブしか読めません)。
 
 - `200`: `StaffMailJob` = `{"jobId", "subject", "total", "sent", "failed", "createdAt", "updatedAt"}`
 - `400`: `jobId` が UUID でない
