@@ -306,10 +306,11 @@ describe('PATCH /tournaments/:id (waitlist promotion, mocked Supabase)', () => {
   };
 
   /**
-   * Stubs PostgREST: the update answers with `ROW`, and the promotion RPC
-   * with `promotion`. Returns the RPC bodies sent.
+   * Stubs PostgREST: the update (and the name read for the mail) answer
+   * with `ROW`, and the promotion RPC with `promotion`. The mail provider
+   * answers with `mailStatus`. Returns the RPC bodies sent.
    */
-  function stubSupabase(promotion: Response): unknown[] {
+  function stubSupabase(promotion: Response, mailStatus = 200): unknown[] {
     const rpcCalls: unknown[] = [];
     globalThis.fetch = staffSessionAwareFetch((async (
       input: RequestInfo | URL,
@@ -320,10 +321,24 @@ describe('PATCH /tournaments/:id (waitlist promotion, mocked Supabase)', () => {
         rpcCalls.push(JSON.parse(String(init?.body)));
         return promotion;
       }
+      if (url.startsWith('https://api.resend.com/')) {
+        return Response.json({id: 'mail'}, {status: mailStatus});
+      }
       return Response.json(ROW);
     }) as unknown as typeof fetch);
     return rpcCalls;
   }
+
+  const PROMOTED = [
+    {
+      entry_id: '22222222-2222-2222-2222-222222222222',
+      participant_email: 'a@example.com',
+    },
+    {
+      entry_id: '33333333-3333-3333-3333-333333333333',
+      participant_email: 'b@example.com',
+    },
+  ];
 
   async function patch(body: Record<string, unknown>): Promise<Response> {
     return app.request(
@@ -340,13 +355,33 @@ describe('PATCH /tournaments/:id (waitlist promotion, mocked Supabase)', () => {
     );
   }
 
-  it('promotes the waitlist when a capacity is saved', async () => {
-    const rpcCalls = stubSupabase(Response.json([]));
+  it('promotes the waitlist when a capacity is saved, and says how many', async () => {
+    const rpcCalls = stubSupabase(Response.json(PROMOTED));
 
     const res = await patch({capacity: 60});
 
     expect(res.status).toBe(200);
     expect(rpcCalls).toEqual([{p_tournament_id: tournamentId}]);
+    expect(((await res.json()) as {promotion: unknown}).promotion).toEqual({
+      promotedCount: 2,
+      mailFailedCount: 0,
+    });
+  });
+
+  it('counts the promotion mails that could not be sent', async () => {
+    stubSupabase(Response.json(PROMOTED), 500);
+    const originalConsoleError = console.error;
+    console.error = () => {};
+    try {
+      const res = await patch({capacity: 60});
+
+      expect(((await res.json()) as {promotion: unknown}).promotion).toEqual({
+        promotedCount: 2,
+        mailFailedCount: 2,
+      });
+    } finally {
+      console.error = originalConsoleError;
+    }
   });
 
   it('leaves the waitlist alone when the capacity is not sent', async () => {
@@ -356,10 +391,14 @@ describe('PATCH /tournaments/:id (waitlist promotion, mocked Supabase)', () => {
 
     expect(res.status).toBe(200);
     expect(rpcCalls).toEqual([]);
+    expect(((await res.json()) as {promotion: unknown}).promotion).toEqual({
+      promotedCount: 0,
+      mailFailedCount: 0,
+    });
   });
 
   // The update is committed; a failed promotion must not report it as not.
-  it('still answers 200 when the promotion fails', async () => {
+  it('still answers 200 when the promotion fails, saying so', async () => {
     stubSupabase(Response.json({message: 'boom'}, {status: 500}));
     const originalConsoleError = console.error;
     console.error = () => {};
@@ -367,7 +406,12 @@ describe('PATCH /tournaments/:id (waitlist promotion, mocked Supabase)', () => {
       const res = await patch({capacity: null});
 
       expect(res.status).toBe(200);
-      expect(((await res.json()) as {capacity: unknown}).capacity).toBe(60);
+      const body = (await res.json()) as {
+        capacity: unknown;
+        promotion: unknown;
+      };
+      expect(body.capacity).toBe(60);
+      expect(body.promotion).toBeNull();
     } finally {
       console.error = originalConsoleError;
     }

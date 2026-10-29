@@ -18,6 +18,7 @@
   import TableHead from '$lib/components/ui/atoms/TableHead.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
   import {formatJstDateTime} from '$lib/jst-datetime';
+  import {promotionNotice} from '$lib/waitlist-promotion';
   import type {PageProps} from './$types';
 
   const {form}: PageProps = $props();
@@ -411,6 +412,7 @@
             </thead>
             <tbody>
               {#each registeredRows as result (result.tournamentId)}
+                {@const notice = promotionNotice(result.promotion)}
                 <tr class="border-b border-border">
                   <TableData size="small">{result.row}</TableData>
                   <TableData size="small">{result.regionName}</TableData>
@@ -426,17 +428,12 @@
                       result.entryClosesAt,
                     )}
                   </TableData>
-                  {#if result.promotedCount === null}
-                    <TableData size="small" class="text-destructive">
-                      失敗しました。大会の編集画面で定員を保存し直してください
-                    </TableData>
-                  {:else}
-                    <TableData size="small">
-                      {result.promotedCount > 0
-                        ? `${result.promotedCount}件(通知メール送信済み)`
-                        : '—'}
-                    </TableData>
-                  {/if}
+                  <TableData
+                    size="small"
+                    class={notice && !notice.ok ? 'text-destructive' : undefined}
+                  >
+                    {notice?.text ?? '—'}
+                  </TableData>
                   <TableData size="small">
                     <Link href="/admin/tournaments/{result.tournamentId}/edit">
                       編集<span class="sr-only"

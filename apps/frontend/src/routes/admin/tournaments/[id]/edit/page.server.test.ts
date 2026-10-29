@@ -48,6 +48,8 @@ interface ApiCall {
  *     find.
  * @param options.calls Collects the recorded requests.
  */
+const PROMOTION = {promotedCount: 2, mailFailedCount: 0};
+
 function fakeFetch(
   options: {
     status?: number;
@@ -88,7 +90,12 @@ function fakeFetch(
     }
     return status >= 400
       ? jsonResponse({error: options.error ?? 'nope'}, status)
-      : jsonResponse(TOURNAMENT, status);
+      : jsonResponse(
+          init?.method === 'PATCH'
+            ? {...TOURNAMENT, promotion: PROMOTION}
+            : TOURNAMENT,
+          status,
+        );
   }) as typeof fetch;
 }
 
@@ -217,7 +224,11 @@ describe('admin tournament update action', () => {
       updateFormData({name: '改題した最強位'}),
     );
 
-    await expect(actions.update(event)).resolves.toMatchObject({saved: true});
+    // What the save did to the waitlist is handed to the page (#223).
+    await expect(actions.update(event)).resolves.toMatchObject({
+      saved: true,
+      promotion: PROMOTION,
+    });
     expect(calls).toEqual([
       {
         method: 'PATCH',

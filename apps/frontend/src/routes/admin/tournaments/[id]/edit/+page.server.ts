@@ -1,5 +1,9 @@
 import {error, fail, redirect} from '@sveltejs/kit';
-import {formFieldDefsToYaml, TournamentSchema} from '@regional-quiz/shared';
+import {
+  formFieldDefsToYaml,
+  TournamentSchema,
+  type WaitlistPromotion,
+} from '@regional-quiz/shared';
 import {createApiClient, isUnauthorized, readErrorMessage} from '$lib/api';
 import {
   parseTournamentFormValues,
@@ -23,6 +27,12 @@ interface TournamentUpdateActionResult {
    * the stored tournament.
    */
   values: TournamentFormValues | null;
+  /**
+   * What promoting the waitlist into seats a saved capacity freed came to
+   * (#223); null when the promotion failed. Only read after a successful
+   * save.
+   */
+  promotion: WaitlistPromotion | null;
 }
 
 /** What the delete action hands back when it refuses. */
@@ -113,6 +123,7 @@ export const actions = {
       saved: true,
       error: null,
       values: null,
+      promotion: (await res.json()).promotion,
     } satisfies TournamentUpdateActionResult;
   },
   delete: async ({params, request, fetch, cookies, url}) => {
@@ -174,5 +185,6 @@ function updateFailure(
     saved: false,
     error: message,
     values,
+    promotion: null,
   } satisfies TournamentUpdateActionResult);
 }

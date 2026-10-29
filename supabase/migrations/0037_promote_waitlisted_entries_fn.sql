@@ -14,6 +14,18 @@
 -- 定員が null(定員なし)ならキャンセル待ちを全件確定にする。空きが無ければ
 -- 何もしない(定員を減らしても、確定済みのエントリーはそのまま)。
 --
+-- 繰り上げた後、残ったキャンセル待ちの `waitlist_position` を 1 から振り
+-- 直す。`confirm_entry_by_token()` は新しいキャンセル待ちに「キャンセル待ちの
+-- 件数 + 1」を振るので、繰り上げで欠番が残ると、後から来た人が前から待って
+-- いた人より小さい番号を得て先に繰り上がってしまう。1 件ずつ繰り上げていた
+-- ときも欠番は 1 つずつ残っていたが、まとめて繰り上げると欠番が一度に増える。
+-- 振り直しは同じロックの下で行うので、採番と競合しない。
+--
+-- キャンセル時の繰り上げもこの関数で行う(`cancelOwnEntry()`)。空席を数えて
+-- その数だけ繰り上げるので、以前の繰り上げが失敗して空席が残っていても次の
+-- キャンセルで回収できる。1 件だけ繰り上げていた `promote_next_waitlisted_entry()`
+-- (0004/0007)は役目を終えたので削除する。
+--
 -- 返り値は繰り上げたエントリーと参加者のメールアドレスを、元のキャンセル
 -- 待ちの順に並べたもの。呼び出し側が繰り上げの通知メールを送る。
 create function promote_waitlisted_entries(p_tournament_id uuid)
@@ -60,8 +72,24 @@ begin
       from promoted
       join participants p on p.id = promoted.participant_id
       order by promoted.waitlist_position asc;
+
+  -- 上の文で確定にした行はもう `waitlisted` ではないので、ここで数えるのは
+  -- 残った行だけ。元の順(同じ番号があれば id 順)を保ったまま詰める。
+  update entries e
+    set waitlist_position = renumbered.n
+    from (
+      select w.id, row_number() over (
+          order by w.waitlist_position asc, w.id asc
+        )::integer as n
+        from entries w
+        where w.tournament_id = p_tournament_id and w.status = 'waitlisted'
+    ) renumbered
+    where e.id = renumbered.id
+      and e.waitlist_position is distinct from renumbered.n;
 end;
 $$;
 
 revoke all on function promote_waitlisted_entries(uuid) from public;
 grant execute on function promote_waitlisted_entries(uuid) to service_role;
+
+drop function promote_next_waitlisted_entry(uuid);

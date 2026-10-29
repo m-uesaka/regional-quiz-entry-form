@@ -89,7 +89,7 @@ flowchart TB
 
 - `pending_verification` → `confirmed` / `waitlisted` は DB 関数 `confirm_entry_by_token()` が行う。
 - `cancelled` への遷移は DB 関数 `cancel_own_entry()` が行う。
-- `waitlisted` → `confirmed`(繰り上げ)は DB 関数 `promote_next_waitlisted_entry()` が行う。
+- `waitlisted` → `confirmed`(繰り上げ)は DB 関数 `promote_waitlisted_entries()`(`0037`。それ以前は `promote_next_waitlisted_entry()`)が行う。
 - `cancelled` からの再エントリーは新しい行を作らず、`unique (participant_id, tournament_id)` 制約のため**既存の行を再利用して上書き**する(`apps/backend/src/lib/entries.ts` の `createEntry()`)。
 
 ## 3. テーブル定義
@@ -121,7 +121,7 @@ flowchart TB
 | `created_at` | timestamptz | not null, default `now()` | |
 
 - `unique (region_id, type)`: 1つの地域につき、各大会種別は1大会まで。この制約があるため `/{regionSlug}/{tournamentSlug}` の組から大会を一意に引ける。
-- `capacity` が `null` のときは定員チェック自体を行いません(`confirm_entry_by_token()` / `promote_next_waitlisted_entry()` の両方で `v_capacity is not null` を条件にしている)。
+- `capacity` が `null` のときは定員チェック自体を行いません(`confirm_entry_by_token()` / `promote_waitlisted_entries()` の両方で `v_capacity is not null` を条件にしている)。
 - 削除(`DELETE /api/tournaments/:id`、#164)では `regulations`・`form_field_defs`・`mail_jobs` が一緒に消えます(`0023` で `on delete cascade`)。`entries` の外部キーは no action のままなので、エントリーがある大会の削除は外部キー違反で止まります。
 - エントリー期間の判定は `packages/shared/src/logic/entry-period.ts` の `isWithinEntryPeriod()` に集約されており、バックエンド(API での拒否)とフロントエンド(UI の非表示)で同じ関数を共有しています。
 
@@ -216,8 +216,7 @@ flowchart TB
 `waitlist_position` について:
 
 - 1 始まりの整数です。`cancel_own_entry()` は waitlisted な行をキャンセルする際、後ろの行を1つずつ前に詰めます。
-- ただし**常に隙間なく詰まっているとは限りません**。`promote_next_waitlisted_entry()` は先頭のエントリーを `confirmed` にしてその `waitlist_position` を `null` にするだけで、後続の順位を詰めないため、繰り上げのたびに欠番が残ります(順位 1〜4 の 4 件から先頭を繰り上げると 2, 3, 4 が残る)。
-- そのため、`confirm_entry_by_token()` の「次の順位 = 現在の waitlisted 件数 + 1」という採番は既存の順位と**衝突し得ます**(上の例では waitlisted 件数 3 なので順位 4 を採番するが、すでに 4 が存在する)。`waitlist_position` には unique 制約がないため重複してもエラーにはならず、参加者に見える順位が同着になります。繰り上げ時にも後続を詰めるか、採番を `max(waitlist_position) + 1` にすれば解消できますが、現時点では未対応です。
+- 繰り上げ(`promote_waitlisted_entries()`、`0037`)も、確定にした後で残りのキャンセル待ちを 1 から振り直します。そのため `confirm_entry_by_token()` の「次の順位 = 現在の waitlisted 件数 + 1」という採番が既存の順位と衝突しません。`0037` より前の `promote_next_waitlisted_entry()` は先頭を確定にするだけで後続を詰めなかったため欠番が残り、後から来た人が前から待っていた人と同じか小さい順位を得ることがありました(残っている欠番も、次に繰り上げが走った時点で詰められます)。
 
 ### entry_regulations — エントリーが選んだレギュレーション
 
@@ -388,7 +387,7 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | --- | --- | --- | --- |
 | `sync_form_field_defs(uuid, jsonb)` | `0002` | `lib/form-definitions.ts` | 大会のフォーム項目定義を全削除+一括挿入で置き換える |
 | `confirm_entry_by_token(text)` | `0003` → `0008` → `0034` で再定義 | `lib/entry-confirmation.ts` | 確認トークンでエントリーを確定 / キャンセル待ちに載せる |
-| `promote_next_waitlisted_entry(uuid)` | `0004` → `0007` で再定義 | `lib/waitlist.ts` | キャンセル待ち先頭を繰り上げる |
+| `promote_waitlisted_entries(uuid)` | `0037`(`promote_next_waitlisted_entry()` を置き換え) | `lib/waitlist.ts` | 空いた席の数だけキャンセル待ちを繰り上げ、残りの順位を振り直す |
 | `cancel_own_entry(uuid, uuid)` | `0006` | `lib/entries.ts` | 参加者自身のエントリーをキャンセルする |
 | `reset_participant_password(text, text)` | `0009` → `0010` で再定義 | `lib/password-reset.ts` | 再設定トークンを消費してパスワードを更新し、残りのトークンを焼き捨てる |
 | `take_over_unverified_participant(uuid, text, uuid)` | `0034` | `lib/entries.ts` | 未確認の参加者アカウントのパスワードと地域を上書きし、それまでのエントリーを削除する |
@@ -437,21 +436,16 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 ステータスをロック取得後に読み直すのが重要な点です。`cancel_own_entry()` は同じ大会行ロックを保持したままエントリーを `cancelled` にするため、先に走り出した確認処理はここでブロックされ、ロック取得後にキャンセルを観測できます。これがないと、キャンセルと競合した再エントリーが挿入した新しいトークンによって、キャンセル済みエントリーが復活し得ます。
 
-### promote_next_waitlisted_entry(p_tournament_id)
-
-`waitlist_position` が最小の waitlisted エントリーを1件 `confirmed` に繰り上げ、`(entry_id, participant_email)` を返します。繰り上げる相手がいなければ何も返しません。
-
-- 大会行を `for update` でロックしてから **定員を再チェック**します(`0007` で追加)。`cancelOwnEntry()` はキャンセルをコミットしてからこの関数を呼ぶため、その隙間に `pending_verification` のエントリーが空席へ確定してしまう可能性があります。再チェックがないと同じ席を二重に配ってしまい、定員超過になります。
-- 空席がすでに埋まっていた場合は、キューを一切触らずに何も返しません(呼び出し側はこれを「繰り上げ対象なし」と同じに扱います)。
-- 繰り上げた行の `waitlist_position` を `null` にするだけで、**後続の順位は詰めません**。欠番が残るため、`confirm_entry_by_token()` の採番と衝突し得ます(前述の `waitlist_position` の項を参照)。
-
-
 ### promote_waitlisted_entries(p_tournament_id)
 
-定員を増やした・定員なしにしたときに、空いた席の数だけキャンセル待ちを繰り上げます(`0037`、#223)。大会の編集(`PATCH /api/tournaments/:id` で `capacity` を送ったとき)と、大会一覧からの一括登録の上書きの後に呼ばれます。返り値は繰り上げた `(entry_id, participant_email)` を元のキャンセル待ちの順に並べたもので、呼び出し側(`promoteWaitlistedEntries()`)が 1 件ずつ通知メールを送ります。
+空いた席の数だけキャンセル待ちを繰り上げます(`0037`、#223)。確定済みエントリーのキャンセル後(`cancelOwnEntry()`)、大会の編集で `capacity` を送ったとき(`PATCH /api/tournaments/:id`)、大会一覧からの一括登録の上書きの後に、`lib/waitlist.ts` の `promoteWaitlistedEntries()` から呼ばれます。返り値は繰り上げた `(entry_id, participant_email)` を元のキャンセル待ちの順に並べたもので、呼び出し側が通知メールを送ります(5 件ずつ並行。送れなかった件数を数えて返す)。
 
-- `promote_next_waitlisted_entry()` と同じく大会行を `for update` でロックしてから確定数を数え、空き(定員 − 確定数)の件数だけ `waitlist_position` の小さい順に `confirmed` にします。定員が null なら全件を繰り上げます。空きが 0 以下なら何もしません
-- 繰り上げた行の `waitlist_position` を `null` にするだけで、後続の順位を詰めないのも `promote_next_waitlisted_entry()` と同じです
+- 大会行を `for update` でロックしてから確定数を数え、空き(定員 − 確定数)の件数だけ `waitlist_position` の小さい順に `confirmed` にします。定員が null なら全件を繰り上げます。空きが 0 以下なら何もしません(キュー・順位とも触らない)
+- ロックを取ってから確定数を読むのが要点です。`cancelOwnEntry()` はキャンセルをコミットしてからこの関数を呼ぶため、その隙間に `pending_verification` のエントリーが空席へ確定し得ます。ロック後に数えるので、同じ席を二重に配りません(`0007` で `promote_next_waitlisted_entry()` に入れた再チェックと同じ考え方)
+- 1 件ずつではなく空席の数だけ繰り上げるので、以前の繰り上げが失敗して空席が残っていても、次のキャンセルや定員の保存で回収されます
+- 繰り上げた後、残りのキャンセル待ちの `waitlist_position` を 1 から振り直します(前述の `waitlist_position` の項)
+- 1 件だけ繰り上げていた `promote_next_waitlisted_entry()`(`0004` → `0007`)は `0037` で削除しました
+
 ### cancel_own_entry(p_entry_id, p_participant_id)
 
 参加者自身のエントリーをキャンセルし、`(previous_status, entry_tournament_id)` を返します。
@@ -606,4 +600,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0031_add_staff_password_link_fn.sql` | スタッフ本人の再設定申し込み(#175)用に、既存の有効なリンクを消さずに書き足す `add_staff_password_link()`。期限切れのリンクは削除し、無効なアカウントは断る |
 | `0034_participants_email_verified_at.sql` | `participants.email_verified_at` を追加して確定済みエントリーから埋め戻し、`confirm_entry_by_token()` を確定時に参加者を確認済みにするよう再定義、未確認アカウントを上書きする `take_over_unverified_participant()` を追加(#189) |
 | `0036_import_tournament_explicit_period.sql` | 大会一覧に定員・エントリー開始・終了の列ができたのに合わせ、`import_tournament()` を定員・開始も書き込み、新規作成か上書きかを引数で受け取ってその通りにしか書かない(合わなければ `P0006`)よう再定義 |
-| `0037_promote_waitlisted_entries_fn.sql` | 定員を増やした・定員なしにしたときに空いた席の数だけキャンセル待ちを繰り上げる `promote_waitlisted_entries()`(#223) |
+| `0037_promote_waitlisted_entries_fn.sql` | 空いた席の数だけキャンセル待ちを繰り上げて残りの順位を振り直す `promote_waitlisted_entries()` を追加し、`promote_next_waitlisted_entry()` を削除(#223) |

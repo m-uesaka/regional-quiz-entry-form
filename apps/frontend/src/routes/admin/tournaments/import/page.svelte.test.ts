@@ -21,7 +21,7 @@ const CREATED: TournamentImportResult = {
   entryOpensAt: '2026-11-04T12:00:00.000Z',
   entryClosesAt: '2026-12-16T14:59:59.000Z',
   error: null,
-  promotedCount: 0,
+  promotion: {promotedCount: 0, mailFailedCount: 0},
 };
 
 const UPDATED: TournamentImportResult = {
@@ -31,7 +31,7 @@ const UPDATED: TournamentImportResult = {
   outcome: 'updated',
   tournamentId: '00000000-0000-0000-0000-000000000022',
   type: 'shinjinou',
-  promotedCount: 3,
+  promotion: {promotedCount: 3, mailFailedCount: 1},
 };
 
 const FAILED: TournamentImportResult = {
@@ -45,7 +45,7 @@ const FAILED: TournamentImportResult = {
   entryOpensAt: null,
   entryClosesAt: null,
   error: '種別「宮崎」は最強位・新人王のいずれでもありません',
-  promotedCount: 0,
+  promotion: {promotedCount: 0, mailFailedCount: 0},
 };
 
 const NEW_ROW: TournamentImportPreviewRow = {
@@ -263,14 +263,22 @@ describe('admin tournament import +page.svelte', () => {
       spreadsheetId: 'abc123',
       error: null,
       rows: null,
-      results: [UPDATED, {...CREATED, row: 5, promotedCount: null}],
+      results: [
+        UPDATED,
+        {
+          ...CREATED,
+          row: 5,
+          tournamentId: '00000000-0000-0000-0000-000000000025',
+          promotion: null,
+        },
+      ],
     } as PageForm);
 
-    expect(screen.getByText('3件(通知メール送信済み)')).toBeInTheDocument();
     expect(
-      screen.getByText(
-        '失敗しました。大会の編集画面で定員を保存し直してください',
-      ),
+      screen.getByText(/キャンセル待ち3件を繰り上げました。うち1件は/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/キャンセル待ちの繰り上げに失敗しました/),
     ).toBeInTheDocument();
   });
 });
