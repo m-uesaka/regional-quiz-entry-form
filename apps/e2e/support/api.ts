@@ -80,7 +80,7 @@ export function entryNoticeSubject(tournament: TournamentFixture): string {
 }
 
 /**
- * The subject `promoteNextWaitlistedEntry()` tells a participant their
+ * The subject `promoteWaitlistedEntries()` tells a participant their
  * waitlisted entry to `tournament` was promoted under.
  * @param tournament The tournament the entry was waitlisted for.
  */

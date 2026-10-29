@@ -546,6 +546,8 @@ describe.skipIf(!(await isDbReachable()))(
         outcome: 'updated',
         tournamentId: before?.id,
         capacity: null,
+        // Nobody is waiting, so nobody is promoted into the cleared capacity.
+        promotion: {promotedCount: 0, mailFailedCount: 0},
         entryOpensAt: '2026-11-09T15:00:00.000Z',
         entryClosesAt: '2026-12-20T14:59:59.000Z',
       });

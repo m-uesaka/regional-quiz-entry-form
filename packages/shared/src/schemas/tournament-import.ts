@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {TournamentTypeSchema} from './tournament';
+import {TournamentTypeSchema, WaitlistPromotionSchema} from './tournament';
 
 // The path segment a Google Sheets URL carries its spreadsheet ID in:
 // `https://docs.google.com/spreadsheets/d/{id}/edit#gid=0`.
@@ -155,6 +155,13 @@ export const TournamentImportResultSchema = z.object({
   entryClosesAt: InstantSchema.nullable(),
   /** Set when `outcome` is `failed`; staff-facing Japanese. */
   error: z.string().nullable(),
+  /**
+   * What an overwrite's promotion of the waitlist into the seats its
+   * capacity freed came to (#223); `{0, 0}` for a new tournament or a
+   * failed row. `null` when the tournament was written but the promotion
+   * then failed.
+   */
+  promotion: WaitlistPromotionSchema.nullable(),
 });
 export type TournamentImportResult = z.infer<
   typeof TournamentImportResultSchema

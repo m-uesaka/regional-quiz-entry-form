@@ -291,6 +291,133 @@ describe('tournaments routes (database errors)', () => {
   });
 });
 
+// A capacity raised or cleared frees seats for the waitlist (#223).
+describe('PATCH /tournaments/:id (waitlist promotion, mocked Supabase)', () => {
+  const tournamentId = '11111111-1111-1111-1111-111111111111';
+  const ROW = {
+    id: tournamentId,
+    region_id: '00000000-0000-0000-0000-000000000000',
+    type: 'saikyoi',
+    name: null,
+    capacity: 60,
+    entry_opens_at: '2026-01-01T00:00:00+09:00',
+    entry_closes_at: '2026-01-31T00:00:00+09:00',
+    regions: {name: 'テスト地域'},
+  };
+
+  /**
+   * Stubs PostgREST: the update (and the name read for the mail) answer
+   * with `ROW`, and the promotion RPC with `promotion`. The mail provider
+   * answers with `mailStatus`. Returns the RPC bodies sent.
+   */
+  function stubSupabase(promotion: Response, mailStatus = 200): unknown[] {
+    const rpcCalls: unknown[] = [];
+    globalThis.fetch = staffSessionAwareFetch((async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes('/rpc/promote_waitlisted_entries')) {
+        rpcCalls.push(JSON.parse(String(init?.body)));
+        return promotion;
+      }
+      if (url.startsWith('https://api.resend.com/')) {
+        return Response.json({id: 'mail'}, {status: mailStatus});
+      }
+      return Response.json(ROW);
+    }) as unknown as typeof fetch);
+    return rpcCalls;
+  }
+
+  const PROMOTED = [
+    {
+      entry_id: '22222222-2222-2222-2222-222222222222',
+      participant_email: 'a@example.com',
+    },
+    {
+      entry_id: '33333333-3333-3333-3333-333333333333',
+      participant_email: 'b@example.com',
+    },
+  ];
+
+  async function patch(body: Record<string, unknown>): Promise<Response> {
+    return app.request(
+      `/api/tournaments/${tournamentId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          cookie: await generalStaffCookie(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      },
+      env,
+    );
+  }
+
+  it('promotes the waitlist when a capacity is saved, and says how many', async () => {
+    const rpcCalls = stubSupabase(Response.json(PROMOTED));
+
+    const res = await patch({capacity: 60});
+
+    expect(res.status).toBe(200);
+    expect(rpcCalls).toEqual([{p_tournament_id: tournamentId}]);
+    expect(((await res.json()) as {promotion: unknown}).promotion).toEqual({
+      promotedCount: 2,
+      mailFailedCount: 0,
+    });
+  });
+
+  it('counts the promotion mails that could not be sent', async () => {
+    stubSupabase(Response.json(PROMOTED), 500);
+    const originalConsoleError = console.error;
+    console.error = () => {};
+    try {
+      const res = await patch({capacity: 60});
+
+      expect(((await res.json()) as {promotion: unknown}).promotion).toEqual({
+        promotedCount: 2,
+        mailFailedCount: 2,
+      });
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+
+  it('leaves the waitlist alone when the capacity is not sent', async () => {
+    const rpcCalls = stubSupabase(Response.json([]));
+
+    const res = await patch({name: '新しい名前'});
+
+    expect(res.status).toBe(200);
+    expect(rpcCalls).toEqual([]);
+    expect(((await res.json()) as {promotion: unknown}).promotion).toEqual({
+      promotedCount: 0,
+      mailFailedCount: 0,
+    });
+  });
+
+  // The update is committed; a failed promotion must not report it as not.
+  it('still answers 200 when the promotion fails, saying so', async () => {
+    stubSupabase(Response.json({message: 'boom'}, {status: 500}));
+    const originalConsoleError = console.error;
+    console.error = () => {};
+    try {
+      const res = await patch({capacity: null});
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        capacity: unknown;
+        promotion: unknown;
+      };
+      expect(body.capacity).toBe(60);
+      expect(body.promotion).toBeNull();
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+});
+
 describe('GET /tournaments/:regionSlug/:tournamentSlug (entry period)', () => {
   const originalFetch = globalThis.fetch;
   const path = '/api/tournaments/some-region/saikyoi';

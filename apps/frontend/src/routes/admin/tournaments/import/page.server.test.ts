@@ -17,6 +17,7 @@ const CREATED: TournamentImportResult = {
   entryOpensAt: '2026-11-04T12:00:00.000Z',
   entryClosesAt: '2026-12-16T14:59:59.000Z',
   error: null,
+  promotion: {promotedCount: 0, mailFailedCount: 0},
 };
 
 const PREVIEW_ROW: TournamentImportPreviewRow = {

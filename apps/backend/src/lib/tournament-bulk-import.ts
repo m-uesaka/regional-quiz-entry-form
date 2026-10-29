@@ -30,6 +30,7 @@ import {
   type TournamentImportResult,
   type TournamentImportSelection,
   type TournamentType,
+  type WaitlistPromotion,
 } from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
@@ -49,6 +50,7 @@ import {
   type SheetRow,
 } from './sheet-to-form-definition';
 import {sheetValuesToRegulations} from './sheet-to-regulations';
+import {promoteWaitlistedEntries} from './waitlist';
 
 /** The headers of the 大会一覧 sheet's columns this reads. */
 const HEADERS = {
@@ -347,7 +349,13 @@ export async function importTournaments(
           '読み込んだ後に、シートまたは登録済みの大会の内容が変わりました。もう一度読み込んで確認してください',
         );
       }
-      return await importRow(context, row, resolved.prepared, selection.action);
+      return await importRow(
+        context,
+        row,
+        resolved.prepared,
+        selection.action,
+        resolved.current?.name,
+      );
     } catch (e: unknown) {
       console.error('failed to import a tournament', {row: row.row, error: e});
       return failed(
@@ -632,12 +640,14 @@ async function prepareRow(
  * @param row The row.
  * @param prepared The row, read and checked.
  * @param action What staff chose to do with it.
+ * @param currentName The display name of the tournament it overwrites.
  */
 async function importRow(
   context: ImportContext,
   row: TournamentIndexRow,
   prepared: PreparedRow,
   action: TournamentImportAction,
+  currentName: string | undefined,
 ): Promise<TournamentImportResult> {
   const {data, error} = await context.db
     .rpc('import_tournament', {
@@ -678,6 +688,31 @@ async function importRow(
       '登録に失敗しました。時間をおいて再度お試しください',
     );
   }
+  // An overwrite may have raised or cleared the capacity of a tournament
+  // with a waitlist (#223). A new tournament has no entries to promote. The
+  // tournament is committed by now, so a failed promotion doesn't fail the
+  // row; saving the capacity again on the edit screen retries it.
+  let promotion: WaitlistPromotion | null = {
+    promotedCount: 0,
+    mailFailedCount: 0,
+  };
+  if (!data.created) {
+    try {
+      promotion = await promoteWaitlistedEntries(
+        context.env,
+        data.tournament_id,
+        // An overwrite leaves the name as it was, so the one read for the
+        // preview is still the one to mail under.
+        {db: context.db, tournamentName: currentName},
+      );
+    } catch (e: unknown) {
+      console.error('failed to promote waitlisted entries', {
+        row: row.row,
+        error: e,
+      });
+      promotion = null;
+    }
+  }
   return {
     row: row.row,
     regionName: row.regionName,
@@ -689,6 +724,7 @@ async function importRow(
     entryOpensAt: prepared.entryOpensAt,
     entryClosesAt: prepared.entryClosesAt,
     error: null,
+    promotion,
   };
 }
 
@@ -822,5 +858,6 @@ function failed(
     entryOpensAt: null,
     entryClosesAt: null,
     error,
+    promotion: {promotedCount: 0, mailFailedCount: 0},
   };
 }

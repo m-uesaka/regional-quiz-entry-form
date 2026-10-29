@@ -37,7 +37,7 @@ interface EntryListRow {
 function rowToEntryListItem(row: EntryListRow): EntryListItem {
   return EntryListItemSchema.parse({
     // Cancelling a confirmed entry does promote the next waitlisted entry
-    // (see `promoteNextWaitlistedEntry`), but that only updates the
+    // (see `promoteWaitlistedEntries`), but that only updates the
     // promoted entry's own row — the cancelled row itself is kept, not
     // removed, so its name is masked in place here rather than dropping
     // the row.
