@@ -369,7 +369,7 @@ describe('POST /staff/tournaments/:tournamentId/mail', () => {
 
     expect(res.status).toBe(202);
     expect(log.entryQueries[0]).toContain('status=eq.confirmed');
-    expect(queue.sent.map(message => message.to)).toEqual(['taro@example.com']);
+    expect(queue.sent).toEqual([{jobId: JOB_ID, to: 'taro@example.com'}]);
   });
 
   it('sends to confirmed and waitlisted entries when no statusFilter is given', async () => {
@@ -386,6 +386,36 @@ describe('POST /staff/tournaments/:tournamentId/mail', () => {
     expect(decodeURIComponent(log.entryQueries[0])).toContain(
       'status=in.(confirmed,waitlisted)',
     );
+  });
+
+  // #192: whatever the filter, an address nobody confirmed is not mailed.
+  it('leaves out participants who never confirmed their address', async () => {
+    const log = mockFetch({
+      tournament: IN_SCOPE_TOURNAMENT,
+      entries: [[entryRow('taro@example.com')]],
+    });
+    const cookie = await generalStaffCookie();
+
+    await postMail(cookie, {...MAIL_INPUT, statusFilter: 'cancelled'});
+
+    expect(log.entryQueries[0]).toContain(
+      'participants.email_verified_at=not.is.null',
+    );
+  });
+
+  // #192: the unconfirmed are reminded with the fixed confirmation mail
+  // (`.../verification-mail`), never with a body staff wrote.
+  it('returns 400 for a statusFilter of pending_verification', async () => {
+    mockFetch({tournament: IN_SCOPE_TOURNAMENT});
+    const cookie = await regionalStaffCookie();
+
+    const res = await postMail(cookie, {
+      ...MAIL_INPUT,
+      statusFilter: 'pending_verification',
+    });
+
+    expect(res.status).toBe(400);
+    expect(queue.sent).toEqual([]);
   });
 
   it('returns 403 for staff outside their scope', async () => {
@@ -410,19 +440,13 @@ describe('POST /staff/tournaments/:tournamentId/mail', () => {
     const res = await postMail(cookie);
 
     expect(res.status).toBe(202);
-    expect(queue.sent.map(message => message.to)).toEqual(['taro@example.com']);
+    expect(queue.sent).toEqual([{jobId: JOB_ID, to: 'taro@example.com'}]);
   });
 
   it('mails a participant once even with several matching entry rows', async () => {
     mockFetch({
       tournament: IN_SCOPE_TOURNAMENT,
-      entries: [
-        [
-          entryRow('taro@example.com'),
-          entryRow('taro@example.com'),
-          {participants: null},
-        ],
-      ],
+      entries: [[entryRow('taro@example.com'), entryRow('taro@example.com')]],
     });
     const cookie = await regionalStaffCookie();
 
@@ -505,6 +529,134 @@ describe('POST /staff/tournaments/:tournamentId/mail', () => {
     // nothing else hands it out.
     const body = await res.json();
     expect(body).toEqual({error: 'internal server error', jobId: JOB_ID});
+  });
+});
+
+const ENTRY_ID = '77777777-7777-7777-7777-777777777777';
+const OTHER_ENTRY_ID = '66666666-6666-6666-6666-666666666666';
+
+/** The tournament as both the scope check and the name lookup read it. */
+const IN_SCOPE_TOURNAMENT_WITH_NAME = [
+  {
+    ...IN_SCOPE_TOURNAMENT[0],
+    id: TOURNAMENT_ID,
+    name: 'テスト大会',
+    regions: {name: '東京'},
+  },
+];
+
+/** A `pending_verification` entry with the given links. */
+function pendingEntryRow(
+  id: string,
+  tokens: Array<{expires_at: string; used_at: string | null}>,
+) {
+  return {id, email_verification_tokens: tokens};
+}
+
+const EXPIRED_TOKEN = {expires_at: '2026-01-01T00:00:00Z', used_at: null};
+const LIVE_TOKEN = {expires_at: '2999-01-01T00:00:00Z', used_at: null};
+
+async function postVerificationMail(
+  cookie: string | undefined,
+): Promise<Response> {
+  return app.request(
+    `/api/staff/tournaments/${TOURNAMENT_ID}/verification-mail`,
+    {
+      method: 'POST',
+      // A browser sends its origin; without it, a body-less POST reads as
+      // a form post to `hono/csrf` and is refused.
+      headers: {
+        ...(cookie ? {cookie} : {}),
+        origin: 'https://entry.example.com',
+      },
+    },
+    env(),
+    EXECUTION_CTX,
+  );
+}
+
+describe('POST /staff/tournaments/:tournamentId/verification-mail', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    queue = new RecordingQueue<BulkMailMessage>();
+  });
+
+  it('returns 401 without a staff session', async () => {
+    mockFetch();
+
+    const res = await postVerificationMail(undefined);
+
+    expect(res.status).toBe(401);
+    expect(queue.sent).toEqual([]);
+  });
+
+  it('returns 403 for staff outside their scope', async () => {
+    mockFetch({tournament: IN_SCOPE_TOURNAMENT_WITH_NAME});
+    const cookie = await regionalStaffCookie(OTHER_REGION_ID);
+
+    const res = await postVerificationMail(cookie);
+
+    expect(res.status).toBe(403);
+    expect(queue.sent).toEqual([]);
+  });
+
+  it('enqueues the unconfirmed entries whose link no longer works', async () => {
+    const log = mockFetch({
+      tournament: IN_SCOPE_TOURNAMENT_WITH_NAME,
+      entries: [
+        [
+          pendingEntryRow(ENTRY_ID, [EXPIRED_TOKEN]),
+          // Its link still works, so its owner already has a usable mail.
+          pendingEntryRow(OTHER_ENTRY_ID, [EXPIRED_TOKEN, LIVE_TOKEN]),
+        ],
+      ],
+    });
+    const cookie = await regionalStaffCookie();
+
+    const res = await postVerificationMail(cookie);
+    const body = await res.json();
+
+    expect(res.status).toBe(202);
+    expect(body).toEqual({jobId: JOB_ID, accepted: 1});
+    expect(log.entryQueries[0]).toContain('status=eq.pending_verification');
+    // The entry, not an address or a link: the consumer issues the token
+    // just before sending, so none sits in the queue.
+    expect(queue.sent).toEqual([{jobId: JOB_ID, entryId: ENTRY_ID}]);
+  });
+
+  it('records the reminder as a job under the confirmation subject', async () => {
+    const log = mockFetch({
+      tournament: IN_SCOPE_TOURNAMENT_WITH_NAME,
+      entries: [[pendingEntryRow(ENTRY_ID, [EXPIRED_TOKEN])]],
+    });
+    const cookie = await regionalStaffCookie();
+
+    await postVerificationMail(cookie);
+
+    expect(log.insertedJobs).toEqual([
+      {
+        tournament_id: TOURNAMENT_ID,
+        subject:
+          '【地域クイズ最強位・新人王】「テスト大会」のエントリーを確定してください',
+        body_html: '',
+        total: 1,
+      },
+    ]);
+  });
+
+  it('returns 500 without enqueueing when the entries cannot be read', async () => {
+    mockFetch({
+      tournament: IN_SCOPE_TOURNAMENT_WITH_NAME,
+      entries: [Response.json({message: 'db is down'}, {status: 500})],
+    });
+    const cookie = await regionalStaffCookie();
+
+    const res = await postVerificationMail(cookie);
+
+    expect(res.status).toBe(500);
+    expect(queue.sent).toEqual([]);
   });
 });
 

@@ -2,10 +2,20 @@ import type {Bindings} from '../types/env';
 import {MailSendError, createMailSender, type SendMailInput} from './mailer';
 import {sendPacedMail, type PacedMailOptions} from './bulk-mail';
 import {
+  discardVerificationToken,
+  prepareVerificationResend,
+} from './entry-verification';
+import {
   fetchMailJobContent,
   recordMailJobProgress,
   type MailJobContent,
 } from './mail-jobs';
+
+/**
+ * One message of the bulk mail queue: a recipient of a staff bulk send, or
+ * an entry a staff reminder re-sends the confirmation mail to.
+ */
+export type BulkMailMessage = StaffMailMessage | VerificationResendMessage;
 
 /**
  * One recipient of one staff bulk send.
@@ -17,9 +27,28 @@ import {
  * lives in the `mail_jobs` row `jobId` names and is read back once per
  * batch.
  */
-export interface BulkMailMessage {
+export interface StaffMailMessage {
   jobId: string;
   to: string;
+}
+
+/**
+ * One entry a staff reminder re-sends the confirmation mail to (#192).
+ *
+ * Carries the entry rather than an address and a link: the link's token is
+ * issued by the consumer just before the mail goes out, so no usable token
+ * ever sits in the queue (or its dead letter queue), and an entry that was
+ * confirmed in the meantime gets nothing.
+ */
+export interface VerificationResendMessage {
+  jobId: string;
+  entryId: string;
+}
+
+function isVerificationResend(
+  message: BulkMailMessage,
+): message is VerificationResendMessage {
+  return 'entryId' in message;
 }
 
 /**
@@ -158,38 +187,89 @@ export async function handleBulkMailQueue(
   // to the queue messages they belong to.
   const sendable: Array<Message<BulkMailMessage>> = [];
   const inputs: SendMailInput[] = [];
+  // The token each reminder's link names, by its place in `sendable`.
+  const issuedTokens = new Map<number, string>();
   const progress = new Map<string, JobProgress>();
+
+  // A message whose content could not be put together this time -- its
+  // job's row or its entry could not be read -- is a fault of this attempt
+  // rather than of the message, so it is tried again later. On the last
+  // delivery a retry would hand it to the dead letter queue with nothing
+  // added to either counter, and the job would read as still sending for
+  // good (`attempts` counts this delivery). An outage long enough to burn
+  // every delivery is one the recipient is not going to survive anyway, so
+  // it is closed out as failed instead.
+  const retryOrFail = (message: Message<BulkMailMessage>) => {
+    if (message.attempts < MAIL_QUEUE_MAX_ATTEMPTS) {
+      message.retry({delaySeconds: MAIL_QUEUE_RETRY_DELAY_SECONDS});
+      return;
+    }
+    tallyOf(progress, message.body.jobId).failed++;
+    message.ack();
+  };
 
   for (const message of batch.messages) {
     const content = contents.get(message.body.jobId);
     if (!content) {
-      if (!unreadable.has(message.body.jobId)) {
-        message.ack();
-      } else if (message.attempts < MAIL_QUEUE_MAX_ATTEMPTS) {
-        // The job's row could not be read, which is a fault of this
-        // attempt rather than of the message: try again later.
-        message.retry({delaySeconds: MAIL_QUEUE_RETRY_DELAY_SECONDS});
+      if (unreadable.has(message.body.jobId)) {
+        retryOrFail(message);
       } else {
-        // Same reasoning as the send failure below: `attempts` counts this
-        // delivery, so a retry on the last one hands the message to the
-        // dead letter queue with nothing added to either counter, and the
-        // job would read as still sending for good. An outage long enough
-        // to burn every delivery is one the recipient is not going to
-        // survive anyway, so it is closed out as failed.
-        tallyOf(progress, message.body.jobId).failed++;
         message.ack();
       }
       continue;
     }
+
+    if (!isVerificationResend(message.body)) {
+      sendable.push(message);
+      inputs.push({
+        to: message.body.to,
+        subject: content.subject,
+        html: content.bodyHtml,
+      });
+      continue;
+    }
+
+    // The job's row holds no body for a reminder: each mail carries its
+    // own link, issued here.
+    const prepared = await prepareVerificationResend(env, message.body.entryId);
+    if (!prepared.ok) {
+      console.error('failed to prepare a verification resend', {
+        jobId: message.body.jobId,
+        entryId: message.body.entryId,
+        error: prepared.error,
+      });
+      retryOrFail(message);
+      continue;
+    }
+    if (prepared.value === null) {
+      // Confirmed, cancelled, or given a live link since the reminder was
+      // asked for. Counted as failed -- "not sent" -- so the job still adds
+      // up to its total.
+      tallyOf(progress, message.body.jobId).failed++;
+      message.ack();
+      continue;
+    }
+    issuedTokens.set(sendable.length, prepared.value.tokenId);
     sendable.push(message);
-    inputs.push({
-      to: message.body.to,
-      subject: content.subject,
-      html: content.bodyHtml,
-    });
+    inputs.push(prepared.value.mail);
   }
 
   const outcomes = await sendPacedMail(createMailSender(env), inputs, options);
+
+  // A reminder's link that never went out must not count as live, or the
+  // retry below -- and every later reminder -- would pass the entry over.
+  for (const [index, tokenId] of issuedTokens) {
+    if (outcomes[index].ok) {
+      continue;
+    }
+    const discarded = await discardVerificationToken(env, tokenId);
+    if (!discarded.ok) {
+      console.error('failed to discard an undelivered verification token', {
+        jobId: sendable[index].body.jobId,
+        error: discarded.error,
+      });
+    }
+  }
 
   outcomes.forEach((outcome, index) => {
     const message = sendable[index];

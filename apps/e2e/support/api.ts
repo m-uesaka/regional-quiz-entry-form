@@ -20,7 +20,7 @@ import type {
   StaffMailInput,
   StaffMailResult,
 } from '@regional-quiz/shared';
-import {BACKEND_URL, MAIL_SINK_URL} from './env';
+import {BACKEND_URL, FRONTEND_URL, MAIL_SINK_URL} from './env';
 import {
   PARTICIPANT_PASSWORD,
   uniqueEmail,
@@ -321,6 +321,29 @@ export async function sendBulkMail(
   const response = await request.post(
     `${BACKEND_URL}/api/staff/tournaments/${tournamentId}/mail`,
     {data: mail},
+  );
+  expect(response.status(), await response.text()).toBe(202);
+  return (await response.json()) as StaffMailResult;
+}
+
+/**
+ * Asks for the confirmation mail to be sent again to the unconfirmed
+ * entries of `tournamentId` whose link has run out, as the signed-in staff
+ * member (#192).
+ *
+ * Answers as soon as the entries are enqueued, like `sendBulkMail()`.
+ * @param request The API context, already holding a staff session.
+ * @param tournamentId The tournament whose entries to remind.
+ */
+export async function resendVerificationMail(
+  request: APIRequestContext,
+  tournamentId: string,
+): Promise<StaffMailResult> {
+  const response = await request.post(
+    `${BACKEND_URL}/api/staff/tournaments/${tournamentId}/verification-mail`,
+    // There is no body, so the origin is what tells `hono/csrf` this is
+    // not a form posted from a foreign page -- as a browser would send it.
+    {headers: {origin: FRONTEND_URL}},
   );
   expect(response.status(), await response.text()).toBe(202);
   return (await response.json()) as StaffMailResult;

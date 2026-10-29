@@ -1,16 +1,25 @@
 // スタッフの一斉メール送信 → Cloudflare Queues のコンシューマが送信 →
-// 送信結果(mail_jobs)の確認
+// 送信結果(mail_jobs)の確認。未確認のエントリーへの確認メール再送も同じ
+// キューを通る
 
 import {expect, test} from '@playwright/test';
 import {
   enterAndVerify,
+  extractVerificationUrl,
   loginStaff,
   readMails,
+  resendVerificationMail,
   sendBulkMail,
   submitEntry,
+  verificationMailSubject,
+  verifyEntry,
   waitForMail,
   waitForMailJob,
 } from '../support/api';
+import {
+  countDefaultMailRecipients,
+  expireVerificationLinks,
+} from '../support/db';
 import {BACKEND_URL} from '../support/env';
 import {SHINJINOU, SHINJINOU_STAFF} from '../support/fixtures';
 
@@ -46,15 +55,20 @@ test('staff mail the confirmed entrants of their tournament through the queue', 
   expect(anonymous.status(), await anonymous.text()).toBe(401);
 
   await loginStaff(request, SHINJINOU_STAFF);
+  // Taken just before the send: `workers: 1` keeps any other spec from
+  // entering the tournament in between, so this is exactly who it must
+  // reach. Were the unconfirmed entry mailed too, `accepted` would come out
+  // one higher.
+  const expected = await countDefaultMailRecipients(SHINJINOU.id);
   const {jobId, accepted} = await sendBulkMail(request, SHINJINOU.id, MAIL);
 
   // The response only says the recipients were taken on: the messages are
   // still in the queue at this point, and nothing has been sent.
-  expect(accepted).toBeGreaterThanOrEqual(1);
+  expect(accepted).toBe(expected);
 
-  // Which is what makes these two arrivals the end-to-end evidence -- the
-  // request that asked for them has long since answered, so they can only
-  // have been sent by the queue's consumer.
+  // Which is what makes this arrival the end-to-end evidence -- the request
+  // that asked for it has long since answered, so it can only have been
+  // sent by the queue's consumer.
   const mail = await waitForMail(request, confirmed.email, MAIL.subject);
   expect(mail.html).toBe(MAIL.body);
   // One message per recipient, so nobody sees anybody else's address.
@@ -77,17 +91,52 @@ test('staff mail the confirmed entrants of their tournament through the queue', 
     MAIL.subject,
   );
 
-  // Staff can still reach the unconfirmed entries, by asking for them.
-  const reminder = {
-    subject: '【テスト】エントリーの確定をお願いします',
-    body: '<p>確認メールのリンクからエントリーを確定してください。</p>',
-    statusFilter: 'pending_verification' as const,
-  };
-  await sendBulkMail(request, SHINJINOU.id, reminder);
-  const reminderMail = await waitForMail(
-    request,
-    pending.email,
-    reminder.subject,
+  // Nor can staff reach the unconfirmed by naming them: what they write
+  // never goes to an address nobody confirmed (#192).
+  const refused = await request.post(
+    `${BACKEND_URL}/api/staff/tournaments/${SHINJINOU.id}/mail`,
+    {data: {...MAIL, statusFilter: 'pending_verification'}},
   );
-  expect(reminderMail.html).toBe(reminder.body);
+  expect(refused.status(), await refused.text()).toBe(400);
+});
+
+test('staff remind the unconfirmed with a fresh confirmation link', async ({
+  request,
+}) => {
+  const pending = await submitEntry(request, SHINJINOU, {
+    name: '催促花子',
+    displayName: 'はなこ',
+  });
+  const subject = verificationMailSubject(SHINJINOU);
+  const verificationMails = async () =>
+    (await readMails(request, pending.email)).filter(
+      received => received.subject === subject,
+    );
+  await loginStaff(request, SHINJINOU_STAFF);
+
+  // Its link still works, so it already holds a usable mail and is passed
+  // over. The job is waited out before looking, so a mail it was going to
+  // send would be in the sink by then.
+  const early = await resendVerificationMail(request, SHINJINOU.id);
+  await waitForMailJob(request, SHINJINOU.id, early.jobId);
+  expect(await verificationMails()).toHaveLength(1);
+
+  // Once the link has run out, the reminder sends a new one.
+  await expireVerificationLinks(pending.email);
+  const reminder = await resendVerificationMail(request, SHINJINOU.id);
+  expect(reminder.accepted).toBeGreaterThanOrEqual(1);
+  const job = await waitForMailJob(request, SHINJINOU.id, reminder.jobId);
+  expect(job).toMatchObject({subject, failed: 0});
+
+  const [resent, original] = await verificationMails();
+  expect(original).toBeDefined();
+  // A link of its own: the token is issued when the reminder goes out.
+  expect(extractVerificationUrl(resent.html)).not.toBe(
+    extractVerificationUrl(original.html),
+  );
+  // And it is the one that works: the newest mail's link confirms the
+  // entry, where the expired one no longer could.
+  expect(['confirmed', 'waitlisted']).toContain(
+    await verifyEntry(request, SHINJINOU, pending.email),
+  );
 });

@@ -1,6 +1,11 @@
 import {afterEach, describe, expect, it} from 'bun:test';
+import {EntryStatusSchema} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
-import {fetchTournamentRecipients} from './entry-recipients';
+import {
+  DEFAULT_EXCLUDED_STATUSES,
+  DEFAULT_RECIPIENT_STATUSES,
+  fetchTournamentRecipients,
+} from './entry-recipients';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
 
 const ENV: Bindings = {
@@ -59,13 +64,29 @@ describe('fetchTournamentRecipients', () => {
     );
   });
 
-  it('reaches unconfirmed entries only when asked for by name', async () => {
-    const urls = mockFetch([[row('taro@example.com')]]);
+  // The default is an allow-list, so a status added to the enum later would
+  // silently drop out of every default send. This makes adding one a
+  // decision: it has to be put on one side or the other.
+  it('classifies every entry status as either mailed or left out by default', () => {
+    expect(
+      [...DEFAULT_RECIPIENT_STATUSES, ...DEFAULT_EXCLUDED_STATUSES].sort(),
+    ).toEqual([...EntryStatusSchema.options].sort());
+  });
 
-    await fetchTournamentRecipients(ENV, TOURNAMENT_ID, 'pending_verification');
+  // #192: the status stands in for a confirmed address only as long as every
+  // way into it goes through the confirmation link, so the address itself
+  // is checked too -- whatever the filter.
+  it('reaches only participants who confirmed their address', async () => {
+    for (const statusFilter of [undefined, 'cancelled'] as const) {
+      const urls = mockFetch([[row('taro@example.com')]]);
 
-    expect(urls[0]).toContain('status=eq.pending_verification');
-    expect(urls[0]).not.toContain('status=in.');
+      await fetchTournamentRecipients(ENV, TOURNAMENT_ID, statusFilter);
+
+      expect(decodeURIComponent(urls[0])).toContain(
+        'participants!inner(email)',
+      );
+      expect(urls[0]).toContain('participants.email_verified_at=not.is.null');
+    }
   });
 
   it('narrows to one status when a status filter is given', async () => {
@@ -139,14 +160,6 @@ describe('fetchTournamentRecipients', () => {
 
   it('de-duplicates an address that appears on several entries', async () => {
     mockFetch([[row('taro@example.com'), row('taro@example.com')]]);
-
-    const result = await fetchTournamentRecipients(ENV, TOURNAMENT_ID);
-
-    expect(result).toEqual({ok: true, recipients: ['taro@example.com']});
-  });
-
-  it('skips an entry with no participant row', async () => {
-    mockFetch([[{participants: null}, row('taro@example.com')]]);
 
     const result = await fetchTournamentRecipients(ENV, TOURNAMENT_ID);
 

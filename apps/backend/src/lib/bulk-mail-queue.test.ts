@@ -37,7 +37,7 @@ class FakeMessage implements Message<BulkMailMessage> {
     readonly body: BulkMailMessage,
     readonly attempts = 1,
   ) {
-    this.id = `message-${body.to}`;
+    this.id = `message-${'to' in body ? body.to : body.entryId}`;
   }
 
   get retried(): boolean {
@@ -82,6 +82,33 @@ interface FetchLog {
   mails: SentMail[];
   progress: ProgressCall[];
   jobLookups: string[];
+  /** The `email_verification_tokens` rows inserted. */
+  tokenInserts: Array<Record<string, unknown>>;
+  /** The `email_verification_tokens` delete URLs. */
+  tokenDeletes: string[];
+}
+
+const ENTRY_ID = '77777777-7777-7777-7777-777777777777';
+const TOKEN_ID = '88888888-8888-8888-8888-888888888888';
+
+/** An `entries` row as `prepareVerificationResend()` selects it. */
+function pendingEntryRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: ENTRY_ID,
+    status: 'pending_verification',
+    participants: {email: 'hanako@example.com'},
+    tournaments: {
+      name: 'テスト大会',
+      type: 'saikyoi',
+      capacity: null,
+      regions: {name: '東京'},
+    },
+    // Its only link expired, which is what makes it due a fresh one.
+    email_verification_tokens: [
+      {expires_at: '2026-01-01T00:00:00Z', used_at: null},
+    ],
+    ...overrides,
+  };
 }
 
 /**
@@ -98,9 +125,21 @@ function mockFetch(
   {
     rejected = [],
     throttled = [],
-  }: {rejected?: readonly string[]; throttled?: readonly string[]} = {},
+    entries = [],
+  }: {
+    rejected?: readonly string[];
+    throttled?: readonly string[];
+    /** The `entries` rows a verification resend reads, or a failure. */
+    entries?: unknown[] | Response;
+  } = {},
 ): FetchLog {
-  const log: FetchLog = {mails: [], progress: [], jobLookups: []};
+  const log: FetchLog = {
+    mails: [],
+    progress: [],
+    jobLookups: [],
+    tokenInserts: [],
+    tokenDeletes: [],
+  };
 
   globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
     const url =
@@ -125,6 +164,22 @@ function mockFetch(
     if (url.includes('/rpc/record_mail_job_progress')) {
       log.progress.push(JSON.parse(String(init?.body)) as ProgressCall);
       return Promise.resolve(Response.json(null));
+    }
+
+    if (url.includes('/rest/v1/entries')) {
+      return Promise.resolve(
+        entries instanceof Response ? entries.clone() : Response.json(entries),
+      );
+    }
+    if (url.includes('/rest/v1/email_verification_tokens')) {
+      if (init?.method === 'DELETE') {
+        log.tokenDeletes.push(url);
+        return Promise.resolve(new Response(null, {status: 204}));
+      }
+      log.tokenInserts.push(
+        JSON.parse(String(init?.body)) as Record<string, unknown>,
+      );
+      return Promise.resolve(Response.json({id: TOKEN_ID}));
     }
 
     log.jobLookups.push(url);
@@ -336,5 +391,98 @@ describe('handleBulkMailQueue', () => {
 
     expect(log.jobLookups).toEqual([]);
     expect(log.progress).toEqual([]);
+  });
+  describe('a verification resend', () => {
+    const resendJob = () => ({
+      ...jobRow(JOB_ID, '【地域クイズ最強位・新人王】確認'),
+      body_html: '',
+    });
+
+    it('sends the entry a fresh confirmation link', async () => {
+      const log = mockFetch([resendJob()], {entries: [pendingEntryRow()]});
+      const messages = [new FakeMessage({jobId: JOB_ID, entryId: ENTRY_ID})];
+
+      await handleBulkMailQueue(batchOf(messages), ENV);
+
+      // The token is issued here, not carried in the message.
+      expect(log.tokenInserts).toHaveLength(1);
+      expect(log.tokenInserts[0].entry_id).toBe(ENTRY_ID);
+      expect(log.mails).toHaveLength(1);
+      expect(log.mails[0].to).toBe('hanako@example.com');
+      expect(log.mails[0].subject).toContain(
+        '「テスト大会」のエントリーを確定してください',
+      );
+      expect(log.mails[0].html).toContain(`${ENV.FRONTEND_URL}/verify?token=`);
+      expect(messages[0].acked).toBe(true);
+      expect(log.tokenDeletes).toEqual([]);
+      expect(log.progress).toEqual([
+        {p_job_id: JOB_ID, p_sent: 1, p_failed: 0},
+      ]);
+    });
+
+    it('sends nothing to an entry confirmed since the reminder was asked for', async () => {
+      const log = mockFetch([resendJob()], {
+        entries: [pendingEntryRow({status: 'confirmed'})],
+      });
+      const messages = [new FakeMessage({jobId: JOB_ID, entryId: ENTRY_ID})];
+
+      await handleBulkMailQueue(batchOf(messages), ENV);
+
+      expect(log.tokenInserts).toEqual([]);
+      expect(log.mails).toEqual([]);
+      expect(messages[0].acked).toBe(true);
+      // Counted as not sent, so the job still adds up to its total.
+      expect(log.progress).toEqual([
+        {p_job_id: JOB_ID, p_sent: 0, p_failed: 1},
+      ]);
+    });
+
+    it('sends nothing to an entry that has a live link again', async () => {
+      // A second press of the button, handled after the first one's mail.
+      const log = mockFetch([resendJob()], {
+        entries: [
+          pendingEntryRow({
+            email_verification_tokens: [
+              {expires_at: '2999-01-01T00:00:00Z', used_at: null},
+            ],
+          }),
+        ],
+      });
+      const messages = [new FakeMessage({jobId: JOB_ID, entryId: ENTRY_ID})];
+
+      await handleBulkMailQueue(batchOf(messages), ENV);
+
+      expect(log.mails).toEqual([]);
+      expect(messages[0].acked).toBe(true);
+    });
+
+    it('discards the link of a throttled reminder before retrying it', async () => {
+      const log = mockFetch([resendJob()], {
+        entries: [pendingEntryRow()],
+        throttled: ['hanako@example.com'],
+      });
+      const messages = [new FakeMessage({jobId: JOB_ID, entryId: ENTRY_ID})];
+
+      await handleBulkMailQueue(batchOf(messages), ENV, NO_RETRIES);
+
+      // Left in place, the undelivered link would read as live on the
+      // redelivery, and the entry would be passed over unsent.
+      expect(log.tokenDeletes).toHaveLength(1);
+      expect(log.tokenDeletes[0]).toContain(`id=eq.${TOKEN_ID}`);
+      expect(messages[0].retried).toBe(true);
+    });
+
+    it('retries a reminder whose entry cannot be read', async () => {
+      const log = mockFetch([resendJob()], {
+        entries: Response.json({message: 'db is down'}, {status: 500}),
+      });
+      const messages = [new FakeMessage({jobId: JOB_ID, entryId: ENTRY_ID})];
+
+      await handleBulkMailQueue(batchOf(messages), ENV);
+
+      expect(log.mails).toEqual([]);
+      expect(messages[0].acked).toBe(false);
+      expect(messages[0].retried).toBe(true);
+    });
   });
 });

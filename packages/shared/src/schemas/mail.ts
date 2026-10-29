@@ -8,6 +8,15 @@ export const STAFF_MAIL_SUBJECT_MAX_LENGTH = 200;
 export const STAFF_MAIL_BODY_MAX_LENGTH = 20000;
 
 /**
+ * The entry statuses a staff bulk send may be narrowed to: every status but
+ * `pending_verification` (see `StaffMailInputSchema`).
+ */
+export const StaffMailStatusFilterSchema = EntryStatusSchema.exclude([
+  'pending_verification',
+]);
+export type StaffMailStatusFilter = z.infer<typeof StaffMailStatusFilterSchema>;
+
+/**
  * `POST /staff/tournaments/:tournamentId/mail` request body.
  *
  * `body` is the mail's HTML content, narrowed by the API to a few formatting
@@ -22,21 +31,29 @@ export const STAFF_MAIL_BODY_MAX_LENGTH = 20000;
  *
  * `statusFilter` narrows the recipients to the entries in one status.
  * Omitting it mails the **`confirmed` and `waitlisted`** entries only
- * (`DEFAULT_RECIPIENT_STATUSES` in `apps/backend/src/lib/entry-recipients.ts`):
- * an unconfirmed entry may have been made under a stranger's address (#192),
- * and someone who withdrew shouldn't keep receiving announcements. Mailing
- * either takes a deliberate `statusFilter: 'pending_verification'` or
- * `'cancelled'`.
+ * (`DEFAULT_RECIPIENT_STATUSES` in `apps/backend/src/lib/entry-recipients.ts`);
+ * mailing the cancelled ones takes a deliberate `statusFilter: 'cancelled'`,
+ * since someone who withdrew shouldn't keep receiving announcements.
+ *
+ * `pending_verification` is refused outright (400), not merely left out of
+ * the default (#192): anyone can enter under a stranger's address and leave
+ * the entry unconfirmed, so a staff-written body sent to those entries
+ * would reach someone who never agreed to it, from the organization's
+ * sending domain. The unconfirmed are reminded with the fixed confirmation
+ * mail instead (`POST /staff/tournaments/:tournamentId/verification-mail`).
+ * Whatever the filter, only participants who have confirmed their address
+ * are mailed.
  */
 export const StaffMailInputSchema = z.object({
   subject: z.string().min(1).max(STAFF_MAIL_SUBJECT_MAX_LENGTH),
   body: z.string().min(1).max(STAFF_MAIL_BODY_MAX_LENGTH),
-  statusFilter: EntryStatusSchema.optional(),
+  statusFilter: StaffMailStatusFilterSchema.optional(),
 });
 export type StaffMailInput = z.infer<typeof StaffMailInputSchema>;
 
 /**
- * `POST /staff/tournaments/:tournamentId/mail` response (202).
+ * `POST /staff/tournaments/:tournamentId/mail` and
+ * `POST /staff/tournaments/:tournamentId/verification-mail` response (202).
  *
  * `accepted` is how many distinct addresses the send was queued for, not
  * how many messages arrived: the request returns as soon as the recipients
