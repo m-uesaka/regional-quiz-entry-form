@@ -36,8 +36,8 @@ flowchart LR
 | --- | --- |
 | `apps/backend/src/lib/sheet-to-form-definition.ts` | `fetchSheetRows()`(Sheets API v4 呼び出し)・`sheetRowsToYaml()`(行データ→YAML変換) |
 | `apps/backend/src/lib/sheet-to-regulations.ts` | `fetchRegulationSheetValues()`(「レギュレーション」シートの取得)・`sheetValuesToRegulations()`(行データ→レギュレーション配列) |
-| `apps/backend/src/routes/sheet-import.ts` | `POST /api/sheet-import/preview`(フォーム定義)・`POST /api/sheet-import/regulations/preview`(レギュレーション)・`POST /api/sheet-import/tournaments`(大会一覧からの一括登録、#168)。統括スタッフ限定 |
-| `apps/backend/src/lib/tournament-bulk-import.ts` | 大会一覧の読み取り(`parseTournamentIndex()`)・締切の既定値(`defaultEntryClosesAt()`)・行ごとの登録(`importTournaments()`) |
+| `apps/backend/src/routes/sheet-import.ts` | `POST /api/sheet-import/preview`(フォーム定義)・`POST /api/sheet-import/regulations/preview`(レギュレーション)・`POST /api/sheet-import/tournaments/preview`・`POST /api/sheet-import/tournaments`(大会一覧からの一括登録の確認と登録、#168)。統括スタッフ限定 |
+| `apps/backend/src/lib/tournament-bulk-import.ts` | 大会一覧の読み取り(`parseTournamentIndex()`)・定員と日時の読み取り(`parseCapacity()` / `parseJstDateTime()`)・確認(`previewTournamentImport()`)・選んだ行の登録(`importTournaments()`) |
 | `apps/frontend/src/routes/admin/tournaments/import/` | 一括登録の画面 |
 | `apps/backend/src/routes/form-definitions.ts` | `PUT /api/form-definitions/:tournamentId`。プレビュー済み YAML をパース・検証して保存処理に渡す(Task 2-2)。統括スタッフ限定 |
 | `apps/backend/src/lib/form-definitions.ts` | `syncFormFieldDefs()`。大会種別の照合と `form_field_defs` の置き換え(`sync_form_field_defs` RPC) |
@@ -230,22 +230,25 @@ bunx wrangler secret put GOOGLE_SHEETS_API_KEY --env production
 
 ### 大会を一括登録する(#168)
 
-大会一覧のスプレッドシートから、記載されたすべての大会を一度に登録できる。各行の入力シートから、フォーム定義とレギュレーションもまとめて取り込む。
+大会一覧のスプレッドシートから、記載された大会をまとめて登録できる。各行の入力シートから、フォーム定義とレギュレーションもまとめて取り込む。読み込みと登録は 2 段階で、**読み込んだだけでは何も登録されない**。
 
 1. 統括スタッフでログインし、管理メニューの「大会を一括登録」(`/admin/tournaments/import`)を開く。
-2. 大会一覧のスプレッドシートの URL(または ID)を貼り付けて「一括登録する」を押す。**プレビューの段階は無く、押すとすぐに登録される。**
-3. 結果に「登録した大会」と「登録できなかった大会(理由つき)」が並ぶ。登録できなかった大会は、理由を直して再実行するか、大会の画面から個別に登録する。再実行しても、登録済みの大会は上書きされるだけで重複はしない。
+2. 大会一覧のスプレッドシートの URL(または ID)を貼り付けて「読み込む」を押す。
+3. 「登録する大会を選ぶ」に、登録できる大会が 1 行ずつ並ぶ。操作は、同じ地域・種別の大会がまだ無ければ「新規作成」、既にあれば「上書き」。上書きの行には、定員・エントリー期間が変わる場合に現在の値も表示される。チェックを付けた大会だけが登録される(新規作成の行は最初からチェック済み、上書きの行は未チェック。「すべて選択」「新規作成のみ選択」「選択を解除」で一括変更できる)。
+4. 登録できない大会は、理由つきで別の表に並ぶ。シートを直して読み込み直すか、大会の画面から個別に登録する。
+5. 「選択した N 件を登録する」を押すと、大会一覧と入力シートを読み直して登録する。結果に「登録した大会」と「登録できなかった大会(理由つき)」が並ぶ。読み込んだ後にシートが編集された場合や、別の統括スタッフがその大会を編集・作成・削除した場合は、確認した内容と違うので登録されない(もう一度読み込む)。
 
 大会一覧(先頭のシート)の書式:
 
-- 1 行目がヘッダー。列は**ヘッダー名で探す**ので順番は問わない。必要なのは `地域` / `種別` / `実施日` / `スプレッドシートID` の 4 列で、それ以外の列(表示用の日付・スプレッドシート名・URL など)は読まない。
+- 1 行目がヘッダー。列は**ヘッダー名で探す**ので順番は問わない。必要なのは `地域` / `種別` / `定員` / `エントリー開始` / `エントリー終了` / `スプレッドシートID` の 6 列で、それ以外の列(実施日・スプレッドシート名・URL など)は読まない。
 - `地域` は地域の画面で登録した**地域名と完全に一致**させる。
 - `種別` は `最強位` / `新人王` のどちらか。
-- `実施日` は `2026/12/26（土）` のように**先頭が年/月/日**の形(`2026-12-26` も可)。エントリーの締切はこの前日の 23:59(日本時間)。新しく作る大会のエントリー開始は登録した時刻になる。`調整中` など日付でない値の行は登録されない。
+- `定員` は 1 以上の整数(`54`)。**空欄は定員なし**。
+- `エントリー開始` / `エントリー終了` は `2026/11/04 21:00:00` のように**年/月/日 時:分(:秒)**の形で、日本時間として読む(`2026-11-04 21:00` も可。時刻は省略できない)。開始が終了より後の行・終了が既に過ぎている行は登録できない。
 - `スプレッドシートID` はその大会の入力シート(5 章・6 章の書式)。ID の代わりに URL を書いてもよい。大会一覧と同じく「リンクを知っている全員が閲覧可」にしておくこと。
 - 同じ地域・種別の行が 2 つ以上あると、どちらが正しいか決められないので**どちらも登録しない**。
 
-既に登録されている大会(同じ地域・種別)は**上書き**される。締切・フォーム定義・レギュレーションが置き換わり、**エントリー開始**・大会名・定員はそのまま残る(エラーの出た行を直して流し直しても、受付開始前の大会が即時受付開始になることはない)。レギュレーションは名前で既存のものと突き合わせるので、名前を変えなければエントリーとの紐付けは保たれる。エントリーで使われているレギュレーションの名前を変えた(シートから消した)場合、その大会は登録できなかった大会として報告され、何も変更されない。フォーム定義の誤りは「フォーム定義 3行目: A列(key)…」のように行番号付きで報告される。
+上書きを選んだ大会は、定員・エントリー開始・エントリー終了・フォーム定義・レギュレーションがシートの内容に置き換わり、大会名はそのまま残る。レギュレーションは名前で既存のものと突き合わせるので、名前を変えなければエントリーとの紐付けは保たれる。エントリーで使われているレギュレーションの名前を変えた(シートから消した)場合、その大会は登録できなかった大会として報告され、何も変更されない。フォーム定義の誤りは「フォーム定義 3行目: A列(key)…」のように行番号付きで報告される。
 
 一括登録は Cloudflare Workers の**有料プラン**が前提(1 行ごとに Google と Supabase へのサブリクエストが発生し、無料プランの上限 50 では約 24 行で足りなくなる。一斉メールの Queues のため、このプロジェクトは元々有料プランを前提にしている)。
 
@@ -263,11 +266,17 @@ curl -X POST http://localhost:8787/api/sheet-import/regulations/preview \
   -H 'Cookie: staff_session=<統括スタッフのJWT>' \
   -d '{"spreadsheetId": "<スプレッドシートID>"}'
 
-# 大会の一括登録(書き込む)
-curl -X POST http://localhost:8787/api/sheet-import/tournaments \
+# 大会の一括登録の確認(書き込まない)
+curl -X POST http://localhost:8787/api/sheet-import/tournaments/preview \
   -H 'Content-Type: application/json' \
   -H 'Cookie: staff_session=<統括スタッフのJWT>' \
   -d '{"spreadsheetId": "<大会一覧のスプレッドシートID>"}'
+
+# 選んだ大会の登録(書き込む)
+curl -X POST http://localhost:8787/api/sheet-import/tournaments \
+  -H 'Content-Type: application/json' \
+  -H 'Cookie: staff_session=<統括スタッフのJWT>' \
+  -d '{"spreadsheetId": "<大会一覧のスプレッドシートID>", "selections": [{"regionName": "北海道", "typeLabel": "最強位", "action": "create"}]}'
 ```
 
 ## 10. 関連スキーマ(`packages/shared/src/schemas/`)

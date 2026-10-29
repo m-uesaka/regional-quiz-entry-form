@@ -231,6 +231,7 @@ if ('yaml' in body) {
 | PUT | `/api/form-definitions/:tournamentId` | 統括スタッフ |
 | POST | `/api/sheet-import/preview` | 統括スタッフ |
 | POST | `/api/sheet-import/regulations/preview` | 統括スタッフ |
+| POST | `/api/sheet-import/tournaments/preview` | 統括スタッフ |
 | POST | `/api/sheet-import/tournaments` | 統括スタッフ |
 | GET | `/api/staff/tournaments/:tournamentId/entries` | スタッフ(担当範囲) |
 | GET | `/api/staff/tournaments/:tournamentId/entries.csv` | スタッフ(担当範囲) |
@@ -759,32 +760,54 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 行に起因する 400 の `error` は `3行目: ...` の形でシートの行番号を含みます。詳細は [`google-sheets-integration.md`](./google-sheets-integration.md#6-レギュレーションシートのフォーマット規約) を参照。
 
-### `POST /api/sheet-import/tournaments`
+### `POST /api/sheet-import/tournaments/preview`
 
-大会一覧のスプレッドシートから、記載された大会を**一括で登録します**(#168)。上の 2 つと違い、**このエンドポイントは DB に書き込みます**(プレビューの段階はありません)。画面は `/admin/tournaments/import`。
+大会一覧のスプレッドシートを読み、行ごとに「登録すると何が起きるか」を返します(#168)。**DB には書き込みません**。統括スタッフはこの結果を `/admin/tournaments/import` で確認し、大会ごとに新規作成・上書きするかを選んで、下の `POST /api/sheet-import/tournaments` で登録します。各行の入力シートもここで読み、フォーム定義・レギュレーションの誤りは登録前に分かります。
 
 - リクエスト: `TournamentBulkImportRequestSchema` — `{spreadsheetId: string}`。スプレッドシートの URL(`https://docs.google.com/spreadsheets/d/{id}/edit...`)を渡すと ID を取り出します
-- `200`: `TournamentBulkImportResponseSchema` — `{"results": TournamentImportResult[]}`。大会一覧の行ごとに 1 件、シートの行順。**何行失敗しても 200** で、行ごとの結果が答えです
+- `200`: `TournamentBulkImportPreviewResponseSchema` — `{"rows": TournamentImportPreviewRow[]}`。大会一覧の行ごとに 1 件、シートの行順。**登録できない行がいくつあっても 200** です
 
-| `TournamentImportResult` のフィールド | 内容 |
+| `TournamentImportPreviewRow` のフィールド | 内容 |
 | --- | --- |
 | `row` | 大会一覧の行番号 |
-| `regionName` / `typeLabel` | 地域・種別のセルの値(書かれたまま) |
-| `outcome` | `created`(新規登録)/ `updated`(既存の大会を上書き)/ `failed`(登録していない) |
-| `tournamentId` / `type` / `entryOpensAt` / `entryClosesAt` | 登録した大会。`failed` では `null` |
-| `error` | `failed` の理由(日本語)。それ以外では `null` |
+| `regionName` / `typeLabel` | 地域・種別のセルの値(書かれたまま)。登録時に行を指定するのに使う |
+| `action` | `create`(同じ地域・種別の大会が無い)/ `overwrite`(既にある)/ `null`(登録できない) |
+| `fingerprint` | 書き込む内容(定員・期間・フォーム定義・レギュレーション)と上書き先の大会の現在値から作った SHA-256。登録時にそのまま送り返す。登録できない行では `null` |
+| `error` | `action` が `null` の理由(日本語) |
+| `capacity` / `entryOpensAt` / `entryClosesAt` | シートの定員(空欄は `null` = 定員なし)とエントリー期間 |
+| `formFieldLabels` / `regulationLabels` | 入力シートの追加項目・レギュレーションのラベル |
+| `current` | `overwrite` のとき、登録済みの大会の現在の値(`tournamentId` / `name` / `capacity` / `entryOpensAt` / `entryClosesAt`)。それ以外は `null` |
 
 | ステータス | 条件 |
 | --- | --- |
-| 400 | 大会一覧のシートが読めない(ID が不正・共有されていない)、1 行目に必要な列(地域・種別・実施日・スプレッドシートID)が無い |
+| 400 | 大会一覧のシートが読めない(ID が不正・共有されていない)、1 行目に必要な列(地域・種別・定員・エントリー開始・エントリー終了・スプレッドシートID)が無い |
 | 502 / 503 | 大会一覧を読むときの Google の障害 / レート制限 |
 
-1 行ぶんの登録(大会・フォーム定義・レギュレーション)は DB 関数 `import_tournament()`(`0028`)が **1 トランザクション**で行い、どこかで失敗すればその大会は何も書かれません。失敗した行は理由を返し、残りの行は登録を続けます。
+行が登録できない理由: 地域名が登録されていない・同名の地域が複数ある、種別が 最強位/新人王 以外、定員が 1 以上の整数でない(空欄は可)、エントリー開始・終了が日時として読めない(`2026/11/04 21:00:00` のように年/月/日 時:分[:秒]。日本時間として読む)、開始が終了より後、終了が既に過ぎている、スプレッドシートIDが空、同じ地域・種別の行が複数ある(どちらも登録しない)、入力シートが読めない・「レギュレーション」シートが無い、フォーム定義・レギュレーションの記入誤り(上の 2 つのプレビューと同じ検証)。
 
-- **エントリー期間**: 締切は実施日の前日 23:59(日本時間)。締切が既に過ぎている行は失敗。開始は、新しく作る大会ではリクエストを処理した時刻
-- **既存の大会**(同じ地域・種別)は**上書き**: 締切・フォーム定義・レギュレーションを置き換えます。**エントリー開始は変えません**(エラーの出た行を直して流し直すたびに、受付開始前の大会が即時受付開始になったり、受付中の大会の開始時刻が書き換わったりしないように)。結果の `entryOpensAt` は保存されている値です。大会名・定員はシートに無いので変えません。レギュレーションは名前で既存の行と突き合わせて id を引き継ぐので、名前が同じならエントリーの紐付けは保たれます。エントリーで使用中のレギュレーションがシートから消えている(名前が変わった)場合は、その行は失敗になります
-- 新規の大会は大会名が空欄(既定名)、定員なし
-- 行の失敗理由: 地域名が登録されていない・同名の地域が複数ある、種別が 最強位/新人王 以外、実施日が日付として読めない(`2026/12/26（土）` のように先頭が年/月/日なら読める)、スプレッドシートIDが空、同じ地域・種別の行が複数ある(どちらも登録しない)、入力シートが読めない・「レギュレーション」シートが無い、フォーム定義・レギュレーションの記入誤り(上の 2 つのプレビューと同じ検証)
+### `POST /api/sheet-import/tournaments`
+
+大会一覧のスプレッドシートから、**選んだ大会を登録します**(#168)。**このエンドポイントは DB に書き込みます**。大会一覧と入力シートはここで読み直します。
+
+- リクエスト: `TournamentBulkImportExecuteRequestSchema` — `{spreadsheetId: string, selections: {regionName, typeLabel, action, fingerprint}[]}`。`selections` はプレビューの行の地域・種別・`action`(`create` / `overwrite`)・`fingerprint`。1 件以上 200 件以下で、同じ地域・種別を 2 回含めない
+- `200`: `TournamentBulkImportResponseSchema` — `{"results": TournamentImportResult[]}`。`selections` 1 件につき 1 件、渡した順。**何件失敗しても 200** で、件ごとの結果が答えです
+
+| `TournamentImportResult` のフィールド | 内容 |
+| --- | --- |
+| `row` | 大会一覧の行番号。大会一覧にその地域・種別の行が無くなっていた場合は `null` |
+| `regionName` / `typeLabel` | 地域・種別のセルの値(書かれたまま) |
+| `outcome` | `created`(新規登録)/ `updated`(既存の大会を上書き)/ `failed`(登録していない) |
+| `tournamentId` / `type` / `capacity` / `entryOpensAt` / `entryClosesAt` | 登録した大会。`failed` では `null` |
+| `error` | `failed` の理由(日本語)。それ以外では `null` |
+
+ステータスはプレビューと同じ(加えて `selections` が空なら 400)。
+
+1 件ぶんの登録(大会・フォーム定義・レギュレーション)は DB 関数 `import_tournament()`(`0036`)が **1 トランザクション**で行い、どこかで失敗すればその大会は何も書かれません。失敗した件は理由を返し、残りは登録を続けます。
+
+- **確認した内容しか書かない**: 読み直したシートと現在の大会から `fingerprint` を作り直し、プレビューのものと違えば(シートが編集された、上書き先の大会が編集・作成・削除された)何も書かずに失敗にします。照合から書き込みまでの間に大会が作成・削除された場合も、`import_tournament()` が選ばれた操作と合わないとして `P0006` で断ります
+- **新規作成**: 定員・エントリー期間はシートの値、大会名は空欄(既定名)
+- **上書き**: 定員・エントリー開始・エントリー終了・フォーム定義・レギュレーションをシートの内容に置き換えます。大会名はシートに無いので変えません。レギュレーションは名前で既存の行と突き合わせて id を引き継ぐので、名前が同じならエントリーの紐付けは保たれます。エントリーで使用中のレギュレーションがシートから消えている(名前が変わった)場合は失敗になります。定員を減らしても、確定済みのエントリーはそのままです(大会の編集 API と同じ)
+- 失敗理由はプレビューと同じ検証によるものに加え、`fingerprint` の不一致・上の `P0006`・使用中のレギュレーション
 
 `スプレッドシートID` の列には URL を書いてもかまいません(ID を取り出します)。
 

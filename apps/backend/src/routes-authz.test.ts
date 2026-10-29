@@ -130,6 +130,7 @@ const ROUTE_POLICIES: Readonly<Record<string, Policy>> = {
   'PUT /api/form-definitions/:tournamentId': {access: 'general-staff'},
   'POST /api/sheet-import/preview': {access: 'general-staff'},
   'POST /api/sheet-import/regulations/preview': {access: 'general-staff'},
+  'POST /api/sheet-import/tournaments/preview': {access: 'general-staff'},
   'POST /api/sheet-import/tournaments': {access: 'general-staff'},
   'GET /api/staff/tournaments/:tournamentId/entries': {access: 'scoped-staff'},
   'GET /api/staff/tournaments/:tournamentId/entries.csv': {
