@@ -155,6 +155,12 @@ export const TournamentImportResultSchema = z.object({
   entryClosesAt: InstantSchema.nullable(),
   /** Set when `outcome` is `failed`; staff-facing Japanese. */
   error: z.string().nullable(),
+  /**
+   * How many waitlisted entries an overwrite promoted into the seats its
+   * capacity freed (#223); 0 for a new tournament or a failed row. `null`
+   * when the tournament was written but the promotion then failed.
+   */
+  promotedCount: z.number().int().nonnegative().nullable(),
 });
 export type TournamentImportResult = z.infer<
   typeof TournamentImportResultSchema

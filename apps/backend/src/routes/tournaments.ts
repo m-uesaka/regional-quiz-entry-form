@@ -25,6 +25,7 @@ import {
   TOURNAMENT_COLUMNS,
   type TournamentRow,
 } from '../lib/tournaments';
+import {promoteWaitlistedEntries} from '../lib/waitlist';
 
 const TournamentIdParamSchema = z.object({id: z.string().uuid()});
 
@@ -243,9 +244,10 @@ export const tournamentsRoute = new Hono<StaffEnv>()
     async c => {
       const db = createDbClient(c.env);
       const {id} = c.req.valid('param');
+      const input = c.req.valid('json');
       const {data, error} = await db
         .from('tournaments')
-        .update(toTournamentRow(c.req.valid('json')))
+        .update(toTournamentRow(input))
         .eq('id', id)
         .select(TOURNAMENT_COLUMNS)
         .returns<TournamentRow[]>()
@@ -262,6 +264,23 @@ export const tournamentsRoute = new Hono<StaffEnv>()
           error,
         );
         return c.json(body, status);
+      }
+      // A capacity raised or cleared frees seats the waitlist is queued for
+      // (#223). Run whenever a capacity was sent rather than only when it
+      // went up: the function finds the free seats itself under the
+      // tournament lock, and does nothing when there are none.
+      if (input.capacity !== undefined) {
+        try {
+          await promoteWaitlistedEntries(c.env, id);
+        } catch (e: unknown) {
+          // The update is already committed, so failing the request would
+          // tell staff it didn't go through. Saving the capacity again
+          // retries the promotion.
+          console.error('failed to promote waitlisted entries', {
+            tournamentId: id,
+            error: e,
+          });
+        }
       }
       return c.json(rowToTournament(data));
     },

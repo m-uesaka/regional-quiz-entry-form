@@ -1,7 +1,7 @@
 import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
 import type {Bindings} from '../types/env';
-import {promoteNextWaitlistedEntry} from './waitlist';
+import {promoteNextWaitlistedEntry, promoteWaitlistedEntries} from './waitlist';
 import {hashPassword} from './password';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
 
@@ -46,6 +46,10 @@ describe.skipIf(!(await isDbReachable()))(
     const testRegionSlug = 'waitlist-lib-test-region';
     const testEmailDomain = 'waitlist-lib-test.example.com';
     const originalFetch = globalThis.fetch;
+    // The addresses the stub below was asked to mail, in order, and whether
+    // it should refuse them.
+    let mailedTo: string[] = [];
+    let mailFails = false;
 
     beforeAll(() => {
       // The Supabase client also runs on `fetch`, so only intercept the
@@ -56,7 +60,11 @@ describe.skipIf(!(await isDbReachable()))(
       ) => {
         const url = typeof input === 'string' ? input : input.toString();
         if (url.startsWith('https://api.resend.com/')) {
-          return new Response(null, {status: 200});
+          const body = JSON.parse(String(init?.body ?? '{}')) as {
+            to?: string | string[];
+          };
+          mailedTo.push(...[body.to ?? []].flat());
+          return new Response(null, {status: mailFails ? 500 : 200});
         }
         return originalFetch(input, init);
       }) as typeof fetch;
@@ -140,6 +148,36 @@ describe.skipIf(!(await isDbReachable()))(
       return entry.id as string;
     }
 
+    async function statusOf(entryId: string) {
+      const [row] = await sql`
+        select e.status, e.waitlist_position, p.email
+        from entries e join participants p on p.id = e.participant_id
+        where e.id = ${entryId}
+      `;
+      return row as {
+        status: string;
+        waitlist_position: number | null;
+        email: string;
+      };
+    }
+
+    async function createConfirmedEntry(
+      regionId: string,
+      tournamentId: string,
+      regulationId: string,
+    ): Promise<void> {
+      const id = await createWaitlistedEntry(
+        regionId,
+        tournamentId,
+        regulationId,
+        0,
+      );
+      await sql`
+        update entries set status = 'confirmed', waitlist_position = null
+        where id = ${id}
+      `;
+    }
+
     it('promotes the entry with the smallest waitlist_position', async () => {
       const fixture = await createTournamentAndRegulation('promote');
       const second = await createWaitlistedEntry(
@@ -204,6 +242,105 @@ describe.skipIf(!(await isDbReachable()))(
       await expect(
         promoteNextWaitlistedEntry(env, fixture.tournamentId),
       ).resolves.toBeUndefined();
+    });
+
+    describe('promoteWaitlistedEntries', () => {
+      it('fills the seats a raised capacity freed, in waitlist order', async () => {
+        const f = await createTournamentAndRegulation('raise');
+        await createConfirmedEntry(f.regionId, f.tournamentId, f.regulationId);
+        const waiting = [];
+        for (const position of [3, 1, 2]) {
+          waiting.push(
+            await createWaitlistedEntry(
+              f.regionId,
+              f.tournamentId,
+              f.regulationId,
+              position,
+            ),
+          );
+        }
+        await sql`update tournaments set capacity = 3 where id = ${f.tournamentId}`;
+        mailedTo = [];
+
+        const promoted = await promoteWaitlistedEntries(env, f.tournamentId);
+
+        // 3 seats, 1 taken: positions 1 and 2 go up, position 3 waits.
+        expect(promoted).toBe(2);
+        const [third, first, second] = await Promise.all(waiting.map(statusOf));
+        expect(first.status).toBe('confirmed');
+        expect(second.status).toBe('confirmed');
+        expect(first.waitlist_position).toBeNull();
+        expect(third).toMatchObject({
+          status: 'waitlisted',
+          waitlist_position: 3,
+        });
+        expect(mailedTo).toEqual([first.email, second.email]);
+      });
+
+      it('promotes everyone waiting when the capacity is cleared', async () => {
+        const f = await createTournamentAndRegulation('clear');
+        await createConfirmedEntry(f.regionId, f.tournamentId, f.regulationId);
+        const waiting = [
+          await createWaitlistedEntry(
+            f.regionId,
+            f.tournamentId,
+            f.regulationId,
+            1,
+          ),
+          await createWaitlistedEntry(
+            f.regionId,
+            f.tournamentId,
+            f.regulationId,
+            2,
+          ),
+        ];
+        await sql`update tournaments set capacity = null where id = ${f.tournamentId}`;
+
+        expect(await promoteWaitlistedEntries(env, f.tournamentId)).toBe(2);
+        for (const id of waiting) {
+          expect((await statusOf(id)).status).toBe('confirmed');
+        }
+      });
+
+      it('promotes nobody when no seat is free', async () => {
+        const f = await createTournamentAndRegulation('full');
+        await createConfirmedEntry(f.regionId, f.tournamentId, f.regulationId);
+        await createConfirmedEntry(f.regionId, f.tournamentId, f.regulationId);
+        const waiting = await createWaitlistedEntry(
+          f.regionId,
+          f.tournamentId,
+          f.regulationId,
+          1,
+        );
+        mailedTo = [];
+
+        // Capacity 1 with 2 confirmed: lowered below what is confirmed.
+        expect(await promoteWaitlistedEntries(env, f.tournamentId)).toBe(0);
+        expect((await statusOf(waiting)).status).toBe('waitlisted');
+        expect(mailedTo).toEqual([]);
+      });
+
+      // The promotions are committed; a lost mail must not report them as
+      // not having happened.
+      it('still reports the promotions when a mail fails', async () => {
+        const f = await createTournamentAndRegulation('mailfail');
+        const waiting = await createWaitlistedEntry(
+          f.regionId,
+          f.tournamentId,
+          f.regulationId,
+          1,
+        );
+        mailFails = true;
+        const originalConsoleError = console.error;
+        console.error = () => {};
+        try {
+          expect(await promoteWaitlistedEntries(env, f.tournamentId)).toBe(1);
+        } finally {
+          mailFails = false;
+          console.error = originalConsoleError;
+        }
+        expect((await statusOf(waiting)).status).toBe('confirmed');
+      });
     });
   },
 );

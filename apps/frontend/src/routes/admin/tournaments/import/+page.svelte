@@ -405,6 +405,7 @@
                 <TableHead size="small">結果</TableHead>
                 <TableHead size="small">定員</TableHead>
                 <TableHead size="small">エントリー期間 (JST)</TableHead>
+                <TableHead size="small">キャンセル待ちの繰り上げ</TableHead>
                 <TableHead size="small"><span class="sr-only">操作</span></TableHead>
               </tr>
             </thead>
@@ -425,6 +426,17 @@
                       result.entryClosesAt,
                     )}
                   </TableData>
+                  {#if result.promotedCount === null}
+                    <TableData size="small" class="text-destructive">
+                      失敗しました。大会の編集画面で定員を保存し直してください
+                    </TableData>
+                  {:else}
+                    <TableData size="small">
+                      {result.promotedCount > 0
+                        ? `${result.promotedCount}件(通知メール送信済み)`
+                        : '—'}
+                    </TableData>
+                  {/if}
                   <TableData size="small">
                     <Link href="/admin/tournaments/{result.tournamentId}/edit">
                       編集<span class="sr-only"

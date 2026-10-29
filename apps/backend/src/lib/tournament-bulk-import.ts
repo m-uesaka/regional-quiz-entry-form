@@ -49,6 +49,7 @@ import {
   type SheetRow,
 } from './sheet-to-form-definition';
 import {sheetValuesToRegulations} from './sheet-to-regulations';
+import {promoteWaitlistedEntries} from './waitlist';
 
 /** The headers of the 大会一覧 sheet's columns this reads. */
 const HEADERS = {
@@ -678,6 +679,25 @@ async function importRow(
       '登録に失敗しました。時間をおいて再度お試しください',
     );
   }
+  // An overwrite may have raised or cleared the capacity of a tournament
+  // with a waitlist (#223). A new tournament has no entries to promote. The
+  // tournament is committed by now, so a failed promotion doesn't fail the
+  // row; saving the capacity again on the edit screen retries it.
+  let promotedCount: number | null = 0;
+  if (!data.created) {
+    try {
+      promotedCount = await promoteWaitlistedEntries(
+        context.env,
+        data.tournament_id,
+      );
+    } catch (e: unknown) {
+      console.error('failed to promote waitlisted entries', {
+        row: row.row,
+        error: e,
+      });
+      promotedCount = null;
+    }
+  }
   return {
     row: row.row,
     regionName: row.regionName,
@@ -689,6 +709,7 @@ async function importRow(
     entryOpensAt: prepared.entryOpensAt,
     entryClosesAt: prepared.entryClosesAt,
     error: null,
+    promotedCount,
   };
 }
 
@@ -822,5 +843,6 @@ function failed(
     entryOpensAt: null,
     entryClosesAt: null,
     error,
+    promotedCount: 0,
   };
 }

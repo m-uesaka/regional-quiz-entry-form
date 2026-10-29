@@ -445,6 +445,13 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 - 空席がすでに埋まっていた場合は、キューを一切触らずに何も返しません(呼び出し側はこれを「繰り上げ対象なし」と同じに扱います)。
 - 繰り上げた行の `waitlist_position` を `null` にするだけで、**後続の順位は詰めません**。欠番が残るため、`confirm_entry_by_token()` の採番と衝突し得ます(前述の `waitlist_position` の項を参照)。
 
+
+### promote_waitlisted_entries(p_tournament_id)
+
+定員を増やした・定員なしにしたときに、空いた席の数だけキャンセル待ちを繰り上げます(`0037`、#223)。大会の編集(`PATCH /api/tournaments/:id` で `capacity` を送ったとき)と、大会一覧からの一括登録の上書きの後に呼ばれます。返り値は繰り上げた `(entry_id, participant_email)` を元のキャンセル待ちの順に並べたもので、呼び出し側(`promoteWaitlistedEntries()`)が 1 件ずつ通知メールを送ります。
+
+- `promote_next_waitlisted_entry()` と同じく大会行を `for update` でロックしてから確定数を数え、空き(定員 − 確定数)の件数だけ `waitlist_position` の小さい順に `confirmed` にします。定員が null なら全件を繰り上げます。空きが 0 以下なら何もしません
+- 繰り上げた行の `waitlist_position` を `null` にするだけで、後続の順位を詰めないのも `promote_next_waitlisted_entry()` と同じです
 ### cancel_own_entry(p_entry_id, p_participant_id)
 
 参加者自身のエントリーをキャンセルし、`(previous_status, entry_tournament_id)` を返します。
@@ -599,3 +606,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0031_add_staff_password_link_fn.sql` | スタッフ本人の再設定申し込み(#175)用に、既存の有効なリンクを消さずに書き足す `add_staff_password_link()`。期限切れのリンクは削除し、無効なアカウントは断る |
 | `0034_participants_email_verified_at.sql` | `participants.email_verified_at` を追加して確定済みエントリーから埋め戻し、`confirm_entry_by_token()` を確定時に参加者を確認済みにするよう再定義、未確認アカウントを上書きする `take_over_unverified_participant()` を追加(#189) |
 | `0036_import_tournament_explicit_period.sql` | 大会一覧に定員・エントリー開始・終了の列ができたのに合わせ、`import_tournament()` を定員・開始も書き込み、新規作成か上書きかを引数で受け取ってその通りにしか書かない(合わなければ `P0006`)よう再定義 |
+| `0037_promote_waitlisted_entries_fn.sql` | 定員を増やした・定員なしにしたときに空いた席の数だけキャンセル待ちを繰り上げる `promote_waitlisted_entries()`(#223) |

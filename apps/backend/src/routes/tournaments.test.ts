@@ -291,6 +291,89 @@ describe('tournaments routes (database errors)', () => {
   });
 });
 
+// A capacity raised or cleared frees seats for the waitlist (#223).
+describe('PATCH /tournaments/:id (waitlist promotion, mocked Supabase)', () => {
+  const tournamentId = '11111111-1111-1111-1111-111111111111';
+  const ROW = {
+    id: tournamentId,
+    region_id: '00000000-0000-0000-0000-000000000000',
+    type: 'saikyoi',
+    name: null,
+    capacity: 60,
+    entry_opens_at: '2026-01-01T00:00:00+09:00',
+    entry_closes_at: '2026-01-31T00:00:00+09:00',
+    regions: {name: 'テスト地域'},
+  };
+
+  /**
+   * Stubs PostgREST: the update answers with `ROW`, and the promotion RPC
+   * with `promotion`. Returns the RPC bodies sent.
+   */
+  function stubSupabase(promotion: Response): unknown[] {
+    const rpcCalls: unknown[] = [];
+    globalThis.fetch = staffSessionAwareFetch((async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes('/rpc/promote_waitlisted_entries')) {
+        rpcCalls.push(JSON.parse(String(init?.body)));
+        return promotion;
+      }
+      return Response.json(ROW);
+    }) as unknown as typeof fetch);
+    return rpcCalls;
+  }
+
+  async function patch(body: Record<string, unknown>): Promise<Response> {
+    return app.request(
+      `/api/tournaments/${tournamentId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          cookie: await generalStaffCookie(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      },
+      env,
+    );
+  }
+
+  it('promotes the waitlist when a capacity is saved', async () => {
+    const rpcCalls = stubSupabase(Response.json([]));
+
+    const res = await patch({capacity: 60});
+
+    expect(res.status).toBe(200);
+    expect(rpcCalls).toEqual([{p_tournament_id: tournamentId}]);
+  });
+
+  it('leaves the waitlist alone when the capacity is not sent', async () => {
+    const rpcCalls = stubSupabase(Response.json([]));
+
+    const res = await patch({name: '新しい名前'});
+
+    expect(res.status).toBe(200);
+    expect(rpcCalls).toEqual([]);
+  });
+
+  // The update is committed; a failed promotion must not report it as not.
+  it('still answers 200 when the promotion fails', async () => {
+    stubSupabase(Response.json({message: 'boom'}, {status: 500}));
+    const originalConsoleError = console.error;
+    console.error = () => {};
+    try {
+      const res = await patch({capacity: null});
+
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as {capacity: unknown}).capacity).toBe(60);
+    } finally {
+      console.error = originalConsoleError;
+    }
+  });
+});
+
 describe('GET /tournaments/:regionSlug/:tournamentSlug (entry period)', () => {
   const originalFetch = globalThis.fetch;
   const path = '/api/tournaments/some-region/saikyoi';

@@ -56,20 +56,98 @@ export async function promoteNextWaitlistedEntry(
   }
 
   const tournamentName = await readTournamentName(env, tournamentId);
+  await sendPromotionMail(
+    env,
+    promoted.participant_email,
+    tournamentName,
+    'cancellation',
+  );
+}
+
+/**
+ * Promotes as many waitlisted entries for `tournamentId` as there are free
+ * seats -- every one of them when the tournament has no capacity -- and
+ * notifies each participant (#223). For after the capacity was raised or
+ * cleared; does nothing when there is no free seat or nobody waiting.
+ *
+ * The promotion is the `promote_waitlisted_entries` Postgres function (0037),
+ * which counts the seats and promotes the queue head under the same
+ * tournament lock as `promoteNextWaitlistedEntry()`.
+ *
+ * The promotions are committed before any mail goes out, so a mail that
+ * fails is logged and the rest are still sent: throwing would report the
+ * promotions as not having happened.
+ * @param env The Worker bindings.
+ * @param tournamentId The tournament whose capacity changed.
+ * @return How many entries were promoted.
+ * @throws {Error} If the promotion itself fails.
+ */
+export async function promoteWaitlistedEntries(
+  env: Bindings,
+  tournamentId: string,
+): Promise<number> {
+  const db = createDbClient(env);
+  const {data, error} = await db.rpc('promote_waitlisted_entries', {
+    p_tournament_id: tournamentId,
+  });
+  if (error) {
+    throw new Error(error.message);
+  }
+  // Untyped client: see `promoteNextWaitlistedEntry()`.
+  const promoted = (data as PromotedEntryRow[] | null) ?? [];
+  if (promoted.length === 0) {
+    return 0;
+  }
+
+  const tournamentName = await readTournamentName(env, tournamentId);
+  for (const entry of promoted) {
+    try {
+      await sendPromotionMail(
+        env,
+        entry.participant_email,
+        tournamentName,
+        'capacity',
+      );
+    } catch (e: unknown) {
+      console.error('failed to send the waitlist promotion mail', {
+        tournamentId,
+        entryId: entry.entry_id,
+        error: e,
+      });
+    }
+  }
+  return promoted.length;
+}
+
+/**
+ * Tells a participant their waitlisted entry was confirmed.
+ * @param env The Worker bindings.
+ * @param email The participant's address.
+ * @param tournamentName The tournament's display name, or `undefined` when
+ *     it couldn't be read.
+ * @param reason Why a seat came free: someone cancelled, or staff changed
+ *     the capacity.
+ */
+async function sendPromotionMail(
+  env: Bindings,
+  email: string,
+  tournamentName: string | undefined,
+  reason: 'cancellation' | 'capacity',
+): Promise<void> {
   const promotedTo =
     tournamentName === undefined
       ? 'キャンセル待ちをしていた大会'
       : `キャンセル待ちをしていた「${tournamentName}」`;
+  const because =
+    reason === 'cancellation'
+      ? 'でキャンセルが出たため'
+      : 'の定員が変更されたため';
   await createMailSender(env).send(
-    buildSystemMail(
-      promoted.participant_email,
-      waitlistPromotionSubject(tournamentName),
-      [
-        `${promotedTo}でキャンセルが出たため、あなたのエントリーが確定しました。`,
-        'エントリーの内容は、マイページから確認できます。参加できなくなった場合は、マイページからエントリーをキャンセルしてください。',
-        {label: 'マイページ', url: `${env.FRONTEND_URL}/mypage`},
-      ],
-    ),
+    buildSystemMail(email, waitlistPromotionSubject(tournamentName), [
+      `${promotedTo}${because}、あなたのエントリーが確定しました。`,
+      'エントリーの内容は、マイページから確認できます。参加できなくなった場合は、マイページからエントリーをキャンセルしてください。',
+      {label: 'マイページ', url: `${env.FRONTEND_URL}/mypage`},
+    ]),
   );
 }
 
