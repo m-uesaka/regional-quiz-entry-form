@@ -1,19 +1,25 @@
 import {afterAll, afterEach, beforeAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
+import type {TournamentImportSelection} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
 import {
-  defaultEntryClosesAt,
   importTournaments,
+  parseCapacity,
+  parseJstDateTime,
   parseTournamentIndex,
+  previewTournamentImport,
   TournamentIndexError,
 } from './tournament-bulk-import';
 
+// The 大会一覧 sheet's header, as the sheet staff use has it.
 const HEADER = [
   '地域',
   '種別',
   '実施日',
-  '実施日（大会情報シートの表記）',
+  '定員',
+  'エントリー開始',
+  'エントリー終了',
   'スプレッドシート名',
   'スプレッドシートID',
   'URL',
@@ -27,7 +33,9 @@ describe('parseTournamentIndex', () => {
         '北海道',
         '最強位',
         '2026/12/26（土）',
-        '12/26（土）',
+        '54',
+        '2026/11/04 21:00:00',
+        '2026/12/16 23:59:59',
         'name',
         'sheet-1',
       ],
@@ -38,7 +46,9 @@ describe('parseTournamentIndex', () => {
         row: 2,
         regionName: '北海道',
         typeLabel: '最強位',
-        eventDate: '2026/12/26（土）',
+        capacity: '54',
+        entryOpensAt: '2026/11/04 21:00:00',
+        entryClosesAt: '2026/12/16 23:59:59',
         spreadsheetId: 'sheet-1',
       },
     ]);
@@ -46,13 +56,22 @@ describe('parseTournamentIndex', () => {
 
   it('copes with the columns being moved', () => {
     const rows = parseTournamentIndex([
-      ['スプレッドシートID', '実施日', '種別', '地域'],
-      ['sheet-1', '2026/12/26', '新人王', '東北'],
+      [
+        'スプレッドシートID',
+        'エントリー終了',
+        'エントリー開始',
+        '定員',
+        '種別',
+        '地域',
+      ],
+      ['sheet-1', '2026/12/18 23:59', '2026/10/31 0:00', '', '新人王', '東北'],
     ]);
 
     expect(rows[0]).toMatchObject({
       regionName: '東北',
       typeLabel: '新人王',
+      capacity: '',
+      entryOpensAt: '2026/10/31 0:00',
       spreadsheetId: 'sheet-1',
     });
   });
@@ -61,34 +80,65 @@ describe('parseTournamentIndex', () => {
     const rows = parseTournamentIndex([
       HEADER,
       [],
-      ['北海道', '最強位', '2026/12/26', '', '', 'sheet-1'],
+      ['北海道', '最強位', '', '', '', '', '', 'sheet-1'],
     ]);
 
     expect(rows.map(row => row.row)).toEqual([3]);
   });
 
   it('refuses a sheet without one of the columns', () => {
+    // The 大会一覧 before 定員 and the entry period had their own columns.
     expect(() =>
-      parseTournamentIndex([['地域', '種別', '実施日'], ['北海道']]),
+      parseTournamentIndex([
+        ['地域', '種別', '実施日', 'スプレッドシートID'],
+        ['北海道'],
+      ]),
     ).toThrow(TournamentIndexError);
   });
 });
 
-describe('defaultEntryClosesAt', () => {
-  it('closes entry at 23:59 JST on the day before', () => {
-    expect(defaultEntryClosesAt('2026/12/26（土）')).toBe(
-      '2026-12-25T14:59:00.000Z',
+describe('parseJstDateTime', () => {
+  it('reads the date-time on the sheet as Japan time', () => {
+    expect(parseJstDateTime('2026/11/04 21:00:00')).toBe(
+      '2026-11-04T12:00:00.000Z',
+    );
+    expect(parseJstDateTime('2026/12/16 23:59:59')).toBe(
+      '2026-12-16T14:59:59.000Z',
+    );
+    // Midnight, as the sheet displays it: no leading zero on the hour.
+    expect(parseJstDateTime('2026/10/31 0:00:00')).toBe(
+      '2026-10-30T15:00:00.000Z',
+    );
+    expect(parseJstDateTime('2026-10-31 21:00')).toBe(
+      '2026-10-31T12:00:00.000Z',
     );
   });
 
-  it('crosses month and year boundaries', () => {
-    expect(defaultEntryClosesAt('2027/01/01')).toBe('2026-12-31T14:59:00.000Z');
-    expect(defaultEntryClosesAt('2026-03-01')).toBe('2026-02-28T14:59:00.000Z');
+  it('reads nothing that is not a date and time', () => {
+    for (const cell of [
+      '',
+      '調整中',
+      '2026/12/16',
+      '12/16 23:59',
+      '2026/02/30 12:00',
+      '2026/12/16 24:00',
+    ]) {
+      expect(parseJstDateTime(cell)).toBeNull();
+    }
+  });
+});
+
+describe('parseCapacity', () => {
+  it('reads a whole number, or blank as no capacity', () => {
+    expect(parseCapacity('54')).toBe(54);
+    expect(parseCapacity('1,000')).toBe(1000);
+    expect(parseCapacity('60人')).toBe(60);
+    expect(parseCapacity('')).toBeNull();
   });
 
-  it('reads nothing that is not a date', () => {
-    for (const cell of ['', '調整中', '12/26', '2026/02/30']) {
-      expect(defaultEntryClosesAt(cell)).toBeNull();
+  it('refuses anything else', () => {
+    for (const cell of ['0', '-5', '12.5', '未定', '五十']) {
+      expect(parseCapacity(cell)).toBeUndefined();
     }
   });
 });
@@ -256,6 +306,10 @@ describe.skipIf(!(await isDbReachable()))(
     });
 
     const NOW = new Date('2026-11-01T00:00:00.000Z');
+    const OPENS = '2026/11/04 21:00:00';
+    const OPENS_ISO = '2026-11-04T12:00:00.000Z';
+    const CLOSES = '2026/12/16 23:59:59';
+    const CLOSES_ISO = '2026-12-16T14:59:59.000Z';
 
     const FORM_ROWS = [
       ['tshirt_size', 'T シャツのサイズ', 'ラジオボタン', '必須', 'S, M, L'],
@@ -269,10 +323,27 @@ describe.skipIf(!(await isDbReachable()))(
     function indexRow(
       region: string,
       type: string,
-      date: string,
       sheetId: string,
+      period: {capacity?: string; opens?: string; closes?: string} = {},
     ): unknown[] {
-      return [region, type, date, '', '', sheetId];
+      return [
+        region,
+        type,
+        '2026/12/26（土）',
+        period.capacity ?? '',
+        period.opens ?? OPENS,
+        period.closes ?? CLOSES,
+        '',
+        sheetId,
+      ];
+    }
+
+    function select(
+      regionName: string,
+      typeLabel: string,
+      action: TournamentImportSelection['action'],
+    ): TournamentImportSelection {
+      return {regionName, typeLabel, action};
     }
 
     async function tournamentOf(region: string, type: string) {
@@ -292,34 +363,67 @@ describe.skipIf(!(await isDbReachable()))(
         | undefined;
     }
 
-    it('registers a tournament with its form definition and regulations', async () => {
+    it('previews a new tournament without writing anything', async () => {
       indexValues = [
         HEADER,
-        indexRow(regionA, '最強位', '2026/12/26（土）', 's1'),
+        indexRow(regionA, '最強位', 's1', {capacity: '54'}),
       ];
       entrySheets = {
         s1: {formRows: FORM_ROWS, regulationRows: REGULATION_ROWS},
       };
       stubSheets();
 
-      const [result] = await importTournaments(env, 'index', NOW);
+      const [row] = await previewTournamentImport(env, 'index', NOW);
+
+      expect(row).toEqual({
+        row: 2,
+        regionName: regionA,
+        typeLabel: '最強位',
+        action: 'create',
+        error: null,
+        capacity: 54,
+        entryOpensAt: OPENS_ISO,
+        entryClosesAt: CLOSES_ISO,
+        formFieldLabels: ['T シャツのサイズ', '備考'],
+        regulationLabels: ['開催地域に在住の方', '上記以外の方'],
+        current: null,
+      });
+      expect(await tournamentOf(regionA, 'saikyoi')).toBeUndefined();
+    });
+
+    it('registers a tournament with its form definition and regulations', async () => {
+      indexValues = [
+        HEADER,
+        indexRow(regionA, '最強位', 's1', {capacity: '54'}),
+      ];
+      entrySheets = {
+        s1: {formRows: FORM_ROWS, regulationRows: REGULATION_ROWS},
+      };
+      stubSheets();
+
+      const [result] = await importTournaments(
+        env,
+        'index',
+        [select(regionA, '最強位', 'create')],
+        NOW,
+      );
 
       expect(result).toMatchObject({
         row: 2,
         outcome: 'created',
         type: 'saikyoi',
-        entryOpensAt: NOW.toISOString(),
-        entryClosesAt: '2026-12-25T14:59:00.000Z',
+        capacity: 54,
+        entryOpensAt: OPENS_ISO,
+        entryClosesAt: CLOSES_ISO,
         error: null,
       });
       const tournament = await tournamentOf(regionA, 'saikyoi');
       expect(tournament?.id).toBe(result.tournamentId as string);
       // Left blank: the default name (地域名＋種別) is used.
       expect(tournament?.name).toBeNull();
-      expect(tournament?.entry_opens_at.toISOString()).toBe(NOW.toISOString());
-      expect(tournament?.entry_closes_at.toISOString()).toBe(
-        '2026-12-25T14:59:00.000Z',
-      );
+      expect(tournament?.capacity).toBe(54);
+      expect(tournament?.entry_opens_at.toISOString()).toBe(OPENS_ISO);
+      expect(tournament?.entry_closes_at.toISOString()).toBe(CLOSES_ISO);
       const fields = await sql`
         select field_key, field_type, required, options from form_field_defs
         where tournament_id = ${result.tournamentId} order by display_order
@@ -350,20 +454,50 @@ describe.skipIf(!(await isDbReachable()))(
       expect(regulations[1].priority_starts_at).toBeNull();
     });
 
-    it('overwrites a registered tournament, keeping what the sheet does not carry', async () => {
+    it('previews a registered tournament as an overwrite, with what it holds now', async () => {
+      const before = await tournamentOf(regionA, 'saikyoi');
+      await sql`
+        update tournaments set name = '手で付けた名前' where id = ${before?.id}
+      `;
+      indexValues = [
+        HEADER,
+        indexRow(regionA, '最強位', 's1', {
+          capacity: '40',
+          opens: '2026/11/10 0:00:00',
+          closes: '2026/12/20 23:59:59',
+        }),
+      ];
+      stubSheets();
+
+      const [row] = await previewTournamentImport(env, 'index', NOW);
+
+      expect(row).toMatchObject({
+        action: 'overwrite',
+        capacity: 40,
+        entryOpensAt: '2026-11-09T15:00:00.000Z',
+        current: {
+          tournamentId: before?.id,
+          name: '手で付けた名前',
+          capacity: 54,
+          entryOpensAt: OPENS_ISO,
+          entryClosesAt: CLOSES_ISO,
+        },
+      });
+    });
+
+    it('overwrites a registered tournament, keeping its name', async () => {
       const before = await tournamentOf(regionA, 'saikyoi');
       expect(before).toBeDefined();
-      await sql`
-        update tournaments set name = '手で付けた名前', capacity = 40
-        where id = ${before?.id}
-      `;
       const [regulationBefore] = await sql`
         select id from regulations
         where tournament_id = ${before?.id} and label = '上記以外の方'
       `;
       indexValues = [
         HEADER,
-        indexRow(regionA, '最強位', '2026/12/27（日）', 's1'),
+        indexRow(regionA, '最強位', 's1', {
+          opens: '2026/11/10 0:00:00',
+          closes: '2026/12/20 23:59:59',
+        }),
       ];
       entrySheets = {
         s1: {
@@ -372,22 +506,31 @@ describe.skipIf(!(await isDbReachable()))(
         },
       };
       stubSheets();
-      const later = new Date('2026-11-02T00:00:00.000Z');
 
-      const [result] = await importTournaments(env, 'index', later);
+      const [result] = await importTournaments(
+        env,
+        'index',
+        [select(regionA, '最強位', 'overwrite')],
+        NOW,
+      );
 
-      // A re-run must not move an opening already set: the one from the
-      // first run (or one staff scheduled since) stays.
       expect(result).toMatchObject({
         outcome: 'updated',
         tournamentId: before?.id,
-        entryOpensAt: NOW.toISOString(),
-        entryClosesAt: '2026-12-26T14:59:00.000Z',
+        capacity: null,
+        entryOpensAt: '2026-11-09T15:00:00.000Z',
+        entryClosesAt: '2026-12-20T14:59:59.000Z',
       });
       const after = await tournamentOf(regionA, 'saikyoi');
       expect(after?.name).toBe('手で付けた名前');
-      expect(after?.capacity).toBe(40);
-      expect(after?.entry_opens_at.toISOString()).toBe(NOW.toISOString());
+      // Blank on the sheet: no capacity.
+      expect(after?.capacity).toBeNull();
+      expect(after?.entry_opens_at.toISOString()).toBe(
+        '2026-11-09T15:00:00.000Z',
+      );
+      expect(after?.entry_closes_at.toISOString()).toBe(
+        '2026-12-20T14:59:59.000Z',
+      );
       const fields = await sql`
         select field_key from form_field_defs where tournament_id = ${before?.id}
       `;
@@ -398,6 +541,76 @@ describe.skipIf(!(await isDbReachable()))(
         where tournament_id = ${before?.id} and label = '上記以外の方'
       `;
       expect(regulationAfter.id).toBe(regulationBefore.id);
+    });
+
+    // Someone else registered or deleted the tournament after the preview:
+    // what staff chose no longer fits, so nothing is done.
+    it('does only what was chosen', async () => {
+      indexValues = [
+        HEADER,
+        indexRow(regionA, '最強位', 's1', {capacity: '99'}),
+        indexRow(regionB, '最強位', 's1', {capacity: '99'}),
+      ];
+      entrySheets = {
+        s1: {formRows: FORM_ROWS, regulationRows: REGULATION_ROWS},
+      };
+      stubSheets();
+
+      const results = await importTournaments(
+        env,
+        'index',
+        [
+          select(regionA, '最強位', 'create'),
+          select(regionB, '最強位', 'overwrite'),
+        ],
+        NOW,
+      );
+
+      expect(results.map(r => r.outcome)).toEqual(['failed', 'failed']);
+      expect(results[0].error).toContain('別の操作で登録されました');
+      expect(results[1].error).toContain('別の操作で削除されました');
+      expect((await tournamentOf(regionA, 'saikyoi'))?.capacity).toBeNull();
+      expect(await tournamentOf(regionB, 'saikyoi')).toBeUndefined();
+    });
+
+    it('registers only the rows chosen', async () => {
+      indexValues = [
+        HEADER,
+        indexRow(regionA, '最強位', 's1', {capacity: '99'}),
+        indexRow(regionB, '最強位', 's1'),
+      ];
+      entrySheets = {
+        s1: {formRows: FORM_ROWS, regulationRows: REGULATION_ROWS},
+      };
+      stubSheets();
+
+      const results = await importTournaments(
+        env,
+        'index',
+        [select(regionB, '最強位', 'create')],
+        NOW,
+      );
+
+      expect(results.map(r => [r.row, r.outcome])).toEqual([[3, 'created']]);
+      // Not chosen, so left as it was.
+      expect((await tournamentOf(regionA, 'saikyoi'))?.capacity).toBeNull();
+      expect(requestedSheetIds).toEqual(['s1']);
+      await sql`delete from tournaments where id = ${results[0].tournamentId}`;
+    });
+
+    it('reports a chosen row that is no longer on the sheet', async () => {
+      indexValues = [HEADER];
+      stubSheets();
+
+      const [result] = await importTournaments(
+        env,
+        'index',
+        [select(regionB, '新人王', 'create')],
+        NOW,
+      );
+
+      expect(result).toMatchObject({row: null, outcome: 'failed'});
+      expect(result.error).toContain('見つかりません');
     });
 
     it('writes nothing of a tournament whose regulations are still in use', async () => {
@@ -423,7 +636,10 @@ describe.skipIf(!(await isDbReachable()))(
         insert into entry_regulations (entry_id, regulation_id, tournament_id)
         values (${entry.id}, ${regulation.id}, ${tournament?.id})
       `;
-      indexValues = [HEADER, indexRow(regionA, '最強位', '2026/12/28', 's1')];
+      indexValues = [
+        HEADER,
+        indexRow(regionA, '最強位', 's1', {closes: '2026/12/28 23:59'}),
+      ];
       entrySheets = {
         s1: {
           formRows: FORM_ROWS,
@@ -435,7 +651,8 @@ describe.skipIf(!(await isDbReachable()))(
       const [result] = await importTournaments(
         env,
         'index',
-        new Date('2026-11-03T00:00:00.000Z'),
+        [select(regionA, '最強位', 'overwrite')],
+        NOW,
       );
 
       expect(result.outcome).toBe('failed');
@@ -443,7 +660,7 @@ describe.skipIf(!(await isDbReachable()))(
       // Rolled back as a whole: the entry period and the form are as before.
       const after = await tournamentOf(regionA, 'saikyoi');
       expect(after?.entry_closes_at.toISOString()).toBe(
-        '2026-12-26T14:59:00.000Z',
+        '2026-12-20T14:59:59.000Z',
       );
       const fields = await sql`
         select field_key from form_field_defs where tournament_id = ${tournament?.id}
@@ -451,15 +668,16 @@ describe.skipIf(!(await isDbReachable()))(
       expect(fields).toEqual([{field_key: 'notes'}]);
     });
 
-    it('reports each failed row and registers the rest', async () => {
+    it('previews why each row that cannot be registered cannot', async () => {
       indexValues = [
         HEADER,
-        indexRow('存在しない地域', '最強位', '2026/12/26', 's1'),
-        indexRow(regionB, '宮崎', '2026/12/26', 's1'),
-        indexRow(regionB, '新人王', '', 's1'),
-        indexRow(regionB, '新人王', '2026/10/01', 's1'),
-        indexRow(regionA, '新人王', '2026/12/26', 'missing-tab'),
-        indexRow(regionB, '最強位', '2026/12/20', 's1'),
+        indexRow('存在しない地域', '最強位', 's1'),
+        indexRow(regionB, '宮崎', 's1'),
+        indexRow(regionB, '新人王', 's1', {capacity: '未定'}),
+        indexRow(regionB, '最強位', 's1', {opens: '調整中'}),
+        indexRow(regionB, '最強位', 's1', {closes: '2026/12/16'}),
+        indexRow(regionA, '新人王', 'missing-tab'),
+        indexRow(regionA, '新人王', 's1'),
       ];
       entrySheets = {
         s1: {formRows: FORM_ROWS, regulationRows: REGULATION_ROWS},
@@ -467,44 +685,66 @@ describe.skipIf(!(await isDbReachable()))(
       };
       stubSheets();
 
-      const results = await importTournaments(env, 'index', NOW);
+      const rows = await previewTournamentImport(env, 'index', NOW);
 
-      expect(results.map(r => [r.row, r.outcome])).toEqual([
-        [2, 'failed'],
-        [3, 'failed'],
-        [4, 'failed'],
-        [5, 'failed'],
-        [6, 'failed'],
-        [7, 'created'],
+      expect(rows.map(r => [r.row, r.action])).toEqual([
+        [2, null],
+        [3, null],
+        [4, null],
+        [5, null],
+        [6, null],
+        [7, null],
+        [8, null],
       ]);
-      expect(results[0].error).toContain(
+      expect(rows[0].error).toContain(
         '地域「存在しない地域」が登録されていません',
       );
-      expect(results[1].error).toContain('種別「宮崎」');
-      // Rows 4 and 5 are both 地域B 新人王, so neither is registered.
-      expect(results[2].error).toContain('5行目');
-      expect(results[3].error).toContain('4行目');
-      expect(results[4].error).toContain('レギュレーション');
+      expect(rows[1].error).toContain('種別「宮崎」');
+      expect(rows[2].error).toContain('定員「未定」');
+      // Rows 5 and 6 are both 地域B 最強位, so neither is registered.
+      expect(rows[3].error).toContain('6行目');
+      expect(rows[4].error).toContain('5行目');
+      expect(rows[5].error).toContain('8行目');
+      expect(rows[6].error).toContain('7行目');
+
+      indexValues = [
+        HEADER,
+        indexRow(regionB, '最強位', 's1', {opens: '調整中'}),
+        indexRow(regionB, '新人王', 's1', {closes: '2026/12/16'}),
+        indexRow(regionA, '新人王', 'missing-tab'),
+      ];
+      const single = await previewTournamentImport(env, 'index', NOW);
+      expect(single[0].error).toContain('エントリー開始「調整中」');
+      expect(single[1].error).toContain('エントリー終了「2026/12/16」');
+      expect(single[2].error).toContain('レギュレーション');
       expect(await tournamentOf(regionB, 'shinjinou')).toBeUndefined();
-      expect(await tournamentOf(regionA, 'shinjinou')).toBeUndefined();
-      expect(await tournamentOf(regionB, 'saikyoi')).toBeDefined();
     });
 
-    it('refuses a tournament whose entry would already have closed', async () => {
-      indexValues = [HEADER, indexRow(regionB, '新人王', '2026/11/01', 's1')];
+    it('refuses an entry period that is reversed or already over', async () => {
+      indexValues = [
+        HEADER,
+        indexRow(regionB, '新人王', 's1', {
+          opens: '2026/12/20 0:00',
+          closes: '2026/12/10 0:00',
+        }),
+        indexRow(regionB, '最強位', 's1', {
+          opens: '2026/10/01 0:00',
+          closes: '2026/10/31 23:59',
+        }),
+      ];
       entrySheets = {
         s1: {formRows: FORM_ROWS, regulationRows: REGULATION_ROWS},
       };
       stubSheets();
 
-      const [result] = await importTournaments(env, 'index', NOW);
+      const rows = await previewTournamentImport(env, 'index', NOW);
 
-      expect(result.outcome).toBe('failed');
-      expect(result.error).toContain('締切');
+      expect(rows[0].error).toContain('エントリー開始がエントリー終了より後');
+      expect(rows[1].error).toContain('既に過ぎています');
     });
 
     it('refuses a form definition the sheet gets wrong', async () => {
-      indexValues = [HEADER, indexRow(regionB, '新人王', '2026/12/26', 's1')];
+      indexValues = [HEADER, indexRow(regionB, '新人王', 's1')];
       entrySheets = {
         s1: {
           formRows: [['notes', '備考', 'プルダウン', '任意']],
@@ -513,7 +753,12 @@ describe.skipIf(!(await isDbReachable()))(
       };
       stubSheets();
 
-      const [result] = await importTournaments(env, 'index', NOW);
+      const [result] = await importTournaments(
+        env,
+        'index',
+        [select(regionB, '新人王', 'create')],
+        NOW,
+      );
 
       expect(result.outcome).toBe('failed');
       expect(result.error).toContain('プルダウン');
@@ -523,7 +768,7 @@ describe.skipIf(!(await isDbReachable()))(
     // The form tab is read as displayed, as the edit screen's import reads
     // it; its value would turn `10%` into `0.1`.
     it('keeps form cells as the sheet displays them', async () => {
-      indexValues = [HEADER, indexRow(regionB, '新人王', '2026/12/26', 's1')];
+      indexValues = [HEADER, indexRow(regionB, '新人王', 's1')];
       entrySheets = {
         s1: {
           formRows: [
@@ -540,7 +785,12 @@ describe.skipIf(!(await isDbReachable()))(
       };
       stubSheets();
 
-      const [result] = await importTournaments(env, 'index', NOW);
+      const [result] = await importTournaments(
+        env,
+        'index',
+        [select(regionB, '新人王', 'create')],
+        NOW,
+      );
 
       expect(result.outcome).toBe('created');
       const [field] = await sql`
@@ -558,7 +808,6 @@ describe.skipIf(!(await isDbReachable()))(
         indexRow(
           regionB,
           '新人王',
-          '2026/12/26',
           'https://docs.google.com/spreadsheets/d/s1/edit?gid=0#gid=0',
         ),
       ];
@@ -567,7 +816,12 @@ describe.skipIf(!(await isDbReachable()))(
       };
       stubSheets();
 
-      const [result] = await importTournaments(env, 'index', NOW);
+      const [result] = await importTournaments(
+        env,
+        'index',
+        [select(regionB, '新人王', 'create')],
+        NOW,
+      );
 
       expect(result.outcome).toBe('created');
       expect(requestedSheetIds).toEqual(['s1']);
@@ -598,14 +852,14 @@ describe.skipIf(!(await isDbReachable()))(
         ],
       ];
       for (const [formRows, message] of cases) {
-        indexValues = [HEADER, indexRow(regionB, '新人王', '2026/12/26', 's1')];
+        indexValues = [HEADER, indexRow(regionB, '新人王', 's1')];
         entrySheets = {s1: {formRows, regulationRows: REGULATION_ROWS}};
         stubSheets();
 
-        const [result] = await importTournaments(env, 'index', NOW);
+        const [row] = await previewTournamentImport(env, 'index', NOW);
 
-        expect(result.outcome).toBe('failed');
-        expect(result.error).toStartWith(message);
+        expect(row.action).toBeNull();
+        expect(row.error).toStartWith(message);
       }
       expect(await tournamentOf(regionB, 'shinjinou')).toBeUndefined();
     });

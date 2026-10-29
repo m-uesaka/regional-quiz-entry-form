@@ -14,24 +14,105 @@ export function spreadsheetIdFromInput(input: string): string {
   return SPREADSHEET_URL_PATTERN.exec(input)?.[1] ?? input;
 }
 
-// Request body of `POST /api/sheet-import/tournaments` (#168): the 大会一覧
-// spreadsheet to register every tournament from. Its URL is accepted as
-// well as its ID.
+// The 大会一覧 spreadsheet's ID, or its URL.
+const IndexSpreadsheetIdSchema = z
+  .string()
+  .trim()
+  .min(1, {message: 'スプレッドシートの ID または URL を入力してください'})
+  .transform(spreadsheetIdFromInput);
+
+// Request body of `POST /api/sheet-import/tournaments/preview` (#168): the
+// 大会一覧 spreadsheet to read. Nothing is written; the answer says, row by
+// row, what registering it would do.
 export const TournamentBulkImportRequestSchema = z.object({
-  spreadsheetId: z
-    .string()
-    .trim()
-    .min(1, {message: 'スプレッドシートの ID または URL を入力してください'})
-    .transform(spreadsheetIdFromInput),
+  spreadsheetId: IndexSpreadsheetIdSchema,
 });
 export type TournamentBulkImportRequest = z.infer<
   typeof TournamentBulkImportRequestSchema
 >;
 
-// What happened to one row of the 大会一覧 sheet. `created` / `updated`
-// mean the tournament, its form definition and its regulations were all
-// written; `failed` means nothing of that tournament was, and `error` says
-// why -- staff register those by hand.
+// What registering a row does: create a tournament, or overwrite the one
+// already registered for the same region and type.
+export const TournamentImportActionSchema = z.enum(['create', 'overwrite']);
+export type TournamentImportAction = z.infer<
+  typeof TournamentImportActionSchema
+>;
+
+// One tournament staff chose to register on the preview screen. A row is
+// named by its 地域 / 種別 cells rather than its row number, so a row moved
+// on the sheet since the preview is still the one meant. `action` is what
+// the preview offered; if the tournament has since been created or deleted
+// by someone else, the row fails rather than doing the other thing.
+export const TournamentImportSelectionSchema = z.object({
+  regionName: z.string(),
+  typeLabel: z.string(),
+  action: TournamentImportActionSchema,
+});
+export type TournamentImportSelection = z.infer<
+  typeof TournamentImportSelectionSchema
+>;
+
+// Request body of `POST /api/sheet-import/tournaments`: registers the
+// chosen rows of the 大会一覧 spreadsheet, reading it again.
+export const TournamentBulkImportExecuteRequestSchema = z.object({
+  spreadsheetId: IndexSpreadsheetIdSchema,
+  selections: z
+    .array(TournamentImportSelectionSchema)
+    .min(1, {message: '登録する大会を選んでください'}),
+});
+export type TournamentBulkImportExecuteRequest = z.infer<
+  typeof TournamentBulkImportExecuteRequestSchema
+>;
+
+const InstantSchema = z.string().datetime({offset: true});
+
+// The tournament already registered for a row's region and type, as it is
+// now, so the preview can show what an overwrite would change.
+export const TournamentImportCurrentSchema = z.object({
+  tournamentId: z.string().uuid(),
+  name: z.string(),
+  capacity: z.number().int().positive().nullable(),
+  entryOpensAt: InstantSchema,
+  entryClosesAt: InstantSchema,
+});
+export type TournamentImportCurrent = z.infer<
+  typeof TournamentImportCurrentSchema
+>;
+
+export const TournamentImportPreviewRowSchema = z.object({
+  /** The row of the 大会一覧 sheet, as the sheet numbers it. */
+  row: z.number().int().positive(),
+  /** The 地域 / 種別 cells as written; they name the row on execute. */
+  regionName: z.string(),
+  typeLabel: z.string(),
+  /** What registering the row would do; null when it can't be registered. */
+  action: TournamentImportActionSchema.nullable(),
+  /** Set when `action` is null; staff-facing Japanese. */
+  error: z.string().nullable(),
+  /** The values the sheet gives; null when the row can't be registered. */
+  capacity: z.number().int().positive().nullable(),
+  entryOpensAt: InstantSchema.nullable(),
+  entryClosesAt: InstantSchema.nullable(),
+  /** The labels of the form's extra fields and of the regulations. */
+  formFieldLabels: z.array(z.string()),
+  regulationLabels: z.array(z.string()),
+  /** Set when `action` is `overwrite`. */
+  current: TournamentImportCurrentSchema.nullable(),
+});
+export type TournamentImportPreviewRow = z.infer<
+  typeof TournamentImportPreviewRowSchema
+>;
+
+export const TournamentBulkImportPreviewResponseSchema = z.object({
+  rows: z.array(TournamentImportPreviewRowSchema),
+});
+export type TournamentBulkImportPreviewResponse = z.infer<
+  typeof TournamentBulkImportPreviewResponseSchema
+>;
+
+// What happened to one chosen row. `created` / `updated` mean the
+// tournament, its form definition and its regulations were all written;
+// `failed` means nothing of that tournament was, and `error` says why.
 export const TournamentImportOutcomeSchema = z.enum([
   'created',
   'updated',
@@ -42,8 +123,8 @@ export type TournamentImportOutcome = z.infer<
 >;
 
 export const TournamentImportResultSchema = z.object({
-  /** The row of the 大会一覧 sheet, as the sheet numbers it. */
-  row: z.number().int().positive(),
+  /** The row of the 大会一覧 sheet; null for a row no longer on it. */
+  row: z.number().int().positive().nullable(),
   /** The 地域 / 種別 cells as written, so a failed row can be found. */
   regionName: z.string(),
   typeLabel: z.string(),
@@ -51,8 +132,9 @@ export const TournamentImportResultSchema = z.object({
   /** Set when the tournament was written. */
   tournamentId: z.string().uuid().nullable(),
   type: TournamentTypeSchema.nullable(),
-  entryOpensAt: z.string().datetime({offset: true}).nullable(),
-  entryClosesAt: z.string().datetime({offset: true}).nullable(),
+  capacity: z.number().int().positive().nullable(),
+  entryOpensAt: InstantSchema.nullable(),
+  entryClosesAt: InstantSchema.nullable(),
   /** Set when `outcome` is `failed`; staff-facing Japanese. */
   error: z.string().nullable(),
 });

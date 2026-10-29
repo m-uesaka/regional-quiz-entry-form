@@ -521,11 +521,11 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 - 「無効でないか」の判定と書き込みが同じロックの下にあるので、無効化(`disable_staff_account()`)や有効化と同時に走っても、無効なアカウントに使えるリンクが残ることはありません。リンクが書かれるのは、書き込みの時点で有効なアカウントに対してだけです。
 
-### import_tournament(p_region_id, p_type, p_entry_opens_at, p_entry_closes_at, p_form_fields, p_regulations)
+### import_tournament(p_region_id, p_type, p_overwrite, p_capacity, p_entry_opens_at, p_entry_closes_at, p_form_fields, p_regulations)
 
-大会一覧のスプレッドシートからの一括登録(#168、`POST /api/sheet-import/tournaments`)で、1 大会ぶんを登録します(`0028`)。返り値は `(tournament_id, created, entry_opens_at)`。
+大会一覧のスプレッドシートからの一括登録(#168、`POST /api/sheet-import/tournaments`)で、1 大会ぶんを登録します(`0028`、`0036` で再定義)。返り値は `(tournament_id, created)`。
 
-1. `tournaments` に `(region_id, type)` で upsert する。既にあればエントリーの**締切だけ**を上書きし、開始・大会名・定員は触らない(流し直しで開始が動かないように)。新規なら開始 `p_entry_opens_at`・大会名 null(既定名)・定員 null
+1. `p_overwrite = false`(新規作成)なら `tournaments` に insert する(大会名 null = 既定名)。同じ `(region_id, type)` の大会が既にあれば `P0006` で断る。`p_overwrite = true`(上書き)なら既存の大会の定員・エントリー開始・締切を置き換える(大会名は触らない)。大会が無ければ `P0006`。統括スタッフが一括登録の確認画面で選んだ操作以外をしないため
 2. `sync_form_field_defs()` でフォーム定義を置き換える
 3. `p_regulations`(id なし)の各要素を、同じ大会の既存レギュレーションと**名前で**突き合わせて id を付けてから `sync_regulations()` に渡す。突き合わせないと既存の行はすべて削除扱いになり、エントリーが 1 件でもあると `P0004` で失敗するため
 
@@ -598,3 +598,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0030_lapse_expired_pending_entries.sql` | 確認リンクの期限が切れた参加者の確定待ちエントリーを `cancelled` にする `lapse_expired_pending_entries()`(#172)。エントリー処理の最初に呼ぶ |
 | `0031_add_staff_password_link_fn.sql` | スタッフ本人の再設定申し込み(#175)用に、既存の有効なリンクを消さずに書き足す `add_staff_password_link()`。期限切れのリンクは削除し、無効なアカウントは断る |
 | `0034_participants_email_verified_at.sql` | `participants.email_verified_at` を追加して確定済みエントリーから埋め戻し、`confirm_entry_by_token()` を確定時に参加者を確認済みにするよう再定義、未確認アカウントを上書きする `take_over_unverified_participant()` を追加(#189) |
+| `0036_import_tournament_explicit_period.sql` | 大会一覧に定員・エントリー開始・終了の列ができたのに合わせ、`import_tournament()` を定員・開始も書き込み、新規作成か上書きかを引数で受け取ってその通りにしか書かない(合わなければ `P0006`)よう再定義 |

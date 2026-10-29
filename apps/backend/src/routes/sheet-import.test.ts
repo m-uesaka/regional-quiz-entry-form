@@ -393,18 +393,109 @@ describe('sheet-import routes', () => {
   });
 });
 
-describe('POST /api/sheet-import/tournaments', () => {
-  /** Posts the bulk import, answering Sheets requests with `sheets`. */
-  async function importFrom(
-    spreadsheetId: string,
-    sheets: (url: URL) => Response | Promise<Response>,
-  ): Promise<{res: Response; urls: URL[]}> {
-    const urls: URL[] = [];
-    globalThis.fetch = staffSessionAwareFetch(((input: RequestInfo | URL) => {
-      const url = new URL(input instanceof Request ? input.url : String(input));
-      urls.push(url);
-      return Promise.resolve(sheets(url));
-    }) as unknown as typeof fetch);
+// The preview and the registration read the 大会一覧 sheet the same way, so
+// the checks on the sheet itself run against both.
+const SELECTIONS = [
+  {regionName: '北海道', typeLabel: '最強位', action: 'create'},
+];
+for (const [path, extraBody] of [
+  ['/api/sheet-import/tournaments/preview', {}],
+  ['/api/sheet-import/tournaments', {selections: SELECTIONS}],
+] as const) {
+  describe(`POST ${path}`, () => {
+    /** Posts to `path`, answering Sheets requests with `sheets`. */
+    async function importFrom(
+      spreadsheetId: string,
+      sheets: (url: URL) => Response | Promise<Response>,
+    ): Promise<{res: Response; urls: URL[]}> {
+      const urls: URL[] = [];
+      globalThis.fetch = staffSessionAwareFetch(((input: RequestInfo | URL) => {
+        const url = new URL(
+          input instanceof Request ? input.url : String(input),
+        );
+        urls.push(url);
+        return Promise.resolve(sheets(url));
+      }) as unknown as typeof fetch);
+      const res = await app.request(
+        path,
+        {
+          method: 'POST',
+          headers: {
+            cookie: await generalStaffCookie(),
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({spreadsheetId, ...extraBody}),
+        },
+        env,
+      );
+      return {res, urls};
+    }
+
+    it('rejects regional staff with 403', async () => {
+      const res = await app.request(
+        path,
+        {
+          method: 'POST',
+          headers: {
+            cookie: await regionalStaffCookie(
+              '00000000-0000-0000-0000-000000000000',
+            ),
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({spreadsheetId: 'index', ...extraBody}),
+        },
+        env,
+      );
+
+      expect(res.status).toBe(403);
+    });
+
+    // Staff paste whatever the address bar shows.
+    it('reads the spreadsheet a pasted URL names', async () => {
+      const {urls} = await importFrom(
+        'https://docs.google.com/spreadsheets/d/abc_DEF-123/edit?gid=0#gid=0',
+        () => Response.json({values: [['地域']]}),
+      );
+
+      expect(urls[0].pathname).toStartWith(
+        '/v4/spreadsheets/abc_DEF-123/values/',
+      );
+    });
+
+    it('answers 400 naming a column the sheet lacks', async () => {
+      const {res} = await importFrom('index', () =>
+        Response.json({
+          values: [
+            ['地域', '種別', '定員', 'エントリー開始', 'エントリー終了'],
+          ],
+        }),
+      );
+
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as {error: string}).error).toContain(
+        'スプレッドシートID',
+      );
+    });
+
+    it('answers 502 when Google Sheets fails', async () => {
+      const originalConsoleError = console.error;
+      console.error = () => {};
+      try {
+        const {res} = await importFrom(
+          'index',
+          () => new Response(null, {status: 500}),
+        );
+
+        expect(res.status).toBe(502);
+      } finally {
+        console.error = originalConsoleError;
+      }
+    });
+  });
+}
+
+describe('POST /api/sheet-import/tournaments (selections)', () => {
+  it('refuses a request choosing no tournament', async () => {
     const res = await app.request(
       '/api/sheet-import/tournaments',
       {
@@ -413,67 +504,11 @@ describe('POST /api/sheet-import/tournaments', () => {
           cookie: await generalStaffCookie(),
           'content-type': 'application/json',
         },
-        body: JSON.stringify({spreadsheetId}),
+        body: JSON.stringify({spreadsheetId: 'index', selections: []}),
       },
       env,
-    );
-    return {res, urls};
-  }
-
-  it('rejects regional staff with 403', async () => {
-    const res = await app.request(
-      '/api/sheet-import/tournaments',
-      {
-        method: 'POST',
-        headers: {
-          cookie: await regionalStaffCookie(
-            '00000000-0000-0000-0000-000000000000',
-          ),
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({spreadsheetId: 'index'}),
-      },
-      env,
-    );
-
-    expect(res.status).toBe(403);
-  });
-
-  // Staff paste whatever the address bar shows.
-  it('reads the spreadsheet a pasted URL names', async () => {
-    const {urls} = await importFrom(
-      'https://docs.google.com/spreadsheets/d/abc_DEF-123/edit?gid=0#gid=0',
-      () => Response.json({values: [['地域']]}),
-    );
-
-    expect(urls[0].pathname).toStartWith(
-      '/v4/spreadsheets/abc_DEF-123/values/',
-    );
-  });
-
-  it('answers 400 naming a column the sheet lacks', async () => {
-    const {res} = await importFrom('index', () =>
-      Response.json({values: [['地域', '種別', '実施日']]}),
     );
 
     expect(res.status).toBe(400);
-    expect(((await res.json()) as {error: string}).error).toContain(
-      'スプレッドシートID',
-    );
-  });
-
-  it('answers 502 when Google Sheets fails', async () => {
-    const originalConsoleError = console.error;
-    console.error = () => {};
-    try {
-      const {res} = await importFrom(
-        'index',
-        () => new Response(null, {status: 500}),
-      );
-
-      expect(res.status).toBe(502);
-    } finally {
-      console.error = originalConsoleError;
-    }
   });
 });
