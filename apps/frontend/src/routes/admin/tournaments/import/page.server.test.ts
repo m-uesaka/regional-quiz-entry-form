@@ -24,6 +24,7 @@ const PREVIEW_ROW: TournamentImportPreviewRow = {
   regionName: '北海道',
   typeLabel: '最強位',
   action: 'create',
+  fingerprint: 'fp-1',
   error: null,
   capacity: 54,
   entryOpensAt: '2026-11-04T12:00:00.000Z',
@@ -33,7 +34,12 @@ const PREVIEW_ROW: TournamentImportPreviewRow = {
   current: null,
 };
 
-const SELECTION = {regionName: '北海道', typeLabel: '最強位', action: 'create'};
+const SELECTION = {
+  regionName: '北海道',
+  typeLabel: '最強位',
+  action: 'create',
+  fingerprint: 'fp-1',
+};
 
 /** One request the action put on the wire. */
 interface ApiCall {
@@ -205,6 +211,22 @@ describe('admin tournament import execute action', () => {
       ),
     ).resolves.toMatchObject({status: 400});
     expect(calls).toEqual([]);
+  });
+
+  it("says the choice was refused when the API's validation rejects it", async () => {
+    const event = buildEvent(
+      fakeFetch({status: 400, body: {success: false, error: {issues: []}}}),
+      'abc123',
+      [],
+      [JSON.stringify(SELECTION)],
+    );
+
+    await expect(actions.execute(event)).resolves.toMatchObject({
+      status: 400,
+      data: {
+        error: '選択した大会を登録できませんでした。もう一度読み込んでください',
+      },
+    });
   });
 
   it('reports an internal failure as one to retry', async () => {

@@ -23,14 +23,15 @@
   const {form}: PageProps = $props();
 
   /**
-   * What a row's checkbox posts: its names and the action the preview
-   * offered, which the API holds the registration to.
+   * What a row's checkbox posts: its names, and the action and fingerprint
+   * the preview offered, which the API holds the registration to.
    */
   function selectionValue(row: TournamentImportPreviewRow): string {
     return JSON.stringify({
       regionName: row.regionName,
       typeLabel: row.typeLabel,
       action: row.action ?? 'create',
+      fingerprint: row.fingerprint ?? '',
     } satisfies TournamentImportSelection);
   }
 

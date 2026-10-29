@@ -338,12 +338,39 @@ describe.skipIf(!(await isDbReachable()))(
       ];
     }
 
+    /** A selection made up by hand, not from a preview. */
     function select(
       regionName: string,
       typeLabel: string,
       action: TournamentImportSelection['action'],
     ): TournamentImportSelection {
-      return {regionName, typeLabel, action};
+      return {regionName, typeLabel, action, fingerprint: 'not-previewed'};
+    }
+
+    /**
+     * The selection the preview screen posts for a row: previews the sheet
+     * as it stands and takes that row's action and fingerprint. The Sheets
+     * requests the preview made are forgotten, so a test sees only those of
+     * the registration.
+     */
+    async function chosen(
+      regionName: string,
+      typeLabel: string,
+    ): Promise<TournamentImportSelection> {
+      const rows = await previewTournamentImport(env, 'index', NOW);
+      requestedSheetIds = [];
+      const row = rows.find(
+        r => r.regionName === regionName && r.typeLabel === typeLabel,
+      );
+      if (!row?.action || !row.fingerprint) {
+        throw new Error(`row not registrable: ${row?.error}`);
+      }
+      return {
+        regionName,
+        typeLabel,
+        action: row.action,
+        fingerprint: row.fingerprint,
+      };
     }
 
     async function tournamentOf(region: string, type: string) {
@@ -380,6 +407,7 @@ describe.skipIf(!(await isDbReachable()))(
         regionName: regionA,
         typeLabel: '最強位',
         action: 'create',
+        fingerprint: expect.any(String),
         error: null,
         capacity: 54,
         entryOpensAt: OPENS_ISO,
@@ -404,7 +432,7 @@ describe.skipIf(!(await isDbReachable()))(
       const [result] = await importTournaments(
         env,
         'index',
-        [select(regionA, '最強位', 'create')],
+        [await chosen(regionA, '最強位')],
         NOW,
       );
 
@@ -510,7 +538,7 @@ describe.skipIf(!(await isDbReachable()))(
       const [result] = await importTournaments(
         env,
         'index',
-        [select(regionA, '最強位', 'overwrite')],
+        [await chosen(regionA, '最強位')],
         NOW,
       );
 
@@ -543,34 +571,77 @@ describe.skipIf(!(await isDbReachable()))(
       expect(regulationAfter.id).toBe(regulationBefore.id);
     });
 
-    // Someone else registered or deleted the tournament after the preview:
-    // what staff chose no longer fits, so nothing is done.
-    it('does only what was chosen', async () => {
+    // The sheet was edited after the preview: what would be written is not
+    // what staff saw, so nothing is.
+    it('refuses a row whose sheet changed since the preview', async () => {
       indexValues = [
         HEADER,
         indexRow(regionA, '最強位', 's1', {capacity: '99'}),
-        indexRow(regionB, '最強位', 's1', {capacity: '99'}),
       ];
       entrySheets = {
         s1: {formRows: FORM_ROWS, regulationRows: REGULATION_ROWS},
       };
       stubSheets();
+      const selection = await chosen(regionA, '最強位');
+      indexValues = [
+        HEADER,
+        indexRow(regionA, '最強位', 's1', {capacity: '5'}),
+      ];
 
-      const results = await importTournaments(
-        env,
-        'index',
-        [
-          select(regionA, '最強位', 'create'),
-          select(regionB, '最強位', 'overwrite'),
-        ],
-        NOW,
-      );
+      const [result] = await importTournaments(env, 'index', [selection], NOW);
 
-      expect(results.map(r => r.outcome)).toEqual(['failed', 'failed']);
-      expect(results[0].error).toContain('別の操作で登録されました');
-      expect(results[1].error).toContain('別の操作で削除されました');
+      expect(result.outcome).toBe('failed');
+      expect(result.error).toContain('内容が変わりました');
       expect((await tournamentOf(regionA, 'saikyoi'))?.capacity).toBeNull();
-      expect(await tournamentOf(regionB, 'saikyoi')).toBeUndefined();
+    });
+
+    // Someone else registered the tournament after the preview offered to
+    // create it: the tournament it would now overwrite was never shown.
+    it('refuses a row whose tournament changed since the preview', async () => {
+      indexValues = [HEADER, indexRow(regionB, '最強位', 's1')];
+      entrySheets = {
+        s1: {formRows: FORM_ROWS, regulationRows: REGULATION_ROWS},
+      };
+      stubSheets();
+      const selection = await chosen(regionB, '最強位');
+      expect(selection.action).toBe('create');
+      const [other] = await sql`
+        insert into tournaments (
+          region_id, type, capacity, entry_opens_at, entry_closes_at
+        ) values (
+          ${regionIds[regionB]}, 'saikyoi', 10, ${OPENS_ISO}, ${CLOSES_ISO}
+        )
+        returning id
+      `;
+
+      const [result] = await importTournaments(env, 'index', [selection], NOW);
+
+      expect(result.outcome).toBe('failed');
+      expect(result.error).toContain('内容が変わりました');
+      expect((await tournamentOf(regionB, 'saikyoi'))?.capacity).toBe(10);
+      await sql`delete from tournaments where id = ${other.id}`;
+    });
+
+    // The database's own guard for the race the fingerprint can't close:
+    // the tournament created or deleted between the check and the write.
+    it('writes only the action asked for', async () => {
+      const existing = await tournamentOf(regionA, 'saikyoi');
+      const call = (type: string, overwrite: boolean) => sql`
+        select * from import_tournament(
+          ${regionIds[regionA]}, ${type}::tournament_type, ${overwrite}, 60,
+          ${OPENS_ISO}, ${CLOSES_ISO}, '[]'::jsonb, '[]'::jsonb
+        )
+      `;
+
+      await expect(call('saikyoi', false)).rejects.toMatchObject({
+        errno: 'P0006',
+      });
+      await expect(call('shinjinou', true)).rejects.toMatchObject({
+        errno: 'P0006',
+      });
+      const after = await tournamentOf(regionA, 'saikyoi');
+      expect(after?.capacity).toBe(existing?.capacity ?? null);
+      expect(await tournamentOf(regionA, 'shinjinou')).toBeUndefined();
     });
 
     it('registers only the rows chosen', async () => {
@@ -587,7 +658,7 @@ describe.skipIf(!(await isDbReachable()))(
       const results = await importTournaments(
         env,
         'index',
-        [select(regionB, '最強位', 'create')],
+        [await chosen(regionB, '最強位')],
         NOW,
       );
 
@@ -651,7 +722,7 @@ describe.skipIf(!(await isDbReachable()))(
       const [result] = await importTournaments(
         env,
         'index',
-        [select(regionA, '最強位', 'overwrite')],
+        [await chosen(regionA, '最強位')],
         NOW,
       );
 
@@ -788,7 +859,7 @@ describe.skipIf(!(await isDbReachable()))(
       const [result] = await importTournaments(
         env,
         'index',
-        [select(regionB, '新人王', 'create')],
+        [await chosen(regionB, '新人王')],
         NOW,
       );
 
@@ -819,7 +890,7 @@ describe.skipIf(!(await isDbReachable()))(
       const [result] = await importTournaments(
         env,
         'index',
-        [select(regionB, '新人王', 'create')],
+        [await chosen(regionB, '新人王')],
         NOW,
       );
 

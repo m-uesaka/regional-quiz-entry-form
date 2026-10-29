@@ -1,6 +1,6 @@
 import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
 import {sign} from 'hono/jwt';
-import {parseFormDefinitionYaml} from '@regional-quiz/shared';
+import {MAX_SELECTIONS, parseFormDefinitionYaml} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {app} from '../index';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
@@ -395,9 +395,13 @@ describe('sheet-import routes', () => {
 
 // The preview and the registration read the 大会一覧 sheet the same way, so
 // the checks on the sheet itself run against both.
-const SELECTIONS = [
-  {regionName: '北海道', typeLabel: '最強位', action: 'create'},
-];
+const SELECTION = {
+  regionName: '北海道',
+  typeLabel: '最強位',
+  action: 'create',
+  fingerprint: 'abc',
+};
+const SELECTIONS = [SELECTION];
 for (const [path, extraBody] of [
   ['/api/sheet-import/tournaments/preview', {}],
   ['/api/sheet-import/tournaments', {selections: SELECTIONS}],
@@ -495,8 +499,8 @@ for (const [path, extraBody] of [
 }
 
 describe('POST /api/sheet-import/tournaments (selections)', () => {
-  it('refuses a request choosing no tournament', async () => {
-    const res = await app.request(
+  async function importWith(selections: unknown[]): Promise<Response> {
+    return app.request(
       '/api/sheet-import/tournaments',
       {
         method: 'POST',
@@ -504,11 +508,35 @@ describe('POST /api/sheet-import/tournaments (selections)', () => {
           cookie: await generalStaffCookie(),
           'content-type': 'application/json',
         },
-        body: JSON.stringify({spreadsheetId: 'index', selections: []}),
+        body: JSON.stringify({spreadsheetId: 'index', selections}),
       },
       env,
     );
+  }
 
-    expect(res.status).toBe(400);
+  it('refuses a request choosing no tournament', async () => {
+    expect((await importWith([])).status).toBe(400);
+  });
+
+  // Both would write the one tournament at once.
+  it('refuses a tournament chosen twice', async () => {
+    expect(
+      (await importWith([SELECTION, {...SELECTION, action: 'overwrite'}]))
+        .status,
+    ).toBe(400);
+  });
+
+  it('refuses a selection without the fingerprint the preview gave', async () => {
+    expect(
+      (await importWith([{...SELECTION, fingerprint: undefined}])).status,
+    ).toBe(400);
+  });
+
+  it('refuses more tournaments than there could be', async () => {
+    const many = Array.from({length: MAX_SELECTIONS + 1}, (_, i) => ({
+      ...SELECTION,
+      regionName: `地域${i}`,
+    }));
+    expect((await importWith(many)).status).toBe(400);
   });
 });

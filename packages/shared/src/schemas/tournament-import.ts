@@ -40,17 +40,23 @@ export type TournamentImportAction = z.infer<
 
 // One tournament staff chose to register on the preview screen. A row is
 // named by its 地域 / 種別 cells rather than its row number, so a row moved
-// on the sheet since the preview is still the one meant. `action` is what
-// the preview offered; if the tournament has since been created or deleted
-// by someone else, the row fails rather than doing the other thing.
+// on the sheet since the preview is still the one meant. `action` and
+// `fingerprint` are what the preview offered and showed: if the tournament
+// has since been created or deleted by someone else, or the sheet or the
+// tournament changed, the row fails rather than writing what staff never
+// saw.
 export const TournamentImportSelectionSchema = z.object({
   regionName: z.string(),
   typeLabel: z.string(),
   action: TournamentImportActionSchema,
+  fingerprint: z.string().min(1),
 });
 export type TournamentImportSelection = z.infer<
   typeof TournamentImportSelectionSchema
 >;
+
+/** The most tournaments one registration may choose. */
+export const MAX_SELECTIONS = 200;
 
 // Request body of `POST /api/sheet-import/tournaments`: registers the
 // chosen rows of the 大会一覧 spreadsheet, reading it again.
@@ -58,7 +64,17 @@ export const TournamentBulkImportExecuteRequestSchema = z.object({
   spreadsheetId: IndexSpreadsheetIdSchema,
   selections: z
     .array(TournamentImportSelectionSchema)
-    .min(1, {message: '登録する大会を選んでください'}),
+    .min(1, {message: '登録する大会を選んでください'})
+    // Far more than there are regions times types; the bound keeps a forged
+    // request from making the API read one spreadsheet per element.
+    .max(MAX_SELECTIONS, {message: '一度に登録できる大会が多すぎます'})
+    // Two selections of one tournament would write it twice at once.
+    .refine(
+      selections =>
+        new Set(selections.map(s => `${s.regionName}\u0000${s.typeLabel}`))
+          .size === selections.length,
+      {message: '同じ大会が複数選ばれています'},
+    ),
 });
 export type TournamentBulkImportExecuteRequest = z.infer<
   typeof TournamentBulkImportExecuteRequestSchema
@@ -87,6 +103,8 @@ export const TournamentImportPreviewRowSchema = z.object({
   typeLabel: z.string(),
   /** What registering the row would do; null when it can't be registered. */
   action: TournamentImportActionSchema.nullable(),
+  /** Sent back with the selection; null when it can't be registered. */
+  fingerprint: z.string().nullable(),
   /** Set when `action` is null; staff-facing Japanese. */
   error: z.string().nullable(),
   /** The values the sheet gives; null when the row can't be registered. */

@@ -50,6 +50,7 @@ const NEW_ROW: TournamentImportPreviewRow = {
   regionName: '北海道',
   typeLabel: '最強位',
   action: 'create',
+  fingerprint: 'fp-2',
   error: null,
   capacity: 54,
   entryOpensAt: '2026-11-04T12:00:00.000Z',
@@ -80,6 +81,7 @@ const INVALID_ROW: TournamentImportPreviewRow = {
   regionName: '宮崎＆鹿児島',
   typeLabel: '宮崎',
   action: null,
+  fingerprint: null,
   error: '種別「宮崎」は最強位・新人王のいずれでもありません',
   capacity: null,
   entryOpensAt: null,
@@ -244,7 +246,12 @@ describe('admin tournament import +page.svelte', () => {
     const data = new FormData(form);
     expect(data.get('spreadsheetId')).toBe('abc123');
     expect(data.getAll('selection').map(v => JSON.parse(String(v)))).toEqual([
-      {regionName: '北海道', typeLabel: '最強位', action: 'create'},
+      {
+        regionName: '北海道',
+        typeLabel: '最強位',
+        action: 'create',
+        fingerprint: 'fp-2',
+      },
     ]);
   });
 });

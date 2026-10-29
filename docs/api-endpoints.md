@@ -772,6 +772,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 | `row` | 大会一覧の行番号 |
 | `regionName` / `typeLabel` | 地域・種別のセルの値(書かれたまま)。登録時に行を指定するのに使う |
 | `action` | `create`(同じ地域・種別の大会が無い)/ `overwrite`(既にある)/ `null`(登録できない) |
+| `fingerprint` | 書き込む内容(定員・期間・フォーム定義・レギュレーション)と上書き先の大会の現在値から作った SHA-256。登録時にそのまま送り返す。登録できない行では `null` |
 | `error` | `action` が `null` の理由(日本語) |
 | `capacity` / `entryOpensAt` / `entryClosesAt` | シートの定員(空欄は `null` = 定員なし)とエントリー期間 |
 | `formFieldLabels` / `regulationLabels` | 入力シートの追加項目・レギュレーションのラベル |
@@ -788,7 +789,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 大会一覧のスプレッドシートから、**選んだ大会を登録します**(#168)。**このエンドポイントは DB に書き込みます**。大会一覧と入力シートはここで読み直します。
 
-- リクエスト: `TournamentBulkImportExecuteRequestSchema` — `{spreadsheetId: string, selections: {regionName, typeLabel, action}[]}`。`selections` はプレビューの行の地域・種別と `action`(`create` / `overwrite`)。1 件以上必要
+- リクエスト: `TournamentBulkImportExecuteRequestSchema` — `{spreadsheetId: string, selections: {regionName, typeLabel, action, fingerprint}[]}`。`selections` はプレビューの行の地域・種別・`action`(`create` / `overwrite`)・`fingerprint`。1 件以上 200 件以下で、同じ地域・種別を 2 回含めない
 - `200`: `TournamentBulkImportResponseSchema` — `{"results": TournamentImportResult[]}`。`selections` 1 件につき 1 件、渡した順。**何件失敗しても 200** で、件ごとの結果が答えです
 
 | `TournamentImportResult` のフィールド | 内容 |
@@ -803,10 +804,10 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 1 件ぶんの登録(大会・フォーム定義・レギュレーション)は DB 関数 `import_tournament()`(`0036`)が **1 トランザクション**で行い、どこかで失敗すればその大会は何も書かれません。失敗した件は理由を返し、残りは登録を続けます。
 
-- **選んだ操作しかしない**: `create` で同じ地域・種別の大会が既にある、`overwrite` で大会が無い場合(プレビューの後に別の統括スタッフが作成・削除した場合)は、何も書かずに失敗にします(SQLSTATE `P0006`)
+- **確認した内容しか書かない**: 読み直したシートと現在の大会から `fingerprint` を作り直し、プレビューのものと違えば(シートが編集された、上書き先の大会が編集・作成・削除された)何も書かずに失敗にします。照合から書き込みまでの間に大会が作成・削除された場合も、`import_tournament()` が選ばれた操作と合わないとして `P0006` で断ります
 - **新規作成**: 定員・エントリー期間はシートの値、大会名は空欄(既定名)
 - **上書き**: 定員・エントリー開始・エントリー終了・フォーム定義・レギュレーションをシートの内容に置き換えます。大会名はシートに無いので変えません。レギュレーションは名前で既存の行と突き合わせて id を引き継ぐので、名前が同じならエントリーの紐付けは保たれます。エントリーで使用中のレギュレーションがシートから消えている(名前が変わった)場合は失敗になります。定員を減らしても、確定済みのエントリーはそのままです(大会の編集 API と同じ)
-- 失敗理由はプレビューと同じ検証によるもの(読み直したシートが変わっていた場合)に加え、上の `P0006`、使用中のレギュレーション
+- 失敗理由はプレビューと同じ検証によるものに加え、`fingerprint` の不一致・上の `P0006`・使用中のレギュレーション
 
 `スプレッドシートID` の列には URL を書いてもかまいません(ID を取り出します)。
 

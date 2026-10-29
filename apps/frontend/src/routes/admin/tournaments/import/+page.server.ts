@@ -69,7 +69,10 @@ export const actions = {
       'preview'
     ].$post({json: parsed.data});
     if (!res.ok) {
-      return apiFailure(res, spreadsheetId, cookies, url, '読み込み');
+      return apiFailure(res, spreadsheetId, cookies, url, {
+        what: '読み込み',
+        rejected: '大会一覧を読み取れませんでした',
+      });
     }
 
     return {
@@ -107,7 +110,11 @@ export const actions = {
       'sheet-import'
     ].tournaments.$post({json: parsed.data});
     if (!res.ok) {
-      return apiFailure(res, spreadsheetId, cookies, url, '一括登録');
+      return apiFailure(res, spreadsheetId, cookies, url, {
+        what: '一括登録',
+        rejected:
+          '選択した大会を登録できませんでした。もう一度読み込んでください',
+      });
     }
 
     return {
@@ -125,14 +132,16 @@ export const actions = {
  * @param spreadsheetId What was submitted, to re-render.
  * @param cookies The request's cookies, for an expired session.
  * @param url The page's URL, to come back to after logging in.
- * @param what What was being done, for the message.
+ * @param messages What was being done, and what to say when the API
+ *     refused the request without a message meant for staff (a 400 from
+ *     its request validation).
  */
 async function apiFailure(
   res: {status: number; json(): Promise<unknown>},
   spreadsheetId: string,
   cookies: Cookies,
   url: URL,
-  what: string,
+  messages: {what: string; rejected: string},
 ) {
   if (isUnauthorized(res)) {
     redirectToStaffLogin(cookies, url);
@@ -143,13 +152,13 @@ async function apiFailure(
     return failure(
       res.status,
       spreadsheetId,
-      await readErrorMessage(res, '大会一覧を読み取れませんでした'),
+      await readErrorMessage(res, messages.rejected),
     );
   }
   return failure(
     502,
     spreadsheetId,
-    `${what}に失敗しました。時間をおいて再度お試しください`,
+    `${messages.what}に失敗しました。時間をおいて再度お試しください`,
   );
 }
 

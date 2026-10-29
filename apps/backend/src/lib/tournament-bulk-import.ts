@@ -256,50 +256,33 @@ export async function previewTournamentImport(
   spreadsheetId: string,
   now: Date,
 ): Promise<TournamentImportPreviewRow[]> {
-  const rows = await readIndex(env, spreadsheetId);
-  const context = await loadContext(env, now);
-  const duplicateOf = duplicateFinder(rows);
+  const {rows, context, duplicateOf} = await startRun(env, spreadsheetId, now);
 
   return mapWithConcurrency(rows, CONCURRENCY, async row => {
-    const invalid = (error: string): TournamentImportPreviewRow => ({
-      row: row.row,
-      regionName: row.regionName,
-      typeLabel: row.typeLabel,
-      action: null,
-      error,
-      capacity: null,
-      entryOpensAt: null,
-      entryClosesAt: null,
-      formFieldLabels: [],
-      regulationLabels: [],
-      current: null,
-    });
-    const others = duplicateOf(row);
-    if (others.length > 0) {
-      return invalid(duplicateMessage(others));
-    }
-    let prepared;
-    try {
-      prepared = await prepareRow(context, row);
-    } catch (e: unknown) {
-      console.error('failed to read a tournament to import', {
+    const resolved = await resolveRow(context, row, duplicateOf, 'preview');
+    if ('error' in resolved) {
+      return {
         row: row.row,
-        error: e,
-      });
-      return invalid('読み込みに失敗しました。時間をおいて再度お試しください');
+        regionName: row.regionName,
+        typeLabel: row.typeLabel,
+        action: null,
+        fingerprint: null,
+        error: resolved.error,
+        capacity: null,
+        entryOpensAt: null,
+        entryClosesAt: null,
+        formFieldLabels: [],
+        regulationLabels: [],
+        current: null,
+      };
     }
-    if (typeof prepared === 'string') {
-      return invalid(prepared);
-    }
-    const current =
-      context.tournaments.get(
-        tournamentKey(prepared.regionId, prepared.type),
-      ) ?? null;
+    const {prepared, current, fingerprint} = resolved;
     return {
       row: row.row,
       regionName: row.regionName,
       typeLabel: row.typeLabel,
       action: current === null ? 'create' : 'overwrite',
+      fingerprint,
       error: null,
       capacity: prepared.capacity,
       entryOpensAt: prepared.entryOpensAt,
@@ -313,7 +296,10 @@ export async function previewTournamentImport(
 
 /**
  * Registers the tournaments staff chose from the 大会一覧 spreadsheet
- * `spreadsheetId`, reading it again.
+ * `spreadsheetId`, reading it again. A tournament is written only if what
+ * would be written, and the tournament it would overwrite, are still what
+ * the preview showed (its `fingerprint`); otherwise it fails and staff
+ * read the sheet again.
  * @param env The Worker bindings.
  * @param spreadsheetId The 大会一覧 spreadsheet.
  * @param selections The rows to register and what to do with each, as the
@@ -330,9 +316,7 @@ export async function importTournaments(
   selections: TournamentImportSelection[],
   now: Date,
 ): Promise<TournamentImportResult[]> {
-  const rows = await readIndex(env, spreadsheetId);
-  const context = await loadContext(env, now);
-  const duplicateOf = duplicateFinder(rows);
+  const {rows, context, duplicateOf} = await startRun(env, spreadsheetId, now);
 
   return mapWithConcurrency(selections, CONCURRENCY, async selection => {
     const row = rows.find(
@@ -347,16 +331,23 @@ export async function importTournaments(
         '大会一覧にこの地域・種別の行が見つかりません。もう一度読み込んでください',
       );
     }
-    const others = duplicateOf(row);
-    if (others.length > 0) {
-      return failed(row.row, selection, duplicateMessage(others));
-    }
     // Whatever goes wrong with one row stays that row's failure. Letting it
     // reject would fail the whole request and lose the results of the rows
     // already committed, so staff would re-run them without knowing they
     // had gone through.
     try {
-      return await importRow(context, row, selection.action);
+      const resolved = await resolveRow(context, row, duplicateOf, 'import');
+      if ('error' in resolved) {
+        return failed(row.row, row, resolved.error);
+      }
+      if (resolved.fingerprint !== selection.fingerprint) {
+        return failed(
+          row.row,
+          row,
+          '読み込んだ後に、シートまたは登録済みの大会の内容が変わりました。もう一度読み込んで確認してください',
+        );
+      }
+      return await importRow(context, row, resolved.prepared, selection.action);
     } catch (e: unknown) {
       console.error('failed to import a tournament', {row: row.row, error: e});
       return failed(
@@ -366,6 +357,93 @@ export async function importTournaments(
       );
     }
   });
+}
+
+/** Reads the 大会一覧 sheet and what both steps check its rows against. */
+async function startRun(env: Bindings, spreadsheetId: string, now: Date) {
+  const rows = await readIndex(env, spreadsheetId);
+  const context = await loadContext(env, now);
+  return {rows, context, duplicateOf: duplicateFinder(rows)};
+}
+
+/** A row ready to write, with what it is checked against on execute. */
+interface ResolvedRow {
+  prepared: PreparedRow;
+  /** The tournament it would overwrite, or null for a new one. */
+  current: TournamentImportCurrent | null;
+  fingerprint: string;
+}
+
+/**
+ * Reads and checks one row the same way for the preview and for the
+ * registration, so the preview can't approve a row the registration then
+ * refuses for some other reason, or the reverse.
+ * @param context The regions and tournaments.
+ * @param row The row.
+ * @param duplicateOf Finds the other rows for the same region and type.
+ * @param step Which step this is, for the log.
+ * @return The row ready to write, or why it can't be registered.
+ */
+async function resolveRow(
+  context: ImportContext,
+  row: TournamentIndexRow,
+  duplicateOf: (row: TournamentIndexRow) => number[],
+  step: 'preview' | 'import',
+): Promise<ResolvedRow | {error: string}> {
+  const others = duplicateOf(row);
+  if (others.length > 0) {
+    return {error: duplicateMessage(others)};
+  }
+  let prepared;
+  try {
+    prepared = await prepareRow(context, row);
+  } catch (e: unknown) {
+    console.error(`failed to read a tournament to ${step}`, {
+      row: row.row,
+      error: e,
+    });
+    return {error: '読み込みに失敗しました。時間をおいて再度お試しください'};
+  }
+  if (typeof prepared === 'string') {
+    return {error: prepared};
+  }
+  const current =
+    context.tournaments.get(tournamentKey(prepared.regionId, prepared.type)) ??
+    null;
+  return {
+    prepared,
+    current,
+    fingerprint: await fingerprintOf(prepared, current),
+  };
+}
+
+/**
+ * A digest of everything registering a row would write and of the
+ * tournament it would overwrite. The preview hands it out and the
+ * registration recomputes it, so a sheet edited, or a tournament changed on
+ * its own screen, in between is noticed instead of written unseen.
+ */
+async function fingerprintOf(
+  prepared: PreparedRow,
+  current: TournamentImportCurrent | null,
+): Promise<string> {
+  const text = JSON.stringify([
+    prepared.regionId,
+    prepared.type,
+    prepared.capacity,
+    prepared.entryOpensAt,
+    prepared.entryClosesAt,
+    prepared.formFields,
+    prepared.regulations,
+    current,
+  ]);
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(text),
+  );
+  return [...new Uint8Array(digest)]
+    .map(byte => byte.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 /** Reads the 大会一覧 sheet's rows. */
@@ -552,18 +630,15 @@ async function prepareRow(
  * Registers the tournament one row of the 大会一覧 sheet describes.
  * @param context The regions and tournaments, and the client to write with.
  * @param row The row.
+ * @param prepared The row, read and checked.
  * @param action What staff chose to do with it.
  */
 async function importRow(
   context: ImportContext,
   row: TournamentIndexRow,
+  prepared: PreparedRow,
   action: TournamentImportAction,
 ): Promise<TournamentImportResult> {
-  const prepared = await prepareRow(context, row);
-  if (typeof prepared === 'string') {
-    return failed(row.row, row, prepared);
-  }
-
   const {data, error} = await context.db
     .rpc('import_tournament', {
       p_region_id: prepared.regionId,
