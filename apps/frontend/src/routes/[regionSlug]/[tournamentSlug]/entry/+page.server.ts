@@ -80,6 +80,11 @@ const ENTRY_ERROR_MESSAGES: Record<string, string> = {
   // offered no longer exists. Reloading is what fixes it.
   'regulation no longer available':
     '選択したレギュレーションが変更されました。ページを再読み込みして、もう一度お試しください',
+  // Another submission for the same tournament -- from another tab, say --
+  // wrote its entry first (#191). Whether that one is confirmed yet depends
+  // on its mail, so the participant is sent to mypage to see which.
+  'concurrent submission':
+    'この大会へのエントリーが同時に送信されていました。マイページでエントリー状況をご確認ください',
   'already entered another tournament in this region':
     'この地域では、最強位と新人王のどちらか一方にのみエントリーできます',
   // Answered by the challenge in front of the API, which refuses a missing

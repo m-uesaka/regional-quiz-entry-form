@@ -393,6 +393,28 @@ describe.skipIf(!(await isDbReachable()))(
       expect(!result.ok && result.status).toBe(409);
     });
 
+    // #191: a refusal the participant can't act on is a fault on our side,
+    // and Postgres' message names the table and the constraint. Classified
+    // as a 500, the route answers it with `internalError()` rather than
+    // passing the message on.
+    it('reports a database refusal of the entry row as a 500, not a 409', async () => {
+      const fixture = await createFixture('db-refusal');
+
+      // Past 0021's length check, which the route's own schema would have
+      // stopped first.
+      const result = await createEntry(
+        env,
+        fixture.tournamentId,
+        validInput({
+          name: 'あ'.repeat(101),
+          regulationIds: [fixture.regulationId],
+        }),
+      );
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.status).toBe(500);
+    });
+
     it('rejects re-entry under an existing email with the wrong password', async () => {
       const fixture = await createFixture('wrong-password');
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;

@@ -250,6 +250,31 @@ async function waitForTurnstileToken(page: Page): Promise<void> {
 }
 
 /**
+ * Waits for the notice an anonymous entry form turns into once submitted,
+ * naming the address the mail went to. The notice reads as its heading,
+ * which describes itself by the paragraph naming the address and takes
+ * focus once the client bundle has hydrated the page.
+ * @param page The page to drive.
+ * @param email The address the form was submitted with.
+ * @param options.hydrated Whether the page answering the submission is
+ *     hydrated. A spec holding the client bundle back gets the server's
+ *     HTML only, where nothing moves focus, so it passes `false`.
+ */
+export async function expectAnonymousEntryNotice(
+  page: Page,
+  email: string,
+  {hydrated = true}: {hydrated?: boolean} = {},
+): Promise<void> {
+  const heading = page.getByRole('heading', {name: 'メールを送信しました'});
+  if (hydrated) {
+    await expect(heading).toBeFocused();
+  }
+  await expect(heading).toHaveAccessibleDescription(
+    new RegExp(email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
+  );
+}
+
+/**
  * Opens the tournament's entry form, fills it in as a brand-new
  * participant and submits it.
  *
@@ -274,7 +299,7 @@ export async function submitEntryForm(
   const participant = await fillEntryForm(page, tournament, input);
 
   await page.getByRole('button', {name: 'エントリーする'}).click();
-  await expect(page.getByRole('status')).toContainText(participant.email);
+  await expectAnonymousEntryNotice(page, participant.email);
   // The page answers before the entry is made (#117); the confirmation mail
   // is the last thing the background work does, so once it is in, the
   // account and the entry exist for whatever the spec does next.
@@ -347,7 +372,9 @@ async function answerCustomField(
 
 /**
  * Waits for a participant's confirmation mail and opens the link in it, the
- * way following it out of a mail client would.
+ * way following it out of a mail client -- or a mail scanner fetching it
+ * first -- would. That alone confirms nothing (#190): the page only offers
+ * the button `pressConfirmEntryButton()` presses.
  *
  * The link's origin is the `FRONTEND_URL` the backend was started with, so
  * it lands on the same `vite dev` server the rest of the flow is on.
@@ -370,6 +397,35 @@ export async function openVerificationLink(
   );
   const link = extractVerificationUrl(mail.html);
   await page.goto(link);
+  return link;
+}
+
+/**
+ * Presses the button `/verify` shows for the link it was opened with, which
+ * is what spends the token and confirms the entry.
+ * @param page A page on `/verify`, opened from a verification link.
+ */
+export async function pressConfirmEntryButton(page: Page): Promise<void> {
+  await page.getByRole('button', {name: 'エントリーを確定する'}).click();
+}
+
+/**
+ * Opens the participant's confirmation link and confirms the entry with it,
+ * as the participant does.
+ * @param page The page to open it in.
+ * @param request An API context, used to read the mail stub.
+ * @param tournament The tournament the entry was made to.
+ * @param email The address the confirmation mail went to.
+ * @return The link that was opened, so a spec can follow it a second time.
+ */
+export async function followVerificationLink(
+  page: Page,
+  request: APIRequestContext,
+  tournament: TournamentFixture,
+  email: string,
+): Promise<string> {
+  const link = await openVerificationLink(page, request, tournament, email);
+  await pressConfirmEntryButton(page);
   return link;
 }
 

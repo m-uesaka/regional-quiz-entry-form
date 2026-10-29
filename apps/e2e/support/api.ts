@@ -17,9 +17,10 @@ import {expect, type APIRequestContext} from '@playwright/test';
 import type {
   EntryStatus,
   StaffMailJob,
+  StaffMailInput,
   StaffMailResult,
 } from '@regional-quiz/shared';
-import {BACKEND_URL, MAIL_SINK_URL} from './env';
+import {BACKEND_URL, FRONTEND_URL, MAIL_SINK_URL} from './env';
 import {
   PARTICIPANT_PASSWORD,
   uniqueEmail,
@@ -232,7 +233,7 @@ export function extractVerificationUrl(html: string): string {
  * API, confirming the entry.
  *
  * Only the arrangement in `staff-csv.spec.ts` uses this; the flow of
- * following the link in a browser is `openVerificationLink()` in `./ui.ts`.
+ * following the link in a browser is `followVerificationLink()` in `./ui.ts`.
  * @param request The API context to confirm through.
  * @param tournament The tournament the entry was made to.
  * @param email The address the confirmation mail went to.
@@ -249,22 +250,16 @@ export async function verifyEntry(
     email,
     verificationMailSubject(tournament),
   );
-  const response = await request.get(
-    `${BACKEND_URL}${extractVerificationPath(mail.html)}`,
-  );
+  const {searchParams} = new URL(extractVerificationUrl(mail.html));
+  const token = searchParams.get('token');
+  expect(token, 'the verification link carries no token').toBeTruthy();
+  // A POST, like the `/verify` page's confirm button sends (#190).
+  const response = await request.post(`${BACKEND_URL}/api/entries/verify`, {
+    data: {token},
+  });
   expect(response.status(), await response.text()).toBe(200);
   const body = (await response.json()) as {status: EntryStatus};
   return body.status;
-}
-
-/**
- * The API path that confirms the entry the mailed link belongs to. The link
- * itself points at the frontend's `/verify` page, which calls this.
- * @param html The mail body.
- */
-function extractVerificationPath(html: string): string {
-  const {searchParams} = new URL(extractVerificationUrl(html));
-  return `/api/entries/verify?token=${searchParams.get('token')}`;
 }
 
 /**
@@ -308,23 +303,47 @@ export async function loginStaff(
 }
 
 /**
- * Asks for a bulk send to every entry of `tournamentId`, as the signed-in
- * staff member.
+ * Asks for a bulk send to the entries of `tournamentId`, as the signed-in
+ * staff member: the confirmed and waitlisted ones, unless `mail.statusFilter`
+ * names another status.
  *
  * Answers as soon as the recipients are enqueued: what it returns is the
  * job to watch, not a delivery report.
  * @param request The API context, already holding a staff session.
  * @param tournamentId The tournament whose entries to mail.
- * @param mail The subject and HTML body to send.
+ * @param mail The subject, HTML body and optional status filter to send.
  */
 export async function sendBulkMail(
   request: APIRequestContext,
   tournamentId: string,
-  mail: {subject: string; body: string},
+  mail: StaffMailInput,
 ): Promise<StaffMailResult> {
   const response = await request.post(
     `${BACKEND_URL}/api/staff/tournaments/${tournamentId}/mail`,
     {data: mail},
+  );
+  expect(response.status(), await response.text()).toBe(202);
+  return (await response.json()) as StaffMailResult;
+}
+
+/**
+ * Asks for the confirmation mail to be sent again to the unconfirmed
+ * entries of `tournamentId` whose link has run out, as the signed-in staff
+ * member (#192).
+ *
+ * Answers as soon as the entries are enqueued, like `sendBulkMail()`.
+ * @param request The API context, already holding a staff session.
+ * @param tournamentId The tournament whose entries to remind.
+ */
+export async function resendVerificationMail(
+  request: APIRequestContext,
+  tournamentId: string,
+): Promise<StaffMailResult> {
+  const response = await request.post(
+    `${BACKEND_URL}/api/staff/tournaments/${tournamentId}/verification-mail`,
+    // There is no body, so the origin is what tells `hono/csrf` this is
+    // not a form posted from a foreign page -- as a browser would send it.
+    {headers: {origin: FRONTEND_URL}},
   );
   expect(response.status(), await response.text()).toBe(202);
   return (await response.json()) as StaffMailResult;

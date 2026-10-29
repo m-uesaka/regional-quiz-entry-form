@@ -59,7 +59,7 @@ function isLoopbackUrl(url: string): boolean {
  * Refuses to seed anything but a local stack, because seeding starts by
  * deleting every application row.
  */
-function assertLocalSupabase(): void {
+export function assertLocalSupabase(): void {
   if (isLoopbackUrl(SUPABASE_URL)) {
     return;
   }
@@ -70,7 +70,7 @@ function assertLocalSupabase(): void {
   );
 }
 
-function createServiceRoleClient(): SupabaseClient {
+export function createServiceRoleClient(): SupabaseClient {
   return createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, {
     auth: {persistSession: false},
   });
