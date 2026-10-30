@@ -13,22 +13,25 @@ export type PriorityRegulation = Pick<
 
 /**
  * One 優先エントリー announcement: the regulations being given priority
- * until the same moment.
+ * over the same window.
  */
 export interface PriorityEntryNotice {
   labels: string[];
+  /** When the window starts, as the page prints it, in JST. */
+  startsAtLabel: string;
   /** When the window ends, as the page prints it, in JST. */
   endsAtLabel: string;
 }
 
 /**
  * The 優先エントリー windows open at `now`, as the portal and the entry form
- * announce them. Regulations whose windows end together are announced
- * together; ones ending at different moments get one notice each, earliest
- * first, so no regulation is said to be prioritised longer than it is.
- * "Together" is as the page prints it -- to the minute -- so two ends the
- * page can't tell apart (seconds apart, or one instant spelt two ways) are
- * one notice rather than two identical-looking lines.
+ * announce them. Regulations whose windows start and end together are
+ * announced together; any other window gets a notice of its own, ordered by
+ * end and then by start, earliest first, so no regulation is said to be
+ * prioritised over a window it isn't. "Together" is as the page prints it
+ * -- to the minute -- so two moments the page can't tell apart (seconds
+ * apart, or one instant spelt two ways) make one notice rather than two
+ * identical-looking lines.
  *
  * Worked out on the server, like the portal's statuses, so the server
  * rendering and the hydrated page agree.
@@ -40,16 +43,27 @@ export function priorityEntryNotices(
   now: Date,
 ): PriorityEntryNotice[] {
   const active = activePriorityRegulations(regulations, now).sort(
-    (a, b) => Date.parse(a.priorityEndsAt) - Date.parse(b.priorityEndsAt),
+    (a, b) =>
+      Date.parse(a.priorityEndsAt) - Date.parse(b.priorityEndsAt) ||
+      Date.parse(a.priorityStartsAt) - Date.parse(b.priorityStartsAt),
   );
-  const byEnd = new Map<string, string[]>();
+  const byWindow = new Map<string, PriorityEntryNotice>();
   for (const regulation of active) {
+    const startsAtLabel = formatJstDateTime(regulation.priorityStartsAt);
     const endsAtLabel = formatJstDateTime(regulation.priorityEndsAt);
-    const labels = byEnd.get(endsAtLabel) ?? [];
-    labels.push(regulation.label);
-    byEnd.set(endsAtLabel, labels);
+    const key = `${startsAtLabel}〜${endsAtLabel}`;
+    const notice = byWindow.get(key);
+    if (notice) {
+      notice.labels.push(regulation.label);
+    } else {
+      byWindow.set(key, {
+        labels: [regulation.label],
+        startsAtLabel,
+        endsAtLabel,
+      });
+    }
   }
-  return [...byEnd].map(([endsAtLabel, labels]) => ({labels, endsAtLabel}));
+  return [...byWindow.values()];
 }
 
 /**
