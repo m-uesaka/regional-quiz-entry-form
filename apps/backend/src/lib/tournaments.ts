@@ -18,6 +18,7 @@ export interface TournamentRow {
   capacity: number | null;
   entry_opens_at: string;
   entry_closes_at: string;
+  entries_paused: boolean;
   // A to-one embed on a not-null foreign key, so always the region itself.
   // Read for its name, which a blank 大会名 is made from.
   regions: {name: string};
@@ -25,7 +26,8 @@ export interface TournamentRow {
 
 /** The columns of `tournaments` itself that `TournamentRow` carries. */
 const TOURNAMENT_OWN_COLUMNS =
-  'id, region_id, type, name, capacity, entry_opens_at, entry_closes_at';
+  'id, region_id, type, name, capacity, entry_opens_at, entry_closes_at, ' +
+  'entries_paused';
 
 /**
  * The select that reads a `TournamentRow`, for every read of one -- and for
@@ -61,6 +63,7 @@ export function rowToTournament(row: TournamentRow): Tournament {
     capacity: row.capacity,
     entryOpensAt: row.entry_opens_at,
     entryClosesAt: row.entry_closes_at,
+    entriesPaused: row.entries_paused,
   });
 }
 

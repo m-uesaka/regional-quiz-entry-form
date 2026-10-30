@@ -20,6 +20,7 @@ const OUT_OF_PERIOD_TOURNAMENT: Tournament = {
   capacity: null,
   entryOpensAt: '2020-01-01T00:00:00.000Z',
   entryClosesAt: '2020-02-01T00:00:00.000Z',
+  entriesPaused: false,
 };
 
 const OPEN_TOURNAMENT: Tournament = {
@@ -233,6 +234,47 @@ describe('entry +page.server load', () => {
     } satisfies Partial<HttpError>);
   });
 
+  it('tells a visitor a paused form is paused rather than closed', async () => {
+    const event = buildEvent({
+      fetch: fakeApi({tournament: {...OPEN_TOURNAMENT, entriesPaused: true}}),
+      staff: null,
+    });
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 403,
+      body: {message: expect.stringContaining('一時中断') as unknown},
+    });
+  });
+
+  it("lets the tournament's own staff preview a paused form, saying why", async () => {
+    const event = buildEvent({
+      fetch: fakeApi({tournament: {...OPEN_TOURNAMENT, entriesPaused: true}}),
+      staff: OWN_REGIONAL_STAFF,
+    });
+
+    await expect(load(event)).resolves.toMatchObject({
+      staffPreview: true,
+      staffPreviewReason: 'paused',
+      priorityNotices: [],
+      waitlistOpen: false,
+    });
+  });
+
+  it('says paused when the API refuses the tournament read as paused', async () => {
+    const event = buildEvent({
+      fetch: fakeApi({
+        tournament: {error: 'entries paused'} as unknown as Tournament,
+        tournamentStatus: 403,
+      }),
+      staff: null,
+    });
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 403,
+      body: {message: expect.stringContaining('一時中断') as unknown},
+    });
+  });
+
   // The backend applies the same rule and refuses first, so the page never
   // sees the tournament at all in that case.
   it('throws 403 when the API refuses the tournament read as out of period', async () => {
@@ -273,6 +315,7 @@ describe('entry +page.server load', () => {
       regulations: REGULATIONS,
       formFieldDefs: FORM_FIELD_DEFS,
       staffPreview: false,
+      staffPreviewReason: null,
       priorityNotices: [],
       waitlistOpen: false,
       loggedIn: false,
@@ -520,6 +563,47 @@ describe('entry +page.server default action for a logged-in participant', () => 
 
   // The session already says who is asking, so the API refuses directly and
   // the form can say why.
+  it('answers a submission to a tournament paused since the form opened in place, keeping what was typed', async () => {
+    const requests: string[] = [];
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          tournament: {error: 'entries paused'} as unknown as Tournament,
+          tournamentStatus: 403,
+          requests,
+        }),
+        fields: sessionFormData(),
+        participant: PARTICIPANT,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 403,
+      data: {
+        error: expect.stringContaining('一時中断') as unknown,
+        values: {name: '山田太郎'},
+      },
+    });
+    expect(requests.some(url => url.includes('/entries'))).toBe(false);
+  });
+
+  it('says paused when the entry POST itself is refused as paused', async () => {
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          entryResponse: {status: 403, body: {error: 'entries paused'}},
+        }),
+        fields: sessionFormData(),
+        participant: PARTICIPANT,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 403,
+      data: {error: expect.stringContaining('一時中断') as unknown},
+    });
+  });
+
   it('reports a refusal directly', async () => {
     const result = await actions.default(
       buildActionEvent({

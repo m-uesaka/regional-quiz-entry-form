@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import type {Cookies, HttpError, Redirect} from '@sveltejs/kit';
 import type {Entry, StaffClaims, Tournament} from '@regional-quiz/shared';
-import {load} from './+page.server';
+import {actions, load} from './+page.server';
 
 const TOURNAMENT: Tournament = {
   id: '00000000-0000-0000-0000-000000000001',
@@ -11,6 +11,7 @@ const TOURNAMENT: Tournament = {
   capacity: null,
   entryOpensAt: '2020-01-01T00:00:00.000Z',
   entryClosesAt: '2099-01-01T00:00:00.000Z',
+  entriesPaused: false,
 };
 
 const GENERAL_STAFF: StaffClaims = {
@@ -262,5 +263,122 @@ describe('staff entries +page.server load', () => {
       status: 303,
       location: LOGIN_REDIRECT,
     } satisfies Partial<Redirect>);
+  });
+});
+
+describe('staff entries pause action', () => {
+  /** One request the action sent. */
+  interface Sent {
+    method: string;
+    url: string;
+    body: unknown;
+  }
+
+  function pauseFetch(
+    options: {status?: number; sent?: Sent[]} = {},
+  ): typeof fetch {
+    return (async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      const body = JSON.parse(String(init?.body)) as {paused: boolean};
+      options.sent?.push({method, url, body});
+      const status = options.status ?? 200;
+      return status >= 400
+        ? Response.json({error: 'nope'}, {status})
+        : Response.json({...TOURNAMENT, entriesPaused: body.paused});
+    }) as typeof fetch;
+  }
+
+  function buildActionEvent(
+    fetchImpl: typeof fetch,
+    paused: string | null,
+    tournamentId: string | null = TOURNAMENT.id,
+  ): Parameters<typeof actions.pause>[0] {
+    const formData = new FormData();
+    if (paused !== null) {
+      formData.set('paused', paused);
+    }
+    if (tournamentId !== null) {
+      formData.set('tournamentId', tournamentId);
+    }
+    return {
+      params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
+      fetch: fetchImpl,
+      cookies: fakeCookies(),
+      locals: {staff: GENERAL_STAFF},
+      url: new URL('http://localhost/staff/tokyo/saikyoi/entries'),
+      request: {formData: async () => formData},
+    } as Parameters<typeof actions.pause>[0];
+  }
+
+  it('pauses the tournament the route names', async () => {
+    const sent: Sent[] = [];
+
+    await expect(
+      actions.pause(buildActionEvent(pauseFetch({sent}), 'true')),
+    ).resolves.toEqual({paused: true, pauseError: null});
+    expect(sent).toEqual([
+      {
+        method: 'PUT',
+        url: `/api/staff/tournaments/${TOURNAMENT.id}/entry-pause`,
+        body: {paused: true},
+      },
+    ]);
+  });
+
+  it('resumes it', async () => {
+    const sent: Sent[] = [];
+
+    await expect(
+      actions.pause(buildActionEvent(pauseFetch({sent}), 'false')),
+    ).resolves.toEqual({paused: false, pauseError: null});
+    expect(sent.map(s => s.body)).toEqual([{paused: false}]);
+  });
+
+  it('refuses a post without the state to set, without asking the API', async () => {
+    const sent: Sent[] = [];
+
+    await expect(
+      actions.pause(buildActionEvent(pauseFetch({sent}), null)),
+    ).resolves.toMatchObject({status: 400});
+    expect(sent).toEqual([]);
+  });
+
+  it('refuses a post without a tournament id, without asking the API', async () => {
+    const sent: Sent[] = [];
+
+    await expect(
+      actions.pause(buildActionEvent(pauseFetch({sent}), 'true', 'nope')),
+    ).resolves.toMatchObject({status: 400});
+    expect(sent).toEqual([]);
+  });
+
+  it('reports a tournament that has since been removed', async () => {
+    await expect(
+      actions.pause(buildActionEvent(pauseFetch({status: 404}), 'true')),
+    ).resolves.toMatchObject({
+      status: 404,
+      data: {pauseError: '大会が見つかりません'},
+    });
+  });
+
+  it('says a refused permission is one', async () => {
+    await expect(
+      actions.pause(buildActionEvent(pauseFetch({status: 403}), 'true')),
+    ).resolves.toMatchObject({
+      status: 403,
+      data: {
+        pauseError: 'この大会のエントリー受付を操作する権限がありません',
+      },
+    });
+  });
+
+  it('reports any other failure', async () => {
+    await expect(
+      actions.pause(buildActionEvent(pauseFetch({status: 500}), 'false')),
+    ).resolves.toMatchObject({
+      status: 502,
+      data: {pauseError: 'エントリー受付の再開に失敗しました'},
+    });
   });
 });

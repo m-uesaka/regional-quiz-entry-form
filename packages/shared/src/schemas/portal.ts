@@ -20,11 +20,14 @@ export const PortalTournamentSchema = z.object({
   tournamentName: z.string(),
   entryOpensAt: z.string().datetime({offset: true}),
   entryClosesAt: z.string().datetime({offset: true}),
+  // Staff paused taking entries (0039), which the portal shows as
+  // 一時中断中 in place of 受付中.
+  entriesPaused: z.boolean(),
   // Null when the tournament takes any number of entries.
   capacity: z.number().int().positive().nullable(),
   // The regulations with a priority window, for the portal to say which of
-  // them is being given priority now. Only a tournament whose entry period
-  // is open lists any: outside it the regulations are part of the form the
+  // them is being given priority now. Only a tournament taking entries (its
+  // period open and not paused) lists any: outside it the regulations are part of the form the
   // entry-period gate keeps unpublished, so this is empty rather than a
   // second way to read them.
   priorityRegulations: z.array(

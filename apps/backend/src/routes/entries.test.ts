@@ -164,7 +164,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** A tournament taking entries, as `checkEntrySubmission()` selects it. */
 function tournamentRow(
-  overrides: {entryClosesAt?: string; capacity?: number | null} = {},
+  overrides: {
+    entryClosesAt?: string;
+    capacity?: number | null;
+    entriesPaused?: boolean;
+  } = {},
 ): Record<string, unknown> {
   return {
     id: TOURNAMENT_ID,
@@ -174,6 +178,7 @@ function tournamentRow(
     entry_opens_at: new Date(Date.now() - DAY_MS).toISOString(),
     entry_closes_at:
       overrides.entryClosesAt ?? new Date(Date.now() + DAY_MS).toISOString(),
+    entries_paused: overrides.entriesPaused ?? false,
     // Lets the dual-entry check be skipped; that rule is the integration
     // tests' business.
     regions: {allows_dual_entry: true},
@@ -739,6 +744,24 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
 
     expect(recorded.takeOvers).toHaveLength(0);
     expect(recorded.mails[0].html).toContain('別の地域');
+  });
+
+  it('refuses a new entry while staff have paused the tournament', async () => {
+    const recorded = mockSupabase({
+      tournament: tournamentRow({entriesPaused: true}),
+      participant: null,
+    });
+
+    const res = await postWithContext(TOURNAMENT_PATH, validBody);
+    await settleBackgroundWork();
+
+    expect(res.status).toBe(403);
+    expect((await res.json()) as unknown).toEqual({error: 'entries paused'});
+    expect(recorded.calls).not.toContainEqual({
+      table: 'entries',
+      method: 'POST',
+    });
+    expect(recorded.mails).toHaveLength(0);
   });
 
   // These refusals don't depend on the address, so reporting them leaks

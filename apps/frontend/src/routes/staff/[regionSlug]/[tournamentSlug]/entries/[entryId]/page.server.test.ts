@@ -15,6 +15,7 @@ const TOURNAMENT: Tournament = {
   capacity: null,
   entryOpensAt: '2020-01-01T00:00:00.000Z',
   entryClosesAt: '2099-01-01T00:00:00.000Z',
+  entriesPaused: false,
 };
 
 const GENERAL_STAFF: StaffClaims = {

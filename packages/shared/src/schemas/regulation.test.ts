@@ -7,13 +7,13 @@ import {
 
 describe('RegulationUpsertSchema', () => {
   // Some regions' conditions run long (the limit was 200 before).
-  it('accepts a label of up to 300 characters and refuses a longer one', () => {
-    expect(REGULATION_LABEL_MAX_LENGTH).toBe(300);
+  it('accepts a label of up to 400 characters and refuses a longer one', () => {
+    expect(REGULATION_LABEL_MAX_LENGTH).toBe(400);
     expect(
-      RegulationUpsertSchema.safeParse({label: 'あ'.repeat(300)}).success,
+      RegulationUpsertSchema.safeParse({label: 'あ'.repeat(400)}).success,
     ).toBe(true);
     expect(
-      RegulationUpsertSchema.safeParse({label: 'あ'.repeat(301)}).success,
+      RegulationUpsertSchema.safeParse({label: 'あ'.repeat(401)}).success,
     ).toBe(false);
   });
 

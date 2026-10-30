@@ -153,6 +153,25 @@ describe('requireOpenEntryPeriodOrStaff (refusals)', () => {
     }
   });
 
+  it('refuses a caller with no session to a paused form, saying it is paused', async () => {
+    const res = await gatedApp(
+      openEntryPeriodTournament({entries_paused: true}),
+    ).request('/', {}, env);
+
+    expect(res.status).toBe(403);
+    expect((await res.json()) as unknown).toEqual({error: 'entries paused'});
+  });
+
+  it('still says closed for a paused form outside its period', async () => {
+    const res = await gatedApp(
+      closedEntryPeriodTournament({entries_paused: true}),
+    ).request('/', {}, env);
+
+    expect((await res.json()) as unknown).toEqual({
+      error: 'entry period closed',
+    });
+  });
+
   it("refuses another region's staff with 403", async () => {
     const res = await gatedApp(closedEntryPeriodTournament()).request(
       '/',
@@ -179,6 +198,22 @@ describe('requireOpenEntryPeriodOrStaff (context variables)', () => {
   // The claims are what tells a handler behind the gate that this is a staff
   // preview of a form that is not published yet, rather than the public
   // in-period read. Left unset, the two would be indistinguishable.
+  it('lets the staff covering a paused form preview it', async () => {
+    const res = await gatedApp(
+      openEntryPeriodTournament({entries_paused: true}),
+    ).request(
+      '/',
+      {headers: {cookie: await regionalStaffCookie(TEST_REGION_ID)}},
+      env,
+    );
+
+    expect(res.status).toBe(200);
+    expect(
+      ((await res.json()) as {entryPeriodStaff: StaffClaims | null})
+        .entryPeriodStaff,
+    ).toMatchObject({regionId: TEST_REGION_ID});
+  });
+
   it('sets entryPeriodStaff for the staff let through outside the period', async () => {
     const res = await gatedApp(closedEntryPeriodTournament()).request(
       '/',

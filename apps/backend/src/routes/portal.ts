@@ -1,7 +1,7 @@
 import {Hono} from 'hono';
 import {
   defaultTournamentName,
-  isWithinEntryPeriod,
+  isAcceptingEntries,
   PortalTournamentSchema,
   type PortalTournament,
   type TournamentType,
@@ -16,6 +16,7 @@ interface PortalTournamentRow {
   name: string | null;
   entry_opens_at: string;
   entry_closes_at: string;
+  entries_paused: boolean;
   capacity: number | null;
   regulations: Array<{
     label: string;
@@ -38,9 +39,12 @@ function rowToPortalTournament(
   now: Date,
 ): PortalTournament | null {
   // Only an open form's regulations are public (see `PortalTournamentSchema`).
-  const regulations = isWithinEntryPeriod(
-    row.entry_opens_at,
-    row.entry_closes_at,
+  const regulations = isAcceptingEntries(
+    {
+      entryOpensAt: row.entry_opens_at,
+      entryClosesAt: row.entry_closes_at,
+      entriesPaused: row.entries_paused,
+    },
     now,
   )
     ? row.regulations
@@ -56,6 +60,7 @@ function rowToPortalTournament(
       (row.regions && defaultTournamentName(row.regions.name, row.type)),
     entryOpensAt: row.entry_opens_at,
     entryClosesAt: row.entry_closes_at,
+    entriesPaused: row.entries_paused,
     capacity: row.capacity,
     priorityRegulations: regulations.flatMap(regulation =>
       regulation.priority_starts_at !== null &&
@@ -100,7 +105,8 @@ export const portalRoute = new Hono<Env>().get('/tournaments', async c => {
   const {data, error} = await db
     .from('tournaments')
     .select(
-      'type, name, entry_opens_at, entry_closes_at, capacity, ' +
+      'type, name, entry_opens_at, entry_closes_at, entries_paused, ' +
+        'capacity, ' +
         'regions!inner(slug, name, allows_dual_entry), ' +
         'regulations(label, priority_starts_at, priority_ends_at)',
     )
