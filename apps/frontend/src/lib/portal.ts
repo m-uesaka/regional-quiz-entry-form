@@ -1,5 +1,5 @@
 import {
-  isWithinEntryPeriod,
+  entryAvailability,
   TOURNAMENT_TYPE_LABELS,
   TournamentTypeSchema,
   type PortalTournament,
@@ -105,8 +105,8 @@ export function tournamentEntryListPath(
 }
 
 /**
- * Says where a tournament's entry period stands at `now`, using the same
- * inclusive window the backend's entry-period gate opens the form for.
+ * Says where a tournament's entries stand at `now`: `entryAvailability()`,
+ * the same rule the backend's entry-period gate opens the form by.
  * @param tournament The tournament to check.
  * @param now The moment to check it at.
  */
@@ -117,14 +117,7 @@ export function portalStatus(
   >,
   now: Date,
 ): PortalStatus {
-  if (
-    isWithinEntryPeriod(tournament.entryOpensAt, tournament.entryClosesAt, now)
-  ) {
-    return tournament.entriesPaused ? 'paused' : 'open';
-  }
-  return now.getTime() < Date.parse(tournament.entryOpensAt)
-    ? 'upcoming'
-    : 'closed';
+  return entryAvailability(tournament, now);
 }
 
 /**

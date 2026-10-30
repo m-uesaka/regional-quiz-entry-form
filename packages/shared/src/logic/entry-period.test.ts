@@ -1,5 +1,9 @@
 import {describe, expect, it} from 'bun:test';
-import {isAcceptingEntries, isWithinEntryPeriod} from './entry-period';
+import {
+  entryAvailability,
+  isAcceptingEntries,
+  isWithinEntryPeriod,
+} from './entry-period';
 
 describe('isWithinEntryPeriod', () => {
   const opensAt = '2026-08-01T00:00:00Z';
@@ -55,5 +59,29 @@ describe('isAcceptingEntries', () => {
     expect(
       isAcceptingEntries(tournament, new Date('2026-12-01T00:00:00Z')),
     ).toBe(false);
+  });
+});
+
+describe('entryAvailability', () => {
+  const tournament = {
+    entryOpensAt: '2026-11-01T00:00:00Z',
+    entryClosesAt: '2026-11-30T00:00:00Z',
+    entriesPaused: false,
+  };
+  const paused = {...tournament, entriesPaused: true};
+
+  it('is open or paused within the period', () => {
+    const within = new Date('2026-11-15T00:00:00Z');
+    expect(entryAvailability(tournament, within)).toBe('open');
+    expect(entryAvailability(paused, within)).toBe('paused');
+  });
+
+  it('goes by the period alone before and after it, paused or not', () => {
+    expect(entryAvailability(paused, new Date('2026-10-31T00:00:00Z'))).toBe(
+      'upcoming',
+    );
+    expect(entryAvailability(paused, new Date('2026-12-01T00:00:00Z'))).toBe(
+      'closed',
+    );
   });
 });

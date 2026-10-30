@@ -280,9 +280,6 @@ describe('staff entries pause action', () => {
     return (async (input, init) => {
       const url = String(input);
       const method = init?.method ?? 'GET';
-      if (method === 'GET') {
-        return Response.json(TOURNAMENT);
-      }
       const body = JSON.parse(String(init?.body)) as {paused: boolean};
       options.sent?.push({method, url, body});
       const status = options.status ?? 200;
@@ -295,10 +292,14 @@ describe('staff entries pause action', () => {
   function buildActionEvent(
     fetchImpl: typeof fetch,
     paused: string | null,
+    tournamentId: string | null = TOURNAMENT.id,
   ): Parameters<typeof actions.pause>[0] {
     const formData = new FormData();
     if (paused !== null) {
       formData.set('paused', paused);
+    }
+    if (tournamentId !== null) {
+      formData.set('tournamentId', tournamentId);
     }
     return {
       params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
@@ -341,6 +342,24 @@ describe('staff entries pause action', () => {
       actions.pause(buildActionEvent(pauseFetch({sent}), null)),
     ).resolves.toMatchObject({status: 400});
     expect(sent).toEqual([]);
+  });
+
+  it('refuses a post without a tournament id, without asking the API', async () => {
+    const sent: Sent[] = [];
+
+    await expect(
+      actions.pause(buildActionEvent(pauseFetch({sent}), 'true', 'nope')),
+    ).resolves.toMatchObject({status: 400});
+    expect(sent).toEqual([]);
+  });
+
+  it('reports a tournament that has since been removed', async () => {
+    await expect(
+      actions.pause(buildActionEvent(pauseFetch({status: 404}), 'true')),
+    ).resolves.toMatchObject({
+      status: 404,
+      data: {pauseError: '大会が見つかりません'},
+    });
   });
 
   it('says a refused permission is one', async () => {

@@ -2,6 +2,7 @@ import {error, fail, redirect} from '@sveltejs/kit';
 import {
   EntryStatusSchema,
   TournamentEntryPauseInputSchema,
+  TournamentSchema,
   TournamentTypeSchema,
 } from '@regional-quiz/shared';
 import {createApiClient, isUnauthorized} from '$lib/api';
@@ -96,39 +97,29 @@ export const load: PageServerLoad = async ({
 };
 
 export const actions = {
-  // Pauses or resumes taking entries (0039). The API checks the staff
-  // member covers the tournament, so the id is taken from `load`'s read of
-  // the route rather than from the form.
-  pause: async ({params, request, fetch, cookies, url}) => {
-    const value = (await request.formData()).get('paused');
+  // Pauses or resumes taking entries (0039). The tournament comes as the
+  // id `load` rendered into the form rather than from reading the route's
+  // slugs again: the API checks the staff member covers whichever
+  // tournament it names, so the id needs no vouching for here.
+  pause: async ({request, fetch, cookies, url}) => {
+    const formData = await request.formData();
+    const tournamentId = TournamentSchema.shape.id.safeParse(
+      formData.get('tournamentId'),
+    );
+    const value = formData.get('paused');
     const input = TournamentEntryPauseInputSchema.safeParse({
       paused: value === 'true' ? true : value === 'false' ? false : undefined,
     });
-    if (!input.success) {
+    if (!tournamentId.success || !input.success) {
       return pauseFailure(400, '操作内容を確認してください');
     }
-    const parsedType = TournamentTypeSchema.safeParse(params.tournamentSlug);
-    if (!parsedType.success) {
-      return pauseFailure(404, '大会が見つかりません');
-    }
 
-    const api = createApiClient(fetch);
-    const tournamentRes = await api.api.tournaments[':regionSlug'][
-      ':tournamentSlug'
-    ].$get({
-      param: {regionSlug: params.regionSlug, tournamentSlug: parsedType.data},
+    const res = await createApiClient(fetch).api.staff.tournaments[
+      ':tournamentId'
+    ]['entry-pause'].$put({
+      param: {tournamentId: tournamentId.data},
+      json: input.data,
     });
-    if (!tournamentRes.ok) {
-      if (isUnauthorized(tournamentRes)) {
-        redirectToStaffLogin(cookies, url);
-      }
-      return pauseFailure(502, '大会情報の取得に失敗しました');
-    }
-    const tournament = await tournamentRes.json();
-
-    const res = await api.api.staff.tournaments[':tournamentId'][
-      'entry-pause'
-    ].$put({param: {tournamentId: tournament.id}, json: input.data});
     if (!res.ok) {
       if (isUnauthorized(res)) {
         redirectToStaffLogin(cookies, url);
@@ -138,6 +129,9 @@ export const actions = {
           403,
           'この大会のエントリー受付を操作する権限がありません',
         );
+      }
+      if (res.status === 404) {
+        return pauseFailure(404, '大会が見つかりません');
       }
       return pauseFailure(
         502,

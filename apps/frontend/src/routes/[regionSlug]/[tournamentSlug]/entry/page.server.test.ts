@@ -563,6 +563,47 @@ describe('entry +page.server default action for a logged-in participant', () => 
 
   // The session already says who is asking, so the API refuses directly and
   // the form can say why.
+  it('answers a submission to a tournament paused since the form opened in place, keeping what was typed', async () => {
+    const requests: string[] = [];
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          tournament: {error: 'entries paused'} as unknown as Tournament,
+          tournamentStatus: 403,
+          requests,
+        }),
+        fields: sessionFormData(),
+        participant: PARTICIPANT,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 403,
+      data: {
+        error: expect.stringContaining('一時中断') as unknown,
+        values: {name: '山田太郎'},
+      },
+    });
+    expect(requests.some(url => url.includes('/entries'))).toBe(false);
+  });
+
+  it('says paused when the entry POST itself is refused as paused', async () => {
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          entryResponse: {status: 403, body: {error: 'entries paused'}},
+        }),
+        fields: sessionFormData(),
+        participant: PARTICIPANT,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 403,
+      data: {error: expect.stringContaining('一時中断') as unknown},
+    });
+  });
+
   it('reports a refusal directly', async () => {
     const result = await actions.default(
       buildActionEvent({

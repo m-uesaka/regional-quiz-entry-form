@@ -273,6 +273,34 @@ describe('staff entries +page.svelte, pausing entries', () => {
     expect(form).toHaveAttribute('method', 'POST');
     expect(form).toHaveAttribute('action', '?/pause');
     expect(form.querySelector('input[name="paused"]')).toHaveValue('true');
+    expect(form.querySelector('input[name="tournamentId"]')).toHaveValue(
+      TOURNAMENT.id,
+    );
+  });
+
+  it("keeps the list's filter and page across the action", () => {
+    render(Page, {
+      props: {
+        params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
+        data: {
+          loggedIn: true,
+          isGeneralStaff: false,
+          tournament: TOURNAMENT,
+          entries: ENTRIES,
+          total: 300,
+          limit: 100,
+          offset: 100,
+          status: 'confirmed',
+        },
+        form: null,
+      },
+    });
+
+    expect(
+      screen
+        .getByRole('button', {name: 'エントリー受付を一時中断する'})
+        .closest('form'),
+    ).toHaveAttribute('action', '?status=confirmed&offset=100&/pause');
   });
 
   it('offers to resume a paused tournament, saying it is paused', () => {

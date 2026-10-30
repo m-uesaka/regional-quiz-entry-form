@@ -38,6 +38,14 @@
       new URLSearchParams(data.status ? {status: data.status} : {}),
       offset,
     );
+
+  // `?/pause` alone would replace the page's query, so the list would come
+  // back unfiltered on its first page after the action. The action is
+  // added to the query the page is showing instead.
+  const pauseAction = $derived.by(() => {
+    const query = hrefFor(data.offset);
+    return query === '?' ? '?/pause' : `${query}&/pause`;
+  });
 </script>
 
 <PageContainer size="wide">
@@ -96,7 +104,8 @@
         </p>
       </Message>
     {/if}
-    <form method="POST" action="?/pause">
+    <form method="POST" action={pauseAction}>
+      <input type="hidden" name="tournamentId" value={data.tournament.id} />
       <input type="hidden" name="paused" value={paused ? 'false' : 'true'} />
       <Button type="submit" variant={paused ? 'primary' : 'danger'}>
         {paused ? 'エントリー受付を再開する' : 'エントリー受付を一時中断する'}

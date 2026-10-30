@@ -1,7 +1,7 @@
 import type {Context} from 'hono';
 import {createMiddleware} from 'hono/factory';
 import {getCookie} from 'hono/cookie';
-import {isAcceptingEntries, isWithinEntryPeriod} from '@regional-quiz/shared';
+import {entryAvailability} from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {
   fetchTournamentById,
@@ -74,30 +74,20 @@ export function requireOpenEntryPeriodOrStaff(
     }
     c.set('tournament', tournament);
 
-    const now = new Date();
-    if (
-      isAcceptingEntries(
-        {
-          entryOpensAt: tournament.entry_opens_at,
-          entryClosesAt: tournament.entry_closes_at,
-          entriesPaused: tournament.entries_paused,
-        },
-        now,
-      )
-    ) {
+    const availability = entryAvailability({
+      entryOpensAt: tournament.entry_opens_at,
+      entryClosesAt: tournament.entry_closes_at,
+      entriesPaused: tournament.entries_paused,
+    });
+    if (availability === 'open') {
       await next();
       return;
     }
     // A paused tournament (0039) is gated exactly like one outside its
     // period, but said apart so the form can tell participants it is
     // paused rather than closed.
-    const refusal = isWithinEntryPeriod(
-      tournament.entry_opens_at,
-      tournament.entry_closes_at,
-      now,
-    )
-      ? 'entries paused'
-      : 'entry period closed';
+    const refusal =
+      availability === 'paused' ? 'entries paused' : 'entry period closed';
 
     const cookie = getCookie(c, STAFF_SESSION_COOKIE);
     const staff = await readStaffClaims(cookie, c.env.SESSION_SECRET);
@@ -111,9 +101,10 @@ export function requireOpenEntryPeriodOrStaff(
       return c.json({error: 'staff session expired'}, 401);
     }
     // Having no session at all is answered 403 rather than 401 instead: the
-    // resource is not one a login would generally unlock, and the entry
-    // form's own error mapping already renders this `error` string as
-    // 「エントリー期間外です」.
+    // resource is not one a login would generally unlock. The entry form
+    // renders the `error` string by what it says: `entry period closed` as
+    // 「エントリー期間外です」, `entries paused` as 一時中断している旨.
+    // Keep the two apart for any new consumer of this gate.
     if (!staff) {
       return c.json({error: refusal}, 403);
     }
