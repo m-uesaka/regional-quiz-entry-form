@@ -3,10 +3,10 @@ import {z} from 'zod';
 /**
  * The longest a regulation's label may be. A label is the condition itself
  * as entrants read it on the entry form (「開催地域に在住・在学・在勤の方」),
- * and some regions' conditions run long, so 300 rather than the 200 it
- * started at.
+ * and some regions' conditions run long, so 400 (it started at 200 and
+ * was raised to 300 first).
  */
-export const REGULATION_LABEL_MAX_LENGTH = 300;
+export const REGULATION_LABEL_MAX_LENGTH = 400;
 
 export const RegulationSchema = z.object({
   id: z.string().uuid(),

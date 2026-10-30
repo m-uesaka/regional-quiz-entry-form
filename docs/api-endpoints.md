@@ -537,7 +537,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
   | フィールド | 型 | 備考 |
   | --- | --- | --- |
   | `id` | string(uuid) | 省略可。**指定すると既存行の更新、省略すると新規追加** |
-  | `label` | string | 1〜300文字(`REGULATION_LABEL_MAX_LENGTH`) |
+  | `label` | string | 1〜400文字(`REGULATION_LABEL_MAX_LENGTH`) |
   | `priorityStartsAt` | string(datetime) \| null | 省略時は `null` |
   | `priorityEndsAt` | string(datetime) \| null | 省略時は `null` |
 - `displayOrder` は送りません。**配列の並び順がそのまま `display_order`** になるので、並べ替えは配列を並べ替えるだけです。
