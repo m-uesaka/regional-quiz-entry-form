@@ -266,14 +266,22 @@ export const load: PageServerLoad = async ({
 }) => {
   const tournament = await fetchTournament({params, fetch, cookies, url});
 
+  // Read once and used for the gate and everything after it, so the
+  // server rendering and the hydrated page agree, and so a request that
+  // straddles the closing instant can't pass the gate as a participant and
+  // then be shown the staff preview notice.
+  const now = new Date();
+  const open = isWithinEntryPeriod(
+    tournament.entryOpensAt,
+    tournament.entryClosesAt,
+    now,
+  );
+
   // Holding *a* staff session is not enough: the requirement grants the
   // out-of-period form to the tournament's own 地域スタッフ and to 統括
   // スタッフ, not to a regional account covering somewhere else. The rule is
   // the one the backend enforces, imported rather than restated.
-  if (
-    !isWithinEntryPeriod(tournament.entryOpensAt, tournament.entryClosesAt) &&
-    !canPreviewTournament(locals.staff, tournament)
-  ) {
+  if (!open && !canPreviewTournament(locals.staff, tournament)) {
     throw error(403, 'エントリー期間外です');
   }
 
@@ -284,24 +292,16 @@ export const load: PageServerLoad = async ({
     fetchFormFieldDefs(tournament.id, fetch),
     fetchEntryCounts(tournament.id, fetch),
   ]);
-  // Worked out here rather than in the page, so the server rendering and
-  // the hydrated page read the same clock. Both notices are about the
-  // entries the form is taking, so a form staff preview outside its period
-  // shows neither -- as on the portal, where a priority window can outlast
-  // its form.
-  const now = new Date();
-  const open = isWithinEntryPeriod(
-    tournament.entryOpensAt,
-    tournament.entryClosesAt,
-    now,
-  );
+  // Both notices are about the entries the form is taking, so a form staff
+  // preview outside its period shows neither -- as on the portal, where a
+  // priority window can outlast its form.
   return {
     tournament,
     regulations,
     formFieldDefs,
-    // Only staff get this far outside the period (checked above), and the
-    // API refuses their submission all the same, so the page says so
-    // before they fill the form in.
+    // Only staff get this far outside the period (checked above). The API
+    // refuses their submission all the same, so the form is shown without
+    // a way to send it.
     staffPreview: !open,
     priorityNotices: open ? priorityEntryNotices(regulations, now) : [],
     waitlistOpen:

@@ -81,6 +81,7 @@
           values={form?.values}
           fieldErrors={form?.fieldErrors}
           loggedIn={data.loggedIn}
+          preview={data.staffPreview}
         />
       {/key}
     </Card>

@@ -134,12 +134,14 @@ describe('entry +page.svelte', () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByLabelText('氏名')).toBeInTheDocument();
+    expect(screen.getByRole('button', {name: 'エントリーする'})).toBeDisabled();
   });
 
   it('says nothing of a preview while the form is open', () => {
     renderPage();
 
     expect(screen.queryByText(/スタッフ向けに確認用/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', {name: 'エントリーする'})).toBeEnabled();
   });
 
   it('renders the entry form fields', () => {
