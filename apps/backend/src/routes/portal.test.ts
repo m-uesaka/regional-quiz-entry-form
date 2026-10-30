@@ -26,6 +26,7 @@ function row(
     name: null,
     entry_opens_at: '2026-11-01T00:00:00+00:00',
     entry_closes_at: '2026-11-30T00:00:00+00:00',
+    entries_paused: false,
     capacity: null,
     regions: {slug: regionSlug, name: regionName, allows_dual_entry: false},
     regulations: [],
@@ -97,6 +98,7 @@ describe('GET /portal/tournaments (mocked Supabase)', () => {
         tournamentName: '東京最強位',
         entryOpensAt: '2026-11-01T00:00:00+00:00',
         entryClosesAt: '2026-11-30T00:00:00+00:00',
+        entriesPaused: false,
         capacity: null,
         priorityRegulations: [],
       },
@@ -108,6 +110,7 @@ describe('GET /portal/tournaments (mocked Supabase)', () => {
         tournamentName: '東京新人王',
         entryOpensAt: '2026-11-01T00:00:00+00:00',
         entryClosesAt: '2026-11-30T00:00:00+00:00',
+        entriesPaused: false,
         capacity: null,
         priorityRegulations: [],
       },
@@ -119,6 +122,7 @@ describe('GET /portal/tournaments (mocked Supabase)', () => {
         tournamentName: '北海道最強位',
         entryOpensAt: '2026-11-01T00:00:00+00:00',
         entryClosesAt: '2026-11-30T00:00:00+00:00',
+        entriesPaused: false,
         capacity: null,
         priorityRegulations: [],
       },
@@ -173,6 +177,23 @@ describe('GET /portal/tournaments (mocked Supabase)', () => {
 
   // The regulations are part of the form the entry-period gate keeps
   // unpublished, so the portal mustn't become a way round it.
+  it('says a paused form is paused and leaves its regulations unlisted', async () => {
+    mockTournamentsFetch([
+      {
+        ...row('tokyo', '東京', 'saikyoi'),
+        ...openPeriod(),
+        entries_paused: true,
+        regulations: PRIORITY_REGULATIONS,
+      },
+    ]);
+
+    const res = await app.request('/api/portal/tournaments', {}, env);
+    const [tournament] = (await res.json()) as Array<Record<string, unknown>>;
+
+    expect(tournament.entriesPaused).toBe(true);
+    expect(tournament.priorityRegulations).toEqual([]);
+  });
+
   it('leaves the regulations of a form that is not open unlisted', async () => {
     mockTournamentsFetch([
       {

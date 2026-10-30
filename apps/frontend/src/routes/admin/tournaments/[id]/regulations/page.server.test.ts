@@ -16,6 +16,7 @@ const TOURNAMENT: Tournament = {
   capacity: 64,
   entryOpensAt: '2026-01-01T00:00:00.000Z',
   entryClosesAt: '2026-02-01T00:00:00.000Z',
+  entriesPaused: false,
 };
 
 const GENERAL: Regulation = {

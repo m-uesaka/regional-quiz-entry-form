@@ -13,6 +13,7 @@ const TOURNAMENT: Tournament = {
   capacity: null,
   entryOpensAt: '2020-01-01T00:00:00.000Z',
   entryClosesAt: '2099-01-01T00:00:00.000Z',
+  entriesPaused: false,
 };
 
 /** A second tournament, reached by a link that only changes the slug. */
@@ -69,6 +70,7 @@ function renderPage(
     priorityNotices?: PriorityEntryNotice[];
     waitlistOpen?: boolean;
     staffPreview?: boolean;
+    staffPreviewReason?: 'paused' | 'closed' | null;
   } = {},
 ) {
   return render(Page, {
@@ -79,6 +81,9 @@ function renderPage(
         regulations: REGULATIONS,
         formFieldDefs: FORM_FIELD_DEFS,
         staffPreview: options.staffPreview ?? false,
+        staffPreviewReason:
+          options.staffPreviewReason ??
+          (options.staffPreview ? 'closed' : null),
         priorityNotices: options.priorityNotices ?? [],
         waitlistOpen: options.waitlistOpen ?? false,
         loggedIn: options.loggedIn ?? false,
@@ -138,6 +143,17 @@ describe('entry +page.svelte', () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByLabelText('氏名')).toBeInTheDocument();
+    expect(screen.getByRole('button', {name: 'エントリーする'})).toBeDisabled();
+  });
+
+  it('tells staff previewing a paused form why it cannot be sent', () => {
+    renderPage(null, {staffPreview: true, staffPreviewReason: 'paused'});
+
+    expect(
+      screen.getByText(
+        /エントリー受付を一時中断しているため、スタッフ向けに確認用として表示しています/,
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByRole('button', {name: 'エントリーする'})).toBeDisabled();
   });
 
@@ -404,6 +420,7 @@ describe('entry +page.svelte', () => {
         regulations: REGULATIONS,
         formFieldDefs: FORM_FIELD_DEFS,
         staffPreview: false,
+        staffPreviewReason: null,
         priorityNotices: [],
         waitlistOpen: false,
         loggedIn: false,

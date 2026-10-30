@@ -65,6 +65,7 @@ export interface EntryTournamentRow {
   capacity: number | null;
   entry_opens_at: string;
   entry_closes_at: string;
+  entries_paused: boolean;
   // A to-one embed, so PostgREST answers with the region object itself
   // rather than a single-element array (unlike `regulations` below).
   regions: {allows_dual_entry: boolean; name: string};
@@ -382,6 +383,7 @@ export async function checkEntrySubmission(
     .from('tournaments')
     .select(
       'id, name, type, region_id, capacity, entry_opens_at, entry_closes_at, ' +
+        'entries_paused, ' +
         'regions(allows_dual_entry, name), ' +
         'regulations(id, priority_starts_at, priority_ends_at)',
     )
@@ -408,6 +410,11 @@ export async function checkEntrySubmission(
     )
   ) {
     return {ok: false, status: 403, error: 'entry period closed'};
+  }
+  // Paused by staff (0039). Only new entries stop: edits, cancellations and
+  // confirmations of entries already made go on.
+  if (tournament.entries_paused) {
+    return {ok: false, status: 403, error: 'entries paused'};
   }
 
   const regulations = tournament.regulations.map(regulation => ({

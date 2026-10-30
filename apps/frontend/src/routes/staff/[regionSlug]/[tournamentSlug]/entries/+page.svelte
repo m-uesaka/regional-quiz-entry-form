@@ -6,6 +6,8 @@
   import Pager from '$lib/components/Pager.svelte';
   import NativeSelect from '$lib/components/form/NativeSelect.svelte';
   import Button, {buttonVariants} from '$lib/components/ui/atoms/Button.svelte';
+  import Card from '$lib/components/ui/atoms/Card.svelte';
+  import Message from '$lib/components/ui/items/Message.svelte';
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import {pageQuery} from '$lib/pagination';
   import {tournamentEntryFormPath} from '$lib/portal';
@@ -17,7 +19,9 @@
   import TableHead from '$lib/components/ui/atoms/TableHead.svelte';
   import type {PageProps} from './$types';
 
-  let {data, params}: PageProps = $props();
+  let {data, params, form}: PageProps = $props();
+
+  const paused = $derived(data.tournament.entriesPaused);
 
   // A plain link rather than a `fetch`: the export is served from the same
   // origin as this page, so the browser sends the `staff_session` cookie
@@ -34,6 +38,14 @@
       new URLSearchParams(data.status ? {status: data.status} : {}),
       offset,
     );
+
+  // `?/pause` alone would replace the page's query, so the list would come
+  // back unfiltered on its first page after the action. The action is
+  // added to the query the page is showing instead.
+  const pauseAction = $derived.by(() => {
+    const query = hrefFor(data.offset);
+    return query === '?' ? '?/pause' : `${query}&/pause`;
+  });
 </script>
 
 <PageContainer size="wide">
@@ -61,6 +73,45 @@
       </a>
     {/snippet}
   </PageHeader>
+
+  <!-- Pausing stops new entries (within the period or not) until it is
+       resumed; entries already made can still be edited, cancelled and
+       confirmed (0039). A form action, so it works without JavaScript. -->
+  <Card class="gap-3">
+    <div class="flex flex-wrap items-center gap-2">
+      <h2 class="text-lg font-bold">エントリー受付</h2>
+      <Chip variant={paused ? 'warning' : 'success'} tone="soft">
+        {paused ? '一時中断中' : '通常'}
+      </Chip>
+    </div>
+    <p class="text-sm">
+      {#if paused}
+        新しいエントリーの受付を一時中断しています。エントリーフォームは参加者に表示されず、ポータルには「一時中断中」と表示されます。
+      {:else}
+        一時中断すると、再開するまで新しいエントリーを受け付けません。すでにあるエントリーの編集・キャンセル・確認メールでの確定はそのまま行えます。
+      {/if}
+    </p>
+    {#if form?.pauseError}
+      <Message variant="danger">
+        <p role="alert" class="text-sm text-foreground">{form.pauseError}</p>
+      </Message>
+    {:else if form?.paused !== undefined && form.paused !== null}
+      <Message variant="success">
+        <p role="status" class="text-sm text-foreground">
+          {form.paused
+            ? 'エントリー受付を一時中断しました'
+            : 'エントリー受付を再開しました'}
+        </p>
+      </Message>
+    {/if}
+    <form method="POST" action={pauseAction}>
+      <input type="hidden" name="tournamentId" value={data.tournament.id} />
+      <input type="hidden" name="paused" value={paused ? 'false' : 'true'} />
+      <Button type="submit" variant={paused ? 'primary' : 'danger'}>
+        {paused ? 'エントリー受付を再開する' : 'エントリー受付を一時中断する'}
+      </Button>
+    </form>
+  </Card>
 
   <p class="text-sm text-muted-foreground">
     この CSV は Excel / Google スプレッドシートで開く前提の出力です。数式として実行され

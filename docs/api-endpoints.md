@@ -80,9 +80,9 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 判定は次の順です。
 
 1. リクエストが指す大会を引く(`:tournamentId` から直接、または `:regionSlug` / `:tournamentSlug` から `regions!inner()` で絞った1回のクエリで)。見つからなければ **404** `{"error": "tournament not found"}`
-2. `isWithinEntryPeriod()`(`packages/shared`)が真なら、セッションを見ずに通過
-3. 期間外なら `staff_session` を読む。`staff_session` が**付いているのに検証できなかった**場合(期限切れ・改竄)は **401** `{"error": "staff session expired"}`。セッションが切れただけのスタッフをログイン画面に戻すためで、セッションを最初から持たない訪問者(4 の 403)と区別する必要があるのはこの点です
-4. セッションが無ければ **403** `{"error": "entry period closed"}`
+2. `isAcceptingEntries()`(`packages/shared`。期間内で、かつ一時中断(`entries_paused`、`0039`)されていない)が真なら、セッションを見ずに通過
+3. 受付中でなければ `staff_session` を読む。`staff_session` が**付いているのに検証できなかった**場合(期限切れ・改竄)は **401** `{"error": "staff session expired"}`。セッションが切れただけのスタッフをログイン画面に戻すためで、セッションを最初から持たない訪問者(4 の 403)と区別する必要があるのはこの点です
+4. セッションが無ければ **403** `{"error": "entry period closed"}`。期間内だが一時中断中のときは `{"error": "entries paused"}`(フォーム側で「一時中断しています」と出し分けるため。6 も同じ)
 5. セッションの失効を確かめる(`staff_accounts.sessions_valid_from`)。失効していれば 3 と同じ **401** `{"error": "staff session expired"}`、列を読めなければ **500**
 6. 担当スタッフでなければ **403** `{"error": "entry period closed"}`
 
@@ -235,6 +235,7 @@ if ('yaml' in body) {
 | POST | `/api/sheet-import/tournaments/preview` | 統括スタッフ |
 | POST | `/api/sheet-import/tournaments` | 統括スタッフ |
 | GET | `/api/staff/tournaments/:tournamentId/entries` | スタッフ(担当範囲) |
+| PUT | `/api/staff/tournaments/:tournamentId/entry-pause` | スタッフ(担当範囲) |
 | GET | `/api/staff/tournaments/:tournamentId/entries.csv` | スタッフ(担当範囲) |
 | GET | `/api/staff/entries/:entryId` | スタッフ(担当範囲) |
 | POST | `/api/staff/tournaments/:tournamentId/mail` | スタッフ(担当範囲) |
@@ -909,6 +910,27 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 - `401` / `403` / `500`
 
 `formFieldDefs` は当該大会のフォーム項目定義を `display_order` 昇順で返すものです。これがないと、スタッフ画面は `customFieldValues` を `t_shirt_size` のような生のキーでしか表示できません。一覧エンドポイントは追加項目の回答を描画しないため、`formFieldDefs` を返しません。
+
+### `PUT /api/staff/tournaments/:tournamentId/entry-pause`
+
+大会のエントリー受付を一時中断・再開します(`0039`)。**統括スタッフと、その大会を担当する地域スタッフ**が使えます(`requireStaffForTournament()`)。大会の他の設定と違って地域スタッフにも許しているのは、大会を運営する側が、レギュレーションの誤りなどを直す間だけ新規受付を止められるようにするためです(再開すれば元に戻り、何も失われません)。
+
+中断中は次のようになります。
+
+- エントリー期間内でも、新しいエントリー(`POST /api/tournaments/:tournamentId/entries` / `.../entries/session`)を **403** `{"error": "entries paused"}` で断る
+- フォームを構成する公開 GET は期間外と同じく担当スタッフにしか開けない(§1 `requireOpenEntryPeriodOrStaff()`)。スタッフには確認用として表示する
+- ポータル(`GET /api/portal/tournaments`)は `entriesPaused: true` を返し、画面には「一時中断中」と出る。優先エントリーの案内も出さない
+- すでにあるエントリーの編集・キャンセル・確認リンクでの確定は**止めない**(中断は新しい受付を止めるためのもので、申し込み済みの人の確認リンクを期限切れにしないため)
+- エントリー期間そのものは変えない。期間外になればいつもどおり「受付終了」「受付開始前」として扱う
+
+- パス: `tournamentId` は UUID
+- リクエスト: `TournamentEntryPauseInput` — `{"paused": boolean}`(トグルではなく状態を送るので、二重送信しても意図した状態になる)
+- `200`: `Tournament`(`entriesPaused` は更新後の値)
+- `400`: Zod のバリデーションエラー(認可の後に検査する)
+- `403` / `404`: §1「認可ミドルウェア」のとおり
+- `500`: `{"error": "internal server error"}`
+
+画面からはスタッフのエントリー一覧(`/staff/[regionSlug]/[tournamentSlug]/entries`)の form action(`?/pause`)が呼びます。
 
 ### `POST /api/staff/tournaments/:tournamentId/mail`
 

@@ -12,6 +12,7 @@ const TOURNAMENT: Tournament = {
   capacity: 64,
   entryOpensAt: '2026-01-01T00:00:00.000Z',
   entryClosesAt: '2026-02-01T00:00:00.000Z',
+  entriesPaused: false,
 };
 
 const REGIONS: Region[] = [
@@ -50,6 +51,7 @@ const OTHER_TOURNAMENT: Tournament = {
   capacity: null,
   entryOpensAt: '2026-03-01T00:00:00.000Z',
   entryClosesAt: '2026-04-01T00:00:00.000Z',
+  entriesPaused: false,
 };
 
 function renderPage(

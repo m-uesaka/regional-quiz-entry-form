@@ -134,6 +134,9 @@ const ROUTE_POLICIES: Readonly<Record<string, Policy>> = {
   'POST /api/sheet-import/tournaments/preview': {access: 'general-staff'},
   'POST /api/sheet-import/tournaments': {access: 'general-staff'},
   'GET /api/staff/tournaments/:tournamentId/entries': {access: 'scoped-staff'},
+  'PUT /api/staff/tournaments/:tournamentId/entry-pause': {
+    access: 'scoped-staff',
+  },
   'GET /api/staff/tournaments/:tournamentId/entries.csv': {
     access: 'scoped-staff',
   },
@@ -293,12 +296,13 @@ const CLOSED_TOURNAMENT = {
   capacity: null,
   entry_opens_at: '2020-01-01T00:00:00.000Z',
   entry_closes_at: '2020-01-31T00:00:00.000Z',
+  entries_paused: false,
   regions: {name: 'テスト地域'},
 };
 
 /** The columns `lib/tournaments.ts` selects, as they appear in the URL. */
 const TOURNAMENT_SELECT =
-  'id,region_id,type,name,capacity,entry_opens_at,entry_closes_at';
+  'id,region_id,type,name,capacity,entry_opens_at,entry_closes_at,entries_paused';
 
 /** A read a guard makes on its way to refusing, and what it is answered. */
 interface GuardRead {

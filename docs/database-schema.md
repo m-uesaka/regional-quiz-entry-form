@@ -118,6 +118,7 @@ flowchart TB
 | `capacity` | integer | nullable | 定員。**`null` は「定員無制限」を意味する**(0 ではない) |
 | `entry_opens_at` | timestamptz | not null | エントリー開始日時 |
 | `entry_closes_at` | timestamptz | not null | エントリー終了日時 |
+| `entries_paused` | boolean | not null, default `false` | エントリー受付の一時中断(`0039`)。`true` の間は期間内でも新しいエントリーを受け付けず、フォームは担当スタッフにしか開けない。統括スタッフと担当の地域スタッフが `PUT /api/staff/tournaments/:tournamentId/entry-pause` で切り替える |
 | `created_at` | timestamptz | not null, default `now()` | |
 
 - `unique (region_id, type)`: 1つの地域につき、各大会種別は1大会まで。この制約があるため `/{regionSlug}/{tournamentSlug}` の組から大会を一意に引ける。
@@ -614,3 +615,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0036_import_tournament_explicit_period.sql` | 大会一覧に定員・エントリー開始・終了の列ができたのに合わせ、`import_tournament()` を定員・開始も書き込み、新規作成か上書きかを引数で受け取ってその通りにしか書かない(合わなければ `P0006`)よう再定義 |
 | `0037_promote_waitlisted_entries_fn.sql` | 空いた席の数だけキャンセル待ちを繰り上げて残りの順位を振り直す `promote_waitlisted_entries()` を追加し、`promote_next_waitlisted_entry()` を削除(#223) |
 | `0038_reset_tournament_entries_fn.sql` | 大会のエントリーを全件削除し、指定があれば他の大会にエントリーが残っていない参加者アカウントも削除する `reset_tournament_entries()` を追加 |
+| `0039_tournaments_entries_paused.sql` | エントリー受付の一時中断を表す `tournaments.entries_paused` を追加 |

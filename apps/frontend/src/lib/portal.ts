@@ -1,5 +1,5 @@
 import {
-  isWithinEntryPeriod,
+  entryAvailability,
   TOURNAMENT_TYPE_LABELS,
   TournamentTypeSchema,
   type PortalTournament,
@@ -11,12 +11,16 @@ import {
   type PriorityEntryNotice,
 } from '$lib/priority-entry';
 
-/** Whether a tournament's entry form is taking entries. */
-export type PortalStatus = 'open' | 'upcoming' | 'closed';
+/**
+ * Whether a tournament's entry form is taking entries. `paused` is within
+ * the period but stopped by staff (0039).
+ */
+export type PortalStatus = 'open' | 'paused' | 'upcoming' | 'closed';
 
 /** What the portal shows for each status. */
 export const PORTAL_STATUS_LABELS: Record<PortalStatus, string> = {
   open: '受付中',
+  paused: '一時中断中',
   upcoming: '受付開始前',
   closed: '受付終了',
 };
@@ -101,23 +105,19 @@ export function tournamentEntryListPath(
 }
 
 /**
- * Says where a tournament's entry period stands at `now`, using the same
- * inclusive window the backend's entry-period gate opens the form for.
+ * Says where a tournament's entries stand at `now`: `entryAvailability()`,
+ * the same rule the backend's entry-period gate opens the form by.
  * @param tournament The tournament to check.
  * @param now The moment to check it at.
  */
 export function portalStatus(
-  tournament: Pick<PortalTournament, 'entryOpensAt' | 'entryClosesAt'>,
+  tournament: Pick<
+    PortalTournament,
+    'entryOpensAt' | 'entryClosesAt' | 'entriesPaused'
+  >,
   now: Date,
 ): PortalStatus {
-  if (
-    isWithinEntryPeriod(tournament.entryOpensAt, tournament.entryClosesAt, now)
-  ) {
-    return 'open';
-  }
-  return now.getTime() < Date.parse(tournament.entryOpensAt)
-    ? 'upcoming'
-    : 'closed';
+  return entryAvailability(tournament, now);
 }
 
 /**

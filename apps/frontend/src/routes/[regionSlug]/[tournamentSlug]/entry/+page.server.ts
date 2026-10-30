@@ -1,10 +1,10 @@
-import {error, fail} from '@sveltejs/kit';
+import {error, fail, isHttpError} from '@sveltejs/kit';
 import {
   canPreviewTournament,
   EntryInputSchema,
   EntrySessionInputSchema,
+  entryAvailability,
   findCustomFieldValuesErrors,
-  isWithinEntryPeriod,
   TournamentEntryCountsSchema,
   TournamentTypeSchema,
   type FormFieldDef,
@@ -45,6 +45,10 @@ const TOO_MANY_REQUESTS_MESSAGE =
 const SESSION_EXPIRED_MESSAGE =
   'ログインの有効期限が切れました。もう一度ログインしてからエントリーしてください';
 
+/** What a tournament staff paused (0039) is shown as, in place of its form. */
+const ENTRIES_PAUSED_MESSAGE =
+  'この大会のエントリー受付は現在一時中断しています。再開までしばらくお待ちください';
+
 /**
  * The hidden field a form rendered for a logged-in participant carries.
  * It is what tells a session that lapsed while the form was open apart from
@@ -64,6 +68,10 @@ const SESSION_ENTRY_VALUE = 'session';
 const ENTRY_ERROR_MESSAGES: Record<string, string> = {
   'invalid tournament': '大会が見つかりません',
   'entry period closed': 'エントリー期間外です',
+  // Staff paused the tournament (0039) between the action's tournament read
+  // and the entry POST. A pause before that read is caught by the action
+  // itself.
+  'entries paused': ENTRIES_PAUSED_MESSAGE,
   'regulation not eligible in priority window':
     '現在は優先期間中のため、優先対象のレギュレーションを1つ以上選択してください',
   // Only a logged-in submission is told this: an anonymous one is answered
@@ -172,7 +180,13 @@ async function fetchTournament({
     // readable at all -- so outside the period this is what a visitor with
     // no staff session, or one covering another region, actually gets.
     if (res.status === 403) {
-      throw error(403, 'エントリー期間外です');
+      // A paused tournament (0039) is gated the same way, but said apart.
+      throw error(
+        403,
+        (await readErrorCode(res)) === 'entries paused'
+          ? ENTRIES_PAUSED_MESSAGE
+          : 'エントリー期間外です',
+      );
     }
     throw error(502, '大会情報の取得に失敗しました');
   }
@@ -271,18 +285,21 @@ export const load: PageServerLoad = async ({
   // straddles the closing instant can't pass the gate as a participant and
   // then be shown the staff preview notice.
   const now = new Date();
-  const open = isWithinEntryPeriod(
-    tournament.entryOpensAt,
-    tournament.entryClosesAt,
-    now,
-  );
+  // Taking entries: within the period and not paused by staff (0039).
+  const availability = entryAvailability(tournament, now);
+  const open = availability === 'open';
 
   // Holding *a* staff session is not enough: the requirement grants the
   // out-of-period form to the tournament's own 地域スタッフ and to 統括
   // スタッフ, not to a regional account covering somewhere else. The rule is
   // the one the backend enforces, imported rather than restated.
   if (!open && !canPreviewTournament(locals.staff, tournament)) {
-    throw error(403, 'エントリー期間外です');
+    throw error(
+      403,
+      availability === 'paused'
+        ? ENTRIES_PAUSED_MESSAGE
+        : 'エントリー期間外です',
+    );
   }
 
   // All public reads and none depends on another, so they run
@@ -303,6 +320,12 @@ export const load: PageServerLoad = async ({
     // refuses their submission all the same, so the form is shown without
     // a way to send it.
     staffPreview: !open,
+    // Which of the two the preview notice explains.
+    staffPreviewReason: open
+      ? null
+      : availability === 'paused'
+        ? ('paused' as const)
+        : ('closed' as const),
     priorityNotices: open ? priorityEntryNotices(regulations, now) : [],
     waitlistOpen:
       open &&
@@ -316,36 +339,67 @@ export const load: PageServerLoad = async ({
   };
 };
 
+/**
+ * What a submission echoes back with every failure, so a rejected one
+ * re-renders what the participant typed. The two password fields are
+ * deliberately left out: re-rendering a password into the HTML would put it
+ * in the page source and in any cache of it.
+ * @param formData The submitted form.
+ * @param formFieldDefs The tournament's custom fields, read back by key.
+ */
+function readEntryFormValues(
+  formData: FormData,
+  formFieldDefs: FormFieldDef[],
+): EntryFormValues {
+  return {
+    name: String(formData.get('name') ?? ''),
+    furigana: String(formData.get('furigana') ?? ''),
+    displayName: String(formData.get('displayName') ?? ''),
+    email: String(formData.get('email') ?? ''),
+    // A checkbox group, so every checked box arrives under the same name —
+    // `getAll`, not `get`.
+    regulationIds: formData.getAll('regulationIds').map(String),
+    freeText: readFormText(formData, 'freeText'),
+    customFieldValues: readCustomFieldValues(formData, formFieldDefs),
+  };
+}
+
 export const actions = {
   default: async ({params, request, fetch, locals, url, cookies}) => {
-    const tournament = await fetchTournament({params, fetch, cookies, url});
+    const formData = await request.formData();
+    let tournament: Tournament;
+    try {
+      tournament = await fetchTournament({params, fetch, cookies, url});
+    } catch (e: unknown) {
+      // Staff paused the tournament (0039) while the form was open. Said
+      // with `fail()` rather than the error page `load` shows, so the
+      // enhanced form stays up with what was typed in it (its controls are
+      // seeded once and keep their values) and can be sent again once
+      // entries resume. The field definitions are behind the same gate, so
+      // the custom answers can't be read back here; the controls still
+      // hold them.
+      if (isHttpError(e, 403) && e.body.message === ENTRIES_PAUSED_MESSAGE) {
+        return fail(403, {
+          error: ENTRIES_PAUSED_MESSAGE,
+          fieldErrors: {} as EntryFieldErrors,
+          values: readEntryFormValues(formData, []),
+          loginPath: null,
+        });
+      }
+      throw e;
+    }
     // The field definitions decide how the submitted body is interpreted,
     // so they're re-read from the API rather than trusted from the client.
     const formFieldDefs = await fetchFormFieldDefs(tournament.id, fetch);
 
-    const formData = await request.formData();
     // Written into the form by the Turnstile widget
     // (`$lib/components/Turnstile.svelte`). Not part of the entry, so it
     // travels as a header rather than in the body the schema describes --
     // which is why it is read through a helper that refuses what a header
     // cannot carry.
     const turnstileToken = readTurnstileToken(formData);
-    const freeText = readFormText(formData, 'freeText');
-    // Echoed back with every failure so a rejected submission re-renders
-    // what the participant typed. The two password fields are deliberately
-    // left out: re-rendering a password into the HTML would put it in the
-    // page source and in any cache of it.
-    const values: EntryFormValues = {
-      name: String(formData.get('name') ?? ''),
-      furigana: String(formData.get('furigana') ?? ''),
-      displayName: String(formData.get('displayName') ?? ''),
-      email: String(formData.get('email') ?? ''),
-      // A checkbox group, so every checked box arrives under the same
-      // name — `getAll`, not `get`.
-      regulationIds: formData.getAll('regulationIds').map(String),
-      freeText,
-      customFieldValues: readCustomFieldValues(formData, formFieldDefs),
-    };
+    const values = readEntryFormValues(formData, formFieldDefs);
+    const {freeText} = values;
 
     // Which form was submitted decides the path, not whether a session
     // exists now: a session that appeared in another tab after an anonymous
