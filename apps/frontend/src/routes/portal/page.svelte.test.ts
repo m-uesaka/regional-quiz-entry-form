@@ -7,6 +7,7 @@ const REGIONS: PortalRegionView[] = [
   {
     regionSlug: 'tokyo',
     regionName: '東京',
+    allowsDualEntry: true,
     tournaments: [
       {
         name: '東京最強位',
@@ -38,6 +39,7 @@ const REGIONS: PortalRegionView[] = [
   {
     regionSlug: 'hokkaido',
     regionName: '北海道',
+    allowsDualEntry: false,
     tournaments: [
       {
         name: '北海道最強位',
@@ -118,6 +120,38 @@ describe('portal +page.svelte', () => {
 
     const closed = screen.getByText('北海道最強位').closest('li');
     expect(within(closed!).getByText('受付終了')).toBeInTheDocument();
+  });
+
+  it('says which regions take entries for both 最強位 and 新人王', () => {
+    renderPage(REGIONS);
+
+    const notice =
+      'この地域は最強位と新人王の両方にエントリー可能です(重複エントリー可)';
+    expect(screen.getAllByText(notice)).toHaveLength(1);
+    expect(
+      within(screen.getByRole('region', {name: '東京'})).getByText(notice),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole('region', {name: '北海道'})).queryByText(notice),
+    ).toBeNull();
+  });
+
+  // It is the region's rule, so it stays while a form is closed; the
+  // form's own status says when it takes entries.
+  it('keeps the notice while one of the forms is not taking entries', () => {
+    const [tokyo] = REGIONS;
+    renderPage([
+      {
+        ...tokyo,
+        tournaments: tokyo.tournaments.map(t => ({...t, status: 'closed'})),
+      },
+    ]);
+
+    expect(
+      screen.getByText(
+        'この地域は最強位と新人王の両方にエントリー可能です(重複エントリー可)',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('says so when no tournament has been published', () => {

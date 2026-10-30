@@ -4,7 +4,12 @@
   import Card from '$lib/components/ui/atoms/Card.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
   import {toTournamentFormValues} from '$lib/tournament-form';
-  import type {Tournament, Region} from '@regional-quiz/shared';
+  import {promotionNotice} from '$lib/waitlist-promotion';
+  import type {
+    Tournament,
+    Region,
+    WaitlistPromotion,
+  } from '@regional-quiz/shared';
   import type {TournamentFormValues} from '$lib/types/tournament-form';
 
   interface Props {
@@ -20,6 +25,8 @@
       saved: boolean;
       error: string | null;
       values: TournamentFormValues | null;
+      /** Read only after a successful save; null when it failed. */
+      promotion: WaitlistPromotion | null;
     } | null;
   }
 
@@ -31,12 +38,22 @@
   const values = $derived(
     result?.values ?? toTournamentFormValues(tournament, customName),
   );
+
+  // What a saved capacity did to the waitlist (#223).
+  const notice = $derived(
+    result?.saved ? promotionNotice(result.promotion) : null,
+  );
 </script>
 
 <Card>
   {#if result?.saved}
     <Message variant="success">
       <p role="status" class="text-sm text-foreground">更新しました</p>
+    </Message>
+  {/if}
+  {#if notice}
+    <Message variant={notice.ok ? 'success' : 'warning'}>
+      <p class="text-sm text-foreground">{notice.text}</p>
     </Message>
   {/if}
   {#if result?.error}

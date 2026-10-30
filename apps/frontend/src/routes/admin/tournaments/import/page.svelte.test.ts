@@ -1,7 +1,11 @@
 import type {ComponentProps} from 'svelte';
 import {fireEvent, render, screen, within} from '@testing-library/svelte';
 import {describe, expect, it} from 'vitest';
-import type {StaffClaims, TournamentImportResult} from '@regional-quiz/shared';
+import type {
+  StaffClaims,
+  TournamentImportPreviewRow,
+  TournamentImportResult,
+} from '@regional-quiz/shared';
 import Page from './+page.svelte';
 
 type PageForm = ComponentProps<typeof Page>['form'];
@@ -13,9 +17,11 @@ const CREATED: TournamentImportResult = {
   outcome: 'created',
   tournamentId: '00000000-0000-0000-0000-000000000021',
   type: 'saikyoi',
-  entryOpensAt: '2026-11-01T00:00:00.000Z',
-  entryClosesAt: '2026-12-25T14:59:00.000Z',
+  capacity: 54,
+  entryOpensAt: '2026-11-04T12:00:00.000Z',
+  entryClosesAt: '2026-12-16T14:59:59.000Z',
   error: null,
+  promotion: {promotedCount: 0, mailFailedCount: 0},
 };
 
 const UPDATED: TournamentImportResult = {
@@ -25,6 +31,7 @@ const UPDATED: TournamentImportResult = {
   outcome: 'updated',
   tournamentId: '00000000-0000-0000-0000-000000000022',
   type: 'shinjinou',
+  promotion: {promotedCount: 3, mailFailedCount: 1},
 };
 
 const FAILED: TournamentImportResult = {
@@ -34,9 +41,56 @@ const FAILED: TournamentImportResult = {
   outcome: 'failed',
   tournamentId: null,
   type: null,
+  capacity: null,
   entryOpensAt: null,
   entryClosesAt: null,
   error: '種別「宮崎」は最強位・新人王のいずれでもありません',
+  promotion: {promotedCount: 0, mailFailedCount: 0},
+};
+
+const NEW_ROW: TournamentImportPreviewRow = {
+  row: 2,
+  regionName: '北海道',
+  typeLabel: '最強位',
+  action: 'create',
+  fingerprint: 'fp-2',
+  error: null,
+  capacity: 54,
+  entryOpensAt: '2026-11-04T12:00:00.000Z',
+  entryClosesAt: '2026-12-16T14:59:59.000Z',
+  formFieldLabels: ['備考'],
+  regulationLabels: ['一般'],
+  current: null,
+};
+
+const OVERWRITE_ROW: TournamentImportPreviewRow = {
+  ...NEW_ROW,
+  row: 3,
+  typeLabel: '新人王',
+  action: 'overwrite',
+  capacity: 36,
+  current: {
+    tournamentId: '00000000-0000-0000-0000-000000000022',
+    name: '北海道新人王',
+    capacity: 30,
+    entryOpensAt: '2026-11-04T12:00:00.000Z',
+    entryClosesAt: '2026-12-16T14:59:59.000Z',
+  },
+};
+
+const INVALID_ROW: TournamentImportPreviewRow = {
+  ...NEW_ROW,
+  row: 4,
+  regionName: '宮崎＆鹿児島',
+  typeLabel: '宮崎',
+  action: null,
+  fingerprint: null,
+  error: '種別「宮崎」は最強位・新人王のいずれでもありません',
+  capacity: null,
+  entryOpensAt: null,
+  entryClosesAt: null,
+  formFieldLabels: [],
+  regulationLabels: [],
 };
 
 // Handed down by `routes/admin/+layout.server.ts`.
@@ -59,31 +113,30 @@ describe('admin tournament import +page.svelte', () => {
     expect(
       screen.getByLabelText('大会一覧のスプレッドシート(URL または ID)'),
     ).toBeRequired();
-    expect(
-      screen.getByRole('button', {name: '一括登録する'}),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('button', {name: '読み込む'})).toBeInTheDocument();
   });
 
   it('frees the button again when the page is shown again', async () => {
     renderPage();
     const form = screen
-      .getByRole('button', {name: '一括登録する'})
+      .getByRole('button', {name: '読み込む'})
       .closest('form') as HTMLFormElement;
     // The test environment doesn't submit, so the handler's effect is all
     // that is observed.
     form.addEventListener('submit', event => event.preventDefault());
 
     await fireEvent.submit(form);
-    expect(screen.getByRole('button', {name: '登録中…'})).toBeDisabled();
+    expect(screen.getByRole('button', {name: '読み込み中…'})).toBeDisabled();
 
     await fireEvent(window, new Event('pageshow'));
-    expect(screen.getByRole('button', {name: '一括登録する'})).toBeEnabled();
+    expect(screen.getByRole('button', {name: '読み込む'})).toBeEnabled();
   });
 
   it('sums up the outcome and lists the rows that failed with why', () => {
     renderPage({
       spreadsheetId: 'abc123',
       error: null,
+      rows: null,
       results: [CREATED, UPDATED, FAILED],
     } as PageForm);
 
@@ -103,6 +156,7 @@ describe('admin tournament import +page.svelte', () => {
     renderPage({
       spreadsheetId: 'abc123',
       error: null,
+      rows: null,
       results: [CREATED],
     } as PageForm);
 
@@ -121,6 +175,7 @@ describe('admin tournament import +page.svelte', () => {
     renderPage({
       spreadsheetId: 'abc123',
       error: '1行目に「地域」の列が見つかりません',
+      rows: null,
       results: null,
     } as PageForm);
 
@@ -131,5 +186,99 @@ describe('admin tournament import +page.svelte', () => {
       screen.getByLabelText('大会一覧のスプレッドシート(URL または ID)'),
     ).toHaveValue('abc123');
     expect(screen.queryByRole('heading', {name: '結果'})).toBeNull();
+  });
+
+  it('offers each registrable tournament, choosing only the new ones', () => {
+    renderPage({
+      spreadsheetId: 'abc123',
+      error: null,
+      rows: [NEW_ROW, OVERWRITE_ROW, INVALID_ROW],
+      results: null,
+    } as PageForm);
+
+    const create = screen.getByRole('checkbox', {
+      name: '北海道最強位を新規作成する',
+    });
+    const overwrite = screen.getByRole('checkbox', {
+      name: '北海道新人王を上書きする',
+    });
+    expect(create).toBeChecked();
+    expect(overwrite).not.toBeChecked();
+    // What an overwrite would change.
+    expect(screen.getByText('現在: 30名')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', {name: '選択した1件を登録する'}),
+    ).toBeEnabled();
+    expect(screen.getByText(INVALID_ROW.error as string)).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', {name: /宮崎/})).toBeNull();
+  });
+
+  it('chooses all, or none, at once', async () => {
+    renderPage({
+      spreadsheetId: 'abc123',
+      error: null,
+      rows: [NEW_ROW, OVERWRITE_ROW],
+      results: null,
+    } as PageForm);
+
+    await fireEvent.click(screen.getByRole('button', {name: 'すべて選択'}));
+    expect(
+      screen.getByRole('checkbox', {name: '北海道新人王を上書きする'}),
+    ).toBeChecked();
+    expect(
+      screen.getByRole('button', {name: '選択した2件を登録する'}),
+    ).toBeEnabled();
+
+    await fireEvent.click(screen.getByRole('button', {name: '選択を解除'}));
+    expect(
+      screen.getByRole('button', {name: '選択した0件を登録する'}),
+    ).toBeDisabled();
+  });
+
+  it('posts what was chosen for the sheet that was read', () => {
+    renderPage({
+      spreadsheetId: 'abc123',
+      error: null,
+      rows: [NEW_ROW],
+      results: null,
+    } as PageForm);
+
+    const form = screen
+      .getByRole('button', {name: '選択した1件を登録する'})
+      .closest('form') as HTMLFormElement;
+    const data = new FormData(form);
+    expect(data.get('spreadsheetId')).toBe('abc123');
+    expect(data.getAll('selection').map(v => JSON.parse(String(v)))).toEqual([
+      {
+        regionName: '北海道',
+        typeLabel: '最強位',
+        action: 'create',
+        fingerprint: 'fp-2',
+      },
+    ]);
+  });
+
+  it('says how many waitlisted entries an overwrite promoted', () => {
+    renderPage({
+      spreadsheetId: 'abc123',
+      error: null,
+      rows: null,
+      results: [
+        UPDATED,
+        {
+          ...CREATED,
+          row: 5,
+          tournamentId: '00000000-0000-0000-0000-000000000025',
+          promotion: null,
+        },
+      ],
+    } as PageForm);
+
+    expect(
+      screen.getByText(/キャンセル待ち3件を繰り上げました。うち1件は/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/キャンセル待ちの繰り上げに失敗しました/),
+    ).toBeInTheDocument();
   });
 });

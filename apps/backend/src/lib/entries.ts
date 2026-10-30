@@ -19,7 +19,7 @@ import type {FormFieldDefRow} from './form-field-defs';
 import {hashPassword, verifyPassword} from './password';
 import {tournamentDisplayName} from './tournaments';
 import {verifyAccountPassword} from './password-rehash';
-import {promoteNextWaitlistedEntry} from './waitlist';
+import {promoteWaitlistedEntries} from './waitlist';
 
 type CreateEntryResult =
   | {ok: true; entry: {id: string}}
@@ -1321,10 +1321,11 @@ export async function cancelOwnEntry(
     try {
       // The cancellation above is already committed, so a
       // `pending_verification` entry can confirm into the freed seat before
-      // this runs. `promote_next_waitlisted_entry` therefore re-checks
-      // capacity under its own tournament lock and promotes nobody when the
-      // seat has been taken, instead of pushing the tournament over capacity.
-      await promoteNextWaitlistedEntry(env, cancelled.entry_tournament_id);
+      // this runs. `promote_waitlisted_entries` therefore counts the free
+      // seats under its own tournament lock and promotes nobody when the
+      // seat has been taken, instead of pushing the tournament over
+      // capacity. A mail it couldn't send is logged there.
+      await promoteWaitlistedEntries(env, cancelled.entry_tournament_id);
     } catch (promotionError) {
       // The cancellation itself is already committed, so failing the request
       // would tell the participant their cancellation didn't go through when

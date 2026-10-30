@@ -50,6 +50,27 @@ export const TournamentOrderInputSchema = z.object({
 });
 export type TournamentOrderInput = z.infer<typeof TournamentOrderInputSchema>;
 
+// What promoting the waitlist into free seats came to (#223): how many
+// waitlisted entries were confirmed, and how many of their participants the
+// promotion mail could not reach -- those have to be told some other way.
+export const WaitlistPromotionSchema = z.object({
+  promotedCount: z.number().int().nonnegative(),
+  mailFailedCount: z.number().int().nonnegative(),
+});
+export type WaitlistPromotion = z.infer<typeof WaitlistPromotionSchema>;
+
+// Response body of `PATCH /api/tournaments/:id`: the updated tournament,
+// and -- when a capacity was sent -- what promoting the waitlist into the
+// seats it freed came to. `promotion` is null when that promotion failed
+// (the update itself is saved), and `{0, 0}` when it didn't run or found
+// nobody to promote.
+export const TournamentUpdateResponseSchema = TournamentSchema.extend({
+  promotion: WaitlistPromotionSchema.nullable(),
+});
+export type TournamentUpdateResponse = z.infer<
+  typeof TournamentUpdateResponseSchema
+>;
+
 // Japanese display labels for each tournament type, shared so staff-facing
 // screens don't each carry their own copy of the wording.
 export const TOURNAMENT_TYPE_LABELS: Record<TournamentType, string> = {

@@ -125,14 +125,47 @@ describe('admin tournament edit +page.svelte', () => {
   });
 
   it('reports a saved update', () => {
-    renderPage(TOURNAMENT, {saved: true, error: null, values: null});
+    renderPage(TOURNAMENT, {
+      saved: true,
+      error: null,
+      values: null,
+      promotion: {promotedCount: 0, mailFailedCount: 0},
+    });
 
     expect(screen.getByRole('status')).toHaveTextContent('更新しました');
+  });
+
+  // A saved capacity promoted the waitlist (#223).
+  it('says how many waitlisted entries a saved capacity promoted', () => {
+    renderPage(TOURNAMENT, {
+      saved: true,
+      error: null,
+      values: null,
+      promotion: {promotedCount: 2, mailFailedCount: 0},
+    });
+
+    expect(
+      screen.getByText('キャンセル待ち2件を繰り上げ、通知メールを送りました'),
+    ).toBeInTheDocument();
+  });
+
+  it('says when the promotion failed', () => {
+    renderPage(TOURNAMENT, {
+      saved: true,
+      error: null,
+      values: null,
+      promotion: null,
+    });
+
+    expect(
+      screen.getByText(/キャンセル待ちの繰り上げに失敗しました/),
+    ).toBeInTheDocument();
   });
 
   it('re-renders what a refused save carried, with its message', () => {
     renderPage(TOURNAMENT, {
       saved: false,
+      promotion: null,
       error: 'regionId が不正です',
       values: {
         regionId: REGIONS[1].id,
@@ -167,7 +200,12 @@ describe('admin tournament edit +page.svelte', () => {
         regions: REGIONS,
         formDefinitionYaml: 'tournamentSlug: shinjinou\nfields: []\n',
       },
-      form: {saved: true, error: null, values: null},
+      form: {
+        saved: true,
+        error: null,
+        values: null,
+        promotion: {promotedCount: 0, mailFailedCount: 0},
+      },
     });
 
     expect(screen.getByText(/対象: 新人王/)).toBeInTheDocument();
@@ -218,7 +256,12 @@ describe('admin tournament edit +page.svelte', () => {
   // A refused update must not show up in the delete section, nor the other
   // way round.
   it('keeps the update result out of the delete section', () => {
-    renderPage(TOURNAMENT, {saved: true, error: null, values: null});
+    renderPage(TOURNAMENT, {
+      saved: true,
+      error: null,
+      values: null,
+      promotion: {promotedCount: 0, mailFailedCount: 0},
+    });
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
