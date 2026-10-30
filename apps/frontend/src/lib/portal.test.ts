@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import type {PortalTournament} from '@regional-quiz/shared';
 import {
+  DUAL_ENTRY_NOTICE,
   groupPortalTournaments,
   portalStatus,
   tournamentEntryListPath,
@@ -195,6 +196,57 @@ describe('groupPortalTournaments', () => {
       ['北海道', false],
       ['大阪', false],
     ]);
+  });
+
+  it('allows both entries whatever the forms statuses are', () => {
+    const [region] = groupPortalTournaments(
+      [
+        tournament({
+          regionAllowsDualEntry: true,
+          entryOpensAt: '2026-12-01T00:00:00Z',
+          entryClosesAt: '2026-12-31T00:00:00Z',
+        }),
+        tournament({
+          regionAllowsDualEntry: true,
+          tournamentType: 'shinjinou',
+          entryClosesAt: '2026-11-10T00:00:00Z',
+        }),
+      ],
+      now,
+    );
+
+    expect(region.tournaments.map(t => t.status)).toEqual([
+      'upcoming',
+      'closed',
+    ]);
+    expect(region.allowsDualEntry).toBe(true);
+  });
+
+  // The setting is the region's, so every row should agree; if they don't,
+  // the answer must not depend on which one came last.
+  it('allows both entries only when every row of the region says so', () => {
+    for (const order of [
+      [true, false],
+      [false, true],
+    ]) {
+      const [region] = groupPortalTournaments(
+        [
+          tournament({regionAllowsDualEntry: order[0]}),
+          tournament({
+            regionAllowsDualEntry: order[1],
+            tournamentType: 'shinjinou',
+          }),
+        ],
+        now,
+      );
+      expect(region.allowsDualEntry).toBe(false);
+    }
+  });
+
+  it('names both tournament types in the notice', () => {
+    expect(DUAL_ENTRY_NOTICE).toBe(
+      'この地域は最強位と新人王の両方にエントリー可能です(重複エントリー可)',
+    );
   });
 
   it('answers no regions when there are no tournaments', () => {

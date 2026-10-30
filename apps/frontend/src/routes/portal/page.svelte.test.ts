@@ -125,12 +125,33 @@ describe('portal +page.svelte', () => {
   it('says which regions take entries for both 最強位 and 新人王', () => {
     renderPage(REGIONS);
 
-    const notice = 'この地域は最強位・新人王の両方にエントリーできます。';
+    const notice =
+      'この地域は最強位と新人王の両方にエントリー可能です(重複エントリー可)';
     expect(screen.getAllByText(notice)).toHaveLength(1);
-    const tokyo = screen
-      .getByRole('heading', {level: 3, name: '東京'})
-      .closest('div');
-    expect(within(tokyo!).getByText(notice)).toBeInTheDocument();
+    expect(
+      within(screen.getByRole('region', {name: '東京'})).getByText(notice),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole('region', {name: '北海道'})).queryByText(notice),
+    ).toBeNull();
+  });
+
+  // It is the region's rule, so it stays while a form is closed; the
+  // form's own status says when it takes entries.
+  it('keeps the notice while one of the forms is not taking entries', () => {
+    const [tokyo] = REGIONS;
+    renderPage([
+      {
+        ...tokyo,
+        tournaments: tokyo.tournaments.map(t => ({...t, status: 'closed'})),
+      },
+    ]);
+
+    expect(
+      screen.getByText(
+        'この地域は最強位と新人王の両方にエントリー可能です(重複エントリー可)',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('says so when no tournament has been published', () => {

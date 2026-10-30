@@ -1,6 +1,7 @@
 import {
   isWithinEntryPeriod,
   TOURNAMENT_TYPE_LABELS,
+  TournamentTypeSchema,
   type PortalTournament,
   type TournamentType,
 } from '@regional-quiz/shared';
@@ -19,6 +20,15 @@ export const PORTAL_STATUS_LABELS: Record<PortalStatus, string> = {
   upcoming: '受付開始前',
   closed: '受付終了',
 };
+
+/**
+ * What the portal says under a region that lets one participant enter both
+ * of its tournaments. It states the region's rule, not that both forms are
+ * taking entries now: each tournament's own status says that.
+ */
+export const DUAL_ENTRY_NOTICE = `この地域は${TournamentTypeSchema.options
+  .map(type => TOURNAMENT_TYPE_LABELS[type])
+  .join('と')}の両方にエントリー可能です(重複エントリー可)`;
 
 /** One tournament as the portal page renders it. */
 export interface PortalTournamentView {
@@ -42,9 +52,10 @@ export interface PortalRegionView {
   regionSlug: string;
   regionName: string;
   /**
-   * Whether the portal says one participant can enter both of the region's
-   * tournaments: the region allows it and lists both a 最強位 and a 新人王.
-   * With only one of them listed there is nothing to enter both of.
+   * Whether the portal shows `DUAL_ENTRY_NOTICE`: the region allows one
+   * participant to enter both of its tournaments and lists one of each type.
+   * With only one of them listed there is nothing to enter both of. Shown
+   * whatever the forms' statuses, as it is the region's rule.
    */
   allowsDualEntry: boolean;
   tournaments: PortalTournamentView[];
@@ -110,27 +121,34 @@ export function groupPortalTournaments(
   tournaments: PortalTournament[],
   now: Date,
 ): PortalRegionView[] {
-  const regions = new Map<string, PortalRegionView>();
-  const regionTypes = new Map<string, Set<TournamentType>>();
+  const regions = new Map<
+    string,
+    {
+      view: Omit<PortalRegionView, 'allowsDualEntry'>;
+      types: Set<TournamentType>;
+      // Every row carries its region's setting; trust it only if they all
+      // agree, so the answer can't depend on which row came last.
+      allowsDualEntry: boolean;
+    }
+  >();
   for (const tournament of tournaments) {
     let region = regions.get(tournament.regionSlug);
     if (!region) {
       region = {
-        regionSlug: tournament.regionSlug,
-        regionName: tournament.regionName,
-        allowsDualEntry: false,
-        tournaments: [],
+        view: {
+          regionSlug: tournament.regionSlug,
+          regionName: tournament.regionName,
+          tournaments: [],
+        },
+        types: new Set(),
+        allowsDualEntry: true,
       };
       regions.set(tournament.regionSlug, region);
     }
-    const types = regionTypes.get(tournament.regionSlug) ?? new Set();
-    types.add(tournament.tournamentType);
-    regionTypes.set(tournament.regionSlug, types);
-    region.allowsDualEntry =
-      tournament.regionAllowsDualEntry &&
-      types.size === Object.keys(TOURNAMENT_TYPE_LABELS).length;
+    region.types.add(tournament.tournamentType);
+    region.allowsDualEntry &&= tournament.regionAllowsDualEntry;
     const status = portalStatus(tournament, now);
-    region.tournaments.push({
+    region.view.tournaments.push({
       name: tournament.tournamentName,
       typeLabel: TOURNAMENT_TYPE_LABELS[tournament.tournamentType],
       status,
@@ -150,5 +168,10 @@ export function groupPortalTournaments(
       ),
     });
   }
-  return [...regions.values()];
+  return [...regions.values()].map(region => ({
+    ...region.view,
+    allowsDualEntry:
+      region.allowsDualEntry &&
+      region.types.size === TournamentTypeSchema.options.length,
+  }));
 }

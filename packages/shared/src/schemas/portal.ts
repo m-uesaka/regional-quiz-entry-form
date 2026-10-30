@@ -13,6 +13,8 @@ export const PortalTournamentSchema = z.object({
   // Whether the region lets one participant enter both its 最強位 and its
   // 新人王 (`regions.allows_dual_entry`), for the portal to say so. Already
   // public in effect: the entry form refuses the second entry otherwise.
+  // A region-level setting, so every tournament of a region carries the
+  // same value.
   regionAllowsDualEntry: z.boolean(),
   tournamentType: TournamentTypeSchema,
   tournamentName: z.string(),
