@@ -7,6 +7,7 @@ const REGIONS: PortalRegionView[] = [
   {
     regionSlug: 'tokyo',
     regionName: '東京',
+    allowsDualEntry: true,
     tournaments: [
       {
         name: '東京最強位',
@@ -38,6 +39,7 @@ const REGIONS: PortalRegionView[] = [
   {
     regionSlug: 'hokkaido',
     regionName: '北海道',
+    allowsDualEntry: false,
     tournaments: [
       {
         name: '北海道最強位',
@@ -118,6 +120,17 @@ describe('portal +page.svelte', () => {
 
     const closed = screen.getByText('北海道最強位').closest('li');
     expect(within(closed!).getByText('受付終了')).toBeInTheDocument();
+  });
+
+  it('says which regions take entries for both 最強位 and 新人王', () => {
+    renderPage(REGIONS);
+
+    const notice = 'この地域は最強位・新人王の両方にエントリーできます。';
+    expect(screen.getAllByText(notice)).toHaveLength(1);
+    const tokyo = screen
+      .getByRole('heading', {level: 3, name: '東京'})
+      .closest('div');
+    expect(within(tokyo!).getByText(notice)).toBeInTheDocument();
   });
 
   it('says so when no tournament has been published', () => {

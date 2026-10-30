@@ -41,6 +41,12 @@ export interface PortalTournamentView {
 export interface PortalRegionView {
   regionSlug: string;
   regionName: string;
+  /**
+   * Whether the portal says one participant can enter both of the region's
+   * tournaments: the region allows it and lists both a 最強位 and a 新人王.
+   * With only one of them listed there is nothing to enter both of.
+   */
+  allowsDualEntry: boolean;
   tournaments: PortalTournamentView[];
 }
 
@@ -105,16 +111,24 @@ export function groupPortalTournaments(
   now: Date,
 ): PortalRegionView[] {
   const regions = new Map<string, PortalRegionView>();
+  const regionTypes = new Map<string, Set<TournamentType>>();
   for (const tournament of tournaments) {
     let region = regions.get(tournament.regionSlug);
     if (!region) {
       region = {
         regionSlug: tournament.regionSlug,
         regionName: tournament.regionName,
+        allowsDualEntry: false,
         tournaments: [],
       };
       regions.set(tournament.regionSlug, region);
     }
+    const types = regionTypes.get(tournament.regionSlug) ?? new Set();
+    types.add(tournament.tournamentType);
+    regionTypes.set(tournament.regionSlug, types);
+    region.allowsDualEntry =
+      tournament.regionAllowsDualEntry &&
+      types.size === Object.keys(TOURNAMENT_TYPE_LABELS).length;
     const status = portalStatus(tournament, now);
     region.tournaments.push({
       name: tournament.tournamentName,

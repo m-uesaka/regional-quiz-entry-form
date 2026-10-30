@@ -27,7 +27,7 @@ function row(
     entry_opens_at: '2026-11-01T00:00:00+00:00',
     entry_closes_at: '2026-11-30T00:00:00+00:00',
     capacity: null,
-    regions: {slug: regionSlug, name: regionName},
+    regions: {slug: regionSlug, name: regionName, allows_dual_entry: false},
     regulations: [],
   };
 }
@@ -92,6 +92,7 @@ describe('GET /portal/tournaments (mocked Supabase)', () => {
       {
         regionSlug: 'tokyo',
         regionName: '東京',
+        regionAllowsDualEntry: false,
         tournamentType: 'saikyoi',
         tournamentName: '東京最強位',
         entryOpensAt: '2026-11-01T00:00:00+00:00',
@@ -102,6 +103,7 @@ describe('GET /portal/tournaments (mocked Supabase)', () => {
       {
         regionSlug: 'tokyo',
         regionName: '東京',
+        regionAllowsDualEntry: false,
         tournamentType: 'shinjinou',
         tournamentName: '東京新人王',
         entryOpensAt: '2026-11-01T00:00:00+00:00',
@@ -112,6 +114,7 @@ describe('GET /portal/tournaments (mocked Supabase)', () => {
       {
         regionSlug: 'hokkaido',
         regionName: '北海道',
+        regionAllowsDualEntry: false,
         tournamentType: 'saikyoi',
         tournamentName: '北海道最強位',
         entryOpensAt: '2026-11-01T00:00:00+00:00',
@@ -120,6 +123,25 @@ describe('GET /portal/tournaments (mocked Supabase)', () => {
         priorityRegulations: [],
       },
     ]);
+  });
+
+  it('answers whether the region allows entering both tournaments', async () => {
+    mockTournamentsFetch([
+      {
+        ...row('tokyo', '東京', 'saikyoi'),
+        regions: {slug: 'tokyo', name: '東京', allows_dual_entry: true},
+      },
+      row('hokkaido', '北海道', 'saikyoi'),
+    ]);
+
+    const res = await app.request('/api/portal/tournaments', {}, env);
+    const body = (await res.json()) as Array<Record<string, unknown>>;
+
+    expect(res.status).toBe(200);
+    expect(decodeURIComponent(requestedUrl)).toContain(
+      'regions!inner(slug,name,allows_dual_entry)',
+    );
+    expect(body.map(t => t.regionAllowsDualEntry)).toEqual([true, false]);
   });
 
   it('answers the capacity and, for an open form, its priority windows', async () => {

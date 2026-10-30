@@ -53,7 +53,14 @@
     {:else}
       {#each data.regions as region (region.regionSlug)}
         <Card class="gap-4">
-          <h3 class="text-base font-bold">{region.regionName}</h3>
+          <div class="flex flex-col gap-1">
+            <h3 class="text-base font-bold">{region.regionName}</h3>
+            {#if region.allowsDualEntry}
+              <p class="text-sm font-medium text-primary">
+                この地域は最強位・新人王の両方にエントリーできます。
+              </p>
+            {/if}
+          </div>
           <ul class="flex flex-col divide-y divide-border">
             {#each region.tournaments as tournament (tournament.entryPath)}
               <li

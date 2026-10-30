@@ -16,6 +16,7 @@ function tournament(
   return {
     regionSlug: 'tokyo',
     regionName: '東京',
+    regionAllowsDualEntry: false,
     tournamentType: 'saikyoi',
     tournamentName: '東京大会',
     entryOpensAt: OPENS_AT,
@@ -165,6 +166,34 @@ describe('groupPortalTournaments', () => {
     expect(region.tournaments.map(t => t.priorityNotices)).toEqual([
       [{labels: ['在住'], endsAtLabel: '2026年12月31日(木) 9:00'}],
       [],
+    ]);
+  });
+
+  it('says a region allows both entries only when it lists both types', () => {
+    const regions = groupPortalTournaments(
+      [
+        tournament({regionAllowsDualEntry: true}),
+        tournament({regionAllowsDualEntry: true, tournamentType: 'shinjinou'}),
+        // Allowed, but with only a 最強位 there is nothing to enter both of.
+        tournament({
+          regionSlug: 'hokkaido',
+          regionName: '北海道',
+          regionAllowsDualEntry: true,
+        }),
+        tournament({regionSlug: 'osaka', regionName: '大阪'}),
+        tournament({
+          regionSlug: 'osaka',
+          regionName: '大阪',
+          tournamentType: 'shinjinou',
+        }),
+      ],
+      now,
+    );
+
+    expect(regions.map(r => [r.regionName, r.allowsDualEntry])).toEqual([
+      ['東京', true],
+      ['北海道', false],
+      ['大阪', false],
     ]);
   });
 
