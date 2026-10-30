@@ -277,6 +277,99 @@ describe('admin tournament edit +page.svelte', () => {
     expect(screen.getByLabelText('この大会を削除する')).toBeRequired();
   });
 
+  it('resets through the page action, behind a choice and a typed word', () => {
+    renderPage();
+
+    const form = screen
+      .getByRole('button', {name: '参加者データをリセット'})
+      .closest('form') as HTMLFormElement;
+    expect(form).toHaveAttribute('method', 'POST');
+    expect(form).toHaveAttribute('action', '?/reset');
+    const keep = screen.getByLabelText('参加者アカウントは残す');
+    const remove = screen.getByLabelText('参加者アカウントも削除する');
+    expect(keep).toBeRequired();
+    expect(keep).not.toBeChecked();
+    expect(remove).not.toBeChecked();
+    expect(
+      screen.getByLabelText('確認のため「リセット」と入力してください'),
+    ).toBeRequired();
+  });
+
+  it('warns that a bulk mail still being sent goes out after a reset', () => {
+    renderPage();
+
+    expect(
+      screen.getByText(/一斉メールの送信中にリセットすると/),
+    ).toBeInTheDocument();
+  });
+
+  it('offers no reset for a tournament in its entry period', () => {
+    const now = Date.now();
+    renderPage({
+      ...TOURNAMENT,
+      entryOpensAt: new Date(now - 86_400_000).toISOString(),
+      entryClosesAt: new Date(now + 86_400_000).toISOString(),
+    });
+
+    expect(
+      screen.getByRole('button', {name: '参加者データをリセット'}),
+    ).toBeDisabled();
+    expect(
+      screen.getByText(
+        'この大会はエントリー期間中のため、リセットできません。',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('lets a tournament outside its entry period be reset', () => {
+    renderPage();
+
+    expect(
+      screen.getByRole('button', {name: '参加者データをリセット'}),
+    ).toBeEnabled();
+  });
+
+  it('says what a reset deleted and which accounts it kept', () => {
+    renderPage(TOURNAMENT, {
+      reset: {
+        deletedEntryCount: 5,
+        deletedParticipantCount: 3,
+        keptParticipantCount: 1,
+      },
+      resetError: null,
+    });
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'エントリーを 5 件削除しました。参加者アカウントを 3 件削除しました。他の大会にエントリーが残っている 1 件の参加者アカウントは残しました。',
+    );
+  });
+
+  it('says only the entries went when the accounts were kept', () => {
+    renderPage(TOURNAMENT, {
+      reset: {
+        deletedEntryCount: 2,
+        deletedParticipantCount: 0,
+        keptParticipantCount: 0,
+      },
+      resetError: null,
+    });
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      /^エントリーを 2 件削除しました。$/,
+    );
+  });
+
+  it('shows why a reset was refused', () => {
+    renderPage(TOURNAMENT, {
+      reset: null,
+      resetError: '参加者データのリセットに失敗しました',
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      '参加者データのリセットに失敗しました',
+    );
+  });
+
   it('shows why a delete was refused, without touching the tournament form', () => {
     renderPage(TOURNAMENT, {
       deleteError: 'エントリーがある大会は削除できません',

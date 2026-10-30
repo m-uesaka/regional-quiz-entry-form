@@ -1,13 +1,17 @@
 import {error, fail, redirect} from '@sveltejs/kit';
 import {
   formFieldDefsToYaml,
+  TournamentResetInputSchema,
   TournamentSchema,
+  type TournamentResetResponse,
   type WaitlistPromotion,
 } from '@regional-quiz/shared';
 import {createApiClient, isUnauthorized, readErrorMessage} from '$lib/api';
 import {
   parseTournamentFormValues,
   readTournamentFormValues,
+  isResetConfirmation,
+  RESET_CONFIRMATION_WORD,
 } from '$lib/tournament-form';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {TournamentFormValues} from '$lib/types/tournament-form';
@@ -38,6 +42,12 @@ interface TournamentUpdateActionResult {
 /** What the delete action hands back when it refuses. */
 interface TournamentDeleteActionResult {
   deleteError: string;
+}
+
+/** What the reset action hands back: the counts, or why it refused. */
+interface TournamentResetActionResult {
+  reset: TournamentResetResponse | null;
+  resetError: string | null;
 }
 
 const INVALID_INPUT_MESSAGE = '入力内容を確認してください';
@@ -157,6 +167,69 @@ export const actions = {
     // Nothing is left to show here, so the list is where the next step is.
     redirect(303, '/admin/tournaments?deleted');
   },
+  reset: async ({params, request, fetch, cookies, url}) => {
+    const formData = await request.formData();
+    // The page asks for both before the button does anything; a post without
+    // them got past the browser's own checks.
+    // Checked against the API's own schema, so the choice the radios carry
+    // can't drift from the body it accepts. A missing or unknown value maps
+    // to undefined, which the schema refuses.
+    const participants = formData.get('participants');
+    const input = TournamentResetInputSchema.safeParse({
+      deleteParticipants:
+        participants === 'delete'
+          ? true
+          : participants === 'keep'
+            ? false
+            : undefined,
+    });
+    if (!input.success) {
+      return resetFailure(
+        400,
+        '参加者アカウントを残すか削除するかを選んでください',
+      );
+    }
+    if (!isResetConfirmation(formData.get('confirmation'))) {
+      return resetFailure(
+        400,
+        `確認のため「${RESET_CONFIRMATION_WORD}」と入力してください`,
+      );
+    }
+
+    const res = await createApiClient(fetch).api.tournaments[':id'].reset.$post(
+      {param: {id: params.id}, json: input.data},
+    );
+    if (!res.ok) {
+      if (isUnauthorized(res)) {
+        redirectToStaffLogin(cookies, url);
+      }
+      // 403: the session is no longer a general staff member's. Said as
+      // such rather than as a failure, so it isn't simply retried.
+      if (res.status === 403) {
+        return resetFailure(403, '参加者データをリセットする権限がありません');
+      }
+      if (res.status === 404) {
+        return resetFailure(404, '大会が見つかりません');
+      }
+      // 409: the entry period is open. The API words that in Japanese
+      // itself.
+      if (res.status === 409) {
+        return resetFailure(
+          409,
+          await readErrorMessage(
+            res,
+            'エントリー期間中の大会はリセットできません',
+          ),
+        );
+      }
+      return resetFailure(502, '参加者データのリセットに失敗しました');
+    }
+
+    return {
+      reset: await res.json(),
+      resetError: null,
+    } satisfies TournamentResetActionResult;
+  },
 } satisfies Actions;
 
 /**
@@ -168,6 +241,18 @@ function deleteFailure(status: number, message: string) {
   return fail(status, {
     deleteError: message,
   } satisfies TournamentDeleteActionResult);
+}
+
+/**
+ * Refuses a reset, with the message to show in the reset section.
+ * @param status The status to answer with.
+ * @param message The message.
+ */
+function resetFailure(status: number, message: string) {
+  return fail(status, {
+    reset: null,
+    resetError: message,
+  } satisfies TournamentResetActionResult);
 }
 
 /**
