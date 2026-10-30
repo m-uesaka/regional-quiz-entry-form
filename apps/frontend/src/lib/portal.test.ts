@@ -174,7 +174,13 @@ describe('groupPortalTournaments', () => {
     );
 
     expect(region.tournaments.map(t => t.priorityNotices)).toEqual([
-      [{labels: ['在住'], endsAtLabel: '2026年12月31日(木) 9:00'}],
+      [
+        {
+          labels: ['在住'],
+          startsAtLabel: '2026年10月1日(木) 9:00',
+          endsAtLabel: '2026年12月31日(木) 9:00',
+        },
+      ],
       [],
     ]);
   });

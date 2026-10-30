@@ -103,14 +103,18 @@ describe('entry +page.svelte', () => {
   it('opens with the 優先エントリー and the waitlist when there are any', () => {
     renderPage(null, {
       priorityNotices: [
-        {labels: ['一般の部'], endsAtLabel: '2026年11月5日(木) 9:00'},
+        {
+          labels: ['一般の部'],
+          startsAtLabel: '2026年11月1日(日) 9:00',
+          endsAtLabel: '2026年11月5日(木) 9:00',
+        },
       ],
       waitlistOpen: true,
     });
 
     expect(
       screen.getByText(
-        '現在優先エントリー実施中です。該当レギュレーション: 「一般の部」、〜2026年11月5日(木) 9:00まで',
+        '現在優先エントリー実施中です。該当レギュレーション: 「一般の部」、2026年11月1日(日) 9:00〜2026年11月5日(木) 9:00まで',
       ),
     ).toBeInTheDocument();
     expect(

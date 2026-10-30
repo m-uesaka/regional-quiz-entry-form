@@ -1,6 +1,6 @@
 <!--
 @component
-The 優先エントリー going on now, one line per window end, worded the same
+The 優先エントリー going on now, one line per window, worded the same
 on the portal and the entry form. Renders nothing when there is none.
 -->
 <script lang="ts">
@@ -15,10 +15,10 @@ on the portal and the entry form. Renders nothing when there is none.
   const {notices, class: className}: Props = $props();
 </script>
 
-{#each notices as notice (notice.endsAtLabel)}
+{#each notices as notice (`${notice.startsAtLabel}〜${notice.endsAtLabel}`)}
   <p class={['text-sm', className]}>
     現在優先エントリー実施中です。該当レギュレーション: {notice.labels
       .map(label => `「${label}」`)
-      .join('')}、〜{notice.endsAtLabel}まで
+      .join('')}、{notice.startsAtLabel}〜{notice.endsAtLabel}まで
   </p>
 {/each}
