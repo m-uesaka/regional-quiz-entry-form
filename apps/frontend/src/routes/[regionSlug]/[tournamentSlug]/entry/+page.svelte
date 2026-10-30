@@ -21,6 +21,14 @@
       email={form.email}
     />
   {:else}
+    {#if data.staffPreview}
+      <Message variant="warning">
+        <p class="text-sm">
+          エントリー期間外のため、スタッフ向けに確認用として表示しています。このフォームから送信することはできません。
+        </p>
+      </Message>
+    {/if}
+
     {#if data.priorityNotices.length > 0}
       <Message>
         <div class="flex flex-col gap-1">
@@ -73,6 +81,7 @@
           values={form?.values}
           fieldErrors={form?.fieldErrors}
           loggedIn={data.loggedIn}
+          preview={data.staffPreview}
         />
       {/key}
     </Card>

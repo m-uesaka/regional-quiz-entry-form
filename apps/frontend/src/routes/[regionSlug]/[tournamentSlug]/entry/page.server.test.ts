@@ -204,6 +204,7 @@ describe('entry +page.server load', () => {
 
     await expect(load(event)).resolves.toMatchObject({
       tournament: OUT_OF_PERIOD_TOURNAMENT,
+      staffPreview: true,
     });
   });
 
@@ -271,6 +272,7 @@ describe('entry +page.server load', () => {
       tournament: OPEN_TOURNAMENT,
       regulations: REGULATIONS,
       formFieldDefs: FORM_FIELD_DEFS,
+      staffPreview: false,
       priorityNotices: [],
       waitlistOpen: false,
       loggedIn: false,

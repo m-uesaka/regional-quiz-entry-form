@@ -8,6 +8,7 @@
   import Button, {buttonVariants} from '$lib/components/ui/atoms/Button.svelte';
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import {pageQuery} from '$lib/pagination';
+  import {tournamentEntryFormPath} from '$lib/portal';
   import {ENTRY_STATUS_CHIP_VARIANT} from '$lib/entry-status';
   import Chip from '$lib/components/ui/atoms/Chip.svelte';
   import Link from '$lib/components/ui/atoms/Link.svelte';
@@ -38,6 +39,19 @@
 <PageContainer size="wide">
   <PageHeader title="{data.tournament.name} エントリー一覧">
     {#snippet actions()}
+      <!-- The form participants fill in, for checking it before the entry
+           period opens: outside the period it is shown only to the staff
+           who cover the tournament (`middleware/entry-period.ts`), and the
+           portal links to it only while it is open, so this is the way
+           regional staff reach it. It opens in a new tab, like the
+           dashboard's link to the public list. -->
+      <Link
+        href={tournamentEntryFormPath(params.regionSlug, data.tournament.type)}
+        target="_blank"
+        aria-label="エントリーフォームを確認(新しいタブで開きます)"
+      >
+        エントリーフォームを確認
+      </Link>
       <a
         href={csvHref}
         download
