@@ -299,6 +299,10 @@ export const load: PageServerLoad = async ({
     tournament,
     regulations,
     formFieldDefs,
+    // Only staff get this far outside the period (checked above), and the
+    // API refuses their submission all the same, so the page says so
+    // before they fill the form in.
+    staffPreview: !open,
     priorityNotices: open ? priorityEntryNotices(regulations, now) : [],
     waitlistOpen:
       open &&
