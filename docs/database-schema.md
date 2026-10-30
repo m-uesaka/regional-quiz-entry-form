@@ -452,8 +452,10 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 大会の参加者データをリセットします(`0038`)。統括スタッフ専用の `POST /api/tournaments/:id/reset` から呼ばれます。大会・レギュレーション・フォーム定義・`mail_jobs` は残し、エントリーだけを空にします。返り値は `(deleted_entry_count, deleted_participant_count, kept_participant_count)` の 1 行で、大会が無ければ 0 行です。
 
 - 大会行を `for update` でロックしてから消します。確定(`confirm_entry_by_token()`)・繰り上げ(`promote_waitlisted_entries()`)と同じロックなので、それらと行き違いません
+- ロックの後で、エントリー期間中(`entry_opens_at` ≦ `now()` ≦ `entry_closes_at`)なら何も消さずに `P0007` を上げます
+- 続いて大会のエントリー行も `for update` でロックします。確認メールの再送・リマインドは大会のロックを取らずに `email_verification_tokens` を足すため、このロックが無いと、トークン削除とエントリー削除の間に入ったトークンのせいでエントリー削除が外部キー違反になり、リセット全体が失敗します。ロック後は、再送側の insert が待たされて失敗します
 - その大会の `email_verification_tokens` を先に消し(`entries` を no action で参照)、続いて `entries` を全件(キャンセル済みも含む)消します。`entry_regulations` は cascade で消えます
-- `p_delete_participants` が true なら、消したエントリーの参加者のうち**他の大会にエントリーが残っていない人だけ**を、`password_reset_tokens` ごと削除します。重複エントリーを認める地域でもう一方の大会にもエントリーしている人のアカウントを消すと、その大会を壊すためです。残した人数が `kept_participant_count` です
+- `p_delete_participants` が true なら、消したエントリーの参加者のうち**他の大会にエントリーが残っていない人だけ**を、`password_reset_tokens` ごと削除します。重複エントリーを認める地域でもう一方の大会にもエントリーしている人のアカウントを消すと、その大会を壊すためです。残した人数が `kept_participant_count` です(削除の後に残っている候補の行を数える)
 - 参加者を消す前に候補の `participants` 行を `for update` でロックします。エントリーの insert は参照先の参加者行に key share ロックを取るので、同時に別の大会へ入ったエントリーはこのロックの後の検査で見え、外部キー違反で全体が失敗することはありません
 
 ### cancel_own_entry(p_entry_id, p_participant_id)

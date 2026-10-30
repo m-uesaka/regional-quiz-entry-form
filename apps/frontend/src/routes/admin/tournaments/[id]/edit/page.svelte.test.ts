@@ -295,6 +295,40 @@ describe('admin tournament edit +page.svelte', () => {
     ).toBeRequired();
   });
 
+  it('warns that a bulk mail still being sent goes out after a reset', () => {
+    renderPage();
+
+    expect(
+      screen.getByText(/一斉メールの送信中にリセットすると/),
+    ).toBeInTheDocument();
+  });
+
+  it('offers no reset for a tournament in its entry period', () => {
+    const now = Date.now();
+    renderPage({
+      ...TOURNAMENT,
+      entryOpensAt: new Date(now - 86_400_000).toISOString(),
+      entryClosesAt: new Date(now + 86_400_000).toISOString(),
+    });
+
+    expect(
+      screen.getByRole('button', {name: '参加者データをリセット'}),
+    ).toBeDisabled();
+    expect(
+      screen.getByText(
+        'この大会はエントリー期間中のため、リセットできません。',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('lets a tournament outside its entry period be reset', () => {
+    renderPage();
+
+    expect(
+      screen.getByRole('button', {name: '参加者データをリセット'}),
+    ).toBeEnabled();
+  });
+
   it('says what a reset deleted and which accounts it kept', () => {
     renderPage(TOURNAMENT, {
       reset: {

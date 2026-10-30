@@ -73,6 +73,12 @@ function tournamentWriteError(
   }
   return {body: internalError(context, error), status: 500};
 }
+/**
+ * Raised by `reset_tournament_entries()` (0038) when the tournament's entry
+ * period is open, so nothing was deleted.
+ */
+const ENTRY_PERIOD_OPEN_SQLSTATE = 'P0007';
+
 /** What a tournament delete answers when entries still point at it. */
 const TOURNAMENT_HAS_ENTRIES_MESSAGE = 'エントリーがある大会は削除できません';
 
@@ -341,7 +347,9 @@ export const tournamentsRoute = new Hono<StaffEnv>()
   // its regulations and form fields, all inside `reset_tournament_entries()`
   // (0038) so it happens in one transaction. 統括スタッフ only: regional
   // staff can read and mail their own tournament's entries, but nothing
-  // that wipes them, since a slip here can't be undone. A POST rather than
+  // that wipes them, since a slip here can't be undone. For the same reason
+  // a tournament whose entry period is open is refused (409): its entries
+  // are the edition being run, not a past one being cleared. A POST rather than
   // `DELETE /:id/entries` because it carries a body, and `/reset` collides
   // with neither the public `POST /:tournamentId/entries` nor anything else
   // mounted at `/tournaments`.
@@ -359,6 +367,12 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         },
       );
       if (error) {
+        if (error.code === ENTRY_PERIOD_OPEN_SQLSTATE) {
+          return c.json(
+            {error: 'エントリー期間中の大会はリセットできません'},
+            409,
+          );
+        }
         return c.json(
           internalError('failed to reset the tournament entries', error),
           500,

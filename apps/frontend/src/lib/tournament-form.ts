@@ -15,6 +15,19 @@ import {readString} from '$lib/form-data';
  */
 export const RESET_CONFIRMATION_WORD = 'リセット';
 
+/**
+ * Whether what was typed into the reset confirmation is the word. Compared
+ * after NFKC normalization and trimming, so the half-width ﾘｾｯﾄ or a
+ * trailing full-width space an IME leaves behind still counts.
+ * @param value The submitted `confirmation` field.
+ */
+export function isResetConfirmation(value: FormDataEntryValue | null): boolean {
+  return (
+    typeof value === 'string' &&
+    value.normalize('NFKC').trim() === RESET_CONFIRMATION_WORD
+  );
+}
+
 /** A form with nothing filled in, which is how a tournament is created. */
 export function emptyTournamentFormValues(): TournamentFormValues {
   return {

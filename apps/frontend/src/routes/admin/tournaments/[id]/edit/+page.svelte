@@ -7,8 +7,10 @@
   import Checkbox from '$lib/components/ui/atoms/Checkbox.svelte';
   import Input from '$lib/components/ui/atoms/Input.svelte';
   import Label from '$lib/components/ui/atoms/Label.svelte';
+  import Radio from '$lib/components/ui/atoms/Radio.svelte';
   import Link from '$lib/components/ui/atoms/Link.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
+  import {isWithinEntryPeriod} from '@regional-quiz/shared';
   import {RESET_CONFIRMATION_WORD} from '$lib/tournament-form';
   import type {PageProps} from './$types';
 
@@ -19,6 +21,14 @@
   const updateResult = $derived(form?.saved === undefined ? null : form);
   const deleteError = $derived(form?.deleteError ?? null);
   const resetResult = $derived(form?.reset ?? null);
+  // As of when the page was rendered. The API decides again when the reset
+  // is sent, so a period that opens in between is still refused there.
+  const entryPeriodOpen = $derived(
+    isWithinEntryPeriod(
+      data.tournament.entryOpensAt,
+      data.tournament.entryClosesAt,
+    ),
+  );
   const resetMessage = $derived.by(() => {
     if (!resetResult) {
       return null;
@@ -70,8 +80,22 @@
     <h2 class="text-lg font-bold">参加者データをリセット</h2>
 
     <p class="text-sm">
-      この大会のエントリーを、キャンセル済みのものも含めてすべて削除します。大会の設定・レギュレーション・フォーム定義・一斉メールの記録は残ります。削除したエントリーは元に戻せません。
+      この大会のエントリーを、キャンセル済みのものも含めてすべて削除します。大会の設定・レギュレーション・フォーム定義・一斉メールの記録は残ります。削除したエントリーは元に戻せません。エントリー期間中の大会はリセットできません。
     </p>
+
+    <Message variant="warning">
+      <p class="text-sm text-foreground">
+        一斉メールの送信中にリセットすると、送信待ちのメールはリセット後も届きます(参加者アカウントを削除した人にも届きます)。一斉メールの送信が終わってからリセットしてください。
+      </p>
+    </Message>
+
+    {#if entryPeriodOpen}
+      <Message variant="danger">
+        <p class="text-sm text-foreground">
+          この大会はエントリー期間中のため、リセットできません。
+        </p>
+      </Message>
+    {/if}
 
     {#if resetMessage}
       <Message variant="success">
@@ -87,30 +111,30 @@
     <!-- A form action like the delete above. Neither choice is preselected,
          so whether the accounts go too is always picked on purpose, and the
          button waits for a typed word rather than a tick (see
-         `RESET_CONFIRMATION_WORD`). -->
+         `RESET_CONFIRMATION_WORD`). The word is checked by the action rather
+         than a `pattern`, which would refuse the trailing full-width space an
+         IME leaves behind. -->
     <form method="POST" action="?/reset" class="flex flex-col gap-3">
       <fieldset class="flex flex-col gap-2">
         <legend class="mb-1 text-sm font-bold">参加者アカウント</legend>
-        <label class="flex w-fit cursor-pointer items-center gap-2 text-sm">
-          <input
-            type="radio"
-            class="size-4 cursor-pointer accent-primary"
+        <div class="flex items-center gap-2">
+          <Radio
+            id="tournament-reset-keep"
             name="participants"
             value="keep"
             required
           />
-          参加者アカウントは残す
-        </label>
-        <label class="flex w-fit cursor-pointer items-center gap-2 text-sm">
-          <input
-            type="radio"
-            class="size-4 cursor-pointer accent-primary"
+          <Label for="tournament-reset-keep">参加者アカウントは残す</Label>
+        </div>
+        <div class="flex items-center gap-2">
+          <Radio
+            id="tournament-reset-delete"
             name="participants"
             value="delete"
             required
           />
-          参加者アカウントも削除する
-        </label>
+          <Label for="tournament-reset-delete">参加者アカウントも削除する</Label>
+        </div>
         <p class="text-xs text-muted-foreground">
           削除する場合も、他の大会にエントリーが残っている参加者のアカウントは残します。
         </p>
@@ -124,11 +148,12 @@
           name="confirmation"
           autocomplete="off"
           required
-          pattern={RESET_CONFIRMATION_WORD}
         />
       </div>
       <div class="flex flex-wrap gap-2">
-        <Button type="submit" variant="danger">参加者データをリセット</Button>
+        <Button type="submit" variant="danger" disabled={entryPeriodOpen}>
+          参加者データをリセット
+        </Button>
       </div>
     </form>
   </Card>

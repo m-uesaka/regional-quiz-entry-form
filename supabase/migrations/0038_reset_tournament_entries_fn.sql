@@ -19,9 +19,22 @@
 -- 記録(`mail_jobs`)。大会の設定を残したまま、次の開催に向けてエントリー
 -- だけを空にするための機能なので。
 --
+-- エントリー期間中(`entry_opens_at` ≦ 現在 ≦ `entry_closes_at`、
+-- `isWithinEntryPeriod()` と同じ両端を含む判定)の大会は、何も消さずに
+-- `P0007` で断る。編集画面を開き間違えて受付中の大会のエントリーを消す
+-- 事故を防ぐため。判定は大会行のロックを取った後に行う。
+--
 -- 大会の行を `for update` でロックしてから消す。確認リンクでの確定・
 -- キャンセル待ちの繰り上げ(`promote_waitlisted_entries()`、0037)も同じ
--- ロックを取るので、それらと行き違いにならない。参加者を消すときは、
+-- ロックを取るので、それらと行き違いにならない。続いて大会のエントリー行を
+-- `for update` でロックする。確認メールの再送・リマインドは大会のロックを
+-- 取らずに `email_verification_tokens` を足すが、その insert は参照先の
+-- エントリー行に key share ロックを取るので、このロックと衝突する。ロック
+-- より前にコミットされたトークンは下のトークン削除で消え、後から来る insert
+-- はエントリーの削除が終わるまで待たされて外部キー違反で失敗する(リセット
+-- 側ではなく、再送側が失敗する)。このロックが無いと、トークン削除と
+-- エントリー削除の間に入ったトークンのせいでエントリー削除が外部キー違反に
+-- なり、リセット全体が失敗する。参加者を消すときは、
 -- 消す候補の `participants` 行も `for update` でロックしてから「他の大会に
 -- エントリーが残っていないか」を見る。エントリーの insert は参照先の参加者
 -- 行に key share ロックを取るので、同時に別の大会へ入ってきたエントリーは
@@ -30,7 +43,8 @@
 -- エントリーが外部キー違反で全体を失敗させることはない。
 --
 -- 返り値は 1 行で、消したエントリー数・消した参加者数・他の大会にエントリーが
--- 残っているため残した参加者数。大会が無ければ 0 行を返す(API は 404)。
+-- 残っているため残した参加者数(削除の後に残っている候補の行を数える)。
+-- 大会が無ければ 0 行を返す(API は 404)。
 create function reset_tournament_entries(
   p_tournament_id uuid,
   p_delete_participants boolean
@@ -43,15 +57,28 @@ returns table(
 language plpgsql
 as $$
 declare
+  v_opens_at timestamptz;
+  v_closes_at timestamptz;
   v_participant_ids uuid[];
   v_deleted_entries integer;
   v_deleted_participants integer := 0;
   v_kept_participants integer := 0;
 begin
-  perform 1 from tournaments t where t.id = p_tournament_id for update;
+  select t.entry_opens_at, t.entry_closes_at
+    into v_opens_at, v_closes_at
+    from tournaments t where t.id = p_tournament_id for update;
   if not found then
     return;
   end if;
+  if now() between v_opens_at and v_closes_at then
+    raise exception 'the entry period of the tournament is open'
+      using errcode = 'P0007';
+  end if;
+
+  perform 1 from entries e
+    where e.tournament_id = p_tournament_id
+    order by e.id
+    for update;
 
   v_participant_ids := array(
     select distinct e.participant_id from entries e
@@ -84,7 +111,8 @@ begin
         );
     get diagnostics v_deleted_participants = row_count;
 
-    v_kept_participants := cardinality(v_participant_ids) - v_deleted_participants;
+    select count(*) into v_kept_participants
+      from participants p where p.id = any (v_participant_ids);
   end if;
 
   return query

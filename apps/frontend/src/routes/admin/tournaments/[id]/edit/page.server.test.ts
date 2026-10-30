@@ -421,6 +421,43 @@ describe('admin tournament reset action', () => {
     expect(calls).toEqual([]);
   });
 
+  it('takes the word as an IME may leave it, half-width or with a trailing space', async () => {
+    const calls: ApiCall[] = [];
+    const event = buildActionEvent(
+      fakeFetch({calls}),
+      resetFormData({confirmation: 'ﾘｾｯﾄ\u3000'}),
+    );
+
+    await expect(actions.reset(event)).resolves.toMatchObject({
+      reset: RESET_RESPONSE,
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("surfaces the API's refusal of a tournament in its entry period", async () => {
+    const event = buildActionEvent(
+      fakeFetch({
+        status: 409,
+        error: 'エントリー期間中の大会はリセットできません',
+      }),
+      resetFormData(),
+    );
+
+    await expect(actions.reset(event)).resolves.toMatchObject({
+      status: 409,
+      data: {resetError: 'エントリー期間中の大会はリセットできません'},
+    });
+  });
+
+  it('says a refused permission is one, not a failure', async () => {
+    const event = buildActionEvent(fakeFetch({status: 403}), resetFormData());
+
+    await expect(actions.reset(event)).resolves.toMatchObject({
+      status: 403,
+      data: {resetError: '参加者データをリセットする権限がありません'},
+    });
+  });
+
   it('reports a tournament that is gone', async () => {
     const event = buildActionEvent(fakeFetch({status: 404}), resetFormData());
 

@@ -867,6 +867,27 @@ describe('POST /tournaments/:id/reset (mocked Supabase)', () => {
     expect(rpcCalls).toHaveLength(0);
   });
 
+  it('answers 409 in Japanese while the entry period is open', async () => {
+    stubRpc(() =>
+      Response.json(
+        {
+          code: 'P0007',
+          message: 'the entry period of the tournament is open',
+          details: null,
+          hint: null,
+        },
+        {status: 400},
+      ),
+    );
+
+    const res = await postReset({deleteParticipants: true});
+
+    expect(res.status).toBe(409);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'エントリー期間中の大会はリセットできません',
+    });
+  });
+
   it('answers 404 when the function finds no such tournament', async () => {
     stubRpc(() => Response.json([]));
 
@@ -1373,6 +1394,23 @@ describe.skipIf(!(await isDbReachable()))(
           const tokens =
             await sql`select 1 from password_reset_tokens where participant_id = ${fixture.onlyHereId}`;
           expect(tokens).toHaveLength(0);
+        } finally {
+          await fixture.cleanUp();
+        }
+      });
+
+      it('refuses a tournament whose entry period is open, deleting nothing', async () => {
+        const fixture = await seedResetFixture('open');
+        await sql`update tournaments
+          set entry_opens_at = now() - interval '1 day',
+              entry_closes_at = now() + interval '1 day'
+          where id = ${fixture.resetId}`;
+        try {
+          const res = await postReset(fixture.resetId, true);
+
+          expect(res.status).toBe(409);
+          expect(await countEntries(fixture.resetId)).toBe(2);
+          expect(await participantExists(fixture.onlyHereId)).toBe(true);
         } finally {
           await fixture.cleanUp();
         }
