@@ -9,7 +9,12 @@ vi.mock('$lib/server/portal-regions', () => ({loadPortalRegions}));
 describe('entry-lists +page.server load', () => {
   it("serves the regions read with the page's fetch", async () => {
     const regions = [
-      {regionSlug: 'tokyo', regionName: '東京', tournaments: []},
+      {
+        regionSlug: 'tokyo',
+        regionName: '東京',
+        allowsDualEntry: false,
+        tournaments: [],
+      },
     ];
     loadPortalRegions.mockResolvedValue(regions);
     const fetchImpl = (async () => new Response()) as typeof fetch;

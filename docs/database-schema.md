@@ -103,7 +103,7 @@ flowchart TB
 | `name` | text | not null | 表示名 |
 | `allows_dual_entry` | boolean | not null, default `false` | 同一地域の最強位と新人王の**両方**にエントリーできるか |
 
-`allows_dual_entry` は requirements.md の「両方に参加することができる**ような地域も存在します**」に対応します。既定を `false` にしているのは、現在の「どの地域でも両方に出られる」挙動が仕様の欠落であって意図された既定ではないためで、許可する地域には運用開始前に明示的に `true` を立ててもらいます。判定は `apps/backend/src/lib/entries.ts` の `createEntry()` が行い、`cancelled` 以外のエントリーが同一地域の別大会にあれば 409 を返します。その裏では `check_region_dual_entry()` トリガ(マイグレーション `0017`)が同じルールを DB 側でも掛けています(下記)。
+`allows_dual_entry` は requirements.md の「両方に参加することができる**ような地域も存在します**」に対応します。既定を `false` にしているのは、現在の「どの地域でも両方に出られる」挙動が仕様の欠落であって意図された既定ではないためで、許可する地域には運用開始前に明示的に `true` を立ててもらいます。判定は `apps/backend/src/lib/entries.ts` の `createEntry()` が行い、`cancelled` 以外のエントリーが同一地域の別大会にあれば 409 を返します。その裏では `check_region_dual_entry()` トリガ(マイグレーション `0017`)が同じルールを DB 側でも掛けています(下記)。エントリーポータル(`/portal`)は `GET /api/portal/tournaments` の `regionAllowsDualEntry` でこの設定を受け取り、許可していて最強位・新人王の両方が並んでいる地域に「この地域は最強位と新人王の両方にエントリー可能です(重複エントリー可)」と表示します。地域のルールとしての表示なので、各大会の受付状況(受付開始前 / 受付中 / 受付終了)にかかわらず出します。
 
 作成・編集は統括スタッフ向けの `GET` / `POST` / `PATCH /api/regions`(`apps/backend/src/routes/regions.ts`)から行えます。`slug` だけは公開済み URL の一部なので作成時に固定され、更新できません。
 

@@ -24,7 +24,7 @@ interface PortalTournamentRow {
   }>;
   // `!inner` makes PostgREST drop a tournament without a region rather than
   // answer `null` here, but the type stays honest about the join.
-  regions: {slug: string; name: string} | null;
+  regions: {slug: string; name: string; allows_dual_entry: boolean} | null;
 }
 
 /**
@@ -48,6 +48,7 @@ function rowToPortalTournament(
   const result = PortalTournamentSchema.safeParse({
     regionSlug: row.regions?.slug,
     regionName: row.regions?.name,
+    regionAllowsDualEntry: row.regions?.allows_dual_entry,
     tournamentType: row.type,
     // Blank-named tournaments are named after their region on read (0024).
     tournamentName:
@@ -82,7 +83,8 @@ function rowToPortalTournament(
 // Public on purpose, and not behind the entry-period gate
 // (`middleware/entry-period.ts`): the portal is where participants find the
 // forms, and listing the closed ones too is what lets it say when a form
-// opens. It answers only names, slugs, the entry period, the capacity and --
+// opens. It answers only names, slugs, whether a region allows entering both
+// of its tournaments, the entry period, the capacity and --
 // for a form that is open, and so already shows them -- the regulations'
 // priority windows; whether a closed form can be opened is still decided by
 // that gate on the form's own routes.
@@ -99,7 +101,7 @@ export const portalRoute = new Hono<Env>().get('/tournaments', async c => {
     .from('tournaments')
     .select(
       'type, name, entry_opens_at, entry_closes_at, capacity, ' +
-        'regions!inner(slug, name), ' +
+        'regions!inner(slug, name, allows_dual_entry), ' +
         'regulations(label, priority_starts_at, priority_ends_at)',
     )
     // The order general staff set (`reorder_tournaments()`, 0032); `id`

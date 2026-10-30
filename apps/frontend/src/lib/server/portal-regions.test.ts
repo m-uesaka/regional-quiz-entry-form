@@ -14,6 +14,7 @@ function fakeFetch(status: number, body: unknown): typeof fetch {
 const TOURNAMENT: PortalTournament = {
   regionSlug: 'tokyo',
   regionName: '東京',
+  regionAllowsDualEntry: false,
   tournamentType: 'saikyoi',
   tournamentName: '東京最強位',
   // Wide enough to be open whenever the test runs.
@@ -35,6 +36,7 @@ describe('loadPortalRegions', () => {
       {
         regionSlug: 'tokyo',
         regionName: '東京',
+        allowsDualEntry: false,
         tournaments: [
           {
             name: '東京最強位',

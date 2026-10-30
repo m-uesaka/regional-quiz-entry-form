@@ -7,6 +7,7 @@ const REGIONS: PortalRegionView[] = [
   {
     regionSlug: 'tokyo',
     regionName: '東京',
+    allowsDualEntry: false,
     tournaments: [
       {
         name: '東京最強位',
