@@ -50,6 +50,28 @@ export const TournamentOrderInputSchema = z.object({
 });
 export type TournamentOrderInput = z.infer<typeof TournamentOrderInputSchema>;
 
+// Request body of `POST /api/tournaments/:id/reset`, which deletes every
+// entry of the tournament. `deleteParticipants` is required rather than
+// defaulted, so whether the accounts go too is always a choice someone made:
+// true also deletes the accounts of those entries' participants, except
+// those still entered in another tournament.
+export const TournamentResetInputSchema = z.object({
+  deleteParticipants: z.boolean(),
+});
+export type TournamentResetInput = z.infer<typeof TournamentResetInputSchema>;
+
+// Response body of `POST /api/tournaments/:id/reset`. `keptParticipantCount`
+// is the accounts left in place because they still have an entry in another
+// tournament; always 0 when `deleteParticipants` was false.
+export const TournamentResetResponseSchema = z.object({
+  deletedEntryCount: z.number().int().nonnegative(),
+  deletedParticipantCount: z.number().int().nonnegative(),
+  keptParticipantCount: z.number().int().nonnegative(),
+});
+export type TournamentResetResponse = z.infer<
+  typeof TournamentResetResponseSchema
+>;
+
 // What promoting the waitlist into free seats came to (#223): how many
 // waitlisted entries were confirmed, and how many of their participants the
 // promotion mail could not reach -- those have to be told some other way.

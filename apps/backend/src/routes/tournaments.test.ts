@@ -781,6 +781,114 @@ describe('PUT /tournaments/order (mocked Supabase)', () => {
   });
 });
 
+describe('POST /tournaments/:id/reset (mocked Supabase)', () => {
+  const ID = '00000000-0000-0000-0000-00000000000a';
+  let rpcCalls: Array<{url: string; body: unknown}> = [];
+
+  /**
+   * Answers the `reset_tournament_entries()` RPC with `response`, recording
+   * what it was called with.
+   * @param response What PostgREST answers.
+   */
+  function stubRpc(response: () => Response): void {
+    rpcCalls = [];
+    globalThis.fetch = staffSessionAwareFetch((async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      rpcCalls.push({
+        url: input.toString(),
+        body: JSON.parse(String(init?.body ?? 'null')),
+      });
+      return response();
+    }) as unknown as typeof fetch);
+  }
+
+  async function postReset(body: unknown, cookie?: string): Promise<Response> {
+    return app.request(
+      `/api/tournaments/${ID}/reset`,
+      {
+        method: 'POST',
+        headers: {
+          cookie: cookie ?? (await generalStaffCookie()),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      },
+      env,
+    );
+  }
+
+  it('hands the choice about the accounts to reset_tournament_entries()', async () => {
+    stubRpc(() =>
+      Response.json([
+        {
+          deleted_entry_count: 5,
+          deleted_participant_count: 3,
+          kept_participant_count: 1,
+        },
+      ]),
+    );
+
+    const res = await postReset({deleteParticipants: true});
+
+    expect(res.status).toBe(200);
+    expect((await res.json()) as unknown).toEqual({
+      deletedEntryCount: 5,
+      deletedParticipantCount: 3,
+      keptParticipantCount: 1,
+    });
+    expect(rpcCalls).toHaveLength(1);
+    expect(rpcCalls[0].url).toContain('/rest/v1/rpc/reset_tournament_entries');
+    expect(rpcCalls[0].body).toEqual({
+      p_tournament_id: ID,
+      p_delete_participants: true,
+    });
+  });
+
+  it('refuses regional staff without touching the database', async () => {
+    stubRpc(() => Response.json([]));
+
+    const res = await postReset(
+      {deleteParticipants: false},
+      await regionalStaffCookie(TEST_REGION_ID),
+    );
+
+    expect(res.status).toBe(403);
+    expect(rpcCalls).toHaveLength(0);
+  });
+
+  it('refuses a body that leaves the accounts unspecified', async () => {
+    stubRpc(() => Response.json([]));
+
+    const res = await postReset({});
+
+    expect(res.status).toBe(400);
+    expect(rpcCalls).toHaveLength(0);
+  });
+
+  it('answers 404 when the function finds no such tournament', async () => {
+    stubRpc(() => Response.json([]));
+
+    const res = await postReset({deleteParticipants: false});
+
+    expect(res.status).toBe(404);
+  });
+
+  it('answers a database error with a generic 500', async () => {
+    stubRpc(() =>
+      Response.json({code: 'XX000', message: 'boom'}, {status: 500}),
+    );
+
+    const res = await postReset({deleteParticipants: false});
+
+    expect(res.status).toBe(500);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'internal server error',
+    });
+  });
+});
+
 describe.skipIf(!(await isDbReachable()))(
   'tournaments routes (local Supabase integration)',
   () => {
@@ -1115,6 +1223,169 @@ describe.skipIf(!(await isDbReachable()))(
         await sql`delete from entries where tournament_id = ${created.id}`;
         await sql`delete from participants where id = ${participant.id}`;
       }
+    });
+
+    describe('POST /api/tournaments/:id/reset', () => {
+      /**
+       * A region allowing dual entry with both tournament types, and two
+       * participants entered in the first: one only there (with a pending
+       * verification link and a password reset link), one in both.
+       */
+      async function seedResetFixture(suffix: string): Promise<{
+        resetId: string;
+        otherId: string;
+        onlyHereId: string;
+        alsoElsewhereId: string;
+        cleanUp: () => Promise<void>;
+      }> {
+        const regionId = await createTestRegion(`reset-${suffix}`);
+        await sql`update regions set allows_dual_entry = true where id = ${regionId}`;
+        const reset = (await (
+          await postTournament(regionId, {type: 'saikyoi'})
+        ).json()) as {id: string};
+        const other = (await (
+          await postTournament(regionId, {type: 'shinjinou'})
+        ).json()) as {id: string};
+        const [onlyHere] = await sql`
+          insert into participants (region_id, email, password_hash)
+          values (${regionId}, ${`reset-only-${suffix}@example.com`}, 'hash')
+          returning id
+        `;
+        const [alsoElsewhere] = await sql`
+          insert into participants (region_id, email, password_hash)
+          values (${regionId}, ${`reset-both-${suffix}@example.com`}, 'hash')
+          returning id
+        `;
+        const [pending] = await sql`
+          insert into entries (
+            participant_id, tournament_id, name, furigana, display_name
+          ) values (
+            ${onlyHere.id}, ${reset.id}, '山田太郎', 'ヤマダタロウ', '太郎'
+          )
+          returning id
+        `;
+        await sql`
+          insert into email_verification_tokens (entry_id, token_hash, expires_at)
+          values (${pending.id}, ${`reset-token-${suffix}`}, now() + interval '1 hour')
+        `;
+        await sql`
+          insert into password_reset_tokens (participant_id, token_hash, expires_at)
+          values (${onlyHere.id}, ${`reset-pw-${suffix}`}, now() + interval '1 hour')
+        `;
+        for (const tournamentId of [reset.id, other.id]) {
+          await sql`
+            insert into entries (
+              participant_id, tournament_id, name, furigana, display_name,
+              status
+            ) values (
+              ${alsoElsewhere.id}, ${tournamentId}, '鈴木花子', 'スズキハナコ',
+              '花子', 'confirmed'
+            )
+          `;
+        }
+        const participantIds = [onlyHere.id, alsoElsewhere.id];
+        return {
+          resetId: reset.id,
+          otherId: other.id,
+          onlyHereId: onlyHere.id,
+          alsoElsewhereId: alsoElsewhere.id,
+          cleanUp: async () => {
+            await sql`delete from email_verification_tokens where entry_id in (
+              select id from entries where participant_id in ${sql(participantIds)}
+            )`;
+            await sql`delete from password_reset_tokens
+              where participant_id in ${sql(participantIds)}`;
+            await sql`delete from entries
+              where participant_id in ${sql(participantIds)}`;
+            await sql`delete from participants
+              where id in ${sql(participantIds)}`;
+          },
+        };
+      }
+
+      async function postReset(
+        tournamentId: string,
+        deleteParticipants: boolean,
+      ): Promise<Response> {
+        return app.request(
+          `/api/tournaments/${tournamentId}/reset`,
+          {
+            method: 'POST',
+            headers: {
+              cookie: await generalStaffCookie(),
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify({deleteParticipants}),
+          },
+          env,
+        );
+      }
+
+      async function countEntries(tournamentId: string): Promise<number> {
+        const [{count}] =
+          await sql`select count(*) as count from entries where tournament_id = ${tournamentId}`;
+        return Number(count);
+      }
+
+      async function participantExists(id: string): Promise<boolean> {
+        const rows = await sql`select 1 from participants where id = ${id}`;
+        return rows.length > 0;
+      }
+
+      it('deletes the entries and keeps the accounts when told to', async () => {
+        const fixture = await seedResetFixture('keep');
+        try {
+          const res = await postReset(fixture.resetId, false);
+
+          expect(res.status).toBe(200);
+          expect((await res.json()) as unknown).toEqual({
+            deletedEntryCount: 2,
+            deletedParticipantCount: 0,
+            keptParticipantCount: 0,
+          });
+          expect(await countEntries(fixture.resetId)).toBe(0);
+          expect(await countEntries(fixture.otherId)).toBe(1);
+          expect(await participantExists(fixture.onlyHereId)).toBe(true);
+          expect(await participantExists(fixture.alsoElsewhereId)).toBe(true);
+          const [{count}] =
+            await sql`select count(*) as count from tournaments where id = ${fixture.resetId}`;
+          expect(Number(count)).toBe(1);
+        } finally {
+          await fixture.cleanUp();
+        }
+      });
+
+      it('deletes the accounts too, except one still entered elsewhere', async () => {
+        const fixture = await seedResetFixture('delete');
+        try {
+          const res = await postReset(fixture.resetId, true);
+
+          expect(res.status).toBe(200);
+          expect((await res.json()) as unknown).toEqual({
+            deletedEntryCount: 2,
+            deletedParticipantCount: 1,
+            keptParticipantCount: 1,
+          });
+          expect(await countEntries(fixture.resetId)).toBe(0);
+          expect(await countEntries(fixture.otherId)).toBe(1);
+          expect(await participantExists(fixture.onlyHereId)).toBe(false);
+          expect(await participantExists(fixture.alsoElsewhereId)).toBe(true);
+          const tokens =
+            await sql`select 1 from password_reset_tokens where participant_id = ${fixture.onlyHereId}`;
+          expect(tokens).toHaveLength(0);
+        } finally {
+          await fixture.cleanUp();
+        }
+      });
+
+      it('answers 404 for a tournament that does not exist', async () => {
+        const res = await postReset(
+          '00000000-0000-0000-0000-000000000000',
+          true,
+        );
+
+        expect(res.status).toBe(404);
+      });
     });
 
     /**

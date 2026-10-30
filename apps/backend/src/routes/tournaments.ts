@@ -4,6 +4,8 @@ import {z} from 'zod';
 import {
   TournamentCreateInputSchema,
   TournamentOrderInputSchema,
+  TournamentResetInputSchema,
+  type TournamentResetResponse,
   TournamentTypeSchema,
   TournamentUpdateInputSchema,
   type TournamentUpdateResponse,
@@ -73,6 +75,13 @@ function tournamentWriteError(
 }
 /** What a tournament delete answers when entries still point at it. */
 const TOURNAMENT_HAS_ENTRIES_MESSAGE = 'エントリーがある大会は削除できません';
+
+/** The one row `reset_tournament_entries()` (0038) returns. */
+interface ResetTournamentEntriesRow {
+  deleted_entry_count: number;
+  deleted_participant_count: number;
+  kept_participant_count: number;
+}
 
 const TournamentBySlugParamSchema = z.object({
   regionSlug: z.string(),
@@ -325,6 +334,48 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         return c.json({error: 'tournament not found'}, 404);
       }
       return c.body(null, 204);
+    },
+  )
+  // Empties a tournament of its participant data -- every entry, and with
+  // `deleteParticipants` their accounts too -- while keeping the tournament,
+  // its regulations and form fields, all inside `reset_tournament_entries()`
+  // (0038) so it happens in one transaction. 統括スタッフ only: regional
+  // staff can read and mail their own tournament's entries, but nothing
+  // that wipes them, since a slip here can't be undone. A POST rather than
+  // `DELETE /:id/entries` because it carries a body, and `/reset` collides
+  // with neither the public `POST /:tournamentId/entries` nor anything else
+  // mounted at `/tournaments`.
+  .post(
+    '/:id/reset',
+    requireGeneralStaff(),
+    zValidator('param', TournamentIdParamSchema),
+    zValidator('json', TournamentResetInputSchema),
+    async c => {
+      const {data, error} = await createDbClient(c.env).rpc(
+        'reset_tournament_entries',
+        {
+          p_tournament_id: c.req.valid('param').id,
+          p_delete_participants: c.req.valid('json').deleteParticipants,
+        },
+      );
+      if (error) {
+        return c.json(
+          internalError('failed to reset the tournament entries', error),
+          500,
+        );
+      }
+      // Cast rather than `.returns()`, for the reason `lib/waitlist.ts`
+      // gives: the client isn't built with generated Database types.
+      const [row] = (data as ResetTournamentEntriesRow[] | null) ?? [];
+      if (!row) {
+        return c.json({error: 'tournament not found'}, 404);
+      }
+      const body: TournamentResetResponse = {
+        deletedEntryCount: row.deleted_entry_count,
+        deletedParticipantCount: row.deleted_participant_count,
+        keptParticipantCount: row.kept_participant_count,
+      };
+      return c.json(body);
     },
   )
   // Public while the entry period is open, and the tournament's own staff

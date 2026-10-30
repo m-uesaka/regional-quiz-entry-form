@@ -7,6 +7,14 @@ import {fromJstDatetimeLocal, toJstDatetimeLocal} from '$lib/jst-datetime';
 import type {TournamentFormValues} from '$lib/types/tournament-form';
 import {readString} from '$lib/form-data';
 
+/**
+ * What the edit screen's participant-data reset asks to be typed before its
+ * button does anything, checked again by its form action. A tick, as the
+ * delete section asks for, is one click away from a stray one; wiping every
+ * entry deserves a deliberate keystroke.
+ */
+export const RESET_CONFIRMATION_WORD = 'リセット';
+
 /** A form with nothing filled in, which is how a tournament is created. */
 export function emptyTournamentFormValues(): TournamentFormValues {
   return {

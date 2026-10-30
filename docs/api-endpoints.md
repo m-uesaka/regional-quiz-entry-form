@@ -218,6 +218,7 @@ if ('yaml' in body) {
 | PATCH | `/api/tournaments/:id` | 統括スタッフ |
 | DELETE | `/api/tournaments/:id` | 統括スタッフ |
 | PUT | `/api/tournaments/order` | 統括スタッフ |
+| POST | `/api/tournaments/:id/reset` | 統括スタッフ |
 | GET | `/api/tournaments/:regionSlug/:tournamentSlug` | 期間中はなし / 期間外は担当スタッフ |
 | GET | `/api/tournaments/:tournamentId/regulations` | 期間中はなし / 期間外は担当スタッフ |
 | PUT | `/api/tournaments/:tournamentId/regulations` | 統括スタッフ |
@@ -469,6 +470,23 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 - `500`: `{"error": "internal server error"}`
 
 本文の無い DELETE なので CSRF の origin 検査(§1)の対象になります。管理画面からは大会編集画面の form action(`?/delete`)がサーバ側から呼ぶため、`Origin` は SvelteKit が付けます。
+
+### `POST /api/tournaments/:id/reset`
+
+大会の参加者データをリセットします。その大会のエントリーを**キャンセル済みも含めて全件**削除し、`deleteParticipants` が `true` なら、それらの参加者アカウントも削除します。大会・レギュレーション・フォーム定義・一斉メールの記録は残ります。処理は `reset_tournament_entries()`(`0038`、`docs/database-schema.md` 5 章)が 1 トランザクションで行います。
+
+**統括スタッフ専用**です。地域スタッフは担当大会のエントリーを閲覧・一斉メール送信できますが、取り消せない一括削除を誤って実行する事故を避けるため、この操作は持たせていません。
+
+参加者アカウントを削除する場合も、**他の大会にエントリーが残っている参加者のアカウントは残します**(重複エントリーを認める地域で、もう一方の大会を壊さないため)。削除されたアカウントの参加者セッションは、次のリクエストで `requireParticipant()` が 401 にします。
+
+- パス: `id` は UUID
+- リクエスト: `TournamentResetInput` — `{"deleteParticipants": boolean}`(省略不可。アカウントをどうするかを必ず選ばせるため)
+- `200`: `TournamentResetResponse` — `{"deletedEntryCount": number, "deletedParticipantCount": number, "keptParticipantCount": number}`。`keptParticipantCount` は他の大会にエントリーが残っているため残したアカウント数(`deleteParticipants: false` なら常に 0)
+- `400`: Zod のバリデーションエラー
+- `404`: `{"error": "tournament not found"}`
+- `500`: `{"error": "internal server error"}`
+
+管理画面からは大会編集画面の form action(`?/reset`)が呼びます。画面では「参加者アカウントは残す / 削除する」のどちらも既定で選ばれておらず、確認のため「リセット」と入力しないと送信できません(form action 側でも同じ検査をします)。
 
 ### `PUT /api/tournaments/order`
 

@@ -42,13 +42,18 @@ interface ApiCall {
 /**
  * Builds a fake `fetch` answering the regions, tournaments and form
  * definition APIs.
- * @param options.status The status to answer a PATCH or DELETE with.
+ * @param options.status The status to answer a PATCH, POST or DELETE with.
  * @param options.error The `{error}` message to answer a refusal with.
  * @param options.tournaments The tournaments `GET /api/tournaments/:id` can
  *     find.
  * @param options.calls Collects the recorded requests.
  */
 const PROMOTION = {promotedCount: 2, mailFailedCount: 0};
+const RESET_RESPONSE = {
+  deletedEntryCount: 5,
+  deletedParticipantCount: 3,
+  keptParticipantCount: 1,
+};
 
 function fakeFetch(
   options: {
@@ -93,7 +98,9 @@ function fakeFetch(
       : jsonResponse(
           init?.method === 'PATCH'
             ? {...TOURNAMENT, promotion: PROMOTION}
-            : TOURNAMENT,
+            : url.endsWith('/reset')
+              ? RESET_RESPONSE
+              : TOURNAMENT,
           status,
         );
   }) as typeof fetch;
@@ -342,6 +349,96 @@ describe('admin tournament delete action', () => {
     await expect(actions.delete(event)).resolves.toMatchObject({
       status: 404,
       data: {deleteError: '大会が見つかりません'},
+    });
+  });
+});
+
+describe('admin tournament reset action', () => {
+  function resetFormData(
+    fields: {participants?: string; confirmation?: string} = {},
+  ): FormData {
+    const formData = new FormData();
+    const {participants = 'delete', confirmation = 'リセット'} = fields;
+    formData.set('participants', participants);
+    formData.set('confirmation', confirmation);
+    return formData;
+  }
+
+  it('resets the entries, deleting the accounts when asked to', async () => {
+    const calls: ApiCall[] = [];
+    const event = buildActionEvent(fakeFetch({calls}), resetFormData());
+
+    await expect(actions.reset(event)).resolves.toEqual({
+      reset: RESET_RESPONSE,
+      resetError: null,
+    });
+    expect(calls).toEqual([
+      {
+        method: 'POST',
+        url: `/api/tournaments/${TOURNAMENT.id}/reset`,
+        body: {deleteParticipants: true},
+      },
+    ]);
+  });
+
+  it('keeps the accounts when asked to', async () => {
+    const calls: ApiCall[] = [];
+    const event = buildActionEvent(
+      fakeFetch({calls}),
+      resetFormData({participants: 'keep'}),
+    );
+
+    await actions.reset(event);
+
+    expect(calls.map(c => c.body)).toEqual([{deleteParticipants: false}]);
+  });
+
+  it('refuses a post that chose nothing about the accounts, without asking the API', async () => {
+    const calls: ApiCall[] = [];
+    const event = buildActionEvent(
+      fakeFetch({calls}),
+      resetFormData({participants: ''}),
+    );
+
+    await expect(actions.reset(event)).resolves.toMatchObject({
+      status: 400,
+      data: {resetError: '参加者アカウントを残すか削除するかを選んでください'},
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it('refuses a post without the typed confirmation, without asking the API', async () => {
+    const calls: ApiCall[] = [];
+    const event = buildActionEvent(
+      fakeFetch({calls}),
+      resetFormData({confirmation: 'りせっと'}),
+    );
+
+    await expect(actions.reset(event)).resolves.toMatchObject({
+      status: 400,
+      data: {resetError: '確認のため「リセット」と入力してください'},
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it('reports a tournament that is gone', async () => {
+    const event = buildActionEvent(fakeFetch({status: 404}), resetFormData());
+
+    await expect(actions.reset(event)).resolves.toMatchObject({
+      status: 404,
+      data: {resetError: '大会が見つかりません'},
+    });
+  });
+
+  it('reports any other failure without passing the API message on', async () => {
+    const event = buildActionEvent(
+      fakeFetch({status: 500, error: 'internal server error'}),
+      resetFormData(),
+    );
+
+    await expect(actions.reset(event)).resolves.toMatchObject({
+      status: 502,
+      data: {resetError: '参加者データのリセットに失敗しました'},
     });
   });
 });

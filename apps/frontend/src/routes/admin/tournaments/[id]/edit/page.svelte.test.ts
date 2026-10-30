@@ -277,6 +277,65 @@ describe('admin tournament edit +page.svelte', () => {
     expect(screen.getByLabelText('この大会を削除する')).toBeRequired();
   });
 
+  it('resets through the page action, behind a choice and a typed word', () => {
+    renderPage();
+
+    const form = screen
+      .getByRole('button', {name: '参加者データをリセット'})
+      .closest('form') as HTMLFormElement;
+    expect(form).toHaveAttribute('method', 'POST');
+    expect(form).toHaveAttribute('action', '?/reset');
+    const keep = screen.getByLabelText('参加者アカウントは残す');
+    const remove = screen.getByLabelText('参加者アカウントも削除する');
+    expect(keep).toBeRequired();
+    expect(keep).not.toBeChecked();
+    expect(remove).not.toBeChecked();
+    expect(
+      screen.getByLabelText('確認のため「リセット」と入力してください'),
+    ).toBeRequired();
+  });
+
+  it('says what a reset deleted and which accounts it kept', () => {
+    renderPage(TOURNAMENT, {
+      reset: {
+        deletedEntryCount: 5,
+        deletedParticipantCount: 3,
+        keptParticipantCount: 1,
+      },
+      resetError: null,
+    });
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'エントリーを 5 件削除しました。参加者アカウントを 3 件削除しました。他の大会にエントリーが残っている 1 件の参加者アカウントは残しました。',
+    );
+  });
+
+  it('says only the entries went when the accounts were kept', () => {
+    renderPage(TOURNAMENT, {
+      reset: {
+        deletedEntryCount: 2,
+        deletedParticipantCount: 0,
+        keptParticipantCount: 0,
+      },
+      resetError: null,
+    });
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      /^エントリーを 2 件削除しました。$/,
+    );
+  });
+
+  it('shows why a reset was refused', () => {
+    renderPage(TOURNAMENT, {
+      reset: null,
+      resetError: '参加者データのリセットに失敗しました',
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      '参加者データのリセットに失敗しました',
+    );
+  });
+
   it('shows why a delete was refused, without touching the tournament form', () => {
     renderPage(TOURNAMENT, {
       deleteError: 'エントリーがある大会は削除できません',

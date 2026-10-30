@@ -391,6 +391,7 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | `cancel_own_entry(uuid, uuid)` | `0006` | `lib/entries.ts` | 参加者自身のエントリーをキャンセルする |
 | `reset_participant_password(text, text)` | `0009` → `0010` で再定義 | `lib/password-reset.ts` | 再設定トークンを消費してパスワードを更新し、残りのトークンを焼き捨てる |
 | `take_over_unverified_participant(uuid, text, uuid)` | `0034` | `lib/entries.ts` | 未確認の参加者アカウントのパスワードと地域を上書きし、それまでのエントリーを削除する |
+| `reset_tournament_entries(uuid, boolean)` | `0038` | `routes/tournaments.ts` | 大会のエントリーを全件削除し、指定があれば他の大会にエントリーが残っていない参加者アカウントも削除する |
 | `tournament_entry_summary()` | `0013` | `routes/staff-dashboard.ts` | 全大会のエントリー件数をステータス別に集計する(読み取り専用) |
 | `sync_regulations(uuid, jsonb)` | `0014` | `lib/regulations.ts` | 大会のレギュレーションを差分同期する(update / insert / 参照が無ければ delete) |
 | `record_mail_job_progress(uuid, integer, integer)` | `0019` | `lib/mail-jobs.ts` | 一斉メール 1 バッチ分の結果をジョブの件数に加算する |
@@ -445,6 +446,15 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 - 1 件ずつではなく空席の数だけ繰り上げるので、以前の繰り上げが失敗して空席が残っていても、次のキャンセルや定員の保存で回収されます
 - 繰り上げた後、残りのキャンセル待ちの `waitlist_position` を 1 から振り直します(前述の `waitlist_position` の項)
 - 1 件だけ繰り上げていた `promote_next_waitlisted_entry()`(`0004` → `0007`)は `0037` で削除しました
+
+### reset_tournament_entries(p_tournament_id, p_delete_participants)
+
+大会の参加者データをリセットします(`0038`)。統括スタッフ専用の `POST /api/tournaments/:id/reset` から呼ばれます。大会・レギュレーション・フォーム定義・`mail_jobs` は残し、エントリーだけを空にします。返り値は `(deleted_entry_count, deleted_participant_count, kept_participant_count)` の 1 行で、大会が無ければ 0 行です。
+
+- 大会行を `for update` でロックしてから消します。確定(`confirm_entry_by_token()`)・繰り上げ(`promote_waitlisted_entries()`)と同じロックなので、それらと行き違いません
+- その大会の `email_verification_tokens` を先に消し(`entries` を no action で参照)、続いて `entries` を全件(キャンセル済みも含む)消します。`entry_regulations` は cascade で消えます
+- `p_delete_participants` が true なら、消したエントリーの参加者のうち**他の大会にエントリーが残っていない人だけ**を、`password_reset_tokens` ごと削除します。重複エントリーを認める地域でもう一方の大会にもエントリーしている人のアカウントを消すと、その大会を壊すためです。残した人数が `kept_participant_count` です
+- 参加者を消す前に候補の `participants` 行を `for update` でロックします。エントリーの insert は参照先の参加者行に key share ロックを取るので、同時に別の大会へ入ったエントリーはこのロックの後の検査で見え、外部キー違反で全体が失敗することはありません
 
 ### cancel_own_entry(p_entry_id, p_participant_id)
 
@@ -601,3 +611,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0034_participants_email_verified_at.sql` | `participants.email_verified_at` を追加して確定済みエントリーから埋め戻し、`confirm_entry_by_token()` を確定時に参加者を確認済みにするよう再定義、未確認アカウントを上書きする `take_over_unverified_participant()` を追加(#189) |
 | `0036_import_tournament_explicit_period.sql` | 大会一覧に定員・エントリー開始・終了の列ができたのに合わせ、`import_tournament()` を定員・開始も書き込み、新規作成か上書きかを引数で受け取ってその通りにしか書かない(合わなければ `P0006`)よう再定義 |
 | `0037_promote_waitlisted_entries_fn.sql` | 空いた席の数だけキャンセル待ちを繰り上げて残りの順位を振り直す `promote_waitlisted_entries()` を追加し、`promote_next_waitlisted_entry()` を削除(#223) |
+| `0038_reset_tournament_entries_fn.sql` | 大会のエントリーを全件削除し、指定があれば他の大会にエントリーが残っていない参加者アカウントも削除する `reset_tournament_entries()` を追加 |
