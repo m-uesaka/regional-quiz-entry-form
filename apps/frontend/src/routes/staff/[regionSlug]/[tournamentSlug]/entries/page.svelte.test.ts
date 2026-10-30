@@ -97,6 +97,31 @@ describe('staff entries +page.svelte', () => {
     );
   });
 
+  it("opens this tournament's entry form in a new tab for checking it", () => {
+    render(Page, {
+      props: {
+        params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
+        data: {
+          loggedIn: true,
+          isGeneralStaff: false,
+          tournament: TOURNAMENT,
+          entries: ENTRIES,
+          total: ENTRIES.length,
+          limit: 100,
+          offset: 0,
+          status: null,
+        },
+        form: null,
+      },
+    });
+
+    const link = screen.getByRole('link', {
+      name: 'エントリーフォームを確認(新しいタブで開きます)',
+    });
+    expect(link).toHaveAttribute('href', `/tokyo/${TOURNAMENT.type}/entry`);
+    expect(link).toHaveAttribute('target', '_blank');
+  });
+
   it('warns that the CSV is meant for spreadsheets, not re-import', () => {
     render(Page, {
       props: {

@@ -76,6 +76,18 @@ export function tournamentPublicPath(
 }
 
 /**
+ * The tournament's entry form, `/<regionSlug>/<tournamentType>/entry`.
+ * @param regionSlug The tournament's region slug.
+ * @param tournamentType The tournament's type, used as the URL slug.
+ */
+export function tournamentEntryFormPath(
+  regionSlug: string,
+  tournamentType: TournamentType,
+): string {
+  return `${tournamentPublicPath(regionSlug, tournamentType)}/entry`;
+}
+
+/**
  * The tournament's published entry list,
  * `/<regionSlug>/<tournamentType>/list`.
  * @param regionSlug The tournament's region slug.
@@ -161,7 +173,10 @@ export function groupPortalTournaments(
         status === 'open'
           ? priorityEntryNotices(tournament.priorityRegulations, now)
           : [],
-      entryPath: `${tournamentPublicPath(tournament.regionSlug, tournament.tournamentType)}/entry`,
+      entryPath: tournamentEntryFormPath(
+        tournament.regionSlug,
+        tournament.tournamentType,
+      ),
       entryListPath: tournamentEntryListPath(
         tournament.regionSlug,
         tournament.tournamentType,

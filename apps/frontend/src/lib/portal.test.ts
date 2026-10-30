@@ -4,6 +4,7 @@ import {
   DUAL_ENTRY_NOTICE,
   groupPortalTournaments,
   portalStatus,
+  tournamentEntryFormPath,
   tournamentEntryListPath,
   tournamentPublicPath,
 } from './portal';
@@ -36,6 +37,14 @@ describe('tournamentPublicPath', () => {
   it('encodes a region slug that would otherwise change the URL', () => {
     expect(tournamentPublicPath('a?b#c', 'shinjinou')).toBe(
       '/a%3Fb%23c/shinjinou',
+    );
+  });
+});
+
+describe('tournamentEntryFormPath', () => {
+  it('points at the entry form under the tournament', () => {
+    expect(tournamentEntryFormPath('tokyo', 'saikyoi')).toBe(
+      '/tokyo/saikyoi/entry',
     );
   });
 });
@@ -165,7 +174,13 @@ describe('groupPortalTournaments', () => {
     );
 
     expect(region.tournaments.map(t => t.priorityNotices)).toEqual([
-      [{labels: ['在住'], endsAtLabel: '2026年12月31日(木) 9:00'}],
+      [
+        {
+          labels: ['在住'],
+          startsAtLabel: '2026年10月1日(木) 9:00',
+          endsAtLabel: '2026年12月31日(木) 9:00',
+        },
+      ],
       [],
     ]);
   });

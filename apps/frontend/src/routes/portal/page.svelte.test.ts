@@ -18,6 +18,7 @@ const REGIONS: PortalRegionView[] = [
         priorityNotices: [
           {
             labels: ['開催地域に在住の方', '開催地域に在学の方'],
+            startsAtLabel: '2026年11月1日(日) 9:00',
             endsAtLabel: '2026年11月5日(木) 9:00',
           },
         ],
@@ -89,7 +90,7 @@ describe('portal +page.svelte', () => {
     expect(screen.getByText('定員: 48名')).toBeInTheDocument();
     expect(
       screen.getByText(
-        '現在優先エントリー実施中です。該当レギュレーション: 「開催地域に在住の方」「開催地域に在学の方」、〜2026年11月5日(木) 9:00まで',
+        '現在優先エントリー実施中です。該当レギュレーション: 「開催地域に在住の方」「開催地域に在学の方」、2026年11月1日(日) 9:00〜2026年11月5日(木) 9:00まで',
       ),
     ).toBeInTheDocument();
   });

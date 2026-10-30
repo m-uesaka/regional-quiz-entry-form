@@ -20,9 +20,9 @@ describe('priorityEntryNotices', () => {
     ).toEqual([]);
   });
 
-  // Each notice names the moment its regulations stop being prioritised,
-  // so windows ending apart are not merged under either end.
-  it('groups the open windows by when they end, earliest first', () => {
+  // Each notice names the window its regulations are prioritised over, so
+  // windows that start or end apart are not merged under either.
+  it('groups the open windows by when they start and end, earliest end first', () => {
     expect(
       priorityEntryNotices(
         [
@@ -45,16 +45,55 @@ describe('priorityEntryNotices', () => {
         now,
       ),
     ).toEqual([
-      {labels: ['在住'], endsAtLabel: '2026年11月5日(木) 9:00'},
-      {labels: ['在勤', '在学'], endsAtLabel: '2026年11月8日(日) 9:00'},
+      {
+        labels: ['在住'],
+        startsAtLabel: '2026年11月1日(日) 9:00',
+        endsAtLabel: '2026年11月5日(木) 9:00',
+      },
+      {
+        labels: ['在勤'],
+        startsAtLabel: '2026年11月1日(日) 9:00',
+        endsAtLabel: '2026年11月8日(日) 9:00',
+      },
+      {
+        labels: ['在学'],
+        startsAtLabel: '2026年11月2日(月) 9:00',
+        endsAtLabel: '2026年11月8日(日) 9:00',
+      },
+    ]);
+  });
+
+  it('announces windows that start and end together as one', () => {
+    expect(
+      priorityEntryNotices(
+        [
+          {
+            label: '在勤',
+            priorityStartsAt: '2026-11-01T00:00:00Z',
+            priorityEndsAt: '2026-11-08T00:00:00Z',
+          },
+          {
+            label: '在学',
+            priorityStartsAt: '2026-11-01T00:00:00Z',
+            priorityEndsAt: '2026-11-08T00:00:00Z',
+          },
+        ],
+        now,
+      ),
+    ).toEqual([
+      {
+        labels: ['在勤', '在学'],
+        startsAtLabel: '2026年11月1日(日) 9:00',
+        endsAtLabel: '2026年11月8日(日) 9:00',
+      },
     ]);
   });
 });
 
-describe('priorityEntryNotices, ends the page cannot tell apart', () => {
+describe('priorityEntryNotices, moments the page cannot tell apart', () => {
   const now = new Date('2026-11-03T00:00:00Z');
 
-  it('announces windows ending in the same printed minute together', () => {
+  it('announces windows starting and ending in the same printed minute together', () => {
     expect(
       priorityEntryNotices(
         [
@@ -65,19 +104,56 @@ describe('priorityEntryNotices, ends the page cannot tell apart', () => {
           },
           {
             label: '在学',
-            priorityStartsAt: '2026-11-01T00:00:00Z',
+            priorityStartsAt: '2026-11-01T00:00:45Z',
             priorityEndsAt: '2026-11-05T00:00:30Z',
           },
           {
             label: '在勤',
-            priorityStartsAt: '2026-11-01T00:00:00Z',
+            priorityStartsAt: '2026-11-01T09:00:00+09:00',
             priorityEndsAt: '2026-11-05T09:00:00+09:00',
           },
         ],
         now,
       ),
     ).toEqual([
-      {labels: ['在住', '在勤', '在学'], endsAtLabel: '2026年11月5日(木) 9:00'},
+      {
+        // In display order: the seconds the page doesn't print don't
+        // reorder them.
+        labels: ['在住', '在学', '在勤'],
+        startsAtLabel: '2026年11月1日(日) 9:00',
+        endsAtLabel: '2026年11月5日(木) 9:00',
+      },
+    ]);
+  });
+
+  it('orders by start when the ends print as the same minute', () => {
+    expect(
+      priorityEntryNotices(
+        [
+          {
+            label: '在住',
+            priorityStartsAt: '2026-11-02T00:00:00Z',
+            priorityEndsAt: '2026-11-05T00:00:00Z',
+          },
+          {
+            label: '在学',
+            priorityStartsAt: '2026-11-01T00:00:00Z',
+            priorityEndsAt: '2026-11-05T00:00:30Z',
+          },
+        ],
+        now,
+      ),
+    ).toEqual([
+      {
+        labels: ['在学'],
+        startsAtLabel: '2026年11月1日(日) 9:00',
+        endsAtLabel: '2026年11月5日(木) 9:00',
+      },
+      {
+        labels: ['在住'],
+        startsAtLabel: '2026年11月2日(月) 9:00',
+        endsAtLabel: '2026年11月5日(木) 9:00',
+      },
     ]);
   });
 });

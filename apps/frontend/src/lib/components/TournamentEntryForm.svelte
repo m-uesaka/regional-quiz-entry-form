@@ -32,6 +32,12 @@
      * so the address and password fields are left out (#117).
      */
     loggedIn?: boolean;
+    /**
+     * Whether this is a staff preview of a form outside its entry period.
+     * The API would refuse the submission, so the form is shown without a
+     * way to send it: no submit, and no challenge spent on one.
+     */
+    preview?: boolean;
   }
 
   const {
@@ -40,6 +46,7 @@
     values,
     fieldErrors,
     loggedIn = false,
+    preview = false,
   }: Props = $props();
 
   // The stored definitions carry API-shaped keys (`fieldKey` / `fieldType`);
@@ -275,10 +282,20 @@
        form, which the page's action forwards to the API. Entry registration
        mails a confirmation to whatever address it is given, so it is one of
        the two forms behind a challenge as well as a rate limit (#116). -->
-  <Turnstile bind:this={turnstile} />
+  {#if !preview}
+    <Turnstile bind:this={turnstile} />
+  {/if}
 
+  <!-- Disabling the form's only submit button also stops Enter in a field
+       from submitting it. -->
   <div class="flex flex-wrap gap-2 pt-2">
-    <Button type="submit" variant="primary" tone="solid" size="large">
+    <Button
+      type="submit"
+      variant="primary"
+      tone="solid"
+      size="large"
+      disabled={preview}
+    >
       エントリーする
     </Button>
   </div>

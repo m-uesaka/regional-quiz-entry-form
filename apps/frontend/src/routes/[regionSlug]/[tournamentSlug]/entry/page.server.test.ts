@@ -204,6 +204,7 @@ describe('entry +page.server load', () => {
 
     await expect(load(event)).resolves.toMatchObject({
       tournament: OUT_OF_PERIOD_TOURNAMENT,
+      staffPreview: true,
     });
   });
 
@@ -271,6 +272,7 @@ describe('entry +page.server load', () => {
       tournament: OPEN_TOURNAMENT,
       regulations: REGULATIONS,
       formFieldDefs: FORM_FIELD_DEFS,
+      staffPreview: false,
       priorityNotices: [],
       waitlistOpen: false,
       loggedIn: false,
@@ -280,13 +282,14 @@ describe('entry +page.server load', () => {
 
   it('announces the 優先エントリー open now', async () => {
     const day = 24 * 60 * 60 * 1000;
+    const startsAt = new Date(Date.now() - day);
     const endsAt = new Date(Date.now() + day);
     const event = buildEvent({
       fetch: fakeApi({
         regulations: [
           {
             ...REGULATIONS[0],
-            priorityStartsAt: new Date(Date.now() - day).toISOString(),
+            priorityStartsAt: startsAt.toISOString(),
             priorityEndsAt: endsAt.toISOString(),
           },
         ],
@@ -299,6 +302,7 @@ describe('entry +page.server load', () => {
     expect(data?.priorityNotices).toEqual([
       {
         labels: [REGULATIONS[0].label],
+        startsAtLabel: formatJstDateTime(startsAt.toISOString()),
         endsAtLabel: formatJstDateTime(endsAt.toISOString()),
       },
     ]);

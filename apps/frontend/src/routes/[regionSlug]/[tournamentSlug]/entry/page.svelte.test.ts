@@ -68,6 +68,7 @@ function renderPage(
     loggedIn?: boolean;
     priorityNotices?: PriorityEntryNotice[];
     waitlistOpen?: boolean;
+    staffPreview?: boolean;
   } = {},
 ) {
   return render(Page, {
@@ -77,6 +78,7 @@ function renderPage(
         tournament: TOURNAMENT,
         regulations: REGULATIONS,
         formFieldDefs: FORM_FIELD_DEFS,
+        staffPreview: options.staffPreview ?? false,
         priorityNotices: options.priorityNotices ?? [],
         waitlistOpen: options.waitlistOpen ?? false,
         loggedIn: options.loggedIn ?? false,
@@ -101,14 +103,18 @@ describe('entry +page.svelte', () => {
   it('opens with the 優先エントリー and the waitlist when there are any', () => {
     renderPage(null, {
       priorityNotices: [
-        {labels: ['一般の部'], endsAtLabel: '2026年11月5日(木) 9:00'},
+        {
+          labels: ['一般の部'],
+          startsAtLabel: '2026年11月1日(日) 9:00',
+          endsAtLabel: '2026年11月5日(木) 9:00',
+        },
       ],
       waitlistOpen: true,
     });
 
     expect(
       screen.getByText(
-        '現在優先エントリー実施中です。該当レギュレーション: 「一般の部」、〜2026年11月5日(木) 9:00まで',
+        '現在優先エントリー実施中です。該当レギュレーション: 「一般の部」、2026年11月1日(日) 9:00〜2026年11月5日(木) 9:00まで',
       ),
     ).toBeInTheDocument();
     expect(
@@ -121,6 +127,25 @@ describe('entry +page.svelte', () => {
 
     expect(screen.queryByText(/優先エントリー実施中/)).not.toBeInTheDocument();
     expect(screen.queryByText(/キャンセル待ち/)).not.toBeInTheDocument();
+  });
+
+  it('tells staff previewing a form outside its period that it cannot be sent', () => {
+    renderPage(null, {staffPreview: true});
+
+    expect(
+      screen.getByText(
+        /エントリー期間外のため、スタッフ向けに確認用として表示しています/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('氏名')).toBeInTheDocument();
+    expect(screen.getByRole('button', {name: 'エントリーする'})).toBeDisabled();
+  });
+
+  it('says nothing of a preview while the form is open', () => {
+    renderPage();
+
+    expect(screen.queryByText(/スタッフ向けに確認用/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', {name: 'エントリーする'})).toBeEnabled();
   });
 
   it('renders the entry form fields', () => {
@@ -378,6 +403,7 @@ describe('entry +page.svelte', () => {
         tournament: {...TOURNAMENT, id: OTHER_TOURNAMENT_ID, type: 'shinjinou'},
         regulations: REGULATIONS,
         formFieldDefs: FORM_FIELD_DEFS,
+        staffPreview: false,
         priorityNotices: [],
         waitlistOpen: false,
         loggedIn: false,
