@@ -218,6 +218,7 @@ if ('yaml' in body) {
 | PATCH | `/api/tournaments/:id` | 統括スタッフ |
 | DELETE | `/api/tournaments/:id` | 統括スタッフ |
 | PUT | `/api/tournaments/order` | 統括スタッフ |
+| POST | `/api/tournaments/:id/reset` | 統括スタッフ |
 | GET | `/api/tournaments/:regionSlug/:tournamentSlug` | 期間中はなし / 期間外は担当スタッフ |
 | GET | `/api/tournaments/:tournamentId/regulations` | 期間中はなし / 期間外は担当スタッフ |
 | PUT | `/api/tournaments/:tournamentId/regulations` | 統括スタッフ |
@@ -469,6 +470,26 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 - `500`: `{"error": "internal server error"}`
 
 本文の無い DELETE なので CSRF の origin 検査(§1)の対象になります。管理画面からは大会編集画面の form action(`?/delete`)がサーバ側から呼ぶため、`Origin` は SvelteKit が付けます。
+
+### `POST /api/tournaments/:id/reset`
+
+大会の参加者データをリセットします。その大会のエントリーを**キャンセル済みも含めて全件**削除し、`deleteParticipants` が `true` なら、それらの参加者アカウントも削除します。大会・レギュレーション・フォーム定義・一斉メールの記録は残ります。処理は `reset_tournament_entries()`(`0038`、`docs/database-schema.md` 5 章)が 1 トランザクションで行います。
+
+**統括スタッフ専用**です。地域スタッフは担当大会のエントリーを閲覧・一斉メール送信できますが、取り消せない一括削除を誤って実行する事故を避けるため、この操作は持たせていません。同じ理由で、**エントリー期間中(`entry_opens_at` ≦ 現在 ≦ `entry_closes_at`)の大会は何も消さずに 409 で断ります**(編集画面を開き間違えて受付中の大会を消さないため)。
+
+一斉メールの送信中にリセットしても、キューに積まれた送信待ちのメールは止まりません(宛先はメッセージに入っているため、削除した参加者にも届きます)。画面ではその旨の注意書きを出しています。
+
+参加者アカウントを削除する場合も、**他の大会にエントリーが残っている参加者のアカウントは残します**(重複エントリーを認める地域で、もう一方の大会を壊さないため)。削除されたアカウントの参加者セッションは、次のリクエストで `requireParticipant()` が 401 にします。
+
+- パス: `id` は UUID
+- リクエスト: `TournamentResetInput` — `{"deleteParticipants": boolean}`(省略不可。アカウントをどうするかを必ず選ばせるため)
+- `200`: `TournamentResetResponse` — `{"deletedEntryCount": number, "deletedParticipantCount": number, "keptParticipantCount": number}`。`keptParticipantCount` は他の大会にエントリーが残っているため残したアカウント数(`deleteParticipants: false` なら常に 0)
+- `400`: Zod のバリデーションエラー
+- `404`: `{"error": "tournament not found"}`
+- `409`: `{"error": "エントリー期間中の大会はリセットできません"}` — SQLSTATE `P0007`
+- `500`: `{"error": "internal server error"}`
+
+管理画面からは大会編集画面の form action(`?/reset`)が呼びます。画面では「参加者アカウントは残す / 削除する」のどちらも既定で選ばれておらず、確認のため「リセット」と入力しないと送信できません(form action が NFKC 正規化と前後の空白除去をしてから比べるので、半角の「ﾘｾｯﾄ」や IME が残す全角スペースも通ります)。エントリー期間中の大会では、画面を表示した時点の判定でボタンを無効にします。
 
 ### `PUT /api/tournaments/order`
 

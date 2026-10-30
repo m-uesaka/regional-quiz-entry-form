@@ -3,6 +3,7 @@ import {
   defaultTournamentName,
   TournamentCreateInputSchema,
   TournamentOrderInputSchema,
+  TournamentResetInputSchema,
   TournamentUpdateInputSchema,
 } from './tournament';
 
@@ -58,6 +59,21 @@ describe('TournamentOrderInputSchema', () => {
     expect(
       TournamentOrderInputSchema.safeParse({tournamentIds: [A, A]}).success,
     ).toBe(false);
+  });
+});
+
+describe('TournamentResetInputSchema', () => {
+  it('accepts either choice about the accounts', () => {
+    expect(
+      TournamentResetInputSchema.safeParse({deleteParticipants: true}).success,
+    ).toBe(true);
+    expect(
+      TournamentResetInputSchema.safeParse({deleteParticipants: false}).success,
+    ).toBe(true);
+  });
+
+  it('rejects a body that leaves the accounts unspecified', () => {
+    expect(TournamentResetInputSchema.safeParse({}).success).toBe(false);
   });
 });
 
