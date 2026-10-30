@@ -20,6 +20,7 @@ const TOURNAMENT: PortalTournament = {
   // Wide enough to be open whenever the test runs.
   entryOpensAt: '2000-01-01T00:00:00Z',
   entryClosesAt: '2999-12-31T00:00:00Z',
+  entriesPaused: false,
   capacity: null,
   priorityRegulations: [],
 };

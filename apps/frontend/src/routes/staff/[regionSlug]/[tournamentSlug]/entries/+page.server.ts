@@ -1,10 +1,20 @@
-import {error, redirect} from '@sveltejs/kit';
-import {EntryStatusSchema, TournamentTypeSchema} from '@regional-quiz/shared';
+import {error, fail, redirect} from '@sveltejs/kit';
+import {
+  EntryStatusSchema,
+  TournamentEntryPauseInputSchema,
+  TournamentTypeSchema,
+} from '@regional-quiz/shared';
 import {createApiClient, isUnauthorized} from '$lib/api';
 import {readPageOffset} from '$lib/pagination';
 import {staffLoginPath} from '$lib/server/staff-login';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
-import type {PageServerLoad} from './$types';
+import type {Actions, PageServerLoad} from './$types';
+
+/** What the pause action hands back: the state it set, or why it refused. */
+interface EntryPauseActionResult {
+  paused: boolean | null;
+  pauseError: string | null;
+}
 
 export const load: PageServerLoad = async ({
   params,
@@ -84,3 +94,73 @@ export const load: PageServerLoad = async ({
   const {items, ...paging} = await entriesRes.json();
   return {tournament, entries: items, ...paging, status};
 };
+
+export const actions = {
+  // Pauses or resumes taking entries (0039). The API checks the staff
+  // member covers the tournament, so the id is taken from `load`'s read of
+  // the route rather than from the form.
+  pause: async ({params, request, fetch, cookies, url}) => {
+    const value = (await request.formData()).get('paused');
+    const input = TournamentEntryPauseInputSchema.safeParse({
+      paused: value === 'true' ? true : value === 'false' ? false : undefined,
+    });
+    if (!input.success) {
+      return pauseFailure(400, '操作内容を確認してください');
+    }
+    const parsedType = TournamentTypeSchema.safeParse(params.tournamentSlug);
+    if (!parsedType.success) {
+      return pauseFailure(404, '大会が見つかりません');
+    }
+
+    const api = createApiClient(fetch);
+    const tournamentRes = await api.api.tournaments[':regionSlug'][
+      ':tournamentSlug'
+    ].$get({
+      param: {regionSlug: params.regionSlug, tournamentSlug: parsedType.data},
+    });
+    if (!tournamentRes.ok) {
+      if (isUnauthorized(tournamentRes)) {
+        redirectToStaffLogin(cookies, url);
+      }
+      return pauseFailure(502, '大会情報の取得に失敗しました');
+    }
+    const tournament = await tournamentRes.json();
+
+    const res = await api.api.staff.tournaments[':tournamentId'][
+      'entry-pause'
+    ].$put({param: {tournamentId: tournament.id}, json: input.data});
+    if (!res.ok) {
+      if (isUnauthorized(res)) {
+        redirectToStaffLogin(cookies, url);
+      }
+      if (res.status === 403) {
+        return pauseFailure(
+          403,
+          'この大会のエントリー受付を操作する権限がありません',
+        );
+      }
+      return pauseFailure(
+        502,
+        input.data.paused
+          ? 'エントリー受付の一時中断に失敗しました'
+          : 'エントリー受付の再開に失敗しました',
+      );
+    }
+    return {
+      paused: (await res.json()).entriesPaused,
+      pauseError: null,
+    } satisfies EntryPauseActionResult;
+  },
+} satisfies Actions;
+
+/**
+ * Refuses a pause or resume, with the message to show beside its button.
+ * @param status The status to answer with.
+ * @param message The message.
+ */
+function pauseFailure(status: number, message: string) {
+  return fail(status, {
+    paused: null,
+    pauseError: message,
+  } satisfies EntryPauseActionResult);
+}

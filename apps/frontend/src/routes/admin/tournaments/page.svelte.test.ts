@@ -20,6 +20,7 @@ const TOURNAMENT = {
   capacity: null,
   entryOpensAt: '2026-01-01T00:00:00.000Z',
   entryClosesAt: '2026-02-01T00:00:00.000Z',
+  entriesPaused: false,
 };
 
 describe('admin tournament list +page.svelte', () => {

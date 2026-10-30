@@ -11,12 +11,16 @@ import {
   type PriorityEntryNotice,
 } from '$lib/priority-entry';
 
-/** Whether a tournament's entry form is taking entries. */
-export type PortalStatus = 'open' | 'upcoming' | 'closed';
+/**
+ * Whether a tournament's entry form is taking entries. `paused` is within
+ * the period but stopped by staff (0039).
+ */
+export type PortalStatus = 'open' | 'paused' | 'upcoming' | 'closed';
 
 /** What the portal shows for each status. */
 export const PORTAL_STATUS_LABELS: Record<PortalStatus, string> = {
   open: '受付中',
+  paused: '一時中断中',
   upcoming: '受付開始前',
   closed: '受付終了',
 };
@@ -107,13 +111,16 @@ export function tournamentEntryListPath(
  * @param now The moment to check it at.
  */
 export function portalStatus(
-  tournament: Pick<PortalTournament, 'entryOpensAt' | 'entryClosesAt'>,
+  tournament: Pick<
+    PortalTournament,
+    'entryOpensAt' | 'entryClosesAt' | 'entriesPaused'
+  >,
   now: Date,
 ): PortalStatus {
   if (
     isWithinEntryPeriod(tournament.entryOpensAt, tournament.entryClosesAt, now)
   ) {
-    return 'open';
+    return tournament.entriesPaused ? 'paused' : 'open';
   }
   return now.getTime() < Date.parse(tournament.entryOpensAt)
     ? 'upcoming'

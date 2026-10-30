@@ -302,6 +302,7 @@ describe('PATCH /tournaments/:id (waitlist promotion, mocked Supabase)', () => {
     capacity: 60,
     entry_opens_at: '2026-01-01T00:00:00+09:00',
     entry_closes_at: '2026-01-31T00:00:00+09:00',
+    entries_paused: false,
     regions: {name: 'テスト地域'},
   };
 
@@ -605,6 +606,7 @@ describe('GET /tournaments/:id and /:regionSlug/:tournamentSlug (queries)', () =
         capacity: tournament.capacity,
         entryOpensAt: tournament.entry_opens_at,
         entryClosesAt: tournament.entry_closes_at,
+        entriesPaused: false,
       },
       customName: tournament.name,
       formFieldDefs: [],

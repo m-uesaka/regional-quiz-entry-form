@@ -11,6 +11,7 @@ const TOURNAMENT: Tournament = {
   capacity: null,
   entryOpensAt: '2020-01-01T00:00:00.000Z',
   entryClosesAt: '2099-01-01T00:00:00.000Z',
+  entriesPaused: false,
 };
 
 const ENTRIES: Entry[] = [
@@ -236,5 +237,77 @@ describe('staff entries +page.svelte', () => {
     expect(
       screen.getByText('該当するエントリーはありません。'),
     ).toBeInTheDocument();
+  });
+});
+
+describe('staff entries +page.svelte, pausing entries', () => {
+  function renderWith(
+    tournament: typeof TOURNAMENT,
+    form: Record<string, unknown> | null = null,
+  ) {
+    return render(Page, {
+      props: {
+        params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
+        data: {
+          loggedIn: true,
+          isGeneralStaff: false,
+          tournament,
+          entries: ENTRIES,
+          total: ENTRIES.length,
+          limit: 100,
+          offset: 0,
+          status: null,
+        },
+        form: form as never,
+      },
+    });
+  }
+
+  it('offers to pause a tournament taking entries, through the page action', () => {
+    renderWith(TOURNAMENT);
+
+    const button = screen.getByRole('button', {
+      name: 'エントリー受付を一時中断する',
+    });
+    const form = button.closest('form') as HTMLFormElement;
+    expect(form).toHaveAttribute('method', 'POST');
+    expect(form).toHaveAttribute('action', '?/pause');
+    expect(form.querySelector('input[name="paused"]')).toHaveValue('true');
+  });
+
+  it('offers to resume a paused tournament, saying it is paused', () => {
+    renderWith({...TOURNAMENT, entriesPaused: true});
+
+    expect(screen.getByText('一時中断中')).toBeInTheDocument();
+    const button = screen.getByRole('button', {
+      name: 'エントリー受付を再開する',
+    });
+    expect(
+      (button.closest('form') as HTMLFormElement).querySelector(
+        'input[name="paused"]',
+      ),
+    ).toHaveValue('false');
+  });
+
+  it('reports what the action did', () => {
+    renderWith(
+      {...TOURNAMENT, entriesPaused: true},
+      {paused: true, pauseError: null},
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'エントリー受付を一時中断しました',
+    );
+  });
+
+  it('shows why the action was refused', () => {
+    renderWith(TOURNAMENT, {
+      paused: null,
+      pauseError: 'この大会のエントリー受付を操作する権限がありません',
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'この大会のエントリー受付を操作する権限がありません',
+    );
   });
 });

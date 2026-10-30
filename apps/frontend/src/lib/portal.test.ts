@@ -23,6 +23,7 @@ function tournament(
     tournamentName: '東京大会',
     entryOpensAt: OPENS_AT,
     entryClosesAt: CLOSES_AT,
+    entriesPaused: false,
     capacity: null,
     priorityRegulations: [],
     ...overrides,
@@ -69,6 +70,24 @@ describe('portalStatus', () => {
   it('is open from the opening instant to the closing instant inclusive', () => {
     expect(portalStatus(tournament(), new Date(OPENS_AT))).toBe('open');
     expect(portalStatus(tournament(), new Date(CLOSES_AT))).toBe('open');
+  });
+
+  it('is paused within the window while staff have paused entries', () => {
+    expect(
+      portalStatus(
+        tournament({entriesPaused: true}),
+        new Date('2026-11-15T00:00:00Z'),
+      ),
+    ).toBe('paused');
+  });
+
+  it('goes by the window alone outside it, paused or not', () => {
+    expect(
+      portalStatus(
+        tournament({entriesPaused: true}),
+        new Date('2026-11-30T00:00:01Z'),
+      ),
+    ).toBe('closed');
   });
 
   it('is closed once the window has passed', () => {

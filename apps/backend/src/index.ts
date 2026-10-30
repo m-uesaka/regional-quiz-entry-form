@@ -8,6 +8,7 @@ import {participantAuthRoute} from './routes/participant-auth';
 import {passwordResetRoute} from './routes/password-reset';
 import {regionsRoute} from './routes/regions';
 import {tournamentsRoute} from './routes/tournaments';
+import {staffEntryPauseRoute} from './routes/staff-entry-pause';
 import {entriesRoute, entrySessionRoute} from './routes/entries';
 import {entryListRoute} from './routes/entry-list';
 import {regulationsRoute} from './routes/regulations';
@@ -75,6 +76,7 @@ const routes = app
   .route('/tournaments', entrySessionRoute)
   .route('/staff', staffDashboardRoute)
   .route('/staff', staffEntriesRoute)
+  .route('/staff', staffEntryPauseRoute)
   .route('/staff', staffMailRoute)
   .route('/staff', staffAccountsRoute)
   .route('/entries', entryVerificationRoute)

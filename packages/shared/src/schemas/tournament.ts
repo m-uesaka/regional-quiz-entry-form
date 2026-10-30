@@ -11,6 +11,9 @@ export const TournamentSchema = z.object({
   capacity: z.number().int().positive().nullable(),
   entryOpensAt: z.string().datetime({offset: true}),
   entryClosesAt: z.string().datetime({offset: true}),
+  // Staff paused taking entries (0039): within the period or not, no new
+  // entry is accepted and the form is staff-only, as outside the period.
+  entriesPaused: z.boolean(),
 });
 export type Tournament = z.infer<typeof TournamentSchema>;
 
@@ -24,6 +27,9 @@ export type Tournament = z.infer<typeof TournamentSchema>;
 // read, rather than making staff type it.
 export const TournamentCreateInputSchema = TournamentSchema.omit({
   id: true,
+  // Switched by staff on its own (`TournamentEntryPauseInputSchema`), not
+  // with the rest of the tournament's settings.
+  entriesPaused: true,
 }).extend({name: z.string().trim().default('')});
 export type TournamentCreateInput = z.infer<typeof TournamentCreateInputSchema>;
 
@@ -49,6 +55,17 @@ export const TournamentOrderInputSchema = z.object({
     }),
 });
 export type TournamentOrderInput = z.infer<typeof TournamentOrderInputSchema>;
+
+// Request body of `PUT /api/staff/tournaments/:tournamentId/entry-pause`:
+// whether the tournament should stop (true) or resume (false) taking
+// entries. A PUT of the state rather than a toggle, so a double submit
+// leaves it where the staff member meant.
+export const TournamentEntryPauseInputSchema = z.object({
+  paused: z.boolean(),
+});
+export type TournamentEntryPauseInput = z.infer<
+  typeof TournamentEntryPauseInputSchema
+>;
 
 // Request body of `POST /api/tournaments/:id/reset`, which deletes every
 // entry of the tournament. `deleteParticipants` is required rather than

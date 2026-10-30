@@ -10,8 +10,9 @@
 
   const {data}: PageProps = $props();
 
-  const STATUS_CHIP_VARIANT: Record<PortalStatus, 'success' | 'primary' | 'secondary'> = {
+  const STATUS_CHIP_VARIANT: Record<PortalStatus, 'success' | 'warning' | 'primary' | 'secondary'> = {
     open: 'success',
+    paused: 'warning',
     upcoming: 'primary',
     closed: 'secondary',
   };

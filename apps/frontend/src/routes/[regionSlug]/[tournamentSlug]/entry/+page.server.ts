@@ -4,6 +4,7 @@ import {
   EntryInputSchema,
   EntrySessionInputSchema,
   findCustomFieldValuesErrors,
+  isAcceptingEntries,
   isWithinEntryPeriod,
   TournamentEntryCountsSchema,
   TournamentTypeSchema,
@@ -45,6 +46,10 @@ const TOO_MANY_REQUESTS_MESSAGE =
 const SESSION_EXPIRED_MESSAGE =
   'ログインの有効期限が切れました。もう一度ログインしてからエントリーしてください';
 
+/** What a tournament staff paused (0039) is shown as, in place of its form. */
+const ENTRIES_PAUSED_MESSAGE =
+  'この大会のエントリー受付は現在一時中断しています。再開までしばらくお待ちください';
+
 /**
  * The hidden field a form rendered for a logged-in participant carries.
  * It is what tells a session that lapsed while the form was open apart from
@@ -64,6 +69,8 @@ const SESSION_ENTRY_VALUE = 'session';
 const ENTRY_ERROR_MESSAGES: Record<string, string> = {
   'invalid tournament': '大会が見つかりません',
   'entry period closed': 'エントリー期間外です',
+  // Staff paused the tournament (0039) while the form was open.
+  'entries paused': ENTRIES_PAUSED_MESSAGE,
   'regulation not eligible in priority window':
     '現在は優先期間中のため、優先対象のレギュレーションを1つ以上選択してください',
   // Only a logged-in submission is told this: an anonymous one is answered
@@ -172,7 +179,13 @@ async function fetchTournament({
     // readable at all -- so outside the period this is what a visitor with
     // no staff session, or one covering another region, actually gets.
     if (res.status === 403) {
-      throw error(403, 'エントリー期間外です');
+      // A paused tournament (0039) is gated the same way, but said apart.
+      throw error(
+        403,
+        (await readErrorCode(res)) === 'entries paused'
+          ? ENTRIES_PAUSED_MESSAGE
+          : 'エントリー期間外です',
+      );
     }
     throw error(502, '大会情報の取得に失敗しました');
   }
@@ -271,18 +284,25 @@ export const load: PageServerLoad = async ({
   // straddles the closing instant can't pass the gate as a participant and
   // then be shown the staff preview notice.
   const now = new Date();
-  const open = isWithinEntryPeriod(
-    tournament.entryOpensAt,
-    tournament.entryClosesAt,
-    now,
-  );
+  // Taking entries: within the period and not paused by staff (0039).
+  const open = isAcceptingEntries(tournament, now);
 
   // Holding *a* staff session is not enough: the requirement grants the
   // out-of-period form to the tournament's own 地域スタッフ and to 統括
   // スタッフ, not to a regional account covering somewhere else. The rule is
   // the one the backend enforces, imported rather than restated.
   if (!open && !canPreviewTournament(locals.staff, tournament)) {
-    throw error(403, 'エントリー期間外です');
+    throw error(
+      403,
+      tournament.entriesPaused &&
+        isWithinEntryPeriod(
+          tournament.entryOpensAt,
+          tournament.entryClosesAt,
+          now,
+        )
+        ? ENTRIES_PAUSED_MESSAGE
+        : 'エントリー期間外です',
+    );
   }
 
   // All public reads and none depends on another, so they run
@@ -303,6 +323,16 @@ export const load: PageServerLoad = async ({
     // refuses their submission all the same, so the form is shown without
     // a way to send it.
     staffPreview: !open,
+    // Which of the two the preview notice explains.
+    staffPreviewReason: open
+      ? null
+      : isWithinEntryPeriod(
+            tournament.entryOpensAt,
+            tournament.entryClosesAt,
+            now,
+          )
+        ? ('paused' as const)
+        : ('closed' as const),
     priorityNotices: open ? priorityEntryNotices(regulations, now) : [],
     waitlistOpen:
       open &&
