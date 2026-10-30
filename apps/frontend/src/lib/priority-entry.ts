@@ -5,6 +5,8 @@ import {
 } from '@regional-quiz/shared';
 import {formatJstDateTime} from '$lib/jst-datetime';
 
+const MS_PER_MINUTE = 60_000;
+
 /** A regulation's priority window, as both the portal and the form get it. */
 export type PriorityRegulation = Pick<
   Regulation,
@@ -42,10 +44,13 @@ export function priorityEntryNotices(
   regulations: readonly PriorityRegulation[],
   now: Date,
 ): PriorityEntryNotice[] {
+  // Ordered at the precision the notices are grouped and printed at, so a
+  // difference the page doesn't show can't reorder them. The sort is
+  // stable, so the regulations inside one notice keep their display order.
   const active = activePriorityRegulations(regulations, now).sort(
     (a, b) =>
-      Date.parse(a.priorityEndsAt) - Date.parse(b.priorityEndsAt) ||
-      Date.parse(a.priorityStartsAt) - Date.parse(b.priorityStartsAt),
+      printedMinute(a.priorityEndsAt) - printedMinute(b.priorityEndsAt) ||
+      printedMinute(a.priorityStartsAt) - printedMinute(b.priorityStartsAt),
   );
   const byWindow = new Map<string, PriorityEntryNotice>();
   for (const regulation of active) {
@@ -64,6 +69,16 @@ export function priorityEntryNotices(
     }
   }
   return [...byWindow.values()];
+}
+
+/**
+ * An instant rounded down to the minute it is printed as. JST is a whole
+ * number of hours ahead of UTC, so rounding the UTC instant is the same as
+ * rounding the JST one.
+ * @param iso The instant.
+ */
+function printedMinute(iso: string): number {
+  return Math.floor(Date.parse(iso) / MS_PER_MINUTE);
 }
 
 /**

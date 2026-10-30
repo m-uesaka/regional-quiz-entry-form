@@ -117,8 +117,41 @@ describe('priorityEntryNotices, moments the page cannot tell apart', () => {
       ),
     ).toEqual([
       {
-        labels: ['在住', '在勤', '在学'],
+        // In display order: the seconds the page doesn't print don't
+        // reorder them.
+        labels: ['在住', '在学', '在勤'],
         startsAtLabel: '2026年11月1日(日) 9:00',
+        endsAtLabel: '2026年11月5日(木) 9:00',
+      },
+    ]);
+  });
+
+  it('orders by start when the ends print as the same minute', () => {
+    expect(
+      priorityEntryNotices(
+        [
+          {
+            label: '在住',
+            priorityStartsAt: '2026-11-02T00:00:00Z',
+            priorityEndsAt: '2026-11-05T00:00:00Z',
+          },
+          {
+            label: '在学',
+            priorityStartsAt: '2026-11-01T00:00:00Z',
+            priorityEndsAt: '2026-11-05T00:00:30Z',
+          },
+        ],
+        now,
+      ),
+    ).toEqual([
+      {
+        labels: ['在学'],
+        startsAtLabel: '2026年11月1日(日) 9:00',
+        endsAtLabel: '2026年11月5日(木) 9:00',
+      },
+      {
+        labels: ['在住'],
+        startsAtLabel: '2026年11月2日(月) 9:00',
         endsAtLabel: '2026年11月5日(木) 9:00',
       },
     ]);
