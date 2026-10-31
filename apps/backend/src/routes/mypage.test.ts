@@ -411,6 +411,15 @@ describe.skipIf(!(await isDbReachable()))(
         regionId,
         'mypage-reset-cuts-session@example.com',
       );
+      // The session is matched on the stamp to the millisecond. On a fast
+      // database the row can be written and updated within one, which would
+      // leave nothing to tell the two stamps apart, so this one is set well
+      // before the reset below.
+      await sql`
+        update participants
+          set password_changed_at = now() - interval '1 minute'
+          where id = ${participantId}
+      `;
       const cookie = await participantCookie(participantId);
 
       // Exactly what `reset_participant_password` does to the row, minus the
