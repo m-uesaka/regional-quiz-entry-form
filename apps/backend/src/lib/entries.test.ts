@@ -202,6 +202,27 @@ describe.skipIf(!(await isDbReachable()))(
     }
 
     /**
+     * Gives the participant under `email` an entry, as if confirmed.
+     * @param email The participant's address.
+     * @param tournamentId The tournament entered, in the participant's
+     *     region.
+     * @param status The entry's status.
+     */
+    async function enterAsConfirmed(
+      email: string,
+      tournamentId: string,
+      status = 'confirmed',
+    ): Promise<void> {
+      await sql`
+        insert into entries (
+          participant_id, tournament_id, name, furigana, display_name, status
+        )
+        select id, ${tournamentId}, '山田太郎', 'ヤマダタロウ', '太郎', ${status}::entry_status
+          from participants where email = ${email}
+      `;
+    }
+
+    /**
      * Marks the account under `email` as verified, the way following any of
      * its verification links would (`confirm_entry_by_token()`). Without it
      * a second submission under the same address takes the account over
@@ -373,7 +394,7 @@ describe.skipIf(!(await isDbReachable()))(
       expect(count).toBe(0);
     });
 
-    it('rejects an email already registered in a different region', async () => {
+    it('rejects an email taking part in a different region', async () => {
       const fixtureA = await createFixture('region-a');
       const fixtureB = await createFixture('region-b');
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
@@ -382,6 +403,7 @@ describe.skipIf(!(await isDbReachable()))(
           region_id, email, password_hash, email_verified_at
         ) values (${fixtureA.regionId}, ${email}, ${await hashPassword('quiz-entry-pass1')}, now())
       `;
+      await enterAsConfirmed(email, fixtureA.tournamentId);
 
       const result = await createEntry(
         env,
@@ -487,6 +509,7 @@ describe.skipIf(!(await isDbReachable()))(
           region_id, email, password_hash, email_verified_at
         ) values (${fixtureA.regionId}, ${email}, ${await hashPassword('quiz-entry-pass1')}, now())
       `;
+      await enterAsConfirmed(email, fixtureA.tournamentId);
       mailSendCount = 0;
 
       const outcome = await enterUnauthenticated(
@@ -1307,6 +1330,179 @@ describe.skipIf(!(await isDbReachable()))(
       expect((await readParticipant(email)).region_id).toBe(near.regionId);
     });
 
+    // #236: the region is held by taking part, not by having registered.
+    describe('entering another region after cancelling', () => {
+      async function verifiedIn(regionId: string): Promise<string> {
+        const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+        await sql`
+          insert into participants (
+            region_id, email, password_hash, email_verified_at
+          ) values (
+            ${regionId}, ${email},
+            ${await hashPassword('quiz-entry-pass1')}, now()
+          )
+        `;
+        return email;
+      }
+
+      it('moves the account once every entry in the old region is cancelled', async () => {
+        const oldRegion = await createFixture('move-old');
+        const newRegion = await createFixture('move-new');
+        const email = await verifiedIn(oldRegion.regionId);
+        await enterAsConfirmed(email, oldRegion.tournamentId, 'cancelled');
+
+        const result = await createEntry(
+          env,
+          newRegion.tournamentId,
+          validInput({email, regulationIds: [newRegion.regulationId]}),
+        );
+
+        expect(result.ok).toBe(true);
+        const [participant] = await sql`
+          select region_id from participants where email = ${email}
+        `;
+        expect(participant.region_id).toBe(newRegion.regionId);
+      });
+
+      it('lets the participant come back to the region they left', async () => {
+        const oldRegion = await createFixture('back-old');
+        const newRegion = await createFixture('back-new');
+        const email = await verifiedIn(oldRegion.regionId);
+        await enterAsConfirmed(email, oldRegion.tournamentId, 'cancelled');
+        const moved = await createEntry(
+          env,
+          newRegion.tournamentId,
+          validInput({email, regulationIds: [newRegion.regulationId]}),
+        );
+        await sql`
+          update entries set status = 'cancelled', cancelled_at = now()
+          where tournament_id = ${newRegion.tournamentId}
+        `;
+
+        const result = await createEntry(
+          env,
+          oldRegion.tournamentId,
+          validInput({email, regulationIds: [oldRegion.regulationId]}),
+        );
+
+        expect(moved.ok).toBe(true);
+        expect(result.ok).toBe(true);
+        const [participant] = await sql`
+          select region_id from participants where email = ${email}
+        `;
+        expect(participant.region_id).toBe(oldRegion.regionId);
+      });
+
+      describe('for a tournament whose entries have closed', () => {
+        const closedAt = '2020-06-01T00:00:00Z';
+
+        /**
+         * Enters a participant into a closed tournament and cancels it, then
+         * has them enter a tournament in another region.
+         * @param suffix The region slug suffix, as in `createFixture()`.
+         * @param cancelledAt When the entry was cancelled.
+         * @param verifiedAt When it was confirmed, or null if it never was.
+         */
+        async function enterAfterCancelling(
+          suffix: string,
+          cancelledAt: string,
+          verifiedAt: string | null,
+        ) {
+          const closed = await createFixture(`${suffix}-closed`, {
+            entryClosesAt: closedAt,
+          });
+          const open = await createFixture(`${suffix}-open`);
+          const email = await verifiedIn(closed.regionId);
+          await enterAsConfirmed(email, closed.tournamentId, 'cancelled');
+          await sql`
+            update entries
+            set cancelled_at = ${cancelledAt},
+                email_verified_at = ${verifiedAt}
+            where tournament_id = ${closed.tournamentId}
+          `;
+          return createEntry(
+            env,
+            open.tournamentId,
+            validInput({email, regulationIds: [open.regulationId]}),
+          );
+        }
+
+        it('refuses after a confirmed entry cancelled past the close', async () => {
+          const result = await enterAfterCancelling(
+            'late',
+            '2020-07-01T00:00:00Z',
+            '2020-05-01T00:00:00Z',
+          );
+
+          expect(!result.ok && result.error).toBe(
+            'already registered in another region',
+          );
+        });
+
+        it('allows it after a cancellation before the close', async () => {
+          const result = await enterAfterCancelling(
+            'in-time',
+            '2020-05-15T00:00:00Z',
+            '2020-05-01T00:00:00Z',
+          );
+
+          expect(result.ok).toBe(true);
+        });
+
+        it('allows it after an entry never confirmed', async () => {
+          const result = await enterAfterCancelling(
+            'unconfirmed',
+            '2020-07-01T00:00:00Z',
+            null,
+          );
+
+          expect(result.ok).toBe(true);
+        });
+      });
+
+      it('still refuses while an entry in the old region is live', async () => {
+        const oldRegion = await createFixture('live-old');
+        const newRegion = await createFixture('live-new');
+        const email = await verifiedIn(oldRegion.regionId);
+        await enterAsConfirmed(email, oldRegion.tournamentId, 'waitlisted');
+
+        const result = await createEntry(
+          env,
+          newRegion.tournamentId,
+          validInput({email, regulationIds: [newRegion.regulationId]}),
+        );
+
+        expect(!result.ok && result.error).toBe(
+          'already registered in another region',
+        );
+      });
+
+      it('frees the old region once an entry link there expired', async () => {
+        const oldRegion = await createFixture('lapse-old');
+        const newRegion = await createFixture('lapse-new');
+        const email = await verifiedIn(oldRegion.regionId);
+        await enterAsConfirmed(
+          email,
+          oldRegion.tournamentId,
+          'pending_verification',
+        );
+        await sql`
+          insert into email_verification_tokens (entry_id, token_hash, expires_at)
+          select e.id, ${crypto.randomUUID()}, now() - interval '1 hour'
+            from entries e
+            where e.tournament_id = ${oldRegion.tournamentId}
+        `;
+
+        const result = await createEntry(
+          env,
+          newRegion.tournamentId,
+          validInput({email, regulationIds: [newRegion.regulationId]}),
+        );
+
+        expect(result.ok).toBe(true);
+      });
+    });
+
     it('holds a verified account to its password and region, unchanged', async () => {
       const far = await createFixture('verified-far');
       const near = await createFixture('verified-near');
@@ -1319,17 +1515,23 @@ describe.skipIf(!(await isDbReachable()))(
           ${await hashPassword('the-real-password')}, now()
         )
       `;
+      await enterAsConfirmed(email, far.tournamentId);
       const before = await readParticipant(email);
 
       const otherRegion = await createEntry(
         env,
         near.tournamentId,
-        validInput({email, regulationIds: [near.regulationId]}),
+        validInput({
+          email,
+          password: 'the-real-password',
+          passwordConfirm: 'the-real-password',
+          regulationIds: [near.regulationId],
+        }),
       );
       const wrongPassword = await createEntry(
         env,
-        far.tournamentId,
-        validInput({email, regulationIds: [far.regulationId]}),
+        near.tournamentId,
+        validInput({email, regulationIds: [near.regulationId]}),
       );
 
       expect(!otherRegion.ok && otherRegion.error).toBe(
