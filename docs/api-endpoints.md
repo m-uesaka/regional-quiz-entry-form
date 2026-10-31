@@ -543,6 +543,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
   | `priorityEndsAt` | string(datetime) \| null | 省略時は `null` |
 - `displayOrder` は送りません。**配列の並び順がそのまま `display_order`** になるので、並べ替えは配列を並べ替えるだけです。
 - 優先期間は「両方 null」か「両方指定(開始 < 終了)」のみ許容します(Zod と `regulations` の check 制約 `regulations_priority_window_complete` の両方で担保)。
+- 終わった優先期間があり、開いている優先期間がすべてエントリーの締切(分単位で比較)まで続くものなら、優先エントリーではなく通常エントリーとして扱います(#235)。優先対象の選択を求めず、ポータルとエントリーフォームにも優先エントリーの案内を出しません。大会を「優先枠 → 一般枠」の順に開くために、一般向けのレギュレーションへ締切までの期間を設定している場合がこれにあたります。判定は `activePriorityRegulations()` にまとめてあります。
 - 配列に含まれなかった既存行は削除されますが、**エントリーから参照されている行は削除できません**。`entry_regulations` が複合外部キー `(regulation_id, tournament_id)` で参照しているため、フォーム定義のような delete → insert は使えず、id 指定は update・id 無しは insert・消えた行は「参照が無ければ delete」という差分同期になっています。
 - `regulations` は1件以上必要です(エントリーは必ず1つ以上選ぶため、0件の大会はエントリー不可になる)。
 

@@ -4,6 +4,8 @@
 
   interface Props {
     regulations: Regulation[];
+    /** When the tournament stops taking entries. */
+    entryClosesAt: string;
     /**
      * The chosen regulations' ids. Bound, so checking one writes it back to
      * the caller — see "Form controls are bound, not rendered from an
@@ -13,7 +15,12 @@
     now?: Date;
   }
 
-  let {regulations, value = $bindable(), now = new Date()}: Props = $props();
+  let {
+    regulations,
+    entryClosesAt,
+    value = $bindable(),
+    now = new Date(),
+  }: Props = $props();
 
   const ordered = $derived(
     [...regulations].sort((a, b) => a.displayOrder - b.displayOrder),
@@ -28,14 +35,19 @@
     new Set(
       ordered
         .filter(regulation =>
-          isRegulationSelectionAllowed(regulations, [regulation.id], now),
+          isRegulationSelectionAllowed(
+            regulations,
+            [regulation.id],
+            now,
+            entryClosesAt,
+          ),
         )
         .map(regulation => regulation.id),
     ),
   );
   const hasPriorityWindow = $derived(priorityIds.size < ordered.length);
   const selectionAllowed = $derived(
-    isRegulationSelectionAllowed(regulations, value, now),
+    isRegulationSelectionAllowed(regulations, value, now, entryClosesAt),
   );
 
   // A checkbox group has no native "at least one checked", so every box

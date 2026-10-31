@@ -2,10 +2,9 @@ import {
   activePriorityRegulations,
   type Regulation,
   type TournamentEntryCounts,
+  wholeMinute,
 } from '@regional-quiz/shared';
 import {formatJstDateTime} from '$lib/jst-datetime';
-
-const MS_PER_MINUTE = 60_000;
 
 /** A regulation's priority window, as both the portal and the form get it. */
 export type PriorityRegulation = Pick<
@@ -35,22 +34,31 @@ export interface PriorityEntryNotice {
  * apart, or one instant spelt two ways) make one notice rather than two
  * identical-looking lines.
  *
+ * A window running to the close of entries is normal entry rather than
+ * 優先エントリー, and goes unannounced (`activePriorityRegulations()`).
+ *
  * Worked out on the server, like the portal's statuses, so the server
  * rendering and the hydrated page agree.
  * @param regulations The tournament's regulations, in display order.
  * @param now The moment to check at.
+ * @param entryClosesAt When the tournament stops taking entries.
  */
 export function priorityEntryNotices(
   regulations: readonly PriorityRegulation[],
   now: Date,
+  entryClosesAt: string,
 ): PriorityEntryNotice[] {
   // Ordered at the precision the notices are grouped and printed at, so a
   // difference the page doesn't show can't reorder them. The sort is
   // stable, so the regulations inside one notice keep their display order.
-  const active = activePriorityRegulations(regulations, now).sort(
+  const active = activePriorityRegulations(
+    regulations,
+    now,
+    entryClosesAt,
+  ).sort(
     (a, b) =>
-      printedMinute(a.priorityEndsAt) - printedMinute(b.priorityEndsAt) ||
-      printedMinute(a.priorityStartsAt) - printedMinute(b.priorityStartsAt),
+      wholeMinute(a.priorityEndsAt) - wholeMinute(b.priorityEndsAt) ||
+      wholeMinute(a.priorityStartsAt) - wholeMinute(b.priorityStartsAt),
   );
   const byWindow = new Map<string, PriorityEntryNotice>();
   for (const regulation of active) {
@@ -69,16 +77,6 @@ export function priorityEntryNotices(
     }
   }
   return [...byWindow.values()];
-}
-
-/**
- * An instant rounded down to the minute it is printed as. JST is a whole
- * number of hours ahead of UTC, so rounding the UTC instant is the same as
- * rounding the JST one.
- * @param iso The instant.
- */
-function printedMinute(iso: string): number {
-  return Math.floor(Date.parse(iso) / MS_PER_MINUTE);
 }
 
 /**

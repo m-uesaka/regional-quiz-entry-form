@@ -24,6 +24,8 @@
   interface Props {
     formFieldDefs: FormFieldDef[];
     regulations: Regulation[];
+    /** When the tournament stops taking entries. */
+    entryClosesAt: string;
     /** What the last rejected submission carried back, if there was one. */
     values?: EntryFormValues;
     fieldErrors?: EntryFieldErrors;
@@ -43,6 +45,7 @@
   const {
     formFieldDefs,
     regulations,
+    entryClosesAt,
     values,
     fieldErrors,
     loggedIn = false,
@@ -243,7 +246,11 @@
   {/if}
 
   <div class="flex flex-col gap-1.5">
-    <RegulationSelector {regulations} bind:value={regulationIds} />
+    <RegulationSelector
+      {regulations}
+      {entryClosesAt}
+      bind:value={regulationIds}
+    />
     {#if fieldError('regulationIds')}
       <p class="text-sm text-destructive">{fieldError('regulationIds')}</p>
     {/if}

@@ -168,6 +168,7 @@ function tournamentRow(
     entryClosesAt?: string;
     capacity?: number | null;
     entriesPaused?: boolean;
+    regulations?: Array<Record<string, unknown>>;
   } = {},
 ): Record<string, unknown> {
   return {
@@ -182,7 +183,7 @@ function tournamentRow(
     // Lets the dual-entry check be skipped; that rule is the integration
     // tests' business.
     regions: {allows_dual_entry: true},
-    regulations: [
+    regulations: overrides.regulations ?? [
       {
         id: validBody.regulationIds[0],
         priority_starts_at: null,
@@ -744,6 +745,57 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
 
     expect(recorded.takeOvers).toHaveLength(0);
     expect(recorded.mails[0].html).toContain('別の地域');
+  });
+
+  // #235: a priority window is judged against this tournament's own close.
+  it("enforces another regulation's window only while it ends before the close", async () => {
+    const closesAt = new Date(Date.now() + DAY_MS * 2).toISOString();
+    const generalWindow = (endsAt: string) => ({
+      id: '99999999-9999-4999-8999-999999999999',
+      priority_starts_at: new Date(Date.now() - DAY_MS).toISOString(),
+      priority_ends_at: endsAt,
+    });
+    const selected = {
+      id: validBody.regulationIds[0],
+      priority_starts_at: null,
+      priority_ends_at: null,
+    };
+
+    mockSupabase({
+      tournament: tournamentRow({
+        entryClosesAt: closesAt,
+        regulations: [
+          {
+            ...selected,
+            priority_starts_at: new Date(Date.now() - DAY_MS).toISOString(),
+            priority_ends_at: new Date(Date.now() - 1000).toISOString(),
+          },
+          generalWindow(new Date(Date.now() + DAY_MS).toISOString()),
+        ],
+      }),
+      participant: null,
+    });
+    const refused = await postWithContext(TOURNAMENT_PATH, validBody);
+    await settleBackgroundWork();
+    expect(refused.status).toBe(403);
+
+    mockSupabase({
+      tournament: tournamentRow({
+        entryClosesAt: closesAt,
+        regulations: [
+          {
+            ...selected,
+            priority_starts_at: new Date(Date.now() - DAY_MS).toISOString(),
+            priority_ends_at: new Date(Date.now() - 1000).toISOString(),
+          },
+          generalWindow(closesAt),
+        ],
+      }),
+      participant: null,
+    });
+    const accepted = await postWithContext(TOURNAMENT_PATH, validBody);
+    await settleBackgroundWork();
+    expect(accepted.status).toBe(202);
   });
 
   it('refuses a new entry while staff have paused the tournament', async () => {

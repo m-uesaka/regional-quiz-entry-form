@@ -423,7 +423,12 @@ export async function checkEntrySubmission(
     priorityEndsAt: regulation.priority_ends_at,
   }));
   if (
-    !isRegulationSelectionAllowed(regulations, submission.regulationIds, now)
+    !isRegulationSelectionAllowed(
+      regulations,
+      submission.regulationIds,
+      now,
+      tournament.entry_closes_at,
+    )
   ) {
     return {
       ok: false,

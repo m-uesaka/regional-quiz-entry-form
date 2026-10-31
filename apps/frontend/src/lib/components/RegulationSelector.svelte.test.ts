@@ -18,6 +18,8 @@ function buildRegulation(overrides: Partial<Regulation>): Regulation {
   };
 }
 
+const ENTRY_CLOSES_AT = '2026-12-31T00:00:00+09:00';
+
 const REGULATION_A = buildRegulation({
   id: '11111111-1111-1111-1111-111111111111',
   label: 'A部門',
@@ -47,6 +49,7 @@ describe('RegulationSelector', () => {
       props: {
         regulations: [priorityRegulation, generalRegulation],
         value: [],
+        entryClosesAt: ENTRY_CLOSES_AT,
         now: new Date('2026-08-23T00:00:00Z'),
       },
     });
@@ -80,6 +83,7 @@ describe('RegulationSelector', () => {
       props: {
         regulations: [priorityRegulation, generalRegulation],
         value: [generalRegulation.id],
+        entryClosesAt: ENTRY_CLOSES_AT,
         now: new Date('2026-08-23T00:00:00Z'),
       },
     });
@@ -98,6 +102,7 @@ describe('RegulationSelector', () => {
       props: {
         regulations: [REGULATION_A, REGULATION_B],
         value: [],
+        entryClosesAt: ENTRY_CLOSES_AT,
         now: new Date('2026-08-23T00:00:00Z'),
       },
     });
@@ -121,6 +126,7 @@ describe('RegulationSelector', () => {
       props: {
         regulations: [REGULATION_A, REGULATION_B],
         value: [REGULATION_B.id],
+        entryClosesAt: ENTRY_CLOSES_AT,
         now: new Date('2026-08-23T00:00:00Z'),
       },
     });
@@ -129,11 +135,37 @@ describe('RegulationSelector', () => {
     expect(screen.getByRole('checkbox', {name: 'A部門'})).not.toBeChecked();
   });
 
+  it('treats a window running to the close as normal entry (#235)', () => {
+    render(RegulationSelector, {
+      props: {
+        regulations: [
+          buildRegulation({
+            ...REGULATION_A,
+            priorityStartsAt: '2026-08-20T00:00:00+09:00',
+            priorityEndsAt: '2026-08-22T00:00:00+09:00',
+          }),
+          buildRegulation({
+            ...REGULATION_B,
+            priorityStartsAt: '2026-08-22T00:00:00+09:00',
+            priorityEndsAt: ENTRY_CLOSES_AT,
+          }),
+        ],
+        entryClosesAt: ENTRY_CLOSES_AT,
+        value: [REGULATION_A.id],
+        now: new Date('2026-08-23T00:00:00Z'),
+      },
+    });
+
+    expect(screen.queryByText(/優先期間中/)).not.toBeInTheDocument();
+    expect(screen.queryByText('優先対象')).not.toBeInTheDocument();
+  });
+
   it('says nothing about priority windows when none is active', () => {
     render(RegulationSelector, {
       props: {
         regulations: [REGULATION_A, REGULATION_B],
         value: [],
+        entryClosesAt: ENTRY_CLOSES_AT,
         now: new Date('2026-08-23T00:00:00Z'),
       },
     });

@@ -4,6 +4,10 @@ import {
   isRegulationSelectionAllowed,
 } from './regulation-eligibility';
 
+// Later than every window below, so none of them runs to the close unless a
+// test says so.
+const ENTRY_CLOSES_AT = '2026-12-31T00:00:00Z';
+
 describe('isRegulationSelectionAllowed', () => {
   it('rejects an empty selection', () => {
     const regulations = [
@@ -16,6 +20,7 @@ describe('isRegulationSelectionAllowed', () => {
         regulations,
         [],
         new Date('2026-08-23T00:00:00Z'),
+        ENTRY_CLOSES_AT,
       ),
     ).toBe(false);
   });
@@ -31,6 +36,7 @@ describe('isRegulationSelectionAllowed', () => {
         regulations,
         ['reg-1', 'reg-2'],
         new Date('2026-08-23T00:00:00Z'),
+        ENTRY_CLOSES_AT,
       ),
     ).toBe(true);
   });
@@ -50,6 +56,7 @@ describe('isRegulationSelectionAllowed', () => {
         regulations,
         ['other-reg', 'priority-reg'],
         new Date('2026-08-15T00:00:00Z'),
+        ENTRY_CLOSES_AT,
       ),
     ).toBe(true);
   });
@@ -69,6 +76,7 @@ describe('isRegulationSelectionAllowed', () => {
         regulations,
         ['other-reg'],
         new Date('2026-08-15T00:00:00Z'),
+        ENTRY_CLOSES_AT,
       ),
     ).toBe(false);
   });
@@ -88,6 +96,7 @@ describe('isRegulationSelectionAllowed', () => {
         regulations,
         ['other-reg'],
         new Date('2026-09-01T00:00:00Z'),
+        ENTRY_CLOSES_AT,
       ),
     ).toBe(true);
   });
@@ -103,6 +112,7 @@ describe('isRegulationSelectionAllowed', () => {
         regulations,
         ['reg-1', 'unknown-reg'],
         new Date('2026-08-23T00:00:00Z'),
+        ENTRY_CLOSES_AT,
       ),
     ).toBe(false);
   });
@@ -134,6 +144,7 @@ describe('activePriorityRegulations', () => {
     const active = activePriorityRegulations(
       regulations,
       new Date('2026-11-03T00:00:00Z'),
+      ENTRY_CLOSES_AT,
     );
 
     expect(active.map(r => [r.id, r.label])).toEqual([['open', '在住']]);
@@ -141,10 +152,112 @@ describe('activePriorityRegulations', () => {
 
   it('counts both ends of a window as inside it', () => {
     const ids = (now: string) =>
-      activePriorityRegulations(regulations, new Date(now)).map(r => r.id);
+      activePriorityRegulations(
+        regulations,
+        new Date(now),
+        ENTRY_CLOSES_AT,
+      ).map(r => r.id);
 
     expect(ids('2026-11-01T00:00:00Z')).toEqual(['open']);
     expect(ids('2026-11-05T00:00:00Z')).toEqual(['open']);
     expect(ids('2026-11-05T00:00:01Z')).toEqual([]);
+  });
+
+  // #235: 東東京 gives its general regulation a window from the end of the
+  // priority one to the close, which is how a tournament is phased.
+  describe('once only a window running to the close is open', () => {
+    const closesAt = '2026-12-25T12:00:00Z';
+    const phased = [
+      {
+        id: 'priority',
+        priorityStartsAt: '2026-10-29T12:00:00Z',
+        priorityEndsAt: '2026-10-31T12:00:00Z',
+      },
+      {
+        id: 'general',
+        priorityStartsAt: '2026-10-31T12:00:00Z',
+        priorityEndsAt: closesAt,
+      },
+    ];
+
+    it('treats it as normal entry, listing nothing', () => {
+      const now = new Date('2026-10-31T12:00:01Z');
+
+      expect(activePriorityRegulations(phased, now, closesAt)).toEqual([]);
+      expect(
+        isRegulationSelectionAllowed(phased, ['priority'], now, closesAt),
+      ).toBe(true);
+    });
+
+    it('still gates the entries while the priority window is open', () => {
+      const now = new Date('2026-10-30T00:00:00Z');
+
+      expect(
+        activePriorityRegulations(phased, now, closesAt).map(r => r.id),
+      ).toEqual(['priority']);
+      expect(
+        isRegulationSelectionAllowed(phased, ['general'], now, closesAt),
+      ).toBe(false);
+    });
+
+    it('keeps a close-reaching window listed alongside a shorter one', () => {
+      const overlapping = [
+        {...phased[0]},
+        {...phased[1], priorityStartsAt: '2026-10-29T12:00:00Z'},
+      ];
+      const now = new Date('2026-10-30T00:00:00Z');
+
+      expect(
+        activePriorityRegulations(overlapping, now, closesAt).map(r => r.id),
+      ).toEqual(['priority', 'general']);
+      expect(
+        isRegulationSelectionAllowed(overlapping, ['general'], now, closesAt),
+      ).toBe(true);
+    });
+
+    it('counts a window ending in the minute of the close', () => {
+      const general = {
+        id: 'general',
+        priorityStartsAt: '2026-10-31T12:00:00Z',
+        priorityEndsAt: '2026-12-25T11:59:00Z',
+      };
+
+      expect(
+        activePriorityRegulations(
+          [phased[0], general],
+          new Date('2026-11-01T00:00:00Z'),
+          '2026-12-25T11:59:59Z',
+        ),
+      ).toEqual([]);
+    });
+
+    it('still gates on a window with none ended before it', () => {
+      const now = new Date('2026-11-01T00:00:00Z');
+      const only = {...phased[1]};
+      const other = {id: 'other', priorityStartsAt: null, priorityEndsAt: null};
+
+      expect(
+        activePriorityRegulations([only, other], now, closesAt).map(r => r.id),
+      ).toEqual(['general']);
+      expect(
+        isRegulationSelectionAllowed([only, other], ['other'], now, closesAt),
+      ).toBe(false);
+    });
+
+    it('leaves a window ending earlier than that as priority', () => {
+      const general = {
+        id: 'general',
+        priorityStartsAt: '2026-10-31T12:00:00Z',
+        priorityEndsAt: '2026-12-19T12:00:00Z',
+      };
+
+      expect(
+        activePriorityRegulations(
+          [phased[0], general],
+          new Date('2026-11-01T00:00:00Z'),
+          closesAt,
+        ).map(r => r.id),
+      ).toEqual(['general']);
+    });
   });
 });
