@@ -23,6 +23,7 @@ import {
   staffSessionAwareFetch,
   TEST_SESSIONS_VALID_FROM_MS,
 } from '../test-support/staff-session';
+import {DB_URL, isDbReachable} from '../test-support/db';
 
 // Every staff guard checks the session against
 // `staff_accounts.sessions_valid_from` before the handler runs; answer that
@@ -39,23 +40,8 @@ afterEach(() => {
 
 // Local Supabase stack (`supabase start`), same convention as
 // `routes/form-definitions.test.ts`. The integration block below is skipped
-// automatically when it isn't reachable, e.g. in CI.
-const DB_URL =
-  process.env.SUPABASE_DB_URL ??
-  'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
-
-async function isDbReachable(): Promise<boolean> {
-  const probe = new SQL(DB_URL);
-  try {
-    await probe`select 1`;
-    return true;
-  } catch {
-    return false;
-  } finally {
-    await probe.close();
-  }
-}
-
+// automatically when it isn't reachable locally; see `test-support/db.ts`.
+//
 // Publicly documented local-dev demo key for Supabase CLI's default stack
 // (fixed `super-secret-jwt-token-with-at-least-32-characters-long` JWT
 // secret) — not a real credential, safe to commit.
