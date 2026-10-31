@@ -2,6 +2,7 @@
 // companion `TextField.svelte.test.ts` covers the mounted component; this file
 // is in the `server` project so nothing here can be satisfied by an effect.
 
+import {createRawSnippet} from 'svelte';
 import type {Component, ComponentProps} from 'svelte';
 import {render} from 'svelte/server';
 import {describe, expect, it} from 'vitest';
@@ -40,6 +41,17 @@ describe('TextField (server-rendered)', () => {
     expect(body).toContain('aria-describedby="name-error"');
     expect(body).toContain('aria-invalid="true"');
     expect(body).toMatch(/<p[^>]*id="name-error"[^>]*>入力してください<\/p>/);
+  });
+
+  it('renders a snippet label in the label element', () => {
+    const body = renderToHtml({
+      ...FIELD,
+      label: createRawSnippet(() => ({render: () => '<em>氏名</em>'})),
+    });
+
+    expect(body).toMatch(
+      /<label[^>]*for="name"[^>]*>.*<em>氏名<\/em>.*<\/label>/,
+    );
   });
 
   it('leaves the wiring out while there is no message', () => {

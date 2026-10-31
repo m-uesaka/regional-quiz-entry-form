@@ -3,20 +3,18 @@
   import {enhance} from '$app/forms';
   import {invalidateAll} from '$app/navigation';
   import {
-    ENTRY_FREE_TEXT_MAX_LENGTH,
-    ENTRY_NAME_MAX_LENGTH,
     PASSWORD_MAX_LENGTH,
     PASSWORD_MIN_LENGTH,
-    toFormFieldDefYaml,
     type FormFieldDef,
     type EntryPeriod,
     type Regulation,
   } from '@regional-quiz/shared';
-  import DynamicFormField from '$lib/components/DynamicFormField.svelte';
+  import CustomFieldsSection from '$lib/components/CustomFieldsSection.svelte';
+  import EntryProfileFields from '$lib/components/EntryProfileFields.svelte';
   import FieldError from '$lib/components/form/FieldError.svelte';
   import TextField from '$lib/components/form/TextField.svelte';
   import PasswordRequirements from '$lib/components/PasswordRequirements.svelte';
-  import {customFieldName} from '$lib/custom-field-name';
+  import {firstFieldError, initialCustomFieldValues} from '$lib/entry-form';
   import RegulationSelector from '$lib/components/RegulationSelector.svelte';
   import Turnstile from '$lib/components/Turnstile.svelte';
   import Button from '$lib/components/ui/atoms/Button.svelte';
@@ -56,10 +54,6 @@
     preview = false,
   }: Props = $props();
 
-  // The stored definitions carry API-shaped keys (`fieldKey` / `fieldType`);
-  // `DynamicFormField` renders the shape the form was authored in.
-  const fields = $derived(formFieldDefs.map(toFormFieldDefYaml));
-
   // A rejected submission comes back with what was typed (minus the
   // passwords, which the action deliberately doesn't echo), so the form
   // starts out showing that rather than emptying itself.
@@ -87,28 +81,12 @@
   let email = $state(initial?.email ?? '');
   let freeText = $state(initial?.freeText ?? '');
   let regulationIds = $state<string[]>(initial?.regulationIds ?? []);
-  let customFieldValues = $state(initialCustomFieldValues());
+  let customFieldValues = $state(
+    untrack(() =>
+      initialCustomFieldValues(formFieldDefs, initial?.customFieldValues),
+    ),
+  );
   let turnstile = $state<ReturnType<typeof Turnstile>>();
-
-  function fieldError(field: string): string | undefined {
-    return fieldErrors?.[field]?.[0];
-  }
-
-  /**
-   * The answer every custom field starts out with, keyed by field key.
-   * Every key the form renders is seeded, unanswered ones included, so that
-   * `DynamicFormField` always has a value of the right shape to bind to.
-   */
-  function initialCustomFieldValues(): Record<string, string | string[]> {
-    const answered = initial?.customFieldValues ?? {};
-    return Object.fromEntries(
-      formFieldDefs.map(fieldDef => [
-        fieldDef.fieldKey,
-        answered[fieldDef.fieldKey] ??
-          (fieldDef.fieldType === 'checkbox' ? [] : ''),
-      ]),
-    );
-  }
 </script>
 
 <!-- The `enhance` callback is only here to hand the challenge back: a
@@ -132,131 +110,94 @@
     };
   }}
 >
-  <TextField
-    id="name"
-    name="name"
-    label="氏名"
-    bind:value={name}
-    maxlength={ENTRY_NAME_MAX_LENGTH}
-    error={fieldError('name')}
-    required
-  />
-
-  <TextField
-    id="furigana"
-    name="furigana"
-    label="ふりがな"
-    bind:value={furigana}
-    maxlength={ENTRY_NAME_MAX_LENGTH}
-    error={fieldError('furigana')}
-    required
-  />
-
-  <TextField
-    id="displayName"
-    name="displayName"
-    label="エントリーリスト掲載名"
-    bind:value={displayName}
-    maxlength={ENTRY_NAME_MAX_LENGTH}
-    error={fieldError('displayName')}
-    required
-  />
-
-  {#if loggedIn}
-    <!-- Tells the action this form was rendered for a session, so a session
-         that lapsed while it was open is sent to log in again rather than
-         told about address and password fields it never showed. -->
-    <input type="hidden" name="entryMode" value="session" />
-    <p class="text-sm text-muted-foreground">
-      ログイン中のアカウントでエントリーします。メールアドレスとパスワードの入力は不要です。
-    </p>
-  {:else}
-    <TextField
-      id="email"
-      name="email"
-      label="メールアドレス"
-      type="email"
-      bind:value={email}
-      error={fieldError('email')}
-      required
-    />
-
-    <!-- An address that is already registered is still recognised by its
-         password, but a wrong one isn't reported on this page: the
-         submission is answered the same whatever the address, and the
-         reason goes to its owner by mail (#117). Registered participants
-         are pointed at logging in instead, which leaves these fields out. -->
-    <TextField
-      id="password"
-      name="password"
-      label="パスワード"
-      type="password"
-      minlength={PASSWORD_MIN_LENGTH}
-      maxlength={PASSWORD_MAX_LENGTH}
-      autocomplete="new-password"
-      error={fieldError('password')}
-      bind:value={password}
-      aria-describedby="password-requirements"
-      required
-    />
-
-    <TextField
-      id="passwordConfirm"
-      name="passwordConfirm"
-      label="パスワード(確認)"
-      type="password"
-      minlength={PASSWORD_MIN_LENGTH}
-      maxlength={PASSWORD_MAX_LENGTH}
-      autocomplete="new-password"
-      error={fieldError('passwordConfirm')}
-      bind:value={passwordConfirm}
-      required
-    />
-
-    <!-- Under both fields, so the match is reported next to the second. The
-         rules apply only when the address turns out to be new; a registered
-         participant types the password they already have (#117). -->
-    <div id="password-requirements">
-      <PasswordRequirements
-        {password}
-        confirmation={passwordConfirm}
-        newAccountOnly
+  <!-- Everything between the names and the free text is this form's own, in
+       the order a participant goes through it. -->
+  <EntryProfileFields
+    bind:name
+    bind:furigana
+    bind:displayName
+    bind:freeText
+    {fieldErrors}
+  >
+    {#if loggedIn}
+      <!-- Tells the action this form was rendered for a session, so a session
+           that lapsed while it was open is sent to log in again rather than
+           told about address and password fields it never showed. -->
+      <input type="hidden" name="entryMode" value="session" />
+      <p class="text-sm text-muted-foreground">
+        ログイン中のアカウントでエントリーします。メールアドレスとパスワードの入力は不要です。
+      </p>
+    {:else}
+      <TextField
+        id="email"
+        name="email"
+        label="メールアドレス"
+        type="email"
+        bind:value={email}
+        error={firstFieldError(fieldErrors, 'email')}
+        required
       />
+
+      <!-- An address that is already registered is still recognised by its
+           password, but a wrong one isn't reported on this page: the
+           submission is answered the same whatever the address, and the
+           reason goes to its owner by mail (#117). Registered participants
+           are pointed at logging in instead, which leaves these fields out. -->
+      <TextField
+        id="password"
+        name="password"
+        label="パスワード"
+        type="password"
+        minlength={PASSWORD_MIN_LENGTH}
+        maxlength={PASSWORD_MAX_LENGTH}
+        autocomplete="new-password"
+        error={firstFieldError(fieldErrors, 'password')}
+        bind:value={password}
+        aria-describedby="password-requirements"
+        required
+      />
+
+      <TextField
+        id="passwordConfirm"
+        name="passwordConfirm"
+        label="パスワード(確認)"
+        type="password"
+        minlength={PASSWORD_MIN_LENGTH}
+        maxlength={PASSWORD_MAX_LENGTH}
+        autocomplete="new-password"
+        error={firstFieldError(fieldErrors, 'passwordConfirm')}
+        bind:value={passwordConfirm}
+        required
+      />
+
+      <!-- Under both fields, so the match is reported next to the second. The
+           rules apply only when the address turns out to be new; a registered
+           participant types the password they already have (#117). -->
+      <div id="password-requirements">
+        <PasswordRequirements
+          {password}
+          confirmation={passwordConfirm}
+          newAccountOnly
+        />
+      </div>
+    {/if}
+
+    <div class="flex flex-col gap-1.5">
+      <RegulationSelector
+        {regulations}
+        {entryPeriod}
+        {now}
+        bind:value={regulationIds}
+      />
+      <FieldError error={firstFieldError(fieldErrors, 'regulationIds')} />
     </div>
-  {/if}
 
-  <div class="flex flex-col gap-1.5">
-    <RegulationSelector
-      {regulations}
-      {entryPeriod}
-      {now}
-      bind:value={regulationIds}
+    <CustomFieldsSection
+      {formFieldDefs}
+      bind:values={customFieldValues}
+      {fieldErrors}
     />
-    <FieldError error={fieldError('regulationIds')} />
-  </div>
-
-  {#each fields as field (field.key)}
-    <!-- Keyed by the control's namespaced name, the same key the action
-         files a custom field's message under. -->
-    <DynamicFormField
-      {field}
-      bind:value={customFieldValues[field.key]}
-      error={fieldError(customFieldName(field.key))}
-    />
-  {/each}
-  <!-- Every answer within its own bound can still add up past the combined
-       one; that has no single control to point at. -->
-  <FieldError error={fieldError('customFieldValues')} />
-
-  <TextField
-    id="freeText"
-    name="freeText"
-    label="自由記述"
-    multiline
-    bind:value={freeText}
-    maxlength={ENTRY_FREE_TEXT_MAX_LENGTH}
-    error={fieldError('freeText')}
-  />
+  </EntryProfileFields>
 
   <!-- The widget drops a hidden `cf-turnstile-response` control into this
        form, which the page's action forwards to the API. Entry registration

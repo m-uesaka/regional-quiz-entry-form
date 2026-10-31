@@ -122,6 +122,12 @@ not the `<script>` block's `$state`, which is exactly what has to be built
 afresh. Re-seeding from an `$effect` would work too, but it means writing state
 from an effect, which this app avoids.
 
+The two entry forms share their fields through `EntryProfileFields` and
+`CustomFieldsSection`, but not their seeding: those two hold no `$state`, and
+take every value through `bind:` from the form that seeded it. So there is
+still one `untrack`ed read, in the component `{#key}` rebuilds, and a rejected
+submission re-rendering the sections has nothing to reset.
+
 The controls are not the only thing that has to move into the child. Whatever
 else the page accumulated about the record it was showing goes with them —
 `TournamentEditor` also holds the "更新しました" notice, which would otherwise
