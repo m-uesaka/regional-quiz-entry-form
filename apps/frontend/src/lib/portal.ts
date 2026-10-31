@@ -171,11 +171,7 @@ export function groupPortalTournaments(
       // takes no entries, prioritised or not.
       priorityNotices:
         status === 'open'
-          ? priorityEntryNotices(
-              tournament.priorityRegulations,
-              now,
-              tournament,
-            )
+          ? priorityEntryNotices(tournament.priorityRegulations, now)
           : [],
       entryPath: tournamentEntryFormPath(
         tournament.regionSlug,

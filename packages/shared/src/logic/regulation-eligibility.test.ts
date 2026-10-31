@@ -5,18 +5,21 @@ import {
   selectableRegulations,
 } from './regulation-eligibility';
 
-// Closes later than every window below, so none of them runs to the close
-// unless a test says so.
-const ENTRY_PERIOD = {
-  entryOpensAt: '2026-01-01T00:00:00Z',
-  entryClosesAt: '2026-12-31T00:00:00Z',
-};
-
 describe('regulationSelectionRefusal', () => {
   it('rejects an empty selection', () => {
     const regulations = [
-      {id: 'reg-1', priorityStartsAt: null, priorityEndsAt: null},
-      {id: 'reg-2', priorityStartsAt: null, priorityEndsAt: null},
+      {
+        id: 'reg-1',
+        priorityStartsAt: null,
+        priorityEndsAt: null,
+        closesWithPriority: false,
+      },
+      {
+        id: 'reg-2',
+        priorityStartsAt: null,
+        priorityEndsAt: null,
+        closesWithPriority: false,
+      },
     ];
 
     expect(
@@ -24,15 +27,24 @@ describe('regulationSelectionRefusal', () => {
         regulations,
         [],
         new Date('2026-08-23T00:00:00Z'),
-        ENTRY_PERIOD,
       ),
     ).toBe('empty');
   });
 
   it('accepts any selection when no priority window is active', () => {
     const regulations = [
-      {id: 'reg-1', priorityStartsAt: null, priorityEndsAt: null},
-      {id: 'reg-2', priorityStartsAt: null, priorityEndsAt: null},
+      {
+        id: 'reg-1',
+        priorityStartsAt: null,
+        priorityEndsAt: null,
+        closesWithPriority: false,
+      },
+      {
+        id: 'reg-2',
+        priorityStartsAt: null,
+        priorityEndsAt: null,
+        closesWithPriority: false,
+      },
     ];
 
     expect(
@@ -40,7 +52,6 @@ describe('regulationSelectionRefusal', () => {
         regulations,
         ['reg-1', 'reg-2'],
         new Date('2026-08-23T00:00:00Z'),
-        ENTRY_PERIOD,
       ),
     ).toBeNull();
   });
@@ -51,8 +62,14 @@ describe('regulationSelectionRefusal', () => {
         id: 'priority-reg',
         priorityStartsAt: '2026-08-01T00:00:00Z',
         priorityEndsAt: '2026-08-31T00:00:00Z',
+        closesWithPriority: false,
       },
-      {id: 'other-reg', priorityStartsAt: null, priorityEndsAt: null},
+      {
+        id: 'other-reg',
+        priorityStartsAt: null,
+        priorityEndsAt: null,
+        closesWithPriority: false,
+      },
     ];
 
     expect(
@@ -60,7 +77,6 @@ describe('regulationSelectionRefusal', () => {
         regulations,
         ['other-reg', 'priority-reg'],
         new Date('2026-08-15T00:00:00Z'),
-        ENTRY_PERIOD,
       ),
     ).toBeNull();
   });
@@ -71,8 +87,14 @@ describe('regulationSelectionRefusal', () => {
         id: 'priority-reg',
         priorityStartsAt: '2026-08-01T00:00:00Z',
         priorityEndsAt: '2026-08-31T00:00:00Z',
+        closesWithPriority: false,
       },
-      {id: 'other-reg', priorityStartsAt: null, priorityEndsAt: null},
+      {
+        id: 'other-reg',
+        priorityStartsAt: null,
+        priorityEndsAt: null,
+        closesWithPriority: false,
+      },
     ];
 
     expect(
@@ -80,7 +102,6 @@ describe('regulationSelectionRefusal', () => {
         regulations,
         ['other-reg'],
         new Date('2026-08-15T00:00:00Z'),
-        ENTRY_PERIOD,
       ),
     ).toBe('needs-priority');
   });
@@ -91,8 +112,14 @@ describe('regulationSelectionRefusal', () => {
         id: 'priority-reg',
         priorityStartsAt: '2026-08-01T00:00:00Z',
         priorityEndsAt: '2026-08-31T00:00:00Z',
+        closesWithPriority: false,
       },
-      {id: 'other-reg', priorityStartsAt: null, priorityEndsAt: null},
+      {
+        id: 'other-reg',
+        priorityStartsAt: null,
+        priorityEndsAt: null,
+        closesWithPriority: false,
+      },
     ];
 
     expect(
@@ -100,15 +127,24 @@ describe('regulationSelectionRefusal', () => {
         regulations,
         ['other-reg'],
         new Date('2026-09-01T00:00:00Z'),
-        ENTRY_PERIOD,
       ),
     ).toBeNull();
   });
 
   it('rejects a selection containing an unknown regulation id', () => {
     const regulations = [
-      {id: 'reg-1', priorityStartsAt: null, priorityEndsAt: null},
-      {id: 'reg-2', priorityStartsAt: null, priorityEndsAt: null},
+      {
+        id: 'reg-1',
+        priorityStartsAt: null,
+        priorityEndsAt: null,
+        closesWithPriority: false,
+      },
+      {
+        id: 'reg-2',
+        priorityStartsAt: null,
+        priorityEndsAt: null,
+        closesWithPriority: false,
+      },
     ];
 
     expect(
@@ -116,7 +152,6 @@ describe('regulationSelectionRefusal', () => {
         regulations,
         ['reg-1', 'unknown-reg'],
         new Date('2026-08-23T00:00:00Z'),
-        ENTRY_PERIOD,
       ),
     ).toBe('not-offered');
   });
@@ -129,18 +164,21 @@ describe('activePriorityRegulations', () => {
       label: '条件なし',
       priorityStartsAt: null,
       priorityEndsAt: null,
+      closesWithPriority: false,
     },
     {
       id: 'open',
       label: '在住',
       priorityStartsAt: '2026-11-01T00:00:00Z',
       priorityEndsAt: '2026-11-05T00:00:00Z',
+      closesWithPriority: false,
     },
     {
       id: 'later',
       label: '在学',
       priorityStartsAt: '2026-11-10T00:00:00Z',
       priorityEndsAt: '2026-11-12T00:00:00Z',
+      closesWithPriority: false,
     },
   ];
 
@@ -148,7 +186,6 @@ describe('activePriorityRegulations', () => {
     const active = activePriorityRegulations(
       regulations,
       new Date('2026-11-03T00:00:00Z'),
-      ENTRY_PERIOD,
     );
 
     expect(active.map(r => [r.id, r.label])).toEqual([['open', '在住']]);
@@ -156,250 +193,182 @@ describe('activePriorityRegulations', () => {
 
   it('counts both ends of a window as inside it', () => {
     const ids = (now: string) =>
-      activePriorityRegulations(regulations, new Date(now), ENTRY_PERIOD).map(
-        r => r.id,
-      );
+      activePriorityRegulations(regulations, new Date(now)).map(r => r.id);
 
     expect(ids('2026-11-01T00:00:00Z')).toEqual(['open']);
     expect(ids('2026-11-05T00:00:00Z')).toEqual(['open']);
     expect(ids('2026-11-05T00:00:01Z')).toEqual([]);
   });
 
-  // #235: 東東京 gives its general regulation a window from the end of the
-  // priority one to the close, which is how a tournament is phased.
-  describe('in the general phase', () => {
-    const closesAt = '2026-12-25T12:00:00Z';
-    const period = {
-      entryOpensAt: '2026-10-29T12:00:00Z',
-      entryClosesAt: closesAt,
-    };
+  // #243: staff mark the regulations that close with their priority.
+  describe('with regulations marked to close', () => {
     const priority = {
       id: 'priority',
       priorityStartsAt: '2026-10-29T12:00:00Z',
       priorityEndsAt: '2026-10-31T12:00:00Z',
+      closesWithPriority: true,
     };
     const general = {
       id: 'general',
-      priorityStartsAt: '2026-10-31T12:00:00Z',
-      priorityEndsAt: closesAt,
+      priorityStartsAt: null,
+      priorityEndsAt: null,
+      closesWithPriority: false,
     };
-    const unlimited = {id: 'tag', priorityStartsAt: null, priorityEndsAt: null};
-    const listed = (
-      regulations: ReadonlyArray<typeof priority | typeof unlimited>,
-      now: string,
-      entryPeriod = period,
-    ) =>
-      activePriorityRegulations(regulations, new Date(now), entryPeriod).map(
-        r => r.id,
-      );
+    // How a general phase was set up before #243, and may still be stored.
+    const generalWindow = {
+      ...general,
+      priorityStartsAt: '2026-10-31T12:00:00Z',
+      priorityEndsAt: '2026-12-25T12:00:00Z',
+    };
+    type Regulations = ReadonlyArray<typeof priority | typeof general>;
+    const listed = (regulations: Regulations, now: string) =>
+      activePriorityRegulations(regulations, new Date(now)).map(r => r.id);
+    const selectable = (regulations: Regulations, now: string) =>
+      selectableRegulations(regulations, new Date(now)).map(r => r.id);
+    const AFTER = '2026-10-31T12:00:01Z';
 
-    const selectable = (
-      regulations: ReadonlyArray<typeof priority | typeof unlimited>,
-      now: string,
-    ) =>
-      selectableRegulations(regulations, new Date(now), period).map(r => r.id);
+    it('needs no window on the general regulation', () => {
+      const regulations = [priority, general];
 
-    it('lists nothing and accepts what is still on offer', () => {
-      const now = new Date('2026-10-31T12:00:01Z');
-      const regulations = [priority, general, unlimited];
+      expect(selectable(regulations, '2026-10-30T00:00:00Z')).toEqual([
+        'priority',
+        'general',
+      ]);
+      expect(selectable(regulations, AFTER)).toEqual(['general']);
+      expect(listed(regulations, AFTER)).toEqual([]);
+    });
 
-      expect(listed(regulations, now.toISOString())).toEqual([]);
+    it('keeps the regulation up to the end of its window, included', () => {
+      expect(selectable([priority, general], priority.priorityEndsAt)).toEqual([
+        'priority',
+        'general',
+      ]);
+    });
+
+    it('still gates the entries while the priority window is open', () => {
       expect(
-        regulationSelectionRefusal(regulations, ['general'], now, period),
-      ).toBeNull();
-      expect(
-        regulationSelectionRefusal(regulations, ['tag'], now, period),
-      ).toBeNull();
+        regulationSelectionRefusal(
+          [priority, general],
+          ['general'],
+          new Date('2026-10-30T00:00:00Z'),
+        ),
+      ).toBe('needs-priority');
     });
 
     // A form overtaken by a change either way: telling it to choose again is
     // what helps, whatever else it names.
     it('calls a phase that is over and a deleted id alike not offered', () => {
-      const now = new Date('2026-10-31T12:00:01Z');
+      const now = new Date(AFTER);
       const regulations = [priority, general];
 
       for (const ids of [
+        ['priority'],
+        ['priority', 'general'],
         ['priority', 'unknown-reg'],
-        ['unknown-reg', 'priority'],
+        ['unknown-reg'],
       ]) {
-        expect(regulationSelectionRefusal(regulations, ids, now, period)).toBe(
+        expect(regulationSelectionRefusal(regulations, ids, now)).toBe(
           'not-offered',
         );
       }
       expect(
-        regulationSelectionRefusal(regulations, ['unknown-reg'], now, period),
-      ).toBe('not-offered');
+        regulationSelectionRefusal(regulations, ['general'], now),
+      ).toBeNull();
     });
 
-    it('takes the phase that is over off the offer', () => {
-      const now = new Date('2026-10-31T12:00:01Z');
-      const regulations = [priority, general];
+    it('keeps a regulation that is not marked', () => {
+      const resident = {...priority, closesWithPriority: false};
 
-      expect(selectable(regulations, now.toISOString())).toEqual(['general']);
-      expect(
-        regulationSelectionRefusal(regulations, ['priority'], now, period),
-      ).toBe('not-offered');
-      expect(
-        regulationSelectionRefusal(
-          regulations,
-          ['priority', 'general'],
-          now,
-          period,
-        ),
-      ).toBe('not-offered');
+      expect(selectable([resident, general], AFTER)).toEqual([
+        'priority',
+        'general',
+      ]);
     });
 
-    // The sheets spell one close as 23:59, 23:59:59 and the next day's 0:00,
-    // so the general window can end just before the entries do.
-    it('holds the phase from the end of its window to the close', () => {
-      const endsEarly = {...general, priorityEndsAt: '2026-12-25T11:59:00Z'};
-      const now = '2026-12-25T11:59:30Z';
+    it('ignores the mark on a regulation with no window', () => {
+      const marked = {...general, closesWithPriority: true};
 
-      expect(listed([priority, endsEarly], now)).toEqual([]);
-      expect(selectable([priority, endsEarly], now)).toEqual(['general']);
+      expect(selectable([marked, general], AFTER)).toEqual([
+        'general',
+        'general',
+      ]);
     });
 
-    it('keeps everything on offer until the general phase starts', () => {
-      const later = {...general, priorityStartsAt: '2026-11-01T00:00:00Z'};
+    // Issue limit: the marker doesn't lean on the close, so moving the close
+    // or ending the general window early changes nothing.
+    it('does not depend on a window reaching the close', () => {
+      const short = {...generalWindow, priorityEndsAt: '2026-12-19T12:00:00Z'};
+
+      expect(listed([priority, short], '2026-11-01T00:00:00Z')).toEqual([]);
+      expect(selectable([priority, short], '2026-12-20T00:00:00Z')).toEqual([
+        'general',
+      ]);
+    });
+
+    it('treats a stored general window as opening the phase', () => {
+      const regulations = [priority, generalWindow];
+
+      expect(listed(regulations, AFTER)).toEqual([]);
+      expect(selectable(regulations, AFTER)).toEqual(['general']);
+    });
+
+    // 北海道: both stay on offer until the window still to come starts.
+    it('waits for a window still to start, and that window is the fix', () => {
+      const later = {
+        ...generalWindow,
+        priorityStartsAt: '2026-11-01T00:00:00Z',
+      };
 
       expect(selectable([priority, later], '2026-10-31T18:00:00Z')).toEqual([
         'priority',
         'general',
       ]);
-    });
-
-    // 中四国 and 東北: residents stay eligible after their priority, and a
-    // window may sit on the only regulation.
-    it('keeps a regulation whose window ended outside the general phase', () => {
-      expect(selectable([priority, unlimited], '2026-11-01T00:00:00Z')).toEqual(
-        ['priority', 'tag'],
-      );
-      expect(selectable([priority], '2026-11-01T00:00:00Z')).toEqual([
-        'priority',
+      expect(selectable([priority, later], '2026-11-01T00:00:00Z')).toEqual([
+        'general',
+      ]);
+      expect(selectable([priority, general], '2026-10-31T18:00:00Z')).toEqual([
+        'general',
       ]);
     });
 
-    it('keeps a regulation whose window ended before entries opened', () => {
-      const stale = {
-        id: 'stale',
-        priorityStartsAt: '2026-09-01T00:00:00Z',
-        priorityEndsAt: '2026-09-10T00:00:00Z',
+    it('keeps an earlier phase on offer until a later one has ended', () => {
+      const second = {
+        ...priority,
+        id: 'second',
+        priorityStartsAt: '2026-10-31T12:00:00Z',
+        priorityEndsAt: '2026-11-05T12:00:00Z',
       };
+      const regulations = [priority, second, general];
+      const during = '2026-11-01T00:00:00Z';
 
-      expect(
-        selectable([stale, priority, general], '2026-11-01T00:00:00Z'),
-      ).toEqual(['stale', 'general']);
-    });
-
-    it('allows a gap between the phases', () => {
-      const later = {...general, priorityStartsAt: '2026-11-01T00:00:00Z'};
-
-      expect(listed([priority, later], '2026-11-02T00:00:00Z')).toEqual([]);
-    });
-
-    it('still gates the entries while the priority window is open', () => {
-      const now = new Date('2026-10-30T00:00:00Z');
-
-      expect(listed([priority, general], now.toISOString())).toEqual([
+      expect(selectable(regulations, during)).toEqual([
         'priority',
+        'second',
+        'general',
       ]);
+      expect(listed(regulations, during)).toEqual(['second']);
+      expect(selectable(regulations, '2026-11-06T00:00:00Z')).toEqual([
+        'general',
+      ]);
+    });
+
+    it('keeps restricting on a window that began before the phase ended', () => {
+      const resident = {
+        ...general,
+        id: 'resident',
+        priorityStartsAt: '2026-10-29T12:00:00Z',
+        priorityEndsAt: '2026-11-05T12:00:00Z',
+      };
+      const regulations = [priority, resident, general];
+
+      expect(listed(regulations, '2026-11-01T00:00:00Z')).toEqual(['resident']);
       expect(
         regulationSelectionRefusal(
-          [priority, general],
+          regulations,
           ['general'],
-          now,
-          period,
+          new Date('2026-11-01T00:00:00Z'),
         ),
       ).toBe('needs-priority');
-    });
-
-    it('waits for a later phase to be over', () => {
-      const third = {
-        id: 'third',
-        priorityStartsAt: '2026-11-15T00:00:00Z',
-        priorityEndsAt: closesAt,
-      };
-      const regulations = [priority, general, third];
-      const now = new Date('2026-11-01T00:00:00Z');
-
-      expect(listed(regulations, now.toISOString())).toEqual(['general']);
-      expect(
-        regulationSelectionRefusal(regulations, ['third'], now, period),
-      ).toBe('needs-priority');
-    });
-
-    it('never lifts and restores the check around a shorter window', () => {
-      const shorter = {
-        id: 'shorter',
-        priorityStartsAt: '2026-11-15T00:00:00Z',
-        priorityEndsAt: '2026-11-20T00:00:00Z',
-      };
-      const regulations = [priority, general, shorter];
-
-      expect(listed(regulations, '2026-11-01T00:00:00Z')).toEqual(['general']);
-      expect(listed(regulations, '2026-11-16T00:00:00Z')).toEqual([
-        'general',
-        'shorter',
-      ]);
-    });
-
-    it('keeps a window that overlapped the one that ended', () => {
-      const whole = {...general, priorityStartsAt: priority.priorityStartsAt};
-      const regulations = [priority, whole, unlimited];
-      const now = new Date('2026-11-01T00:00:00Z');
-
-      expect(listed(regulations, '2026-10-30T00:00:00Z')).toEqual([
-        'priority',
-        'general',
-      ]);
-      expect(listed(regulations, now.toISOString())).toEqual(['general']);
-      expect(
-        regulationSelectionRefusal(regulations, ['tag'], now, period),
-      ).toBe('needs-priority');
-    });
-
-    it('ignores a window that ended before entries opened', () => {
-      const stale = {
-        id: 'stale',
-        priorityStartsAt: '2026-09-01T00:00:00Z',
-        priorityEndsAt: '2026-09-10T00:00:00Z',
-      };
-      const whole = {...general, priorityStartsAt: period.entryOpensAt};
-      const regulations = [stale, whole, unlimited];
-      const now = new Date('2026-11-01T00:00:00Z');
-
-      expect(listed(regulations, now.toISOString())).toEqual(['general']);
-      expect(
-        regulationSelectionRefusal(regulations, ['tag'], now, period),
-      ).toBe('needs-priority');
-    });
-
-    it('still gates on a window with none ended before it', () => {
-      expect(listed([general, unlimited], '2026-11-01T00:00:00Z')).toEqual([
-        'general',
-      ]);
-    });
-
-    it.each([
-      ['23:59 for 23:59:59', '2026-12-25T14:59:00Z', '2026-12-25T14:59:59Z'],
-      ['23:59:59 for 0:00', '2026-12-25T14:59:59Z', '2026-12-25T15:00:00Z'],
-      ['23:59 for 0:00', '2026-12-25T14:59:00Z', '2026-12-25T15:00:00Z'],
-    ])('counts %s as the close', (_, endsAt, entryClosesAt) => {
-      expect(
-        listed(
-          [priority, {...general, priorityEndsAt: endsAt}],
-          '2026-11-01T00:00:00Z',
-          {...period, entryClosesAt},
-        ),
-      ).toEqual([]);
-    });
-
-    it('leaves a window ending earlier than that as priority', () => {
-      const earlier = {...general, priorityEndsAt: '2026-12-19T12:00:00Z'};
-
-      expect(listed([priority, earlier], '2026-11-01T00:00:00Z')).toEqual([
-        'general',
-      ]);
     });
   });
 });

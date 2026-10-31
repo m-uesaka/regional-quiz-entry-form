@@ -13,15 +13,11 @@ function buildRegulation(overrides: Partial<Regulation>): Regulation {
     label: '一般部門',
     priorityStartsAt: null,
     priorityEndsAt: null,
+    closesWithPriority: false,
     displayOrder: 0,
     ...overrides,
   };
 }
-
-const ENTRY_PERIOD = {
-  entryOpensAt: '2026-08-01T00:00:00+09:00',
-  entryClosesAt: '2026-12-31T00:00:00+09:00',
-};
 
 const REGULATION_A = buildRegulation({
   id: '11111111-1111-1111-1111-111111111111',
@@ -52,7 +48,6 @@ describe('RegulationSelector', () => {
       props: {
         regulations: [priorityRegulation, generalRegulation],
         value: [],
-        entryPeriod: ENTRY_PERIOD,
         now: new Date('2026-08-23T00:00:00Z'),
       },
     });
@@ -86,7 +81,6 @@ describe('RegulationSelector', () => {
       props: {
         regulations: [priorityRegulation, generalRegulation],
         value: [generalRegulation.id],
-        entryPeriod: ENTRY_PERIOD,
         now: new Date('2026-08-23T00:00:00Z'),
       },
     });
@@ -105,7 +99,6 @@ describe('RegulationSelector', () => {
       props: {
         regulations: [REGULATION_A, REGULATION_B],
         value: [],
-        entryPeriod: ENTRY_PERIOD,
         now: new Date('2026-08-23T00:00:00Z'),
       },
     });
@@ -129,7 +122,6 @@ describe('RegulationSelector', () => {
       props: {
         regulations: [REGULATION_A, REGULATION_B],
         value: [REGULATION_B.id],
-        entryPeriod: ENTRY_PERIOD,
         now: new Date('2026-08-23T00:00:00Z'),
       },
     });
@@ -138,7 +130,7 @@ describe('RegulationSelector', () => {
     expect(screen.getByRole('checkbox', {name: 'A部門'})).not.toBeChecked();
   });
 
-  it('treats the general phase as normal entry (#235)', () => {
+  it('takes a marked regulation off the offer after its window (#243)', () => {
     render(RegulationSelector, {
       props: {
         regulations: [
@@ -146,14 +138,10 @@ describe('RegulationSelector', () => {
             ...REGULATION_A,
             priorityStartsAt: '2026-08-20T00:00:00+09:00',
             priorityEndsAt: '2026-08-22T00:00:00+09:00',
+            closesWithPriority: true,
           }),
-          buildRegulation({
-            ...REGULATION_B,
-            priorityStartsAt: '2026-08-22T00:00:00+09:00',
-            priorityEndsAt: ENTRY_PERIOD.entryClosesAt,
-          }),
+          REGULATION_B,
         ],
-        entryPeriod: ENTRY_PERIOD,
         // A rejected submission echoing the phase that is over.
         value: [REGULATION_A.id],
         now: new Date('2026-08-23T00:00:00Z'),
@@ -168,7 +156,7 @@ describe('RegulationSelector', () => {
     expect(screen.getByRole('checkbox', {name: /B部門/})).toBeInTheDocument();
   });
 
-  it('keeps a regulation whose window ended outside the general phase', () => {
+  it('keeps a regulation that is not marked after its window', () => {
     render(RegulationSelector, {
       props: {
         regulations: [
@@ -179,7 +167,6 @@ describe('RegulationSelector', () => {
           }),
           REGULATION_B,
         ],
-        entryPeriod: ENTRY_PERIOD,
         value: [],
         now: new Date('2026-08-23T00:00:00Z'),
       },
@@ -193,7 +180,6 @@ describe('RegulationSelector', () => {
       props: {
         regulations: [REGULATION_A, REGULATION_B],
         value: [],
-        entryPeriod: ENTRY_PERIOD,
         now: new Date('2026-08-23T00:00:00Z'),
       },
     });
@@ -214,7 +200,6 @@ describe('RegulationSelector', () => {
           }),
         ],
         value: [],
-        entryPeriod: ENTRY_PERIOD,
         now: new Date('2026-08-23T00:00:00Z'),
       },
     });

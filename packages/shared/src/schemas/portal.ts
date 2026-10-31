@@ -35,6 +35,7 @@ export const PortalTournamentSchema = z.object({
       label: z.string(),
       priorityStartsAt: z.string().datetime({offset: true}),
       priorityEndsAt: z.string().datetime({offset: true}),
+      closesWithPriority: z.boolean(),
     }),
   ),
 });

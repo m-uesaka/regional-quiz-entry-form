@@ -177,7 +177,7 @@ export async function fetchEntrySheet(
       'data.rowData.values(formattedValue,effectiveValue))',
   });
   params.append('ranges', FORM_DEFINITION_RANGE);
-  params.append('ranges', `'${regulationSheetName}'!A2:C`);
+  params.append('ranges', `'${regulationSheetName}'!A2:D`);
   const url =
     'https://sheets.googleapis.com/v4/spreadsheets/' +
     `${encodeURIComponent(spreadsheetId)}?${params}`;

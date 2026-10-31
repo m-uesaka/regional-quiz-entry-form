@@ -1,7 +1,6 @@
 import {
   activePriorityRegulations,
   type Regulation,
-  type EntryPeriod,
   type TournamentEntryCounts,
 } from '@regional-quiz/shared';
 import {formatJstDateTime} from '$lib/jst-datetime';
@@ -11,7 +10,7 @@ const MS_PER_MINUTE = 60_000;
 /** A regulation's priority window, as both the portal and the form get it. */
 export type PriorityRegulation = Pick<
   Regulation,
-  'label' | 'priorityStartsAt' | 'priorityEndsAt'
+  'label' | 'priorityStartsAt' | 'priorityEndsAt' | 'closesWithPriority'
 >;
 
 /**
@@ -43,17 +42,15 @@ export interface PriorityEntryNotice {
  * rendering and the hydrated page agree.
  * @param regulations The tournament's regulations, in display order.
  * @param now The moment to check at.
- * @param entryPeriod The tournament's entry period.
  */
 export function priorityEntryNotices(
   regulations: readonly PriorityRegulation[],
   now: Date,
-  entryPeriod: EntryPeriod,
 ): PriorityEntryNotice[] {
   // Ordered at the precision the notices are grouped and printed at, so a
   // difference the page doesn't show can't reorder them. The sort is
   // stable, so the regulations inside one notice keep their display order.
-  const active = activePriorityRegulations(regulations, now, entryPeriod).sort(
+  const active = activePriorityRegulations(regulations, now).sort(
     (a, b) =>
       printedMinute(a.priorityEndsAt) - printedMinute(b.priorityEndsAt) ||
       printedMinute(a.priorityStartsAt) - printedMinute(b.priorityStartsAt),

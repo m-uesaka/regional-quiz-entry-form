@@ -135,17 +135,19 @@ flowchart TB
 | `label` | text | not null | 表示ラベル |
 | `priority_starts_at` | timestamptz | nullable | 優先エントリー期間の開始 |
 | `priority_ends_at` | timestamptz | nullable | 優先エントリー期間の終了 |
+| `closes_with_priority` | boolean | not null, default `false` | 優先期間の終了後に選択肢から外すか(`0042`、#243)。優先期間が無い行では意味を持たない |
 | `display_order` | integer | not null, default 0 | 表示順 |
 
 - `unique (id, tournament_id)`: 一見冗長ですが、これは `entry_regulations` 側の複合外部キー `foreign key (regulation_id, tournament_id) references regulations (id, tournament_id)` を張るために必要です。この複合 FK により、**ある大会のエントリーが別の大会のレギュレーションを参照することが DB レベルで不可能**になります(`0018` より前は同じ複合 FK が `entries` から直接張られていました)。
 - 優先期間の判定ロジックは `packages/shared/src/logic/regulation-eligibility.ts` の `regulationSelectionRefusal()`。「いずれかのレギュレーションの優先期間が現在アクティブなら、選んだ集合にそのうち少なくとも1つが含まれていなければならない。アクティブなものが1つもなければ、選択肢に残っているものの中から何を選んでもよい」という規則です。優先期間は「その条件を満たす参加者だけがエントリーできる」という意味なので、優先対象を1つ選んだうえで他の条件も一緒に申告することは許されます。
-- アクティブかどうかは `activePriorityRegulations()` が決め、大会を「優先枠 → 一般枠」の順に開く設定の最後の段階(一般枠)はアクティブとして扱いません(#235)。案内の表示も送信時の検査もこの判定を使います。一般枠の段階では、終わった優先枠のレギュレーションを選択肢から外し、送信も断ります(`selectableRegulations()`)。一般枠と見なすのは、次の**すべて**を満たすときです。
-  - これから始まる優先期間が無い
-  - 開いている優先期間がすべて、エントリーの締切まで続く(終わりが締切の 60 秒前以降)
-  - 開いている優先期間がそれぞれ、別の優先期間が終わった後に始まっている
-  - その終わった優先期間が、エントリーの受付開始より後に終わっている
+- 一般枠の段階は `closes_with_priority` で決めます(#243)。この設定の枠が 1 つ以上あり、それらの優先期間が**すべて**終わり、どの優先期間も始まった後(`regulation-eligibility.ts` の `arePhasesOver()`)に、次の 2 つが起きます。案内の表示も送信時の検査も同じ判定を使います。
+  - 設定した枠を選択肢から外し、送信も断ります(`selectableRegulations()`)
+  - 設定の無い優先期間のうち、設定した枠のどれかが終わった後に始まったものは、制限でなくなります(`activePriorityRegulations()`)。一般枠に優先期間を設定している既存の大会はこの形です。それより前に始まった優先期間は、終了まで制限が続きます
 
-  選択肢から外すのを一般枠の段階に限るのは、期間が終わっただけでは外せないためです。在住者を優先する期間のように、終わった後も対象者がそのレギュレーションを選ぶ必要がある大会や、レギュレーションが1つだけの大会があります。
+  枠ごとの終了で外さないのは、`0042` の移行で今の受付条件を保つためです。旧来の推定では、2 段階の優先枠の 1 段階目は 2 段階目の期間中も選べ、優先枠と一般枠の間が空いていれば間も両方選べました。この時点の判定は旧来の推定と同じ式で、設定で変わるのは対象の枠だけです。一般枠の優先期間を空欄にすれば、間は生じません。
+
+  設定を列にしているのは、期間が終わっただけでは外せないためです。在住者を優先する期間のように、終わった後も対象者がそのレギュレーションを選ぶ必要がある大会や、レギュレーションが1つだけの大会があります。
+- `0042` のバックフィルは、旧来の `isGeneralPhase()` で実際に枠が外れていた行だけを `true` にしました。旧来の推定は `now` を引数に取りますが、結果が真になるのは「締切(60 秒の許容幅あり)に届く窓があり、そのすべてに、受付開始より後かつ締切に届く前に終わった別の窓が先行する」という時刻によらない条件を満たす大会で、外れる枠は常に「受付開始より後かつ締切に届く前に終わる窓」です。`now` が決めるのは外れる時刻だけで、それは `arePhasesOver()` と同じです。この等価性は、旧来の実装を残した `packages/shared/src/testing/legacy-general-phase.ts` を使い、`legacy-general-phase.test.ts`(判定)と `apps/backend/src/lib/regulations-backfill.test.ts`(SQL)で確かめています。
 - `priority_starts_at` / `priority_ends_at` は**両方揃っているときだけ**優先期間として扱われます(片方だけ設定されている行は優先期間なしと同じ扱い)。
 - `check (regulations_priority_window_complete)`(`0014`): 「両方 null」か「両方非 null かつ開始 < 終了」だけを許します。制約追加は既存行も検証するため、`0014` では制約を張る前に不完全な行(片方だけ / 逆順)を両方 null に正規化しています(`regulationSelectionRefusal()` は元々それらを「優先期間なし」として扱っていたので、挙動は変わりません)。片方だけ設定された行を `regulationSelectionRefusal()` が「優先期間なし」として扱ってしまうため、そもそも作らせません。Zod の `RegulationUpsertSchema` にも同じ規則がありますが、SQL を直接叩く運用が残るので DB 側にも持たせています。
 - `index (tournament_id, display_order)`(`0014`): `unique (id, tournament_id)` は先頭列が `id` なので `where tournament_id = ?` には使えません。エントリーフォームの表示のたびに走るクエリなので別途張っています。
@@ -402,7 +404,7 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | `claim_participant_region(uuid, uuid)` | `0040` | `lib/entries.ts` | 確認済みの参加者の地域を、別の地域に押さえるエントリーが無ければエントリーする大会の地域に移す |
 | `reset_tournament_entries(uuid, boolean)` | `0038` | `routes/tournaments.ts` | 大会のエントリーを全件削除し、指定があれば他の大会にエントリーが残っていない参加者アカウントも削除する |
 | `tournament_entry_summary()` | `0013` | `routes/staff-dashboard.ts` | 全大会のエントリー件数をステータス別に集計する(読み取り専用) |
-| `sync_regulations(uuid, jsonb)` | `0014` | `lib/regulations.ts` | 大会のレギュレーションを差分同期する(update / insert / 参照が無ければ delete) |
+| `sync_regulations(uuid, jsonb)` | `0014`(`0018`・`0042` で再定義) | `lib/regulations.ts` | 大会のレギュレーションを差分同期する(update / insert / 参照が無ければ delete) |
 | `record_mail_job_progress(uuid, integer, integer)` | `0019` | `lib/mail-jobs.ts` | 一斉メール 1 バッチ分の結果をジョブの件数に加算する |
 | `custom_field_values_length(jsonb)` | `0021` | `entries_text_lengths` check 制約 | 追加項目の回答の合計文字数を数える(`language sql` / `immutable`) |
 
@@ -421,7 +423,7 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 
 1. 大会行を `for update` でロック(存在しなければ SQLSTATE `P0002`)。同一大会への同時保存を直列化します。
 2. `id` 付き要素のうち、**この大会のレギュレーションでない** id を洗い出して SQLSTATE `P0003`(`detail` に id 一覧)。これが無いと、よその大会の行を `on conflict (id) do update` で書き換えてしまいます。
-3. `id` 付きは update、`id` 無しは insert(`display_order` は配列の添字)。
+3. `id` 付きは update、`id` 無しは insert(`display_order` は配列の添字)。要素に `closesWithPriority` が無ければ、既存の行は今の値を保ち、新しい行は `false` になります(古い Worker・開いたままの古い画面・シートの空欄がこの形で届くため。`0042`)。優先期間が無い行は `false` にします。
 4. 配列から消えた行のうち `entries` から参照されているものがあれば SQLSTATE `P0004`(`detail` にラベル一覧)を raise してロールバック。
 5. 残った「消えた行」を delete。
 
@@ -640,3 +642,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0038_reset_tournament_entries_fn.sql` | 大会のエントリーを全件削除し、指定があれば他の大会にエントリーが残っていない参加者アカウントも削除する `reset_tournament_entries()` を追加 |
 | `0039_tournaments_entries_paused.sql` | エントリー受付の一時中断を表す `tournaments.entries_paused` を追加 |
 | `0040_participant_region_follows_entries.sql` | 確認済みの参加者の地域を移す `claim_participant_region()` と、その裏付けの `check_participant_region()` トリガ(#236) |
+| `0042_regulations_closes_with_priority.sql` | `regulations.closes_with_priority`(#243)。旧来の推定で枠が外れていた行のバックフィル。`sync_regulations()` を、キーが無ければ今の値を保つよう再定義 |
