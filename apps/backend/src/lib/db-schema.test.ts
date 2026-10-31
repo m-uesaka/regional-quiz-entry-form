@@ -311,6 +311,74 @@ describe.skipIf(!dbReachable)(
       expect(regionId).toBe(otherRegion.id);
     });
 
+    // `claim_participant_region()` and `check_participant_region()` take the
+    // participant row in turn, which is all that keeps these two apart.
+    it('never leaves a participant in two regions when moving concurrently', async () => {
+      const {participantId, entryFor} = await seedRegion(false);
+      const [otherRegion] = await sql`
+        insert into regions (slug, name, allows_dual_entry)
+        values (${testRegionSlug + '-race'}, 'テスト地域', false)
+        returning id
+      `;
+      const [otherTournament] = await sql`
+        insert into tournaments (
+          region_id, type, name, entry_opens_at, entry_closes_at
+        ) values (
+          ${otherRegion.id}, 'saikyoi', 'テスト大会',
+          '2020-01-01T00:00:00Z', '2099-01-01T00:00:00Z'
+        )
+        returning id
+      `;
+      const original = entryFor('saikyoi');
+      const moving = new SQL(DB_URL);
+      const refusals = new Set<string | undefined>();
+      const refused = (e: unknown) => {
+        refusals.add((e as {errno?: string}).errno);
+      };
+      const crossRegionCounts: number[] = [];
+
+      for (let round = 0; round < 20; round++) {
+        await sql`delete from entries where participant_id = ${participantId}`;
+        await sql`
+          update participants
+          set region_id = (select id from regions where slug = ${testRegionSlug})
+          where id = ${participantId}
+        `;
+        await Promise.all([
+          sql`insert into entries ${sql(original)}`.then(() => {}, refused),
+          (async () => {
+            const [{claimed}] = await moving`
+              select claim_participant_region(
+                ${participantId}, ${otherRegion.id}
+              ) as claimed
+            `;
+            if (claimed) {
+              await moving`insert into entries ${moving({
+                ...original,
+                tournament_id: otherTournament.id,
+              })}`;
+            }
+          })().catch(refused),
+        ]);
+        const [{regions}] = await sql`
+          select count(distinct t.region_id)::int as regions
+          from entries e
+          join tournaments t on t.id = e.tournament_id
+          where e.participant_id = ${participantId}
+            and e.status <> 'cancelled'
+        `;
+        crossRegionCounts.push(regions as number);
+      }
+      await moving.close();
+      await sql`delete from entries where participant_id = ${participantId}`;
+      await sql`delete from participants where id = ${participantId}`;
+      await sql`delete from tournaments where id = ${otherTournament.id}`;
+      await sql`delete from regions where id = ${otherRegion.id}`;
+
+      expect(Math.max(...crossRegionCounts)).toBe(1);
+      expect([...refusals].filter(code => code !== 'P0008')).toEqual([]);
+    });
+
     it('does not count a cancelled entry as occupying the region', async () => {
       const {participantId, entryFor} = await seedRegion(false);
       await sql`insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}`;

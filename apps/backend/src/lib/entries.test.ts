@@ -1369,7 +1369,7 @@ describe.skipIf(!(await isDbReachable()))(
         const newRegion = await createFixture('back-new');
         const email = await verifiedIn(oldRegion.regionId);
         await enterAsConfirmed(email, oldRegion.tournamentId, 'cancelled');
-        await createEntry(
+        const moved = await createEntry(
           env,
           newRegion.tournamentId,
           validInput({email, regulationIds: [newRegion.regulationId]}),
@@ -1385,7 +1385,79 @@ describe.skipIf(!(await isDbReachable()))(
           validInput({email, regulationIds: [oldRegion.regulationId]}),
         );
 
+        expect(moved.ok).toBe(true);
         expect(result.ok).toBe(true);
+        const [participant] = await sql`
+          select region_id from participants where email = ${email}
+        `;
+        expect(participant.region_id).toBe(oldRegion.regionId);
+      });
+
+      describe('for a tournament whose entries have closed', () => {
+        const closedAt = '2020-06-01T00:00:00Z';
+
+        /**
+         * Enters a participant into a closed tournament and cancels it, then
+         * has them enter a tournament in another region.
+         * @param suffix The region slug suffix, as in `createFixture()`.
+         * @param cancelledAt When the entry was cancelled.
+         * @param verifiedAt When it was confirmed, or null if it never was.
+         */
+        async function enterAfterCancelling(
+          suffix: string,
+          cancelledAt: string,
+          verifiedAt: string | null,
+        ) {
+          const closed = await createFixture(`${suffix}-closed`, {
+            entryClosesAt: closedAt,
+          });
+          const open = await createFixture(`${suffix}-open`);
+          const email = await verifiedIn(closed.regionId);
+          await enterAsConfirmed(email, closed.tournamentId, 'cancelled');
+          await sql`
+            update entries
+            set cancelled_at = ${cancelledAt},
+                email_verified_at = ${verifiedAt}
+            where tournament_id = ${closed.tournamentId}
+          `;
+          return createEntry(
+            env,
+            open.tournamentId,
+            validInput({email, regulationIds: [open.regulationId]}),
+          );
+        }
+
+        it('refuses after a confirmed entry cancelled past the close', async () => {
+          const result = await enterAfterCancelling(
+            'late',
+            '2020-07-01T00:00:00Z',
+            '2020-05-01T00:00:00Z',
+          );
+
+          expect(!result.ok && result.error).toBe(
+            'already registered in another region',
+          );
+        });
+
+        it('allows it after a cancellation before the close', async () => {
+          const result = await enterAfterCancelling(
+            'in-time',
+            '2020-05-15T00:00:00Z',
+            '2020-05-01T00:00:00Z',
+          );
+
+          expect(result.ok).toBe(true);
+        });
+
+        it('allows it after an entry never confirmed', async () => {
+          const result = await enterAfterCancelling(
+            'unconfirmed',
+            '2020-07-01T00:00:00Z',
+            null,
+          );
+
+          expect(result.ok).toBe(true);
+        });
       });
 
       it('still refuses while an entry in the old region is live', async () => {

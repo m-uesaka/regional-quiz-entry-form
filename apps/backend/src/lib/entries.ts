@@ -98,6 +98,8 @@ const REGULATION_NO_LONGER_AVAILABLE = 'regulation no longer available';
  */
 const INVALID_PASSWORD = 'invalid password';
 const ALREADY_REGISTERED_IN_ANOTHER_REGION =
+  // Named after the rule it first stood for, and kept as the frontend matches
+  // on it: it now means taking part in another region (#236).
   'already registered in another region';
 const ALREADY_ENTERED = 'already entered';
 /**
@@ -136,8 +138,9 @@ const REGION_DUAL_ENTRY_SQLSTATE = 'P0005';
 
 /**
  * The SQLSTATE `check_participant_region()` (migration 0040) raises: a
- * concurrent submission moved the participant to another region between
- * `claim_participant_region()` and the write.
+ * concurrent submission moved the participant to another region after this
+ * one last looked. Nothing need stand in the other region, so this is
+ * answered as `CONCURRENT_SUBMISSION` rather than as taking part there.
  */
 const PARTICIPANT_REGION_SQLSTATE = 'P0008';
 
@@ -347,7 +350,7 @@ async function rollbackEntry(
  * row for this tournament, if any) and dispatch of the verification email.
  *
  * Not what `POST /tournaments/:tournamentId/entries` answers with: reporting
- * "wrong password" or "registered in another region" to whoever submitted
+ * "wrong password" or "taking part in another region" to whoever submitted
  * would tell them whether an address is registered (#117). The route runs
  * `checkEntrySubmission()` up front and hands the rest to
  * `createEntryUnauthenticated()` in the background.
@@ -792,27 +795,31 @@ async function enterTournament(
   }
 
   // Taking part in another region is what stops an entry here, not having
-  // registered in one: a participant who cancelled there can enter here
-  // (#236), and the account follows. Only ever reached with the identity
-  // settled, so a stranger's submission can't move an account. An entry that
-  // then fails leaves the account moved, which is harmless: with nothing
-  // active it can move again.
-  const {data: claimedRegion, error: claimError} = await db.rpc(
-    'claim_participant_region',
-    {
-      p_participant_id: participantId,
-      p_region_id: tournament.region_id,
-    },
-  );
-  if (claimError) {
-    return {ok: false, status: 500, error: claimError.message};
-  }
-  if (!claimedRegion) {
-    return {
-      ok: false,
-      status: 409,
-      error: ALREADY_REGISTERED_IN_ANOTHER_REGION,
-    };
+  // registered in one: a participant who cancelled there in time can enter
+  // here (#236), and the account follows. Only a verified participant gets
+  // here unsettled, once proved by password or session, so a stranger's
+  // submission can't move an account; an unverified account's region was
+  // settled when it was made or taken over, and claiming it again on a stale
+  // read could undo a takeover. An entry that then fails leaves the account
+  // moved, which is harmless: with nothing holding it, it can move again.
+  if (!unverifiedAccount) {
+    const {data: claimedRegion, error: claimError} = await db.rpc(
+      'claim_participant_region',
+      {
+        p_participant_id: participantId,
+        p_region_id: tournament.region_id,
+      },
+    );
+    if (claimError) {
+      return {ok: false, status: 500, error: claimError.message};
+    }
+    if (!claimedRegion) {
+      return {
+        ok: false,
+        status: 409,
+        error: ALREADY_REGISTERED_IN_ANOTHER_REGION,
+      };
+    }
   }
 
   // requirements.md only says that regions allowing both 最強位 and 新人王
@@ -905,14 +912,8 @@ async function enterTournament(
     // participant from holding both seats.
     return {ok: false, status: 409, error: ALREADY_ENTERED_ANOTHER_TOURNAMENT};
   }
-  if (error?.code === PARTICIPANT_REGION_SQLSTATE) {
-    return {
-      ok: false,
-      status: 409,
-      error: ALREADY_REGISTERED_IN_ANOTHER_REGION,
-    };
-  }
   if (
+    error?.code === PARTICIPANT_REGION_SQLSTATE ||
     error?.code === UNIQUE_VIOLATION_SQLSTATE ||
     (existingEntry && error?.code === NO_ROW_PGRST_CODE)
   ) {
@@ -1065,7 +1066,7 @@ const ENTRY_NOTICE_REASONS: Record<string, EntryNoticeReason> = {
  *   and region it is simply entered, like a verified one.
  * - A verified address with the matching password gets the entry.
  * - Anything about the address's own account that would otherwise have
- *   been an error -- a wrong password, registration in another region, an
+ *   been an error -- a wrong password, taking part in another region, an
  *   entry already made -- is mailed to that address instead, so only its
  *   owner learns it. No entry is made.
  * - A failure on our side is logged; there is no one left to tell.

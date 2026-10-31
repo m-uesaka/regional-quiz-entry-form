@@ -243,6 +243,8 @@ function mockSupabase(options: {
    * in another region that isn't cancelled.
    */
   activeElsewhere?: boolean;
+  /** The SQLSTATE the entry write is refused with, if it is. */
+  entryWriteErrorCode?: string;
 }): MockSupabase {
   const recorded: MockSupabase = {
     calls: [],
@@ -322,7 +324,12 @@ function mockSupabase(options: {
       case 'GET entries':
         return rows([]);
       case 'POST entries':
-        return rows([{id: ENTRY_ID}]);
+        return options.entryWriteErrorCode
+          ? Response.json(
+              {code: options.entryWriteErrorCode, message: 'refused'},
+              {status: 400},
+            )
+          : rows([{id: ENTRY_ID}]);
       case 'POST email_verification_tokens':
         return options.failVerificationToken
           ? Response.json({message: 'boom'}, {status: 500})
@@ -658,6 +665,8 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     // Nothing in the answer says the address was in any particular state.
     expect(res).toEqual({status: 202, body: JSON.stringify({ok: true})});
     expect(recorded.takeOvers).toHaveLength(1);
+    // The takeover settled the region, so nothing claims it again.
+    expect(recorded.regionClaims).toHaveLength(0);
     const [takeOver] = recorded.takeOvers;
     expect(takeOver.p_participant_id).toBe(PARTICIPANT_ID);
     expect(takeOver.p_region_id).toBe(REGION_ID);
@@ -919,5 +928,41 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
       error: 'already registered in another region',
     });
     expect(recorded.mails).toHaveLength(0);
+  });
+
+  it('enters a participant with nothing left in their old region (#236)', async () => {
+    const recorded = mockSupabase({
+      participant: await registeredParticipant({regionId: OTHER_REGION_ID}),
+    });
+
+    const res = await postWithContext(
+      SESSION_PATH,
+      sessionBody,
+      await sessionCookie(),
+    );
+
+    expect(res.status).toBe(201);
+    expect(recorded.regionClaims).toEqual([
+      {p_participant_id: PARTICIPANT_ID, p_region_id: REGION_ID},
+    ]);
+    expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
+  });
+
+  it('answers a concurrent move of the region as a concurrent submission', async () => {
+    mockSupabase({
+      participant: await registeredParticipant(),
+      entryWriteErrorCode: 'P0008',
+    });
+
+    const res = await postWithContext(
+      SESSION_PATH,
+      sessionBody,
+      await sessionCookie(),
+    );
+
+    expect(res.status).toBe(409);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'concurrent submission',
+    });
   });
 });
