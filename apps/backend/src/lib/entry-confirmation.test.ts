@@ -286,7 +286,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const result = await confirmEntryByToken(env, token);
 
-      expect(result).toMatchObject({ok: false, reason: 'invalid_token'});
+      expect(result).toMatchObject({ok: false, status: 400});
     });
 
     it('rejects an already-used token', async () => {
@@ -300,7 +300,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const result = await confirmEntryByToken(env, token);
 
-      expect(result).toMatchObject({ok: false, reason: 'invalid_token'});
+      expect(result).toMatchObject({ok: false, status: 400});
     });
 
     it('rejects a valid token whose entry is no longer pending', async () => {
@@ -317,7 +317,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const result = await confirmEntryByToken(env, token);
 
-      expect(result).toMatchObject({ok: false, reason: 'invalid_token'});
+      expect(result).toMatchObject({ok: false, status: 400});
       const [entryRow] = await sql`
         select status from entries where id = ${entryId}
       `;
@@ -327,7 +327,7 @@ describe.skipIf(!(await isDbReachable()))(
     it('rejects an unknown token', async () => {
       const result = await confirmEntryByToken(env, generateToken());
 
-      expect(result).toMatchObject({ok: false, reason: 'invalid_token'});
+      expect(result).toMatchObject({ok: false, status: 400});
     });
   },
 );

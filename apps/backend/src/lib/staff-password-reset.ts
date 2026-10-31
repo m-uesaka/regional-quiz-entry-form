@@ -1,11 +1,13 @@
-import type {
-  StaffLoginScope,
-  StaffRole,
-  TournamentType,
+import {
+  ENTRY_ERROR_CODES,
+  type StaffLoginScope,
+  type StaffRole,
+  type TournamentType,
 } from '@regional-quiz/shared';
 import type {StaffPasswordResetConfirmInput} from '@regional-quiz/shared/password-policy';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
+import type {LibFailure} from './errors';
 import {findStaffAccountByScope} from './staff-account-lookup';
 import {createMailSender} from './mailer';
 import {hashPassword} from './password';
@@ -63,8 +65,7 @@ const ACCOUNT_DISABLED_SQLSTATE = 'P0005';
 export type StaffPasswordLinkResult =
   {ok: true} | {ok: false; disabled: boolean; error: string};
 
-export type StaffPasswordResetResult =
-  {ok: true} | {ok: false; status: 400 | 500; error: string};
+export type StaffPasswordResetResult = {ok: true} | LibFailure<400>;
 
 interface ResetTokenRow {
   id: string;
@@ -357,7 +358,11 @@ export async function confirmStaffPasswordReset(
     return {ok: false, status: 500, error: error.message};
   }
   if (!candidate) {
-    return {ok: false, status: 400, error: 'invalid or expired token'};
+    return {
+      ok: false,
+      status: 400,
+      error: ENTRY_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
+    };
   }
 
   const {error: resetError} = await db.rpc('reset_staff_password', {
@@ -366,7 +371,11 @@ export async function confirmStaffPasswordReset(
   });
   if (resetError) {
     if (resetError.code === INVALID_TOKEN_SQLSTATE) {
-      return {ok: false, status: 400, error: 'invalid or expired token'};
+      return {
+        ok: false,
+        status: 400,
+        error: ENTRY_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
+      };
     }
     return {ok: false, status: 500, error: resetError.message};
   }

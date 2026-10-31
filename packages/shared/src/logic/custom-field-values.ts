@@ -87,14 +87,18 @@ export type CustomFieldValuesErrorReason =
   | 'too-long';
 
 /** The wording each reason is reported to an API client with. */
-const REASON_MESSAGES: Record<CustomFieldValuesErrorReason, string> = {
+const REASON_MESSAGES = {
   'unknown-field': 'unknown custom field',
   'expects-list': 'custom field expects a list of values',
   'expects-single': 'custom field expects a single value',
   required: 'custom field is required',
   'unknown-option': 'custom field has an unknown option',
   'too-long': 'custom field answer is too long',
-};
+} as const satisfies Record<CustomFieldValuesErrorReason, string>;
+
+/** What the API answers a rejected custom field answer with. */
+export type CustomFieldValuesErrorMessage =
+  `${(typeof REASON_MESSAGES)[CustomFieldValuesErrorReason]}: ${string}`;
 
 /** A rejected custom field answer: which field, and why. */
 export interface CustomFieldValuesError {
@@ -109,7 +113,7 @@ export interface CustomFieldValuesError {
    * caller showing this to a person is expected to word it from `reason`
    * and the field's own label instead.
    */
-  message: string;
+  message: CustomFieldValuesErrorMessage;
 }
 
 /**
