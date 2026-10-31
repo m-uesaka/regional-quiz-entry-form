@@ -13,14 +13,13 @@
     type Regulation,
   } from '@regional-quiz/shared';
   import DynamicFormField from '$lib/components/DynamicFormField.svelte';
+  import FieldError from '$lib/components/form/FieldError.svelte';
+  import TextField from '$lib/components/form/TextField.svelte';
   import PasswordRequirements from '$lib/components/PasswordRequirements.svelte';
   import {customFieldName} from '$lib/custom-field-name';
   import RegulationSelector from '$lib/components/RegulationSelector.svelte';
   import Turnstile from '$lib/components/Turnstile.svelte';
   import Button from '$lib/components/ui/atoms/Button.svelte';
-  import Input from '$lib/components/ui/atoms/Input.svelte';
-  import Label from '$lib/components/ui/atoms/Label.svelte';
-  import Textarea from '$lib/components/ui/atoms/Textarea.svelte';
   import type {EntryFieldErrors, EntryFormValues} from '$lib/types/entry-form';
 
   interface Props {
@@ -133,50 +132,35 @@
     };
   }}
 >
-  <div class="flex flex-col gap-1.5">
-    <Label for="name">氏名</Label>
-    <Input
-      id="name"
-      name="name"
-      bind:value={name}
-      maxlength={ENTRY_NAME_MAX_LENGTH}
-      isError={!!fieldError('name')}
-      required
-    />
-    {#if fieldError('name')}
-      <p class="text-sm text-destructive">{fieldError('name')}</p>
-    {/if}
-  </div>
+  <TextField
+    id="name"
+    name="name"
+    label="氏名"
+    bind:value={name}
+    maxlength={ENTRY_NAME_MAX_LENGTH}
+    error={fieldError('name')}
+    required
+  />
 
-  <div class="flex flex-col gap-1.5">
-    <Label for="furigana">ふりがな</Label>
-    <Input
-      id="furigana"
-      name="furigana"
-      bind:value={furigana}
-      maxlength={ENTRY_NAME_MAX_LENGTH}
-      isError={!!fieldError('furigana')}
-      required
-    />
-    {#if fieldError('furigana')}
-      <p class="text-sm text-destructive">{fieldError('furigana')}</p>
-    {/if}
-  </div>
+  <TextField
+    id="furigana"
+    name="furigana"
+    label="ふりがな"
+    bind:value={furigana}
+    maxlength={ENTRY_NAME_MAX_LENGTH}
+    error={fieldError('furigana')}
+    required
+  />
 
-  <div class="flex flex-col gap-1.5">
-    <Label for="displayName">エントリーリスト掲載名</Label>
-    <Input
-      id="displayName"
-      name="displayName"
-      bind:value={displayName}
-      maxlength={ENTRY_NAME_MAX_LENGTH}
-      isError={!!fieldError('displayName')}
-      required
-    />
-    {#if fieldError('displayName')}
-      <p class="text-sm text-destructive">{fieldError('displayName')}</p>
-    {/if}
-  </div>
+  <TextField
+    id="displayName"
+    name="displayName"
+    label="エントリーリスト掲載名"
+    bind:value={displayName}
+    maxlength={ENTRY_NAME_MAX_LENGTH}
+    error={fieldError('displayName')}
+    required
+  />
 
   {#if loggedIn}
     <!-- Tells the action this form was rendered for a session, so a session
@@ -187,62 +171,47 @@
       ログイン中のアカウントでエントリーします。メールアドレスとパスワードの入力は不要です。
     </p>
   {:else}
-    <div class="flex flex-col gap-1.5">
-      <Label for="email">メールアドレス</Label>
-      <Input
-        id="email"
-        name="email"
-        type="email"
-        bind:value={email}
-        isError={!!fieldError('email')}
-        required
-      />
-      {#if fieldError('email')}
-        <p class="text-sm text-destructive">{fieldError('email')}</p>
-      {/if}
-    </div>
+    <TextField
+      id="email"
+      name="email"
+      label="メールアドレス"
+      type="email"
+      bind:value={email}
+      error={fieldError('email')}
+      required
+    />
 
     <!-- An address that is already registered is still recognised by its
          password, but a wrong one isn't reported on this page: the
          submission is answered the same whatever the address, and the
          reason goes to its owner by mail (#117). Registered participants
          are pointed at logging in instead, which leaves these fields out. -->
-    <div class="flex flex-col gap-1.5">
-      <Label for="password">パスワード</Label>
-      <Input
-        id="password"
-        name="password"
-        type="password"
-        minlength={PASSWORD_MIN_LENGTH}
-        maxlength={PASSWORD_MAX_LENGTH}
-        autocomplete="new-password"
-        isError={!!fieldError('password')}
-        bind:value={password}
-        aria-describedby="password-requirements"
-        required
-      />
-      {#if fieldError('password')}
-        <p class="text-sm text-destructive">{fieldError('password')}</p>
-      {/if}
-    </div>
+    <TextField
+      id="password"
+      name="password"
+      label="パスワード"
+      type="password"
+      minlength={PASSWORD_MIN_LENGTH}
+      maxlength={PASSWORD_MAX_LENGTH}
+      autocomplete="new-password"
+      error={fieldError('password')}
+      bind:value={password}
+      aria-describedby="password-requirements"
+      required
+    />
 
-    <div class="flex flex-col gap-1.5">
-      <Label for="passwordConfirm">パスワード(確認)</Label>
-      <Input
-        id="passwordConfirm"
-        name="passwordConfirm"
-        type="password"
-        minlength={PASSWORD_MIN_LENGTH}
-        maxlength={PASSWORD_MAX_LENGTH}
-        autocomplete="new-password"
-        isError={!!fieldError('passwordConfirm')}
-        bind:value={passwordConfirm}
-        required
-      />
-      {#if fieldError('passwordConfirm')}
-        <p class="text-sm text-destructive">{fieldError('passwordConfirm')}</p>
-      {/if}
-    </div>
+    <TextField
+      id="passwordConfirm"
+      name="passwordConfirm"
+      label="パスワード(確認)"
+      type="password"
+      minlength={PASSWORD_MIN_LENGTH}
+      maxlength={PASSWORD_MAX_LENGTH}
+      autocomplete="new-password"
+      error={fieldError('passwordConfirm')}
+      bind:value={passwordConfirm}
+      required
+    />
 
     <!-- Under both fields, so the match is reported next to the second. The
          rules apply only when the address turns out to be new; a registered
@@ -263,9 +232,7 @@
       {now}
       bind:value={regulationIds}
     />
-    {#if fieldError('regulationIds')}
-      <p class="text-sm text-destructive">{fieldError('regulationIds')}</p>
-    {/if}
+    <FieldError error={fieldError('regulationIds')} />
   </div>
 
   {#each fields as field (field.key)}
@@ -279,23 +246,17 @@
   {/each}
   <!-- Every answer within its own bound can still add up past the combined
        one; that has no single control to point at. -->
-  {#if fieldError('customFieldValues')}
-    <p class="text-sm text-destructive">{fieldError('customFieldValues')}</p>
-  {/if}
+  <FieldError error={fieldError('customFieldValues')} />
 
-  <div class="flex flex-col gap-1.5">
-    <Label for="freeText">自由記述</Label>
-    <Textarea
-      id="freeText"
-      name="freeText"
-      bind:value={freeText}
-      maxlength={ENTRY_FREE_TEXT_MAX_LENGTH}
-      isError={!!fieldError('freeText')}
-    />
-    {#if fieldError('freeText')}
-      <p class="text-sm text-destructive">{fieldError('freeText')}</p>
-    {/if}
-  </div>
+  <TextField
+    id="freeText"
+    name="freeText"
+    label="自由記述"
+    multiline
+    bind:value={freeText}
+    maxlength={ENTRY_FREE_TEXT_MAX_LENGTH}
+    error={fieldError('freeText')}
+  />
 
   <!-- The widget drops a hidden `cf-turnstile-response` control into this
        form, which the page's action forwards to the API. Entry registration
