@@ -15,14 +15,15 @@
      * expression" in `apps/frontend/README.md`.
      */
     value: string[];
-    now?: Date;
+    /** The moment `load` read, so the server and the browser agree. */
+    now: Date;
   }
 
   let {
     regulations,
     entryPeriod,
     value = $bindable(),
-    now = new Date(),
+    now,
   }: Props = $props();
 
   // Only what is on offer, in order. `regulations` itself stays the whole

@@ -78,6 +78,7 @@ function renderPage(
       params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
       data: {
         tournament: TOURNAMENT,
+        now: new Date(),
         regulations: REGULATIONS,
         formFieldDefs: FORM_FIELD_DEFS,
         staffPreview: options.staffPreview ?? false,
@@ -417,6 +418,7 @@ describe('entry +page.svelte', () => {
       params: {regionSlug: 'tokyo', tournamentSlug: 'shinjinou'},
       data: {
         tournament: {...TOURNAMENT, id: OTHER_TOURNAMENT_ID, type: 'shinjinou'},
+        now: new Date(),
         regulations: REGULATIONS,
         formFieldDefs: FORM_FIELD_DEFS,
         staffPreview: false,

@@ -50,10 +50,27 @@ function openWindows<T extends PriorityWindow>(
 }
 
 /**
+ * Whether a window runs to the close of entries, give or take how sheets
+ * spell it (`CLOSE_TOLERANCE_MS`).
+ * @param window The window.
+ * @param entryPeriod The tournament's entry period.
+ */
+function reachesClose(
+  window: PriorityWindow,
+  entryPeriod: EntryPeriod,
+): boolean {
+  return (
+    Date.parse(window.priorityEndsAt) >=
+    Date.parse(entryPeriod.entryClosesAt) - CLOSE_TOLERANCE_MS
+  );
+}
+
+/**
  * Whether a window is an earlier phase that is over: it ended after entries
- * opened, so it let someone in. One over before then let nobody in, so it is
- * left over rather than a phase; 千葉 and 新潟 keep theirs on a regulation
- * that stays in use.
+ * opened, so it let someone in, and before the close, so a phase came after
+ * it. One over before entries opened let nobody in, so it is left over
+ * rather than a phase; 千葉 and 新潟 keep theirs on a regulation that stays
+ * in use.
  * @param window The window.
  * @param now The moment to check at.
  * @param entryPeriod The tournament's entry period.
@@ -65,7 +82,9 @@ function isFinishedPhase(
 ): boolean {
   const endsAt = Date.parse(window.priorityEndsAt);
   return (
-    endsAt > Date.parse(entryPeriod.entryOpensAt) && endsAt < now.getTime()
+    endsAt > Date.parse(entryPeriod.entryOpensAt) &&
+    endsAt < now.getTime() &&
+    !reachesClose(window, entryPeriod)
   );
 }
 
@@ -81,6 +100,8 @@ function isFinishedPhase(
  *   it, and lifting the check now would only bring it back when that opens.
  * - A window is open and every open one runs to the close: one ending
  *   earlier leaves entries to come after it, so it gives priority over those.
+ *   One running to the close counts as open up to the close itself, however
+ *   its end is spelt, so the phase doesn't lapse just before the deadline.
  * - Each of them started once an earlier phase was over
  *   (`isFinishedPhase()`): one alongside a window, or with none before it,
  *   restricts the whole of its own period.
@@ -96,8 +117,12 @@ function isGeneralPhase(
   if (windows.some(window => now < new Date(window.priorityStartsAt))) {
     return false;
   }
-  const active = openWindows(windows, now);
-  const closesAt = Date.parse(entryPeriod.entryClosesAt);
+  const active = windows.filter(
+    window =>
+      now >= new Date(window.priorityStartsAt) &&
+      (now <= new Date(window.priorityEndsAt) ||
+        reachesClose(window, entryPeriod)),
+  );
   const phaseEnds = windows
     .filter(window => isFinishedPhase(window, now, entryPeriod))
     .map(window => Date.parse(window.priorityEndsAt));
@@ -105,7 +130,7 @@ function isGeneralPhase(
     active.length > 0 &&
     active.every(
       window =>
-        Date.parse(window.priorityEndsAt) >= closesAt - CLOSE_TOLERANCE_MS &&
+        reachesClose(window, entryPeriod) &&
         phaseEnds.some(endsAt => endsAt <= Date.parse(window.priorityStartsAt)),
     )
   );

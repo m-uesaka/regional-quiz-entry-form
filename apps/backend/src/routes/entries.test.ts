@@ -1034,6 +1034,40 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
     expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
   });
 
+  it('reports a regulation taken off the offer directly', async () => {
+    const closesAt = new Date(Date.now() + DAY_MS * 2).toISOString();
+    const priorityEndedAt = new Date(Date.now() - 1000).toISOString();
+    mockSupabase({
+      tournament: tournamentRow({
+        entryClosesAt: closesAt,
+        regulations: [
+          {
+            id: validBody.regulationIds[0],
+            priority_starts_at: new Date(Date.now() - DAY_MS / 2).toISOString(),
+            priority_ends_at: priorityEndedAt,
+          },
+          {
+            id: '99999999-9999-4999-8999-999999999999',
+            priority_starts_at: priorityEndedAt,
+            priority_ends_at: closesAt,
+          },
+        ],
+      }),
+      participant: await registeredParticipant(),
+    });
+
+    const res = await postWithContext(
+      SESSION_PATH,
+      sessionBody,
+      await sessionCookie(),
+    );
+
+    expect(res.status).toBe(409);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'regulation no longer available',
+    });
+  });
+
   it('answers a concurrent move of the region as a concurrent submission', async () => {
     mockSupabase({
       participant: await registeredParticipant(),

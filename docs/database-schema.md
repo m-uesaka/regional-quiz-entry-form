@@ -138,7 +138,7 @@ flowchart TB
 | `display_order` | integer | not null, default 0 | 表示順 |
 
 - `unique (id, tournament_id)`: 一見冗長ですが、これは `entry_regulations` 側の複合外部キー `foreign key (regulation_id, tournament_id) references regulations (id, tournament_id)` を張るために必要です。この複合 FK により、**ある大会のエントリーが別の大会のレギュレーションを参照することが DB レベルで不可能**になります(`0018` より前は同じ複合 FK が `entries` から直接張られていました)。
-- 優先期間の判定ロジックは `packages/shared/src/logic/regulation-eligibility.ts` の `isRegulationSelectionAllowed()`。「いずれかのレギュレーションの優先期間が現在アクティブなら、選んだ集合にそのうち少なくとも1つが含まれていなければならない。アクティブなものが1つもなければ何を選んでもよい」という規則です。優先期間は「その条件を満たす参加者だけがエントリーできる」という意味なので、優先対象を1つ選んだうえで他の条件も一緒に申告することは許されます。
+- 優先期間の判定ロジックは `packages/shared/src/logic/regulation-eligibility.ts` の `isRegulationSelectionAllowed()`。「いずれかのレギュレーションの優先期間が現在アクティブなら、選んだ集合にそのうち少なくとも1つが含まれていなければならない。アクティブなものが1つもなければ、選択肢に残っているものの中から何を選んでもよい」という規則です。優先期間は「その条件を満たす参加者だけがエントリーできる」という意味なので、優先対象を1つ選んだうえで他の条件も一緒に申告することは許されます。
 - アクティブかどうかは `activePriorityRegulations()` が決め、大会を「優先枠 → 一般枠」の順に開く設定の最後の段階(一般枠)はアクティブとして扱いません(#235)。案内の表示も送信時の検査もこの判定を使います。一般枠の段階では、終わった優先枠のレギュレーションを選択肢から外し、送信も断ります(`selectableRegulations()`)。一般枠と見なすのは、次の**すべて**を満たすときです。
   - これから始まる優先期間が無い
   - 開いている優先期間がすべて、エントリーの締切まで続く(終わりが締切の 60 秒前以降)

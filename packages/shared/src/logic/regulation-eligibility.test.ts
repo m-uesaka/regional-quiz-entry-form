@@ -230,6 +230,16 @@ describe('activePriorityRegulations', () => {
       ).toBe(false);
     });
 
+    // The sheets spell one close as 23:59, 23:59:59 and the next day's 0:00,
+    // so the general window can end just before the entries do.
+    it('holds the phase from the end of its window to the close', () => {
+      const endsEarly = {...general, priorityEndsAt: '2026-12-25T11:59:00Z'};
+      const now = '2026-12-25T11:59:30Z';
+
+      expect(listed([priority, endsEarly], now)).toEqual([]);
+      expect(selectable([priority, endsEarly], now)).toEqual(['general']);
+    });
+
     it('keeps everything on offer until the general phase starts', () => {
       const later = {...general, priorityStartsAt: '2026-11-01T00:00:00Z'};
 
