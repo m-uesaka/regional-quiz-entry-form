@@ -13,11 +13,7 @@ import {createDbClient} from '../lib/db';
 import {cancelOwnEntry, updateOwnEntry} from '../lib/entries';
 import {internalError} from '../lib/errors';
 import {tournamentDisplayName} from '../lib/tournaments';
-import {
-  FORM_FIELD_DEF_COLUMNS,
-  toFormFieldDef,
-  type FormFieldDefRow,
-} from '../lib/form-field-defs';
+import {fetchFormFieldDefs} from '../lib/form-field-defs';
 import {
   ENTRY_REGULATIONS_COLUMNS,
   entryRegulationLabels,
@@ -126,12 +122,10 @@ export const mypageRoute = new Hono<ParticipantEnv>()
 
       // The tournament's custom form fields, so the edit screen can
       // re-render the same form the entry was submitted through.
-      const {data: formFieldDefRows, error: formFieldDefsError} = await db
-        .from('form_field_defs')
-        .select(FORM_FIELD_DEF_COLUMNS)
-        .eq('tournament_id', data.tournament_id)
-        .order('display_order', {ascending: true})
-        .returns<FormFieldDefRow[]>();
+      const {fieldDefs, error: formFieldDefsError} = await fetchFormFieldDefs(
+        db,
+        data.tournament_id,
+      );
       if (formFieldDefsError) {
         return c.json(
           internalError(
@@ -151,7 +145,7 @@ export const mypageRoute = new Hono<ParticipantEnv>()
           regulationLabels: entryRegulationLabels(data.entry_regulations),
           freeText: data.free_text,
           customFieldValues: data.custom_field_values,
-          formFieldDefs: (formFieldDefRows ?? []).map(toFormFieldDef),
+          formFieldDefs: fieldDefs,
         }),
       );
     },
