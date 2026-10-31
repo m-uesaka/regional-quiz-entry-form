@@ -138,7 +138,7 @@ describe('admin staff +page.svelte', () => {
       intent: 'invite',
       accountId: null,
       saved: false,
-      error: null,
+      error: '入力内容を確認してください',
       fieldErrors: {regionId: ['地域が見つかりません']},
       values: {email: '', role: 'regional', regionId: '', tournamentType: ''},
     } as PageForm);
@@ -149,7 +149,7 @@ describe('admin staff +page.svelte', () => {
       'aria-describedby',
       'staff-invite-region-error',
     );
-    expect(screen.getByRole('alert')).toHaveAttribute(
+    expect(screen.getByText('地域が見つかりません')).toHaveAttribute(
       'id',
       'staff-invite-region-error',
     );
