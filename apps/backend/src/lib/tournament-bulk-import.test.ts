@@ -145,7 +145,8 @@ describe('parseCapacity', () => {
 });
 
 // Local Supabase stack (`supabase start`), same convention as the other
-// integration suites. Skipped automatically when it isn't reachable.
+// integration suites. Skipped automatically when it isn't reachable locally;
+// see `test-support/db.ts`.
 const SUPABASE_URL = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
 // Publicly documented local-dev demo key for Supabase CLI's default stack —
 // not a real credential, safe to commit.

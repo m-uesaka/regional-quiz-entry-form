@@ -63,6 +63,8 @@ key=$(printf '%s\n' "$status" | sed -n 's/^SECRET_KEY="\{0,1\}\([^"]*\)"\{0,1\}$
 if [ -z "$key" ]; then
   key=$(printf '%s\n' "$status" | sed -n 's/^SERVICE_ROLE_KEY="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p')
 fi
-if [ -n "$key" ]; then
+# `GITHUB_ENV` only exists on Actions. Run by hand, the stack is up all the same
+# and the tests fall back to the default key.
+if [ -n "$key" ] && [ -n "${GITHUB_ENV:-}" ]; then
   echo "SUPABASE_SECRET_KEY=$key" >> "$GITHUB_ENV"
 fi

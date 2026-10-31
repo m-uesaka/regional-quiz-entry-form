@@ -464,7 +464,7 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 - 機能ブランチへの push 自体ではデプロイされない。マージ前に実環境で確認したい場合は、`deploy-staging` を `workflow_dispatch` でそのブランチを指定して実行する(次に `develop` へ push されるまで staging はそのブランチの内容になる)
 - `ci.yml` は PR と、`develop` / `main` への push で実行される
 - `ci.yml` の `check (test)` は DB なしで動くため、バックエンドの DB 統合テスト(`describe.skipIf(!(await isDbReachable()))`)はスキップされる。これらは `integration` ジョブが自前のローカル Supabase を起動して実行する。e2e とは別のジョブ(別のランナー・別のスタック)に分けているのは、同じ DB でテストデータが干渉しないようにするためで、片方の失敗がもう片方の結果を隠すこともない
-- `integration` ジョブは `REQUIRE_SUPABASE_DB=1` を設定する。これがあると DB に接続できないときはスキップではなく失敗になる(`apps/backend/src/test-support/db.ts`)。ローカルと `check (test)`、デプロイの `test` ではこの変数を設定しないので、DB がなければ従来どおりスキップされる。スキップ件数は `bun test` のサマリの `skip` で分かる
+- `integration` ジョブは `REQUIRE_SUPABASE_DB=1` を設定する。これがあると DB に接続できないときはスキップではなく失敗になる(`apps/backend/src/test-support/db.ts`)。ローカルと `check (test)`、デプロイの `test` ではこの変数を設定しないので、DB がなければ従来どおりスキップされる。`.skip` の残りなど、この変数で防げないスキップがあれば、`integration` ジョブは `.github/scripts/assert-no-skipped-tests.sh` で失敗する。変数を有効にする値は `1` だけで、`0` や `false` は無効のまま
 
 呼び出し側は `secrets: inherit` を使うため、Secrets の参照先は呼び出し先ジョブの `environment:` で決まります。押さえておきたい点は次の通りです。
 

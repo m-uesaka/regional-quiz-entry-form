@@ -41,6 +41,9 @@ jobs:
   # The cost is starting a second stack, on a runner that is otherwise idle.
   integration:
     runs-on: ubuntu-latest
+    # A healthy run takes about a minute. Bun's per-test timeout doesn't cover
+    # the probes at the top of each test file or a hung `supabase start`.
+    timeout-minutes: 10
     env:
       # An unreachable database fails the run rather than skipping every suite
       # (`apps/backend/src/test-support/db.ts`).
@@ -55,11 +58,10 @@ jobs:
       - run: bun install
       - run: bash .github/scripts/start-local-supabase.sh
       # The whole package rather than a list of files, which would quietly
-      # miss the next file to gain an integration suite. Run directly rather
-      # than through `bun --filter` so the output is bun's own, with the `skip`
-      # count in its summary.
-      - run: bun test
+      # miss the next file to gain an integration suite.
+      - run: bun test --reporter=junit --reporter-outfile=integration-junit.xml
         working-directory: apps/backend
+      - run: bash .github/scripts/assert-no-skipped-tests.sh apps/backend/integration-junit.xml
 
   e2e:
     runs-on: ubuntu-latest

@@ -24,6 +24,15 @@ describe('isDbReachable', () => {
     expect(await isDbReachable(UNREACHABLE_URL)).toBe(false);
   });
 
+  it.each(['0', 'false', ''])(
+    'still skips with REQUIRE_SUPABASE_DB=%p',
+    async value => {
+      process.env.REQUIRE_SUPABASE_DB = value;
+
+      expect(await isDbReachable(UNREACHABLE_URL)).toBe(false);
+    },
+  );
+
   it('throws for an unreachable database when one is required', async () => {
     process.env.REQUIRE_SUPABASE_DB = '1';
 

@@ -18,10 +18,11 @@ export const DB_URL =
  * `.github/workflows/ci.yml` sets `REQUIRE_SUPABASE_DB` instead, which turns
  * an unreachable database into a thrown error: a skip there would be a green
  * run that tested nothing. It is a variable of its own rather than `CI`
- * because those other runs are on CI as well.
+ * because those other runs are on CI as well. Only `1` turns it on, so `0`
+ * or `false` read the way they look.
  * @param url The Postgres connection string to probe.
  * @return Whether `url` answered a query.
- * @throws Error If it did not and `REQUIRE_SUPABASE_DB` is set.
+ * @throws Error If it did not and `REQUIRE_SUPABASE_DB` is `1`.
  */
 export async function isDbReachable(url: string = DB_URL): Promise<boolean> {
   const probe = new SQL(url);
@@ -29,7 +30,7 @@ export async function isDbReachable(url: string = DB_URL): Promise<boolean> {
     await probe`select 1`;
     return true;
   } catch (cause) {
-    if (process.env.REQUIRE_SUPABASE_DB) {
+    if (process.env.REQUIRE_SUPABASE_DB === '1') {
       throw new Error(
         'REQUIRE_SUPABASE_DB is set, but the database did not answer',
         {cause},

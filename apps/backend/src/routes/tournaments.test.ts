@@ -898,7 +898,11 @@ describe('POST /tournaments/:id/reset (mocked Supabase)', () => {
   });
 });
 
-describe.skipIf(!(await isDbReachable()))(
+// Probed once for the whole file, so a run without a database pays for one
+// failed connection rather than one per block.
+const dbReachable = await isDbReachable();
+
+describe.skipIf(!dbReachable)(
   'tournaments routes (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);
@@ -1478,7 +1482,7 @@ describe.skipIf(!(await isDbReachable()))(
   },
 );
 
-describe.skipIf(!(await isDbReachable()))(
+describe.skipIf(!dbReachable)(
   'PUT /tournaments/order (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);

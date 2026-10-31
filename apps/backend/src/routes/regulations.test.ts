@@ -41,7 +41,7 @@ afterEach(() => {
 // Local Supabase stack (`supabase start`), same convention as
 // `routes/form-definitions.test.ts`. The integration block below is skipped
 // automatically when it isn't reachable locally; see `test-support/db.ts`.
-
+//
 // Publicly documented local-dev demo key for Supabase CLI's default stack
 // (fixed `super-secret-jwt-token-with-at-least-32-characters-long` JWT
 // secret) — not a real credential, safe to commit.

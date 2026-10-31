@@ -34,7 +34,11 @@ const env: Bindings = {
   SESSION_SECRET: 'test-session-secret',
 };
 
-describe.skipIf(!(await isDbReachable()))(
+// Probed once for the whole file, so a run without a database pays for one
+// failed connection rather than one per block.
+const dbReachable = await isDbReachable();
+
+describe.skipIf(!dbReachable)(
   'createEntry (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);
@@ -1623,7 +1627,7 @@ describe.skipIf(!(await isDbReachable()))(
   },
 );
 
-describe.skipIf(!(await isDbReachable()))(
+describe.skipIf(!dbReachable)(
   'updateOwnEntry (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);
@@ -1855,7 +1859,7 @@ describe.skipIf(!(await isDbReachable()))(
   },
 );
 
-describe.skipIf(!(await isDbReachable()))(
+describe.skipIf(!dbReachable)(
   'cancelOwnEntry (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);
