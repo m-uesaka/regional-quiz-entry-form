@@ -11,31 +11,17 @@ import {
 } from './entries';
 import {hashPassword, verifyPassword} from './password';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {DB_URL, isDbReachable} from '../test-support/db';
 
-// Local Supabase Postgres connection (`supabase start` default), same
-// convention as `lib/db-schema.test.ts`. Skipped automatically when one
-// isn't reachable, e.g. in CI.
-const DB_URL =
-  process.env.SUPABASE_DB_URL ??
-  'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
+// Local Supabase stack (`supabase start`), same convention as
+// `lib/db-schema.test.ts`. Skipped automatically when it isn't
+// reachable locally; see `test-support/db.ts`.
 const SUPABASE_URL = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
 // Publicly documented local-dev demo key for Supabase CLI's default stack,
 // same as `routes/tournaments.test.ts` — not a real credential.
 const SUPABASE_SECRET_KEY =
   process.env.SUPABASE_SECRET_KEY ??
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
-
-async function isDbReachable(): Promise<boolean> {
-  const probe = new SQL(DB_URL);
-  try {
-    await probe`select 1`;
-    return true;
-  } catch {
-    return false;
-  } finally {
-    await probe.close();
-  }
-}
 
 const env: Bindings = {
   ...PERMISSIVE_PLATFORM_BINDINGS,
@@ -48,7 +34,11 @@ const env: Bindings = {
   SESSION_SECRET: 'test-session-secret',
 };
 
-describe.skipIf(!(await isDbReachable()))(
+// Probed once for the whole file, so a run without a database pays for one
+// failed connection rather than one per block.
+const dbReachable = await isDbReachable();
+
+describe.skipIf(!dbReachable)(
   'createEntry (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);
@@ -1637,7 +1627,7 @@ describe.skipIf(!(await isDbReachable()))(
   },
 );
 
-describe.skipIf(!(await isDbReachable()))(
+describe.skipIf(!dbReachable)(
   'updateOwnEntry (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);
@@ -1869,7 +1859,7 @@ describe.skipIf(!(await isDbReachable()))(
   },
 );
 
-describe.skipIf(!(await isDbReachable()))(
+describe.skipIf(!dbReachable)(
   'cancelOwnEntry (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);

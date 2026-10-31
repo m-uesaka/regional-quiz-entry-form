@@ -1,31 +1,14 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
 import {readFileSync} from 'node:fs';
-
-// Local Supabase Postgres connection (`supabase start` default). Overridable
-// via SUPABASE_DB_URL for other local setups.
-const DB_URL =
-  process.env.SUPABASE_DB_URL ??
-  'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
-
-async function isDbReachable(): Promise<boolean> {
-  const probe = new SQL(DB_URL);
-  try {
-    await probe`select 1`;
-    return true;
-  } catch {
-    return false;
-  } finally {
-    await probe.close();
-  }
-}
+import {DB_URL, isDbReachable} from '../test-support/db';
 
 // Probed once for the whole file rather than per `describe`, so a run without
 // a database pays for one failed connection instead of one per block.
 const dbReachable = await isDbReachable();
 
 // Requires a running local Supabase instance (`supabase start`); skipped
-// automatically when one isn't reachable, e.g. in CI.
+// automatically when one isn't reachable locally; see `test-support/db.ts`.
 describe.skipIf(!dbReachable)(
   'entries table (local Supabase integration)',
   () => {
