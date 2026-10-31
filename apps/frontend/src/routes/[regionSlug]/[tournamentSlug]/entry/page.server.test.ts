@@ -981,6 +981,45 @@ describe('entry +page.server default action', () => {
     });
   });
 
+  // Codes the API has but the form has no wording of its own for: they keep
+  // reading as their status's fallback.
+  it.each([
+    [
+      401,
+      'invalid password',
+      'ログインの有効期限が切れました。もう一度ログインしてからエントリーしてください',
+    ],
+    [400, 'password too common', '入力内容を確認してください'],
+    [409, 'superseded by a later submission', '既にエントリー済みです'],
+  ])('shows a %i %s as the status does', async (status, code, message) => {
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({entryResponse: {status, body: {error: code}}}),
+        fields: validFormData(),
+      }),
+    );
+
+    expect(result).toMatchObject({status, data: {error: message}});
+  });
+
+  // A property every object inherits is not a code, whatever a plain lookup
+  // in the message table would make of it.
+  it('falls back for a string naming an inherited property', async () => {
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          entryResponse: {status: 403, body: {error: 'constructor'}},
+        }),
+        fields: validFormData(),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 403,
+      data: {error: 'この内容ではエントリーできません'},
+    });
+  });
+
   it("forwards the widget's token to the API", async () => {
     const turnstileTokens: Array<string | null> = [];
 

@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'bun:test';
 import {
   activePriorityRegulations,
-  isRegulationSelectionAllowed,
+  regulationSelectionRefusal,
   selectableRegulations,
 } from './regulation-eligibility';
 
@@ -12,7 +12,7 @@ const ENTRY_PERIOD = {
   entryClosesAt: '2026-12-31T00:00:00Z',
 };
 
-describe('isRegulationSelectionAllowed', () => {
+describe('regulationSelectionRefusal', () => {
   it('rejects an empty selection', () => {
     const regulations = [
       {id: 'reg-1', priorityStartsAt: null, priorityEndsAt: null},
@@ -20,13 +20,13 @@ describe('isRegulationSelectionAllowed', () => {
     ];
 
     expect(
-      isRegulationSelectionAllowed(
+      regulationSelectionRefusal(
         regulations,
         [],
         new Date('2026-08-23T00:00:00Z'),
         ENTRY_PERIOD,
       ),
-    ).toBe(false);
+    ).toBe('empty');
   });
 
   it('accepts any selection when no priority window is active', () => {
@@ -36,13 +36,13 @@ describe('isRegulationSelectionAllowed', () => {
     ];
 
     expect(
-      isRegulationSelectionAllowed(
+      regulationSelectionRefusal(
         regulations,
         ['reg-1', 'reg-2'],
         new Date('2026-08-23T00:00:00Z'),
         ENTRY_PERIOD,
       ),
-    ).toBe(true);
+    ).toBeNull();
   });
 
   it('accepts a selection containing one active priority regulation', () => {
@@ -56,13 +56,13 @@ describe('isRegulationSelectionAllowed', () => {
     ];
 
     expect(
-      isRegulationSelectionAllowed(
+      regulationSelectionRefusal(
         regulations,
         ['other-reg', 'priority-reg'],
         new Date('2026-08-15T00:00:00Z'),
         ENTRY_PERIOD,
       ),
-    ).toBe(true);
+    ).toBeNull();
   });
 
   it('rejects a selection of only non-priority regulations during a window', () => {
@@ -76,13 +76,13 @@ describe('isRegulationSelectionAllowed', () => {
     ];
 
     expect(
-      isRegulationSelectionAllowed(
+      regulationSelectionRefusal(
         regulations,
         ['other-reg'],
         new Date('2026-08-15T00:00:00Z'),
         ENTRY_PERIOD,
       ),
-    ).toBe(false);
+    ).toBe('needs-priority');
   });
 
   it('opens up after the priority window ends', () => {
@@ -96,13 +96,13 @@ describe('isRegulationSelectionAllowed', () => {
     ];
 
     expect(
-      isRegulationSelectionAllowed(
+      regulationSelectionRefusal(
         regulations,
         ['other-reg'],
         new Date('2026-09-01T00:00:00Z'),
         ENTRY_PERIOD,
       ),
-    ).toBe(true);
+    ).toBeNull();
   });
 
   it('rejects a selection containing an unknown regulation id', () => {
@@ -112,13 +112,13 @@ describe('isRegulationSelectionAllowed', () => {
     ];
 
     expect(
-      isRegulationSelectionAllowed(
+      regulationSelectionRefusal(
         regulations,
         ['reg-1', 'unknown-reg'],
         new Date('2026-08-23T00:00:00Z'),
         ENTRY_PERIOD,
       ),
-    ).toBe(false);
+    ).toBe('unknown');
   });
 });
 
@@ -205,11 +205,30 @@ describe('activePriorityRegulations', () => {
 
       expect(listed(regulations, now.toISOString())).toEqual([]);
       expect(
-        isRegulationSelectionAllowed(regulations, ['general'], now, period),
-      ).toBe(true);
+        regulationSelectionRefusal(regulations, ['general'], now, period),
+      ).toBeNull();
       expect(
-        isRegulationSelectionAllowed(regulations, ['tag'], now, period),
-      ).toBe(true);
+        regulationSelectionRefusal(regulations, ['tag'], now, period),
+      ).toBeNull();
+    });
+
+    // A form overtaken by a change as well: telling it to choose again is
+    // what helps, and it must not depend on the order of the ids.
+    it('calls a phase that is over not offered, even next to an unknown id', () => {
+      const now = new Date('2026-10-31T12:00:01Z');
+      const regulations = [priority, general];
+
+      for (const ids of [
+        ['priority', 'unknown-reg'],
+        ['unknown-reg', 'priority'],
+      ]) {
+        expect(regulationSelectionRefusal(regulations, ids, now, period)).toBe(
+          'not-offered',
+        );
+      }
+      expect(
+        regulationSelectionRefusal(regulations, ['unknown-reg'], now, period),
+      ).toBe('unknown');
     });
 
     it('takes the phase that is over off the offer', () => {
@@ -218,16 +237,16 @@ describe('activePriorityRegulations', () => {
 
       expect(selectable(regulations, now.toISOString())).toEqual(['general']);
       expect(
-        isRegulationSelectionAllowed(regulations, ['priority'], now, period),
-      ).toBe(false);
+        regulationSelectionRefusal(regulations, ['priority'], now, period),
+      ).toBe('not-offered');
       expect(
-        isRegulationSelectionAllowed(
+        regulationSelectionRefusal(
           regulations,
           ['priority', 'general'],
           now,
           period,
         ),
-      ).toBe(false);
+      ).toBe('not-offered');
     });
 
     // The sheets spell one close as 23:59, 23:59:59 and the next day's 0:00,
@@ -285,13 +304,13 @@ describe('activePriorityRegulations', () => {
         'priority',
       ]);
       expect(
-        isRegulationSelectionAllowed(
+        regulationSelectionRefusal(
           [priority, general],
           ['general'],
           now,
           period,
         ),
-      ).toBe(false);
+      ).toBe('needs-priority');
     });
 
     it('waits for a later phase to be over', () => {
@@ -305,8 +324,8 @@ describe('activePriorityRegulations', () => {
 
       expect(listed(regulations, now.toISOString())).toEqual(['general']);
       expect(
-        isRegulationSelectionAllowed(regulations, ['third'], now, period),
-      ).toBe(false);
+        regulationSelectionRefusal(regulations, ['third'], now, period),
+      ).toBe('needs-priority');
     });
 
     it('never lifts and restores the check around a shorter window', () => {
@@ -335,8 +354,8 @@ describe('activePriorityRegulations', () => {
       ]);
       expect(listed(regulations, now.toISOString())).toEqual(['general']);
       expect(
-        isRegulationSelectionAllowed(regulations, ['tag'], now, period),
-      ).toBe(false);
+        regulationSelectionRefusal(regulations, ['tag'], now, period),
+      ).toBe('needs-priority');
     });
 
     it('ignores a window that ended before entries opened', () => {
@@ -351,8 +370,8 @@ describe('activePriorityRegulations', () => {
 
       expect(listed(regulations, now.toISOString())).toEqual(['general']);
       expect(
-        isRegulationSelectionAllowed(regulations, ['tag'], now, period),
-      ).toBe(false);
+        regulationSelectionRefusal(regulations, ['tag'], now, period),
+      ).toBe('needs-priority');
     });
 
     it('still gates on a window with none ended before it', () => {

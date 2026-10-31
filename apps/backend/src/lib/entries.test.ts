@@ -381,7 +381,7 @@ describe.skipIf(!(await isDbReachable()))(
       );
 
       expect(result.ok).toBe(false);
-      // Refused by `isRegulationSelectionAllowed()`, which only knows this
+      // Refused by `regulationSelectionRefusal()`, which only knows this
       // tournament's regulations — before any row is written. The DB-level
       // guarantee behind it (the shared `tournament_id` on both composite
       // foreign keys) is covered in `db-schema.test.ts`.

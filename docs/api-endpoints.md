@@ -622,7 +622,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 | 400 | `invalid tournament` | `:tournamentId` の大会が存在しない |
 | 400 | `unknown custom field: ...` 等 | `customFieldValues` が大会の `form_field_defs` と一致しない(メッセージは [`form-generation.md`](./form-generation.md) の一覧を参照) |
 | 403 | `entry period closed` | エントリー期間外 |
-| 403 | `regulation not eligible in priority window` | `regulationIds` が空、この大会のものでない id を含む、または優先期間中に優先対象を1つも選んでいない(一般枠の段階は優先期間中として扱わない。`database-schema.md` の `regulations` を参照) |
+| 403 | `regulation not eligible in priority window` | `regulationIds` が空、この大会のものでない id を含む(下の 409 の条件にも当たるときは 409)、または優先期間中に優先対象を1つも選んでいない(一般枠の段階は優先期間中として扱わない。`database-schema.md` の `regulations` を参照) |
 | 409 | `regulation no longer available` | 一般枠の段階に入り、選択肢から外れた優先枠のレギュレーションを含む(フォームを開いたまま優先枠が終わった場合) |
 | 500 | `internal server error` | 大会や `form_field_defs` の取得に失敗 |
 

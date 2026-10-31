@@ -1,13 +1,15 @@
 import {
   EDITABLE_ENTRY_STATUSES,
+  ENTRY_ERROR_CODES,
   findCustomFieldValuesError,
-  isRegulationSelectionAllowed,
-  selectableRegulations,
   isWithinEntryPeriod,
+  regulationSelectionRefusal,
   type EntryEditInput,
+  type EntryErrorCode,
   type EntryInput,
   type EntrySessionInput,
   type EntryStatus,
+  type RegulationSelectionRefusal,
   type TournamentType,
 } from '@regional-quiz/shared';
 import {isCommonPassword} from '@regional-quiz/shared/password-policy';
@@ -74,61 +76,25 @@ export interface EntryTournamentRow {
 }
 
 /**
- * The error the dual-entry rule answers with. Shared with the trigger's
- * SQLSTATE mapping below so both paths give the entry form the same string
- * to translate.
+ * What each way of refusing a regulation selection answers with. A regulation
+ * that stopped being offered is a conflict with a change, which choosing
+ * again fixes; the rest are a selection the form wouldn't offer.
  */
-const ALREADY_ENTERED_ANOTHER_TOURNAMENT =
-  'already entered another tournament in this region';
-
-/**
- * What a submission naming a regulation that is no longer on offer answers
- * with. Reached when the form was left open past the end of a priority
- * phase (`selectableRegulations()`), or when a refused `entry_regulations`
- * write shows the regulation stopped existing between
- * `isRegulationSelectionAllowed()` and the write — a `sync_regulations()`
- * call that dropped it. Either way it is a conflict with a change, not a
- * malformed submission. Spelled out rather than passing the constraint
- * violation through, so the entry form has something stable to translate.
- */
-const REGULATION_NO_LONGER_AVAILABLE = 'regulation no longer available';
-
-/**
- * The errors about the address's own account, named once: besides being
- * answered by the logged-in route, each is what `ENTRY_NOTICE_REASONS` maps
- * to the mail the unauthenticated route sends instead, so a string spelled
- * one way here and another way there would silently stop that mail.
- */
-const INVALID_PASSWORD = 'invalid password';
-const ALREADY_REGISTERED_IN_ANOTHER_REGION =
-  // Named after the rule it first stood for, and kept as the frontend matches
-  // on it: it now means taking part in another region (#236).
-  'already registered in another region';
-const ALREADY_ENTERED = 'already entered';
-/**
- * An entry for the tournament is waiting on a verification link that is
- * still valid. Told apart from `ALREADY_ENTERED` so the participant is sent
- * to that mail rather than to an entry that isn't confirmed yet (#172).
- */
-const ENTRY_PENDING_VERIFICATION = 'entry pending verification';
-const COMMON_PASSWORD = 'password too common';
-/**
- * A later submission under the same unverified address took the account
- * over while this one was being entered (`isStillUnverifiedAccountOf()`).
- * Not one of the notice reasons: the later submission sends its own mail,
- * and this one is answered like any other failure on our side.
- */
-const SUPERSEDED_BY_LATER_SUBMISSION = 'superseded by a later submission';
-/**
- * Another submission for the same address -- or the same participant and
- * tournament -- wrote its row first, and the database refused this one's.
- * Spelled out instead of passing the refusal on: Postgres' message names the
- * table and the constraint, and the logged-in route answers 4xx messages as
- * they are (#191). Like `SUPERSEDED_BY_LATER_SUBMISSION`, not a notice
- * reason: the anonymous route answers it like any other failure on our side,
- * logging it and mailing `processing-failed` alongside the winner's own mail.
- */
-const CONCURRENT_SUBMISSION = 'concurrent submission';
+const REGULATION_REFUSALS: Record<
+  RegulationSelectionRefusal,
+  {status: 403 | 409; error: EntryErrorCode}
+> = {
+  empty: {status: 403, error: ENTRY_ERROR_CODES.REGULATION_NOT_ELIGIBLE},
+  unknown: {status: 403, error: ENTRY_ERROR_CODES.REGULATION_NOT_ELIGIBLE},
+  'needs-priority': {
+    status: 403,
+    error: ENTRY_ERROR_CODES.REGULATION_NOT_ELIGIBLE,
+  },
+  'not-offered': {
+    status: 409,
+    error: ENTRY_ERROR_CODES.REGULATION_NO_LONGER_AVAILABLE,
+  },
+};
 
 /**
  * The SQLSTATE `check_region_dual_entry()` (migration 0016) raises. The
@@ -411,7 +377,11 @@ export async function checkEntrySubmission(
     return {ok: false, status: 500, error: tournamentError.message};
   }
   if (!tournament) {
-    return {ok: false, status: 400, error: 'invalid tournament'};
+    return {
+      ok: false,
+      status: 400,
+      error: ENTRY_ERROR_CODES.INVALID_TOURNAMENT,
+    };
   }
 
   const now = new Date();
@@ -422,12 +392,16 @@ export async function checkEntrySubmission(
       now,
     )
   ) {
-    return {ok: false, status: 403, error: 'entry period closed'};
+    return {
+      ok: false,
+      status: 403,
+      error: ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED,
+    };
   }
   // Paused by staff (0039). Only new entries stop: edits, cancellations and
   // confirmations of entries already made go on.
   if (tournament.entries_paused) {
-    return {ok: false, status: 403, error: 'entries paused'};
+    return {ok: false, status: 403, error: ENTRY_ERROR_CODES.ENTRIES_PAUSED};
   }
 
   const regulations = tournament.regulations.map(regulation => ({
@@ -439,27 +413,14 @@ export async function checkEntrySubmission(
     entryOpensAt: tournament.entry_opens_at,
     entryClosesAt: tournament.entry_closes_at,
   };
-  if (
-    !isRegulationSelectionAllowed(
-      regulations,
-      submission.regulationIds,
-      now,
-      entryPeriod,
-    )
-  ) {
-    const selectable = selectableRegulations(regulations, now, entryPeriod);
-    const noLongerOnOffer = regulations.some(
-      regulation =>
-        submission.regulationIds.includes(regulation.id) &&
-        !selectable.includes(regulation),
-    );
-    return noLongerOnOffer
-      ? {ok: false, status: 409, error: REGULATION_NO_LONGER_AVAILABLE}
-      : {
-          ok: false,
-          status: 403,
-          error: 'regulation not eligible in priority window',
-        };
+  const regulationRefusal = regulationSelectionRefusal(
+    regulations,
+    submission.regulationIds,
+    now,
+    entryPeriod,
+  );
+  if (regulationRefusal) {
+    return {ok: false, ...REGULATION_REFUSALS[regulationRefusal]};
   }
 
   // Checked here, before the participant lookup, so a submission the rendered
@@ -547,7 +508,7 @@ async function createEntryAfterCheck(
     // an older password), and doing it here keeps the refusal behind the
     // address like every other answer that depends on it.
     if (isCommonPassword(input.password)) {
-      return {ok: false, status: 400, error: COMMON_PASSWORD};
+      return {ok: false, status: 400, error: ENTRY_ERROR_CODES.COMMON_PASSWORD};
     }
     const passwordHash = await hashPassword(input.password);
     if (!existingParticipant) {
@@ -561,7 +522,11 @@ async function createEntryAfterCheck(
         .select('id')
         .single();
       if (error?.code === UNIQUE_VIOLATION_SQLSTATE) {
-        return {ok: false, status: 409, error: CONCURRENT_SUBMISSION};
+        return {
+          ok: false,
+          status: 409,
+          error: ENTRY_ERROR_CODES.CONCURRENT_SUBMISSION,
+        };
       }
       if (error || !created) {
         // Anything else is a fault on our side, and its message describes
@@ -671,7 +636,7 @@ async function enterVerifiedParticipant(
     },
   );
   if (!valid) {
-    return {ok: false, status: 401, error: INVALID_PASSWORD};
+    return {ok: false, status: 401, error: ENTRY_ERROR_CODES.INVALID_PASSWORD};
   }
   await upgrade;
   return enterTournament(env, tournament, participant.id, input.email, input);
@@ -809,8 +774,8 @@ async function enterTournament(
       // Still pending after the lapse above means its link is still valid.
       error:
         existingEntry.status === 'pending_verification'
-          ? ENTRY_PENDING_VERIFICATION
-          : ALREADY_ENTERED,
+          ? ENTRY_ERROR_CODES.ENTRY_PENDING_VERIFICATION
+          : ENTRY_ERROR_CODES.ALREADY_ENTERED,
     };
   }
 
@@ -837,7 +802,7 @@ async function enterTournament(
       return {
         ok: false,
         status: 409,
-        error: ALREADY_REGISTERED_IN_ANOTHER_REGION,
+        error: ENTRY_ERROR_CODES.ALREADY_REGISTERED_IN_ANOTHER_REGION,
       };
     }
   }
@@ -871,7 +836,7 @@ async function enterTournament(
       return {
         ok: false,
         status: 409,
-        error: ALREADY_ENTERED_ANOTHER_TOURNAMENT,
+        error: ENTRY_ERROR_CODES.ALREADY_ENTERED_ANOTHER_TOURNAMENT,
       };
     }
   }
@@ -930,14 +895,22 @@ async function enterTournament(
     // The check above lost a race with a concurrent submission for the
     // region's other tournament; the trigger is what actually kept the
     // participant from holding both seats.
-    return {ok: false, status: 409, error: ALREADY_ENTERED_ANOTHER_TOURNAMENT};
+    return {
+      ok: false,
+      status: 409,
+      error: ENTRY_ERROR_CODES.ALREADY_ENTERED_ANOTHER_TOURNAMENT,
+    };
   }
   if (
     error?.code === PARTICIPANT_REGION_SQLSTATE ||
     error?.code === UNIQUE_VIOLATION_SQLSTATE ||
     (existingEntry && error?.code === NO_ROW_PGRST_CODE)
   ) {
-    return {ok: false, status: 409, error: CONCURRENT_SUBMISSION};
+    return {
+      ok: false,
+      status: 409,
+      error: ENTRY_ERROR_CODES.CONCURRENT_SUBMISSION,
+    };
   }
   if (error || !entry) {
     // Anything else -- a check constraint (0021's length limits), Supabase
@@ -953,7 +926,7 @@ async function enterTournament(
   // The selection is written after the entry because it references it. The
   // composite foreign keys behind `entry_regulations` are what refuse a
   // regulation belonging to another tournament, so a submission that got
-  // past `isRegulationSelectionAllowed()` on a regulation list
+  // past `regulationSelectionRefusal()` on a regulation list
   // `sync_regulations()` deleted from under it is stopped here rather than
   // stored — which is why a failure rolls the entry back instead of leaving
   // one claiming nothing.
@@ -971,7 +944,11 @@ async function enterTournament(
     });
     await rollbackEntry(db, entry.id, tournamentId, existingEntry);
     return regulationsError.code === FOREIGN_KEY_VIOLATION_SQLSTATE
-      ? {ok: false, status: 409, error: REGULATION_NO_LONGER_AVAILABLE}
+      ? {
+          ok: false,
+          status: 409,
+          error: ENTRY_ERROR_CODES.REGULATION_NO_LONGER_AVAILABLE,
+        }
       : {ok: false, status: 500, error: regulationsError.message};
   }
 
@@ -984,7 +961,11 @@ async function enterTournament(
     ))
   ) {
     await rollbackEntry(db, entry.id, tournamentId, existingEntry);
-    return {ok: false, status: 409, error: SUPERSEDED_BY_LATER_SUBMISSION};
+    return {
+      ok: false,
+      status: 409,
+      error: ENTRY_ERROR_CODES.SUPERSEDED_BY_LATER_SUBMISSION,
+    };
   }
 
   try {
@@ -1064,13 +1045,13 @@ async function isStillUnverifiedAccountOf(
  * unauthenticated route mails it instead of answering with it.
  */
 const ENTRY_NOTICE_REASONS: Record<string, EntryNoticeReason> = {
-  [INVALID_PASSWORD]: 'password-mismatch',
-  [ALREADY_REGISTERED_IN_ANOTHER_REGION]: 'other-region',
-  [ALREADY_ENTERED]: 'already-entered',
-  [ENTRY_PENDING_VERIFICATION]: 'pending-verification',
-  [COMMON_PASSWORD]: 'common-password',
-  [ALREADY_ENTERED_ANOTHER_TOURNAMENT]: 'dual-entry',
-  [REGULATION_NO_LONGER_AVAILABLE]: 'regulation-unavailable',
+  [ENTRY_ERROR_CODES.INVALID_PASSWORD]: 'password-mismatch',
+  [ENTRY_ERROR_CODES.ALREADY_REGISTERED_IN_ANOTHER_REGION]: 'other-region',
+  [ENTRY_ERROR_CODES.ALREADY_ENTERED]: 'already-entered',
+  [ENTRY_ERROR_CODES.ENTRY_PENDING_VERIFICATION]: 'pending-verification',
+  [ENTRY_ERROR_CODES.COMMON_PASSWORD]: 'common-password',
+  [ENTRY_ERROR_CODES.ALREADY_ENTERED_ANOTHER_TOURNAMENT]: 'dual-entry',
+  [ENTRY_ERROR_CODES.REGULATION_NO_LONGER_AVAILABLE]: 'regulation-unavailable',
 };
 
 /**
@@ -1282,7 +1263,11 @@ export async function updateOwnEntry(
       entry.tournaments.entry_closes_at,
     )
   ) {
-    return {ok: false, status: 403, error: 'entry period closed'};
+    return {
+      ok: false,
+      status: 403,
+      error: ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED,
+    };
   }
   if (!EDITABLE_ENTRY_STATUSES.includes(entry.status)) {
     return {ok: false, status: 403, error: `entry is ${entry.status}`};

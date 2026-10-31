@@ -891,6 +891,57 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
         method: 'POST',
       });
     });
+
+    // A foreign id alongside the phase that is over is what a form left open
+    // sends when staff also removed a regulation: the 409 is what makes it
+    // read the regulations again.
+    it('answers 409 for the phase that is over next to a foreign id', async () => {
+      mockSupabase({
+        tournament: tournamentRow({
+          entryClosesAt: closesAt,
+          regulations: [
+            earlierPhase(validBody.regulationIds[0]),
+            generalPhase(closesAt),
+          ],
+        }),
+        participant: null,
+      });
+
+      const res = await postWithContext(TOURNAMENT_PATH, {
+        ...validBody,
+        regulationIds: [otherPhaseId, validBody.regulationIds[0]],
+      });
+      await settleBackgroundWork();
+
+      expect(res.status).toBe(409);
+      expect((await res.json()) as unknown).toEqual({
+        error: 'regulation no longer available',
+      });
+    });
+
+    it('answers 403 for a foreign id on its own', async () => {
+      mockSupabase({
+        tournament: tournamentRow({
+          entryClosesAt: closesAt,
+          regulations: [
+            earlierPhase(validBody.regulationIds[0]),
+            generalPhase(closesAt),
+          ],
+        }),
+        participant: null,
+      });
+
+      const res = await postWithContext(TOURNAMENT_PATH, {
+        ...validBody,
+        regulationIds: [otherPhaseId],
+      });
+      await settleBackgroundWork();
+
+      expect(res.status).toBe(403);
+      expect((await res.json()) as unknown).toEqual({
+        error: 'regulation not eligible in priority window',
+      });
+    });
   });
 
   it('refuses a new entry while staff have paused the tournament', async () => {
