@@ -1,23 +1,6 @@
 import {afterAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
-
-// Local Supabase Postgres connection (`supabase start` default). Overridable
-// via SUPABASE_DB_URL for other local setups.
-const DB_URL =
-  process.env.SUPABASE_DB_URL ??
-  'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
-
-async function isDbReachable(): Promise<boolean> {
-  const probe = new SQL(DB_URL);
-  try {
-    await probe`select 1`;
-    return true;
-  } catch {
-    return false;
-  } finally {
-    await probe.close();
-  }
-}
+import {DB_URL, isDbReachable} from '../test-support/db';
 
 const dbReachable = await isDbReachable();
 
@@ -26,7 +9,7 @@ const dbReachable = await isDbReachable();
 const DATA_API_ROLES = ['anon', 'authenticated'];
 
 // Requires a running local Supabase instance (`supabase start`); skipped
-// automatically when one isn't reachable, e.g. in CI.
+// automatically when one isn't reachable locally; see `test-support/db.ts`.
 describe.skipIf(!dbReachable)(
   'Data API role privileges (local Supabase integration)',
   () => {

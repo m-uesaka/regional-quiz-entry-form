@@ -4,29 +4,15 @@ import type {Bindings} from '../types/env';
 import {promoteWaitlistedEntries} from './waitlist';
 import {hashPassword} from './password';
 import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {DB_URL, isDbReachable} from '../test-support/db';
 
-// Local Supabase Postgres connection (`supabase start` default), same
-// convention as `lib/db-schema.test.ts`. Skipped automatically when one
-// isn't reachable, e.g. in CI.
-const DB_URL =
-  process.env.SUPABASE_DB_URL ??
-  'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
+// Local Supabase stack (`supabase start`), same convention as
+// `lib/db-schema.test.ts`. Skipped automatically when it isn't
+// reachable locally; see `test-support/db.ts`.
 const SUPABASE_URL = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
 const SUPABASE_SECRET_KEY =
   process.env.SUPABASE_SECRET_KEY ??
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
-
-async function isDbReachable(): Promise<boolean> {
-  const probe = new SQL(DB_URL);
-  try {
-    await probe`select 1`;
-    return true;
-  } catch {
-    return false;
-  } finally {
-    await probe.close();
-  }
-}
 
 const env: Bindings = {
   ...PERMISSIVE_PLATFORM_BINDINGS,
@@ -267,7 +253,8 @@ describe.skipIf(!(await isDbReachable()))(
 
         const promoted = await promoteWaitlistedEntries(env, f.tournamentId);
 
-        // 3 seats, 1 taken: positions 1 and 2 go up, position 3 waits.
+        // 3 seats, 1 taken: positions 1 and 2 go up, and position
+        // 3 waits at the head of the line, renumbered from 1 (0037).
         expect(promoted).toEqual({promotedCount: 2, mailFailedCount: 0});
         const [third, first, second] = await Promise.all(waiting.map(statusOf));
         expect(first.status).toBe('confirmed');
@@ -275,7 +262,7 @@ describe.skipIf(!(await isDbReachable()))(
         expect(first.waitlist_position).toBeNull();
         expect(third).toMatchObject({
           status: 'waitlisted',
-          waitlist_position: 3,
+          waitlist_position: 1,
         });
         expect(mailedTo).toEqual([first.email, second.email]);
       });
