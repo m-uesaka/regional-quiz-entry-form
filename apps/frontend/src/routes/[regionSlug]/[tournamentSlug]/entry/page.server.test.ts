@@ -311,6 +311,7 @@ describe('entry +page.server load', () => {
     const event = buildEvent({fetch: fakeApi(), staff: null});
 
     await expect(load(event)).resolves.toEqual({
+      now: expect.any(Date),
       tournament: OPEN_TOURNAMENT,
       regulations: REGULATIONS,
       formFieldDefs: FORM_FIELD_DEFS,
@@ -340,8 +341,11 @@ describe('entry +page.server load', () => {
       staff: null,
     });
 
+    const before = Date.now();
     const data = await load(event);
 
+    // The moment the form goes by too, so it can't disagree with the notices.
+    expect(data?.now.getTime()).toBeGreaterThanOrEqual(before);
     expect(data?.priorityNotices).toEqual([
       {
         labels: [REGULATIONS[0].label],
@@ -779,6 +783,43 @@ describe('entry +page.server default action', () => {
     ).not.toHaveProperty('password');
   });
 
+  it('tells the form to read the regulations again when they changed', async () => {
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          entryResponse: {
+            status: 409,
+            body: {error: 'regulation no longer available'},
+          },
+        }),
+        fields: sessionFormData(),
+        participant: PARTICIPANT,
+      }),
+    );
+
+    expect((result as {data: Record<string, unknown>}).data).toMatchObject({
+      error:
+        '選択したレギュレーションが変更されました。選択し直して、もう一度お試しください',
+      regulationsChanged: true,
+    });
+  });
+
+  it('leaves the page data alone for any other refusal', async () => {
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          entryResponse: {status: 409, body: {error: 'already entered'}},
+        }),
+        fields: sessionFormData(),
+        participant: PARTICIPANT,
+      }),
+    );
+
+    expect((result as {data: Record<string, unknown>}).data).toMatchObject({
+      regulationsChanged: false,
+    });
+  });
+
   it.each([
     [409, 'already entered', 'この大会には既にエントリー済みです'],
     [
@@ -789,7 +830,7 @@ describe('entry +page.server default action', () => {
     [
       409,
       'already registered in another region',
-      'このアカウントは別の地域で登録済みのため、この大会にはエントリーできません',
+      '別の地域の大会にエントリーしているため、この大会にはエントリーできません。この大会にエントリーするには、マイページで別の地域の大会のエントリーをキャンセルしてください。受付終了後にキャンセルした大会がある場合は、別の地域の大会にはエントリーできません',
     ],
     [403, 'entry period closed', 'エントリー期間外です'],
     [

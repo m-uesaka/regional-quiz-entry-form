@@ -1,6 +1,13 @@
 import {describe, expect, it} from 'vitest';
 import {isWaitlistOpen, priorityEntryNotices} from './priority-entry';
 
+// Closes later than every window below, so none of them runs to the close
+// unless a test says so.
+const ENTRY_PERIOD = {
+  entryOpensAt: '2026-10-01T00:00:00Z',
+  entryClosesAt: '2026-12-31T00:00:00Z',
+};
+
 describe('priorityEntryNotices', () => {
   const now = new Date('2026-11-03T00:00:00Z');
 
@@ -16,6 +23,29 @@ describe('priorityEntryNotices', () => {
           },
         ],
         now,
+        ENTRY_PERIOD,
+      ),
+    ).toEqual([]);
+  });
+
+  // #235: the general regulation's window after the priority one has ended.
+  it('announces nothing in the general phase', () => {
+    expect(
+      priorityEntryNotices(
+        [
+          {
+            label: '優先参加枠',
+            priorityStartsAt: '2026-10-29T12:00:00Z',
+            priorityEndsAt: '2026-11-01T12:00:00Z',
+          },
+          {
+            label: '一般',
+            priorityStartsAt: '2026-11-01T12:00:00Z',
+            priorityEndsAt: ENTRY_PERIOD.entryClosesAt,
+          },
+        ],
+        now,
+        ENTRY_PERIOD,
       ),
     ).toEqual([]);
   });
@@ -43,6 +73,7 @@ describe('priorityEntryNotices', () => {
           },
         ],
         now,
+        ENTRY_PERIOD,
       ),
     ).toEqual([
       {
@@ -79,6 +110,7 @@ describe('priorityEntryNotices', () => {
           },
         ],
         now,
+        ENTRY_PERIOD,
       ),
     ).toEqual([
       {
@@ -114,6 +146,7 @@ describe('priorityEntryNotices, moments the page cannot tell apart', () => {
           },
         ],
         now,
+        ENTRY_PERIOD,
       ),
     ).toEqual([
       {
@@ -142,6 +175,7 @@ describe('priorityEntryNotices, moments the page cannot tell apart', () => {
           },
         ],
         now,
+        ENTRY_PERIOD,
       ),
     ).toEqual([
       {

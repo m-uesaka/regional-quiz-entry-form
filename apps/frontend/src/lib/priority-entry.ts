@@ -1,6 +1,7 @@
 import {
   activePriorityRegulations,
   type Regulation,
+  type EntryPeriod,
   type TournamentEntryCounts,
 } from '@regional-quiz/shared';
 import {formatJstDateTime} from '$lib/jst-datetime';
@@ -35,19 +36,24 @@ export interface PriorityEntryNotice {
  * apart, or one instant spelt two ways) make one notice rather than two
  * identical-looking lines.
  *
+ * A tournament's general phase is normal entry rather than 優先エントリー,
+ * and goes unannounced (`activePriorityRegulations()`).
+ *
  * Worked out on the server, like the portal's statuses, so the server
  * rendering and the hydrated page agree.
  * @param regulations The tournament's regulations, in display order.
  * @param now The moment to check at.
+ * @param entryPeriod The tournament's entry period.
  */
 export function priorityEntryNotices(
   regulations: readonly PriorityRegulation[],
   now: Date,
+  entryPeriod: EntryPeriod,
 ): PriorityEntryNotice[] {
   // Ordered at the precision the notices are grouped and printed at, so a
   // difference the page doesn't show can't reorder them. The sort is
   // stable, so the regulations inside one notice keep their display order.
-  const active = activePriorityRegulations(regulations, now).sort(
+  const active = activePriorityRegulations(regulations, now, entryPeriod).sort(
     (a, b) =>
       printedMinute(a.priorityEndsAt) - printedMinute(b.priorityEndsAt) ||
       printedMinute(a.priorityStartsAt) - printedMinute(b.priorityStartsAt),

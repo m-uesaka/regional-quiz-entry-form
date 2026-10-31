@@ -168,6 +168,7 @@ function tournamentRow(
     entryClosesAt?: string;
     capacity?: number | null;
     entriesPaused?: boolean;
+    regulations?: Array<Record<string, unknown>>;
   } = {},
 ): Record<string, unknown> {
   return {
@@ -182,7 +183,7 @@ function tournamentRow(
     // Lets the dual-entry check be skipped; that rule is the integration
     // tests' business.
     regions: {allows_dual_entry: true},
-    regulations: [
+    regulations: overrides.regulations ?? [
       {
         id: validBody.regulationIds[0],
         priority_starts_at: null,
@@ -208,6 +209,8 @@ interface MockSupabase {
   mails: SentMail[];
   /** The arguments each `take_over_unverified_participant()` call got. */
   takeOvers: Array<Record<string, unknown>>;
+  /** The arguments each `claim_participant_region()` call got. */
+  regionClaims: Array<Record<string, unknown>>;
 }
 
 /**
@@ -236,8 +239,20 @@ function mockSupabase(options: {
    * account another submission took over and had confirmed in between.
    */
   verifiedMeanwhile?: Record<string, unknown>;
+  /**
+   * Makes `claim_participant_region()` refuse: the participant has an entry
+   * in another region that isn't cancelled.
+   */
+  activeElsewhere?: boolean;
+  /** The SQLSTATE the entry write is refused with, if it is. */
+  entryWriteErrorCode?: string;
 }): MockSupabase {
-  const recorded: MockSupabase = {calls: [], mails: [], takeOvers: []};
+  const recorded: MockSupabase = {
+    calls: [],
+    mails: [],
+    takeOvers: [],
+    regionClaims: [],
+  };
   const tournament = options.tournament ?? tournamentRow();
   // Written to by the account creation and the takeover, so the re-read
   // after the entry is written (`isStillUnverifiedAccountOf()`) sees the
@@ -302,10 +317,20 @@ function mockSupabase(options: {
       // Nothing of this participant's has a lapsed verification link.
       case 'POST rpc/lapse_expired_pending_entries':
         return Response.json([]);
+      case 'POST rpc/claim_participant_region': {
+        const args = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        recorded.regionClaims.push(args);
+        return Response.json(!options.activeElsewhere);
+      }
       case 'GET entries':
         return rows([]);
       case 'POST entries':
-        return rows([{id: ENTRY_ID}]);
+        return options.entryWriteErrorCode
+          ? Response.json(
+              {code: options.entryWriteErrorCode, message: 'refused'},
+              {status: 400},
+            )
+          : rows([{id: ENTRY_ID}]);
       case 'POST email_verification_tokens':
         return options.failVerificationToken
           ? Response.json({message: 'boom'}, {status: 500})
@@ -437,6 +462,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
   it('mails the owner instead of answering when the address is in another region', async () => {
     const recorded = mockSupabase({
       participant: await registeredParticipant({regionId: OTHER_REGION_ID}),
+      activeElsewhere: true,
     });
 
     const res = await observable(
@@ -452,6 +478,39 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
       table: 'entries',
       method: 'POST',
     });
+  });
+
+  // #236: nothing but a cancelled entry is left in the old region.
+  it('enters a verified participant with nothing left in their old region', async () => {
+    const recorded = mockSupabase({
+      participant: await registeredParticipant({regionId: OTHER_REGION_ID}),
+    });
+
+    await postWithContext(TOURNAMENT_PATH, validBody);
+    await settleBackgroundWork();
+
+    expect(recorded.regionClaims).toEqual([
+      {p_participant_id: PARTICIPANT_ID, p_region_id: REGION_ID},
+    ]);
+    expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
+    expect(recorded.mails[0].subject).toBe(
+      verificationMailSubject(TOURNAMENT_NAME),
+    );
+  });
+
+  it('never moves a verified account for a wrong password', async () => {
+    const recorded = mockSupabase({
+      participant: await registeredParticipant({
+        regionId: OTHER_REGION_ID,
+        password: 'the-real-password',
+      }),
+    });
+
+    await postWithContext(TOURNAMENT_PATH, validBody);
+    await settleBackgroundWork();
+
+    expect(recorded.regionClaims).toHaveLength(0);
+    expect(recorded.mails[0].html).toContain('パスワード');
   });
 
   it('creates the account and the entry for an unknown email, after answering', async () => {
@@ -607,6 +666,8 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     // Nothing in the answer says the address was in any particular state.
     expect(res).toEqual({status: 202, body: JSON.stringify({ok: true})});
     expect(recorded.takeOvers).toHaveLength(1);
+    // The takeover settled the region, so nothing claims it again.
+    expect(recorded.regionClaims).toHaveLength(0);
     const [takeOver] = recorded.takeOvers;
     expect(takeOver.p_participant_id).toBe(PARTICIPANT_ID);
     expect(takeOver.p_region_id).toBe(REGION_ID);
@@ -737,6 +798,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
   it('never takes over a verified account', async () => {
     const recorded = mockSupabase({
       participant: await registeredParticipant({regionId: OTHER_REGION_ID}),
+      activeElsewhere: true,
     });
 
     await postWithContext(TOURNAMENT_PATH, validBody);
@@ -744,6 +806,91 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
 
     expect(recorded.takeOvers).toHaveLength(0);
     expect(recorded.mails[0].html).toContain('別の地域');
+  });
+
+  // #235: a priority window is judged against this tournament's own period.
+  describe('with a priority phase that is over', () => {
+    const closesAt = new Date(Date.now() + DAY_MS * 2).toISOString();
+    const priorityEndedAt = new Date(Date.now() - 1000).toISOString();
+    const earlierPhase = (id: string) => ({
+      id,
+      priority_starts_at: new Date(Date.now() - DAY_MS / 2).toISOString(),
+      priority_ends_at: priorityEndedAt,
+    });
+    const generalPhase = (endsAt: string) => ({
+      id: '99999999-9999-4999-8999-999999999999',
+      priority_starts_at: priorityEndedAt,
+      priority_ends_at: endsAt,
+    });
+    const selectedWithoutWindow = {
+      id: validBody.regulationIds[0],
+      priority_starts_at: null,
+      priority_ends_at: null,
+    };
+    const otherPhaseId = '88888888-8888-4888-8888-888888888888';
+
+    it('enforces a later window ending before the close', async () => {
+      mockSupabase({
+        tournament: tournamentRow({
+          entryClosesAt: closesAt,
+          regulations: [
+            selectedWithoutWindow,
+            earlierPhase(otherPhaseId),
+            generalPhase(new Date(Date.now() + DAY_MS).toISOString()),
+          ],
+        }),
+        participant: null,
+      });
+
+      const res = await postWithContext(TOURNAMENT_PATH, validBody);
+      await settleBackgroundWork();
+
+      expect(res.status).toBe(403);
+    });
+
+    it('accepts what is on offer in the general phase', async () => {
+      mockSupabase({
+        tournament: tournamentRow({
+          entryClosesAt: closesAt,
+          regulations: [
+            selectedWithoutWindow,
+            earlierPhase(otherPhaseId),
+            generalPhase(closesAt),
+          ],
+        }),
+        participant: null,
+      });
+
+      const res = await postWithContext(TOURNAMENT_PATH, validBody);
+      await settleBackgroundWork();
+
+      expect(res.status).toBe(202);
+    });
+
+    it('refuses the phase that is over in the general phase', async () => {
+      const recorded = mockSupabase({
+        tournament: tournamentRow({
+          entryClosesAt: closesAt,
+          regulations: [
+            earlierPhase(validBody.regulationIds[0]),
+            generalPhase(closesAt),
+          ],
+        }),
+        participant: null,
+      });
+
+      const res = await postWithContext(TOURNAMENT_PATH, validBody);
+      await settleBackgroundWork();
+
+      expect(res.status).toBe(409);
+      expect((await res.json()) as unknown).toEqual({
+        error: 'regulation no longer available',
+      });
+      expect(recorded.calls).not.toContainEqual({
+        table: 'entries',
+        method: 'POST',
+      });
+    });
   });
 
   it('refuses a new entry while staff have paused the tournament', async () => {
@@ -853,6 +1000,7 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
   it('still reports errors directly for a logged-in participant', async () => {
     const recorded = mockSupabase({
       participant: await registeredParticipant({regionId: OTHER_REGION_ID}),
+      activeElsewhere: true,
     });
 
     const res = await postWithContext(
@@ -866,5 +1014,75 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
       error: 'already registered in another region',
     });
     expect(recorded.mails).toHaveLength(0);
+  });
+
+  it('enters a participant with nothing left in their old region (#236)', async () => {
+    const recorded = mockSupabase({
+      participant: await registeredParticipant({regionId: OTHER_REGION_ID}),
+    });
+
+    const res = await postWithContext(
+      SESSION_PATH,
+      sessionBody,
+      await sessionCookie(),
+    );
+
+    expect(res.status).toBe(201);
+    expect(recorded.regionClaims).toEqual([
+      {p_participant_id: PARTICIPANT_ID, p_region_id: REGION_ID},
+    ]);
+    expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
+  });
+
+  it('reports a regulation taken off the offer directly', async () => {
+    const closesAt = new Date(Date.now() + DAY_MS * 2).toISOString();
+    const priorityEndedAt = new Date(Date.now() - 1000).toISOString();
+    mockSupabase({
+      tournament: tournamentRow({
+        entryClosesAt: closesAt,
+        regulations: [
+          {
+            id: validBody.regulationIds[0],
+            priority_starts_at: new Date(Date.now() - DAY_MS / 2).toISOString(),
+            priority_ends_at: priorityEndedAt,
+          },
+          {
+            id: '99999999-9999-4999-8999-999999999999',
+            priority_starts_at: priorityEndedAt,
+            priority_ends_at: closesAt,
+          },
+        ],
+      }),
+      participant: await registeredParticipant(),
+    });
+
+    const res = await postWithContext(
+      SESSION_PATH,
+      sessionBody,
+      await sessionCookie(),
+    );
+
+    expect(res.status).toBe(409);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'regulation no longer available',
+    });
+  });
+
+  it('answers a concurrent move of the region as a concurrent submission', async () => {
+    mockSupabase({
+      participant: await registeredParticipant(),
+      entryWriteErrorCode: 'P0008',
+    });
+
+    const res = await postWithContext(
+      SESSION_PATH,
+      sessionBody,
+      await sessionCookie(),
+    );
+
+    expect(res.status).toBe(409);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'concurrent submission',
+    });
   });
 });
