@@ -2,6 +2,7 @@ import {describe, expect, it} from 'bun:test';
 import {
   activePriorityRegulations,
   isRegulationSelectionAllowed,
+  selectableRegulations,
 } from './regulation-eligibility';
 
 // Closes later than every window below, so none of them runs to the close
@@ -192,18 +193,73 @@ describe('activePriorityRegulations', () => {
         r => r.id,
       );
 
-    it('lists nothing and accepts any selection', () => {
-      const now = new Date('2026-10-31T12:00:01Z');
+    const selectable = (
+      regulations: ReadonlyArray<typeof priority | typeof unlimited>,
+      now: string,
+    ) =>
+      selectableRegulations(regulations, new Date(now), period).map(r => r.id);
 
-      expect(listed([priority, general], now.toISOString())).toEqual([]);
+    it('lists nothing and accepts what is still on offer', () => {
+      const now = new Date('2026-10-31T12:00:01Z');
+      const regulations = [priority, general, unlimited];
+
+      expect(listed(regulations, now.toISOString())).toEqual([]);
+      expect(
+        isRegulationSelectionAllowed(regulations, ['general'], now, period),
+      ).toBe(true);
+      expect(
+        isRegulationSelectionAllowed(regulations, ['tag'], now, period),
+      ).toBe(true);
+    });
+
+    it('takes the phase that is over off the offer', () => {
+      const now = new Date('2026-10-31T12:00:01Z');
+      const regulations = [priority, general];
+
+      expect(selectable(regulations, now.toISOString())).toEqual(['general']);
+      expect(
+        isRegulationSelectionAllowed(regulations, ['priority'], now, period),
+      ).toBe(false);
       expect(
         isRegulationSelectionAllowed(
-          [priority, general],
-          ['priority'],
+          regulations,
+          ['priority', 'general'],
           now,
           period,
         ),
-      ).toBe(true);
+      ).toBe(false);
+    });
+
+    it('keeps everything on offer until the general phase starts', () => {
+      const later = {...general, priorityStartsAt: '2026-11-01T00:00:00Z'};
+
+      expect(selectable([priority, later], '2026-10-31T18:00:00Z')).toEqual([
+        'priority',
+        'general',
+      ]);
+    });
+
+    // 中四国 and 東北: residents stay eligible after their priority, and a
+    // window may sit on the only regulation.
+    it('keeps a regulation whose window ended outside the general phase', () => {
+      expect(selectable([priority, unlimited], '2026-11-01T00:00:00Z')).toEqual(
+        ['priority', 'tag'],
+      );
+      expect(selectable([priority], '2026-11-01T00:00:00Z')).toEqual([
+        'priority',
+      ]);
+    });
+
+    it('keeps a regulation whose window ended before entries opened', () => {
+      const stale = {
+        id: 'stale',
+        priorityStartsAt: '2026-09-01T00:00:00Z',
+        priorityEndsAt: '2026-09-10T00:00:00Z',
+      };
+
+      expect(
+        selectable([stale, priority, general], '2026-11-01T00:00:00Z'),
+      ).toEqual(['stale', 'general']);
     });
 
     it('allows a gap between the phases', () => {
