@@ -47,7 +47,7 @@ flowchart LR
 基本となるデータモデルの前提は次の通りです。
 
 - **地域(region)** の下に **大会(tournament)** があり、大会は「地域 × 大会種別(最強位 / 新人王)」の組で一意に決まる(`unique (region_id, type)`)。
-- **参加者アカウント(participant)** はメールアドレスで一意、かつ1つの地域にひもづく。地域をまたいだ参加はできない。
+- **参加者アカウント(participant)** はメールアドレスで一意、かつ1つの地域にひもづく。地域をまたいだ参加はできない。別の地域のエントリーがすべてキャンセル済みなら、次のエントリーで地域が移る(#236)。
 - **エントリー(entry)** は「participant × tournament」の組ごとに1件のみ(`unique (participant_id, tournament_id)`)。同じ participant が同じ地域の最強位・新人王の両方に entry を持てるかは、地域ごとの設定(`regions.allows_dual_entry`、既定 `false`)で決まる。
 - **フォーム項目定義(form_field_defs)** は大会ごとに YAML から展開して保存する。フロントエンドはこれを読んでフォームを動的生成する。
 
@@ -165,7 +165,7 @@ flowchart TB
 | カラム | 型 | 制約 | 説明 |
 | --- | --- | --- | --- |
 | `id` | uuid | PK | |
-| `region_id` | uuid | not null, FK → `regions.id` | 所属地域 |
+| `region_id` | uuid | not null, FK → `regions.id` | 所属地域。別の地域のエントリーがすべて `cancelled` なら、次のエントリーで `claim_participant_region()`(`0040`)が移す |
 | `email` | text | not null, **unique(全体)**, check `email = lower(email)` | ログイン ID。小文字で保存(#133) |
 | `password_hash` | text | not null | PBKDF2-SHA256 ハッシュ。`pbkdf2-sha256$<反復回数>$<16バイトのソルトの hex>$<32バイトのハッシュの hex>` の形式(現行 10 万回)。`$` を含まない `{ソルト}:{ハッシュ}` は旧形式(10 万回)として読み、次のログインで新形式に書き換わります |
 | `password_changed_at` | timestamptz | not null, default `now()` | パスワードが最後に変わった時刻(`0011` で追加)。セッション失効の判定に使います |

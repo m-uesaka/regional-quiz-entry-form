@@ -208,6 +208,8 @@ interface MockSupabase {
   mails: SentMail[];
   /** The arguments each `take_over_unverified_participant()` call got. */
   takeOvers: Array<Record<string, unknown>>;
+  /** The arguments each `claim_participant_region()` call got. */
+  regionClaims: Array<Record<string, unknown>>;
 }
 
 /**
@@ -236,8 +238,18 @@ function mockSupabase(options: {
    * account another submission took over and had confirmed in between.
    */
   verifiedMeanwhile?: Record<string, unknown>;
+  /**
+   * Makes `claim_participant_region()` refuse: the participant has an entry
+   * in another region that isn't cancelled.
+   */
+  activeElsewhere?: boolean;
 }): MockSupabase {
-  const recorded: MockSupabase = {calls: [], mails: [], takeOvers: []};
+  const recorded: MockSupabase = {
+    calls: [],
+    mails: [],
+    takeOvers: [],
+    regionClaims: [],
+  };
   const tournament = options.tournament ?? tournamentRow();
   // Written to by the account creation and the takeover, so the re-read
   // after the entry is written (`isStillUnverifiedAccountOf()`) sees the
@@ -302,6 +314,11 @@ function mockSupabase(options: {
       // Nothing of this participant's has a lapsed verification link.
       case 'POST rpc/lapse_expired_pending_entries':
         return Response.json([]);
+      case 'POST rpc/claim_participant_region': {
+        const args = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        recorded.regionClaims.push(args);
+        return Response.json(!options.activeElsewhere);
+      }
       case 'GET entries':
         return rows([]);
       case 'POST entries':
@@ -437,6 +454,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
   it('mails the owner instead of answering when the address is in another region', async () => {
     const recorded = mockSupabase({
       participant: await registeredParticipant({regionId: OTHER_REGION_ID}),
+      activeElsewhere: true,
     });
 
     const res = await observable(
@@ -452,6 +470,39 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
       table: 'entries',
       method: 'POST',
     });
+  });
+
+  // #236: nothing but a cancelled entry is left in the old region.
+  it('enters a verified participant with nothing left in their old region', async () => {
+    const recorded = mockSupabase({
+      participant: await registeredParticipant({regionId: OTHER_REGION_ID}),
+    });
+
+    await postWithContext(TOURNAMENT_PATH, validBody);
+    await settleBackgroundWork();
+
+    expect(recorded.regionClaims).toEqual([
+      {p_participant_id: PARTICIPANT_ID, p_region_id: REGION_ID},
+    ]);
+    expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
+    expect(recorded.mails[0].subject).toBe(
+      verificationMailSubject(TOURNAMENT_NAME),
+    );
+  });
+
+  it('never moves a verified account for a wrong password', async () => {
+    const recorded = mockSupabase({
+      participant: await registeredParticipant({
+        regionId: OTHER_REGION_ID,
+        password: 'the-real-password',
+      }),
+    });
+
+    await postWithContext(TOURNAMENT_PATH, validBody);
+    await settleBackgroundWork();
+
+    expect(recorded.regionClaims).toHaveLength(0);
+    expect(recorded.mails[0].html).toContain('パスワード');
   });
 
   it('creates the account and the entry for an unknown email, after answering', async () => {
@@ -737,6 +788,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
   it('never takes over a verified account', async () => {
     const recorded = mockSupabase({
       participant: await registeredParticipant({regionId: OTHER_REGION_ID}),
+      activeElsewhere: true,
     });
 
     await postWithContext(TOURNAMENT_PATH, validBody);
@@ -853,6 +905,7 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
   it('still reports errors directly for a logged-in participant', async () => {
     const recorded = mockSupabase({
       participant: await registeredParticipant({regionId: OTHER_REGION_ID}),
+      activeElsewhere: true,
     });
 
     const res = await postWithContext(

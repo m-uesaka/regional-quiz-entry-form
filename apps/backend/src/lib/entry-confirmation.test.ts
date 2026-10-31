@@ -209,6 +209,10 @@ describe.skipIf(!(await isDbReachable()))(
         'verify-account-again',
         null,
       );
+      await sql`
+        update participants set region_id = ${otherFixture.regionId}
+        where id = ${participantId}
+      `;
       const [otherEntry] = await sql`
         insert into entries (
           participant_id, tournament_id, name, furigana, display_name

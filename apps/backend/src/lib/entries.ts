@@ -135,6 +135,13 @@ const CONCURRENT_SUBMISSION = 'concurrent submission';
 const REGION_DUAL_ENTRY_SQLSTATE = 'P0005';
 
 /**
+ * The SQLSTATE `check_participant_region()` (migration 0040) raises: a
+ * concurrent submission moved the participant to another region between
+ * `claim_participant_region()` and the write.
+ */
+const PARTICIPANT_REGION_SQLSTATE = 'P0008';
+
+/**
  * Postgres' own `foreign_key_violation`, which is what a regulation dropped
  * by a concurrent `sync_regulations()` makes the `entry_regulations` write
  * raise. It is the only failure of that write the participant can act on,
@@ -460,7 +467,7 @@ export async function checkEntrySubmission(
  * the address belongs to and enters them.
  *
  * A participant whose address has been verified must prove ownership by
- * password, and stays in the region it registered in. One whose address
+ * password, and can't enter across regions. One whose address
  * never was (#189) is taken over instead: the account was made by a
  * submission nobody has confirmed, possibly from someone who typed another
  * person's address to lock them into a far region, so its password and
@@ -608,7 +615,7 @@ async function createEntryAfterCheck(
 
 /**
  * Enters a submission into a participant whose address has been verified,
- * once it proves the account's password, for the account's own region.
+ * once it proves the account's password.
  * @param env The Worker bindings.
  * @param tournament The checked tournament.
  * @param participant The verified participant, as last read.
@@ -620,14 +627,6 @@ async function enterVerifiedParticipant(
   participant: ParticipantRow,
   input: EntryInput,
 ): Promise<CreateEntryResult> {
-  if (participant.region_id !== tournament.region_id) {
-    return {
-      ok: false,
-      status: 409,
-      error: ALREADY_REGISTERED_IN_ANOTHER_REGION,
-    };
-  }
-
   // Re-entering under a verified address must prove ownership of that
   // account, otherwise anyone who learns a participant's email could attach
   // unauthorized entries to it.
@@ -723,8 +722,9 @@ async function withdrawnTournamentNames(
  * `createEntryAfterCheck()`, or by session in `createEntryForParticipant()`
  * -- into a checked tournament: lapses their entries whose verification
  * link expired unused, reuses their own cancelled entry if there is one,
- * enforces the region's dual-entry rule, writes the entry and its
- * regulations and mails the verification link.
+ * moves them to the tournament's region unless they are taking part in
+ * another one, enforces the region's dual-entry rule, writes the entry and
+ * its regulations and mails the verification link.
  * @param env The Worker bindings.
  * @param tournament The checked tournament.
  * @param participantId The participant being entered.
@@ -788,6 +788,30 @@ async function enterTournament(
         existingEntry.status === 'pending_verification'
           ? ENTRY_PENDING_VERIFICATION
           : ALREADY_ENTERED,
+    };
+  }
+
+  // Taking part in another region is what stops an entry here, not having
+  // registered in one: a participant who cancelled there can enter here
+  // (#236), and the account follows. Only ever reached with the identity
+  // settled, so a stranger's submission can't move an account. An entry that
+  // then fails leaves the account moved, which is harmless: with nothing
+  // active it can move again.
+  const {data: claimedRegion, error: claimError} = await db.rpc(
+    'claim_participant_region',
+    {
+      p_participant_id: participantId,
+      p_region_id: tournament.region_id,
+    },
+  );
+  if (claimError) {
+    return {ok: false, status: 500, error: claimError.message};
+  }
+  if (!claimedRegion) {
+    return {
+      ok: false,
+      status: 409,
+      error: ALREADY_REGISTERED_IN_ANOTHER_REGION,
     };
   }
 
@@ -880,6 +904,13 @@ async function enterTournament(
     // region's other tournament; the trigger is what actually kept the
     // participant from holding both seats.
     return {ok: false, status: 409, error: ALREADY_ENTERED_ANOTHER_TOURNAMENT};
+  }
+  if (error?.code === PARTICIPANT_REGION_SQLSTATE) {
+    return {
+      ok: false,
+      status: 409,
+      error: ALREADY_REGISTERED_IN_ANOTHER_REGION,
+    };
   }
   if (
     error?.code === UNIQUE_VIOLATION_SQLSTATE ||
@@ -1124,7 +1155,6 @@ async function sendEntryNotice(
 /** Shape of the participant lookup in `createEntryForParticipant()`. */
 interface SessionParticipantRow {
   email: string;
-  region_id: string;
 }
 
 /**
@@ -1152,7 +1182,7 @@ export async function createEntryForParticipant(
   const db = createDbClient(env);
   const {data: participant, error} = await db
     .from('participants')
-    .select('email, region_id')
+    .select('email')
     .eq('id', participantId)
     .returns<SessionParticipantRow[]>()
     .maybeSingle();
@@ -1163,13 +1193,6 @@ export async function createEntryForParticipant(
     // `requireParticipant()` read this same row a moment ago, so it was
     // deleted in between; the session no longer names anyone.
     return {ok: false, status: 401, error: 'unauthorized'};
-  }
-  if (participant.region_id !== tournament.region_id) {
-    return {
-      ok: false,
-      status: 409,
-      error: ALREADY_REGISTERED_IN_ANOTHER_REGION,
-    };
   }
   return enterTournament(
     env,

@@ -243,6 +243,74 @@ describe.skipIf(!dbReachable)(
       expect(count).toBe(2);
     });
 
+    // The backstop for `claim_participant_region()` (0040): a submission that
+    // passed it just before a concurrent one moved the account.
+    it("refuses a seat outside the participant's region", async () => {
+      const {participantId, entryFor} = await seedRegion(false);
+      await sql`insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}`;
+      const [otherRegion] = await sql`
+        insert into regions (slug, name, allows_dual_entry)
+        values (${testRegionSlug + '-moved'}, 'テスト地域', false)
+        returning id
+      `;
+      await sql`
+        update participants set region_id = ${otherRegion.id}
+        where id = ${participantId}
+      `;
+
+      let code: string | undefined;
+      try {
+        await sql`
+          update entries set status = 'pending_verification'
+          where participant_id = ${participantId}
+        `;
+      } catch (e: unknown) {
+        code = (e as {errno?: string}).errno;
+      }
+      await sql`delete from entries where participant_id = ${participantId}`;
+      await sql`
+        update participants set region_id = (
+          select id from regions where slug = ${testRegionSlug}
+        ) where id = ${participantId}
+      `;
+      await sql`delete from regions where id = ${otherRegion.id}`;
+
+      expect(code).toBe('P0008');
+    });
+
+    it('moves a participant only while nothing holds their old region', async () => {
+      const {participantId, entryFor} = await seedRegion(false);
+      const [otherRegion] = await sql`
+        insert into regions (slug, name, allows_dual_entry)
+        values (${testRegionSlug + '-claim'}, 'テスト地域', false)
+        returning id
+      `;
+      const claim = async () => {
+        const [row] = await sql`
+          select claim_participant_region(
+            ${participantId}, ${otherRegion.id}
+          ) as claimed
+        `;
+        return row.claimed as boolean;
+      };
+      await sql`insert into entries ${sql(entryFor('saikyoi'))}`;
+
+      const whileLive = await claim();
+      await sql`update entries set status = 'cancelled'
+        where participant_id = ${participantId}`;
+      const onceCancelled = await claim();
+      const [{region_id: regionId}] = await sql`
+        select region_id from participants where id = ${participantId}
+      `;
+      await sql`delete from entries where participant_id = ${participantId}`;
+      await sql`delete from participants where id = ${participantId}`;
+      await sql`delete from regions where id = ${otherRegion.id}`;
+
+      expect(whileLive).toBe(false);
+      expect(onceCancelled).toBe(true);
+      expect(regionId).toBe(otherRegion.id);
+    });
+
     it('does not count a cancelled entry as occupying the region', async () => {
       const {participantId, entryFor} = await seedRegion(false);
       await sql`insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}`;
