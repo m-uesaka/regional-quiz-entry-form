@@ -1,10 +1,10 @@
 <script lang="ts">
+  import TextField from '$lib/components/form/TextField.svelte';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
   import Button from '$lib/components/ui/atoms/Button.svelte';
   import Card from '$lib/components/ui/atoms/Card.svelte';
   import Checkbox from '$lib/components/ui/atoms/Checkbox.svelte';
-  import Input from '$lib/components/ui/atoms/Input.svelte';
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
   import type {PageProps} from './$types';
@@ -46,43 +46,31 @@
     {/if}
 
     <form method="POST" action="?/create" class="flex flex-col gap-4">
-      <div class="flex flex-col gap-1.5">
-        <Label for="region-create-slug">slug</Label>
-        <!-- Fixed at creation time: it is one segment of the published entry-form
-             URL, so the row forms below carry no control for it. -->
-        <Input
-          id="region-create-slug"
-          class="w-full"
-          name="slug"
-          type="text"
-          required
-          isError={Boolean(createResult?.fieldErrors.slug)}
-          value={createResult?.values.slug ?? ''}
-        />
-        {#if createResult?.fieldErrors.slug}
-          <p role="alert" class="text-sm text-destructive">
-            {createResult.fieldErrors.slug[0]}
-          </p>
-        {/if}
-      </div>
+      <!-- Fixed at creation time: it is one segment of the published entry-form
+           URL, so the row forms below carry no control for it. -->
+      <TextField
+        id="region-create-slug"
+        class="w-full"
+        name="slug"
+        label="slug"
+        type="text"
+        required
+        error={createResult?.fieldErrors.slug?.[0]}
+        errorRole="alert"
+        value={createResult?.values.slug ?? ''}
+      />
 
-      <div class="flex flex-col gap-1.5">
-        <Label for="region-create-name">地域名</Label>
-        <Input
-          id="region-create-name"
-          class="w-full"
-          name="name"
-          type="text"
-          required
-          isError={Boolean(createResult?.fieldErrors.name)}
-          value={createResult?.values.name ?? ''}
-        />
-        {#if createResult?.fieldErrors.name}
-          <p role="alert" class="text-sm text-destructive">
-            {createResult.fieldErrors.name[0]}
-          </p>
-        {/if}
-      </div>
+      <TextField
+        id="region-create-name"
+        class="w-full"
+        name="name"
+        label="地域名"
+        type="text"
+        required
+        error={createResult?.fieldErrors.name?.[0]}
+        errorRole="alert"
+        value={createResult?.values.name ?? ''}
+      />
 
       <div class="flex items-center gap-2">
         <Checkbox
@@ -130,23 +118,17 @@
               <form method="POST" action="?/update" class="flex flex-col gap-4">
                 <input type="hidden" name="id" value={region.id} />
 
-                <div class="flex flex-col gap-1.5">
-                  <Label for="region-{region.id}-name">地域名</Label>
-                  <Input
-                    id="region-{region.id}-name"
-                    class="w-full"
-                    name="name"
-                    type="text"
-                    required
-                    isError={Boolean(result?.fieldErrors.name)}
-                    value={result?.values.name ?? region.name}
-                  />
-                  {#if result?.fieldErrors.name}
-                    <p role="alert" class="text-sm text-destructive">
-                      {result.fieldErrors.name[0]}
-                    </p>
-                  {/if}
-                </div>
+                <TextField
+                  id="region-{region.id}-name"
+                  class="w-full"
+                  name="name"
+                  label="地域名"
+                  type="text"
+                  required
+                  error={result?.fieldErrors.name?.[0]}
+                  errorRole="alert"
+                  value={result?.values.name ?? region.name}
+                />
 
                 <div class="flex items-center gap-2">
                   <Checkbox

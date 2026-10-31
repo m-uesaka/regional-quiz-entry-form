@@ -8,11 +8,10 @@
     type MypageEntryDetail,
   } from '@regional-quiz/shared';
   import DynamicFormField from '$lib/components/DynamicFormField.svelte';
+  import FieldError from '$lib/components/form/FieldError.svelte';
+  import TextField from '$lib/components/form/TextField.svelte';
   import {customFieldName} from '$lib/custom-field-name';
   import Button from '$lib/components/ui/atoms/Button.svelte';
-  import Input from '$lib/components/ui/atoms/Input.svelte';
-  import Label from '$lib/components/ui/atoms/Label.svelte';
-  import Textarea from '$lib/components/ui/atoms/Textarea.svelte';
   import type {
     EntryEditFormValues,
     EntryFieldErrors,
@@ -73,64 +72,45 @@
 </script>
 
 <form method="POST" class="flex flex-col gap-4" use:enhance>
-  <div class="flex flex-col gap-1.5">
-    <Label for="name">氏名</Label>
-    <Input
-      id="name"
-      name="name"
-      bind:value={name}
-      maxlength={ENTRY_NAME_MAX_LENGTH}
-      isError={!!fieldError('name')}
-      required
-    />
-    {#if fieldError('name')}
-      <p class="text-sm text-destructive">{fieldError('name')}</p>
-    {/if}
-  </div>
+  <TextField
+    id="name"
+    name="name"
+    label="氏名"
+    bind:value={name}
+    maxlength={ENTRY_NAME_MAX_LENGTH}
+    error={fieldError('name')}
+    required
+  />
 
-  <div class="flex flex-col gap-1.5">
-    <Label for="furigana">ふりがな</Label>
-    <Input
-      id="furigana"
-      name="furigana"
-      bind:value={furigana}
-      maxlength={ENTRY_NAME_MAX_LENGTH}
-      isError={!!fieldError('furigana')}
-      required
-    />
-    {#if fieldError('furigana')}
-      <p class="text-sm text-destructive">{fieldError('furigana')}</p>
-    {/if}
-  </div>
+  <TextField
+    id="furigana"
+    name="furigana"
+    label="ふりがな"
+    bind:value={furigana}
+    maxlength={ENTRY_NAME_MAX_LENGTH}
+    error={fieldError('furigana')}
+    required
+  />
 
-  <div class="flex flex-col gap-1.5">
-    <Label for="displayName">エントリーリスト掲載名</Label>
-    <Input
-      id="displayName"
-      name="displayName"
-      bind:value={displayName}
-      maxlength={ENTRY_NAME_MAX_LENGTH}
-      isError={!!fieldError('displayName')}
-      required
-    />
-    {#if fieldError('displayName')}
-      <p class="text-sm text-destructive">{fieldError('displayName')}</p>
-    {/if}
-  </div>
+  <TextField
+    id="displayName"
+    name="displayName"
+    label="エントリーリスト掲載名"
+    bind:value={displayName}
+    maxlength={ENTRY_NAME_MAX_LENGTH}
+    error={fieldError('displayName')}
+    required
+  />
 
-  <div class="flex flex-col gap-1.5">
-    <Label for="freeText">自由記述</Label>
-    <Textarea
-      id="freeText"
-      name="freeText"
-      bind:value={freeText}
-      maxlength={ENTRY_FREE_TEXT_MAX_LENGTH}
-      isError={!!fieldError('freeText')}
-    />
-    {#if fieldError('freeText')}
-      <p class="text-sm text-destructive">{fieldError('freeText')}</p>
-    {/if}
-  </div>
+  <TextField
+    id="freeText"
+    name="freeText"
+    label="自由記述"
+    multiline
+    bind:value={freeText}
+    maxlength={ENTRY_FREE_TEXT_MAX_LENGTH}
+    error={fieldError('freeText')}
+  />
 
   {#each fields as field (field.key)}
     <!-- Keyed by the control's namespaced name, the same key the action
@@ -143,9 +123,7 @@
   {/each}
   <!-- Every answer within its own bound can still add up past the combined
        one; that has no single control to point at. -->
-  {#if fieldError('customFieldValues')}
-    <p class="text-sm text-destructive">{fieldError('customFieldValues')}</p>
-  {/if}
+  <FieldError error={fieldError('customFieldValues')} />
 
   <div class="flex flex-wrap gap-2 pt-2">
     <Button type="submit" variant="primary" tone="solid">保存する</Button>

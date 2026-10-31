@@ -75,6 +75,12 @@ server-rendered page would come back blank. That breaks the pages that have to
 work before (or without) the client bundle, e.g. the staff login form echoing a
 rejected address back.
 
+`TextField` is the one place a caller may still pass a one-way `value={...}`:
+it only seeds the field, and the control underneath is bound by the component,
+so a typed value survives hydration all the same. The rule above is about what
+sits directly on an `<input>` or `<textarea>`, and it still holds for a control
+used on its own.
+
 ### A constraint that needs a re-render doesn't belong in the server's HTML
 
 The same rule applies to `required`, and the one control that got it wrong was

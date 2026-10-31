@@ -4,13 +4,14 @@
     type StaffAccount,
     type StaffRole,
   } from '@regional-quiz/shared';
+  import FieldError from '$lib/components/form/FieldError.svelte';
   import NativeSelect from '$lib/components/form/NativeSelect.svelte';
+  import TextField from '$lib/components/form/TextField.svelte';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
   import Button from '$lib/components/ui/atoms/Button.svelte';
   import Card from '$lib/components/ui/atoms/Card.svelte';
   import Chip from '$lib/components/ui/atoms/Chip.svelte';
-  import Input from '$lib/components/ui/atoms/Input.svelte';
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
   import type {RowIntent} from './+page.server';
@@ -104,23 +105,17 @@
     {/if}
 
     <form method="POST" action="?/invite" class="flex flex-col gap-4">
-      <div class="flex flex-col gap-1.5">
-        <Label for="staff-invite-email">メールアドレス</Label>
-        <Input
-          id="staff-invite-email"
-          class="w-full"
-          name="email"
-          type="email"
-          required
-          isError={Boolean(inviteResult?.fieldErrors.email)}
-          value={inviteResult?.values.email ?? ''}
-        />
-        {#if inviteResult?.fieldErrors.email}
-          <p role="alert" class="text-sm text-destructive">
-            {inviteResult.fieldErrors.email[0]}
-          </p>
-        {/if}
-      </div>
+      <TextField
+        id="staff-invite-email"
+        class="w-full"
+        name="email"
+        label="メールアドレス"
+        type="email"
+        required
+        error={inviteResult?.fieldErrors.email?.[0]}
+        errorRole="alert"
+        value={inviteResult?.values.email ?? ''}
+      />
 
       <div class="flex flex-col gap-1.5">
         <Label for="staff-invite-role">権限</Label>
@@ -142,6 +137,10 @@
           id="staff-invite-region"
           name="regionId"
           isError={Boolean(inviteResult?.fieldErrors.regionId)}
+          aria-describedby={inviteResult?.fieldErrors.regionId
+            ? 'staff-invite-region-error'
+            : undefined}
+          aria-invalid={inviteResult?.fieldErrors.regionId ? 'true' : undefined}
           value={inviteResult?.values.regionId ?? ''}
         >
           <option value="">選択してください</option>
@@ -149,11 +148,11 @@
             <option value={region.id}>{region.name}</option>
           {/each}
         </NativeSelect>
-        {#if inviteResult?.fieldErrors.regionId}
-          <p role="alert" class="text-sm text-destructive">
-            {inviteResult.fieldErrors.regionId[0]}
-          </p>
-        {/if}
+        <FieldError
+          error={inviteResult?.fieldErrors.regionId?.[0]}
+          id="staff-invite-region-error"
+          role="alert"
+        />
       </div>
 
       <div class="flex flex-col gap-1.5">

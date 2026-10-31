@@ -6,6 +6,7 @@
   } from '@regional-quiz/shared';
   import {customFieldName} from '$lib/custom-field-name';
   import FieldLabelText from '$lib/components/FieldLabelText.svelte';
+  import FieldError from '$lib/components/form/FieldError.svelte';
   import Input from '$lib/components/ui/atoms/Input.svelte';
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import Textarea from '$lib/components/ui/atoms/Textarea.svelte';
@@ -74,13 +75,6 @@
   });
 </script>
 
-<!-- The branches below each render this under their control, so a
-     rejected answer is reported in the same place whatever the field
-     type is. -->
-{#snippet errorMessage()}
-  {#if error}<p class="text-sm text-destructive">{error}</p>{/if}
-{/snippet}
-
 <!-- The options stay native inputs inside their own `<label>`: a native
      radio/checkbox is what `bind:group` and the server-rendered `required`
      rely on, and the wrapping label is what names each option. -->
@@ -109,7 +103,7 @@
         bind:value
       />
     {/if}
-    {@render errorMessage()}
+    <FieldError {error} />
   </div>
 {:else if field.type === 'radio'}
   <fieldset class="flex flex-col gap-2">
@@ -130,7 +124,7 @@
         <FieldLabelText label={option} />
       </label>
     {/each}
-    {@render errorMessage()}
+    <FieldError {error} />
   </fieldset>
 {:else if field.type === 'checkbox'}
   {#if field.options && field.options.length > 0}
@@ -152,7 +146,7 @@
           <FieldLabelText label={option} />
         </label>
       {/each}
-      {@render errorMessage()}
+      <FieldError {error} />
     </fieldset>
   {:else}
     <div class="flex flex-col gap-1.5">
@@ -167,7 +161,7 @@
         />
         <FieldLabelText label={field.label} />
       </label>
-      {@render errorMessage()}
+      <FieldError {error} />
     </div>
   {/if}
 {/if}
