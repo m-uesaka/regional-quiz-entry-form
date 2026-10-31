@@ -200,4 +200,26 @@ describe('RegulationSelector', () => {
 
     expect(screen.queryByText(/優先期間/)).not.toBeInTheDocument();
   });
+
+  // The page's own notice still announces the window; there is just nothing
+  // to pick between here.
+  it('says nothing when a window covers everything on offer', () => {
+    render(RegulationSelector, {
+      props: {
+        regulations: [
+          buildRegulation({
+            ...REGULATION_A,
+            priorityStartsAt: '2026-08-20T00:00:00+09:00',
+            priorityEndsAt: '2026-08-31T00:00:00+09:00',
+          }),
+        ],
+        value: [],
+        entryPeriod: ENTRY_PERIOD,
+        now: new Date('2026-08-23T00:00:00Z'),
+      },
+    });
+
+    expect(screen.queryByText('優先対象')).not.toBeInTheDocument();
+    expect(screen.queryByText(/現在は優先期間中です/)).not.toBeInTheDocument();
+  });
 });

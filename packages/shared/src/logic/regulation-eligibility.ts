@@ -189,7 +189,23 @@ export function selectableRegulations<T extends Omit<RegulationWindow, 'id'>>(
 }
 
 /**
- * Determines whether `selectedRegulationIds` may be chosen at `now`.
+ * Why a selection of regulations is refused:
+ *
+ * - `empty`: it chooses nothing.
+ * - `not-offered`: it names something not on offer
+ *   (`selectableRegulations()`): a phase that is over, or an id the
+ *   tournament doesn't have, which is what a regulation staff deleted looks
+ *   like from a form left open. Both are a form overtaken by a change, which
+ *   reading the regulations again and choosing again fixes.
+ * - `needs-priority`: it claims none of the regulations a priority window
+ *   requires one of.
+ */
+export type RegulationSelectionRefusal =
+  'empty' | 'not-offered' | 'needs-priority';
+
+/**
+ * Determines whether `selectedRegulationIds` may be chosen at `now`, and if
+ * not, why.
  *
  * A participant may meet several of a tournament's conditions at once, so a
  * selection is a set rather than a single regulation. The rule itself is
@@ -208,14 +224,15 @@ export function selectableRegulations<T extends Omit<RegulationWindow, 'id'>>(
  *     select.
  * @param now The current time.
  * @param entryPeriod The tournament's entry period.
+ * @return Why the selection is refused, or null if it may be chosen.
  */
-export function isRegulationSelectionAllowed(
+export function regulationSelectionRefusal(
   regulations: RegulationWindow[],
   selectedRegulationIds: readonly string[],
   now: Date,
   entryPeriod: EntryPeriod,
-): boolean {
-  if (selectedRegulationIds.length === 0) return false;
+): RegulationSelectionRefusal | null {
+  if (selectedRegulationIds.length === 0) return 'empty';
   // Every selected id has to name a regulation of this tournament that is
   // still on offer. The composite foreign key behind `entry_regulations`
   // would refuse an outsider anyway, but as a constraint violation rather
@@ -224,7 +241,7 @@ export function isRegulationSelectionAllowed(
   const allOnOffer = selectedRegulationIds.every(selectedId =>
     selectable.some(regulation => regulation.id === selectedId),
   );
-  if (!allOnOffer) return false;
+  if (!allOnOffer) return 'not-offered';
 
   const activePriorityIds = activePriorityRegulations(
     regulations,
@@ -232,8 +249,9 @@ export function isRegulationSelectionAllowed(
     entryPeriod,
   ).map(regulation => regulation.id);
 
-  if (activePriorityIds.length === 0) return true;
-  return selectedRegulationIds.some(selectedId =>
+  if (activePriorityIds.length === 0) return null;
+  const claimsPriority = selectedRegulationIds.some(selectedId =>
     activePriorityIds.includes(selectedId),
   );
+  return claimsPriority ? null : 'needs-priority';
 }

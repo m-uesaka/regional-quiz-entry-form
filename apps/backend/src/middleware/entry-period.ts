@@ -1,7 +1,7 @@
 import type {Context} from 'hono';
 import {createMiddleware} from 'hono/factory';
 import {getCookie} from 'hono/cookie';
-import {entryAvailability} from '@regional-quiz/shared';
+import {ENTRY_ERROR_CODES, entryAvailability} from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {
   fetchTournamentById,
@@ -87,7 +87,9 @@ export function requireOpenEntryPeriodOrStaff(
     // period, but said apart so the form can tell participants it is
     // paused rather than closed.
     const refusal =
-      availability === 'paused' ? 'entries paused' : 'entry period closed';
+      availability === 'paused'
+        ? ENTRY_ERROR_CODES.ENTRIES_PAUSED
+        : ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED;
 
     const cookie = getCookie(c, STAFF_SESSION_COOKIE);
     const staff = await readStaffClaims(cookie, c.env.SESSION_SECRET);

@@ -138,7 +138,7 @@ flowchart TB
 | `display_order` | integer | not null, default 0 | 表示順 |
 
 - `unique (id, tournament_id)`: 一見冗長ですが、これは `entry_regulations` 側の複合外部キー `foreign key (regulation_id, tournament_id) references regulations (id, tournament_id)` を張るために必要です。この複合 FK により、**ある大会のエントリーが別の大会のレギュレーションを参照することが DB レベルで不可能**になります(`0018` より前は同じ複合 FK が `entries` から直接張られていました)。
-- 優先期間の判定ロジックは `packages/shared/src/logic/regulation-eligibility.ts` の `isRegulationSelectionAllowed()`。「いずれかのレギュレーションの優先期間が現在アクティブなら、選んだ集合にそのうち少なくとも1つが含まれていなければならない。アクティブなものが1つもなければ、選択肢に残っているものの中から何を選んでもよい」という規則です。優先期間は「その条件を満たす参加者だけがエントリーできる」という意味なので、優先対象を1つ選んだうえで他の条件も一緒に申告することは許されます。
+- 優先期間の判定ロジックは `packages/shared/src/logic/regulation-eligibility.ts` の `regulationSelectionRefusal()`。「いずれかのレギュレーションの優先期間が現在アクティブなら、選んだ集合にそのうち少なくとも1つが含まれていなければならない。アクティブなものが1つもなければ、選択肢に残っているものの中から何を選んでもよい」という規則です。優先期間は「その条件を満たす参加者だけがエントリーできる」という意味なので、優先対象を1つ選んだうえで他の条件も一緒に申告することは許されます。
 - アクティブかどうかは `activePriorityRegulations()` が決め、大会を「優先枠 → 一般枠」の順に開く設定の最後の段階(一般枠)はアクティブとして扱いません(#235)。案内の表示も送信時の検査もこの判定を使います。一般枠の段階では、終わった優先枠のレギュレーションを選択肢から外し、送信も断ります(`selectableRegulations()`)。一般枠と見なすのは、次の**すべて**を満たすときです。
   - これから始まる優先期間が無い
   - 開いている優先期間がすべて、エントリーの締切まで続く(終わりが締切の 60 秒前以降)
@@ -147,7 +147,7 @@ flowchart TB
 
   選択肢から外すのを一般枠の段階に限るのは、期間が終わっただけでは外せないためです。在住者を優先する期間のように、終わった後も対象者がそのレギュレーションを選ぶ必要がある大会や、レギュレーションが1つだけの大会があります。
 - `priority_starts_at` / `priority_ends_at` は**両方揃っているときだけ**優先期間として扱われます(片方だけ設定されている行は優先期間なしと同じ扱い)。
-- `check (regulations_priority_window_complete)`(`0014`): 「両方 null」か「両方非 null かつ開始 < 終了」だけを許します。制約追加は既存行も検証するため、`0014` では制約を張る前に不完全な行(片方だけ / 逆順)を両方 null に正規化しています(`isRegulationSelectionAllowed()` は元々それらを「優先期間なし」として扱っていたので、挙動は変わりません)。片方だけ設定された行を `isRegulationSelectionAllowed()` が「優先期間なし」として扱ってしまうため、そもそも作らせません。Zod の `RegulationUpsertSchema` にも同じ規則がありますが、SQL を直接叩く運用が残るので DB 側にも持たせています。
+- `check (regulations_priority_window_complete)`(`0014`): 「両方 null」か「両方非 null かつ開始 < 終了」だけを許します。制約追加は既存行も検証するため、`0014` では制約を張る前に不完全な行(片方だけ / 逆順)を両方 null に正規化しています(`regulationSelectionRefusal()` は元々それらを「優先期間なし」として扱っていたので、挙動は変わりません)。片方だけ設定された行を `regulationSelectionRefusal()` が「優先期間なし」として扱ってしまうため、そもそも作らせません。Zod の `RegulationUpsertSchema` にも同じ規則がありますが、SQL を直接叩く運用が残るので DB 側にも持たせています。
 - `index (tournament_id, display_order)`(`0014`): `unique (id, tournament_id)` は先頭列が `id` なので `where tournament_id = ?` には使えません。エントリーフォームの表示のたびに走るクエリなので別途張っています。
 
 ### form_field_defs — 大会ごとの追加フォーム項目定義
@@ -244,7 +244,7 @@ flowchart TB
 - 上の2本が `tournament_id` を**共有している**ことが要点です。「この行の大会 = エントリーの大会」かつ「この行の大会 = レギュレーションの大会」が同時に成り立つので、**あるエントリーが別の大会のレギュレーションを参照することは DB レベルで不可能**なまま(移行前の `entries` の複合 FK と同じ保証)。片方だけでは、もう一方とずれた行を止められません。
 - `on delete cascade` なので、エントリーを消せば選択も一緒に消えます。`lib/entries.ts` のロールバック(確認メール送信に失敗したときなど)がこれに乗っています。
 - `entry_regulations_regulation_id_idx`(`0018`): 主キーの先頭列は `entry_id` なので、`sync_regulations()` の「まだ参照されているレギュレーションか」判定と `regulations` 側 FK の参照チェックのために別途張っています。
-- **「1エントリーにつき最低1件」は DB では保証されていません**。旧 `entries.regulation_id` は `not null` だったので DB が担保していましたが、中間テーブルでは0行を止められません。この規則は `EntryInputSchema.regulationIds` の `min(1)` と `isRegulationSelectionAllowed()`(空集合を拒否)がアプリ側で担保しています。
+- **「1エントリーにつき最低1件」は DB では保証されていません**。旧 `entries.regulation_id` は `not null` だったので DB が担保していましたが、中間テーブルでは0行を止められません。この規則は `EntryInputSchema.regulationIds` の `min(1)` と `regulationSelectionRefusal()`(空集合を拒否)がアプリ側で担保しています。
 
 ### email_verification_tokens — メール確認トークン
 
