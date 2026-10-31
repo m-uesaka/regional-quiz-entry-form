@@ -8,6 +8,7 @@ describe('ENTRY_ERROR_CODES', () => {
     expect(ENTRY_ERROR_CODES).toEqual({
       INVALID_TOURNAMENT: 'invalid tournament',
       ENTRY_PERIOD_CLOSED: 'entry period closed',
+      ENTRY_CANCELLED: 'entry is cancelled',
       ENTRIES_PAUSED: 'entries paused',
       REGULATION_NOT_ELIGIBLE: 'regulation not eligible in priority window',
       REGULATION_NO_LONGER_AVAILABLE: 'regulation no longer available',

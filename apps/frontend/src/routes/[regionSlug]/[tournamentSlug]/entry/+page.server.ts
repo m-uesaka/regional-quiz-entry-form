@@ -6,7 +6,6 @@ import {
   EntrySessionInputSchema,
   entryAvailability,
   findCustomFieldValuesErrors,
-  isEntryErrorCode,
   TournamentEntryCountsSchema,
   TournamentTypeSchema,
   type EntryErrorCode,
@@ -15,7 +14,14 @@ import {
   type Tournament,
   type TournamentEntryCounts,
 } from '@regional-quiz/shared';
-import {createApiClient, isUnauthorized} from '$lib/api';
+import {
+  createApiClient,
+  isUnauthorized,
+  pickApiErrorMessage,
+  readErrorMessage,
+  resolveApiErrorMessage,
+  type ApiErrorMessages,
+} from '$lib/api';
 import {isWaitlistOpen, priorityEntryNotices} from '$lib/priority-entry';
 import {participantLoginPath} from '$lib/server/participant-login';
 import {clearParticipantSession} from '$lib/server/participant-session';
@@ -73,16 +79,18 @@ const ALREADY_ENTERED_FALLBACK_MESSAGE = '既にエントリー済みです';
  * no password or unverified account to end in them. So the form is never
  * answered with one, and has no wording for it.
  */
-const MAIL_ONLY_ENTRY_ERROR_CODES = [
-  ENTRY_ERROR_CODES.INVALID_PASSWORD,
-  ENTRY_ERROR_CODES.COMMON_PASSWORD,
-  ENTRY_ERROR_CODES.SUPERSEDED_BY_LATER_SUBMISSION,
-] as const;
+type MailOnlyEntryErrorCode =
+  | typeof ENTRY_ERROR_CODES.INVALID_PASSWORD
+  | typeof ENTRY_ERROR_CODES.COMMON_PASSWORD
+  | typeof ENTRY_ERROR_CODES.SUPERSEDED_BY_LATER_SUBMISSION;
 
-/** The codes the entry form can be answered with. */
+/**
+ * The codes the entry form can be answered with. `ENTRY_CANCELLED` is an edit
+ * of an existing entry being refused, which this form doesn't do.
+ */
 type AnsweredEntryErrorCode = Exclude<
   EntryErrorCode,
-  (typeof MAIL_ONLY_ENTRY_ERROR_CODES)[number]
+  MailOnlyEntryErrorCode | typeof ENTRY_ERROR_CODES.ENTRY_CANCELLED
 >;
 
 /**
@@ -141,54 +149,12 @@ const ENTRY_STATUS_MESSAGES: Record<number, string> = {
   429: TOO_MANY_REQUESTS_MESSAGE,
 };
 
-/**
- * What a refused submission is shown as: the code's own wording, or, for a
- * code from outside `ENTRY_ERROR_CODES`, what its status falls back to.
- * @param code The `error` string of the response.
- * @param status The response's status.
- */
-function entryErrorMessage(code: string, status: number): string {
-  return isAnsweredEntryErrorCode(code)
-    ? ENTRY_ERROR_MESSAGES[code]
-    : (ENTRY_STATUS_MESSAGES[status] ?? 'エントリーの登録に失敗しました');
-}
-
-/**
- * Whether an `error` string is one the entry form has wording for.
- * @param code The `error` string of the response.
- */
-function isAnsweredEntryErrorCode(
-  code: string,
-): code is AnsweredEntryErrorCode {
-  return (
-    isEntryErrorCode(code) &&
-    !MAIL_ONLY_ENTRY_ERROR_CODES.some(mailOnly => mailOnly === code)
-  );
-}
-
-/**
- * Reads the `{error: string}` body the backend returns with every failure.
- * The RPC client types the body as a union across statuses, so it is
- * narrowed here rather than asserted.
- * @param res The failed API response.
- */
-async function readErrorCode(res: {json(): Promise<unknown>}): Promise<string> {
-  try {
-    const body: unknown = await res.json();
-    if (
-      typeof body === 'object' &&
-      body !== null &&
-      'error' in body &&
-      typeof body.error === 'string'
-    ) {
-      return body.error;
-    }
-  } catch {
-    // A non-JSON body (a proxy error page, say) leaves the status to speak
-    // for itself.
-  }
-  return '';
-}
+/** What a refused submission is shown as. */
+const ENTRY_REFUSAL_MESSAGES: ApiErrorMessages = {
+  byCode: ENTRY_ERROR_MESSAGES,
+  byStatus: ENTRY_STATUS_MESSAGES,
+  fallback: 'エントリーの登録に失敗しました',
+};
 
 /**
  * Fetches the tournament named by the route, applying the same "not found"
@@ -238,9 +204,10 @@ async function fetchTournament({
       // A paused tournament (0039) is gated the same way, but said apart.
       throw error(
         403,
-        (await readErrorCode(res)) === ENTRY_ERROR_CODES.ENTRIES_PAUSED
-          ? ENTRIES_PAUSED_MESSAGE
-          : ENTRY_ERROR_MESSAGES[ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED],
+        await resolveApiErrorMessage(res, {
+          byCode: {[ENTRY_ERROR_CODES.ENTRIES_PAUSED]: ENTRIES_PAUSED_MESSAGE},
+          fallback: ENTRY_ERROR_MESSAGES[ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED],
+        }),
       );
     }
     throw error(502, '大会情報の取得に失敗しました');
@@ -569,12 +536,14 @@ export const actions = {
       if (res.status === 401) {
         clearParticipantSession(cookies, url);
       }
-      const code = await readErrorCode(res);
+      // Read here rather than by `resolveApiErrorMessage()`: the body can only
+      // be read once, and `regulationsChanged` below needs the code as well.
+      const code = await readErrorMessage(res, '');
       // The API's refusal is about the submission as a whole, not about one
       // input, so there is nothing to attach per field.
       const fieldErrors: EntryFieldErrors = {};
       return fail(res.status, {
-        error: entryErrorMessage(code, res.status),
+        error: pickApiErrorMessage(code, res.status, ENTRY_REFUSAL_MESSAGES),
         fieldErrors,
         values,
         loginPath: res.status === 401 ? loginPath : null,

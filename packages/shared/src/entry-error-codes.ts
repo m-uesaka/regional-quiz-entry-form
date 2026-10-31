@@ -8,6 +8,12 @@
 export const ENTRY_ERROR_CODES = {
   INVALID_TOURNAMENT: 'invalid tournament',
   ENTRY_PERIOD_CLOSED: 'entry period closed',
+  /**
+   * An edit of an entry that was cancelled while the edit form was open: the
+   * only status `EDITABLE_ENTRY_STATUSES` leaves out. Said apart from
+   * `ENTRY_PERIOD_CLOSED`, which refuses an edit with the same 403.
+   */
+  ENTRY_CANCELLED: 'entry is cancelled',
   /** Paused by staff (0039), said apart from being outside the period. */
   ENTRIES_PAUSED: 'entries paused',
   REGULATION_NOT_ELIGIBLE: 'regulation not eligible in priority window',

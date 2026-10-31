@@ -71,13 +71,18 @@ function fakeFetch(
     entry?: MypageEntryDetail;
     detailStatus?: number;
     patchStatus?: number;
+    patchError?: string;
   } = {},
   log: FetchLog = {patchBodies: []},
 ): typeof fetch {
   return (async (input, init) => {
     if (init?.method === 'PATCH') {
       log.patchBodies.push(JSON.parse(String(init.body)));
-      return new Response(JSON.stringify({ok: true}), {
+      const body =
+        options.patchError === undefined
+          ? {ok: true}
+          : {error: options.patchError};
+      return new Response(JSON.stringify(body), {
         status: options.patchStatus ?? 200,
         headers: {'Content-Type': 'application/json'},
       });
@@ -358,19 +363,56 @@ describe('mypage entry edit form action', () => {
     });
   });
 
-  it('fails with 403 when the backend refuses the update', async () => {
+  it.each([
+    ['entry period closed', 'エントリー期間外のため編集できません'],
+    ['entry is cancelled', 'キャンセル済みのエントリーは編集できません'],
+  ])('tells a 403 %s apart', async (code, message) => {
     const event = buildActionEvent(
-      fakeFetch({patchStatus: 403}),
+      fakeFetch({patchStatus: 403, patchError: code}),
       validFormData(),
     );
 
-    // A 403 covers both a closed entry period and a cancelled entry, so the
-    // message must not claim one of the two reasons.
+    await expect(actions.default(event)).resolves.toMatchObject({
+      status: 403,
+      data: {error: message},
+    });
+  });
+
+  it('claims neither reason for a 403 that names neither', async () => {
+    const event = buildActionEvent(
+      fakeFetch({patchStatus: 403, patchError: 'forbidden'}),
+      validFormData(),
+    );
+
     await expect(actions.default(event)).resolves.toMatchObject({
       status: 403,
       data: {
         error: 'エントリー期間外またはキャンセル済みのため編集できません',
       },
+    });
+  });
+
+  it('fails with 404 when the entry has gone', async () => {
+    const event = buildActionEvent(
+      fakeFetch({patchStatus: 404, patchError: 'entry not found'}),
+      validFormData(),
+    );
+
+    await expect(actions.default(event)).resolves.toMatchObject({
+      status: 404,
+      data: {error: 'エントリーが見つかりません'},
+    });
+  });
+
+  it('answers a failure on our side as a 502', async () => {
+    const event = buildActionEvent(
+      fakeFetch({patchStatus: 500, patchError: 'internal error'}),
+      validFormData(),
+    );
+
+    await expect(actions.default(event)).resolves.toMatchObject({
+      status: 502,
+      data: {error: 'エントリーの更新に失敗しました'},
     });
   });
 

@@ -1266,7 +1266,11 @@ export async function updateOwnEntry(
     };
   }
   if (!EDITABLE_ENTRY_STATUSES.includes(entry.status)) {
-    return {ok: false, status: 403, error: `entry is ${entry.status}`};
+    return {
+      ok: false,
+      status: 403,
+      error: ENTRY_ERROR_CODES.ENTRY_CANCELLED,
+    };
   }
 
   const customFieldValuesCheck = await validateCustomFieldValues(
