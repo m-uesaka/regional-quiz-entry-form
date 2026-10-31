@@ -137,6 +137,10 @@
           id="staff-invite-region"
           name="regionId"
           isError={Boolean(inviteResult?.fieldErrors.regionId)}
+          aria-describedby={inviteResult?.fieldErrors.regionId
+            ? 'staff-invite-region-error'
+            : undefined}
+          aria-invalid={inviteResult?.fieldErrors.regionId ? 'true' : undefined}
           value={inviteResult?.values.regionId ?? ''}
         >
           <option value="">選択してください</option>
@@ -146,6 +150,7 @@
         </NativeSelect>
         <FieldError
           error={inviteResult?.fieldErrors.regionId?.[0]}
+          id="staff-invite-region-error"
           role="alert"
         />
       </div>

@@ -2,8 +2,10 @@
 @component
 A label, a text control and the server's message about it, with the control
 pointed at the message through `aria-describedby` / `aria-invalid`. Everything
-else (`type`, `maxlength`, `required`, `class`, ...) goes straight to the
-control; set `multiline` for a `<textarea>`.
+else (`type`, `maxlength`, `required`, ...) goes straight to the control; set
+`multiline` for a `<textarea>`. `class` goes where `Input` and `Textarea` put
+it: on the `<textarea>`, but on the wrapper around an `<input>`, which takes
+`inputClass` instead.
 
 `value` stays the caller's: `bind:value` to `$state` it seeded, or pass a
 starting value. Either way the control underneath is bound, which is what
@@ -60,12 +62,21 @@ not rendered from an expression" in `apps/frontend/README.md`.
 
   const errorId = $derived(`${id}-error`);
   // Names the message only while it is on the page: a reference to an element
-  // that isn't there would describe the control as nothing at all.
+  // that isn't there would describe the control as nothing at all. The message
+  // comes first, as what went wrong is what someone coming back to the field
+  // needs to hear, and it may come ahead of a long description.
   const describedBy = $derived(
-    [ariaDescribedby, error ? errorId : undefined].filter(Boolean).join(' ') ||
+    [error ? errorId : undefined, ariaDescribedby].filter(Boolean).join(' ') ||
       undefined,
   );
-  const invalid = $derived(error ? 'true' : undefined);
+  // Written once for both controls, and last, so a caller's attributes can't
+  // override what this component is here to keep in step.
+  const controlAttributes = $derived({
+    id,
+    isError: !!error,
+    'aria-describedby': describedBy,
+    'aria-invalid': error ? ('true' as const) : undefined,
+  });
 </script>
 
 <div class="flex flex-col gap-1.5">
@@ -73,23 +84,9 @@ not rendered from an expression" in `apps/frontend/README.md`.
   {#if multiline}
     <!-- `multiline` is what picks the union's member, but TypeScript can't
          carry that over to a rest element. -->
-    <Textarea
-      {id}
-      {...rest as TextareaProps}
-      isError={!!error}
-      aria-describedby={describedBy}
-      aria-invalid={invalid}
-      bind:value
-    />
+    <Textarea {...rest as TextareaProps} {...controlAttributes} bind:value />
   {:else}
-    <Input
-      {id}
-      {...rest as InputProps}
-      isError={!!error}
-      aria-describedby={describedBy}
-      aria-invalid={invalid}
-      bind:value
-    />
+    <Input {...rest as InputProps} {...controlAttributes} bind:value />
   {/if}
   <FieldError {error} id={errorId} role={errorRole} />
 </div>

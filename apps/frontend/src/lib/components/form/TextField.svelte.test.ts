@@ -90,14 +90,14 @@ describe('TextField', () => {
     });
   });
 
-  it('keeps what else describes the control next to the message', () => {
+  it('reads the message ahead of what else describes the control', () => {
     render(TextField, {
       props: {...FIELD, error: MESSAGE, 'aria-describedby': 'requirements'},
     });
 
     expect(screen.getByRole('textbox', {name: '氏名'})).toHaveAttribute(
       'aria-describedby',
-      'requirements name-error',
+      'name-error requirements',
     );
   });
 

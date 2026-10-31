@@ -3,9 +3,10 @@
 What the server said about a field, under the control it belongs to. Renders
 nothing while there is no message, so a caller needn't guard it.
 
-`TextField` uses this and wires it to its control; use it alone where a
-message has no single text control to point at (a `<select>`, a group of
-boxes, a rule across several fields).
+`TextField` uses this and wires it to its control. Use it alone for any other
+control, passing `id` and pointing the control's `aria-describedby` at it, or
+where a message has no single control to point at (a group of boxes, a rule
+across several fields).
 -->
 <script lang="ts">
   interface Props {
