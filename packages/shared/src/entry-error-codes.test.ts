@@ -23,6 +23,9 @@ describe('ENTRY_ERROR_CODES', () => {
       CONCURRENT_SUBMISSION: 'concurrent submission',
       TURNSTILE_VERIFICATION_FAILED: 'turnstile verification failed',
       TOO_MANY_REQUESTS: 'too many requests',
+      UNAUTHORIZED: 'unauthorized',
+      ENTRY_NOT_FOUND: 'entry not found',
+      INVALID_OR_EXPIRED_TOKEN: 'invalid or expired token',
     });
   });
 });

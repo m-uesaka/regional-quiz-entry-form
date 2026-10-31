@@ -1,6 +1,8 @@
+import {ENTRY_ERROR_CODES} from '@regional-quiz/shared';
 import type {PasswordResetConfirmInput} from '@regional-quiz/shared/password-policy';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
+import type {LibFailure} from './errors';
 import {createMailSender} from './mailer';
 import {hashPassword} from './password';
 import {
@@ -15,7 +17,7 @@ import {generateToken, hashToken} from './token';
 // stop working soon after the participant asked for it.
 const TOKEN_TTL_MS = 60 * 60 * 1000;
 
-type ConfirmResult = {ok: true} | {ok: false; status: 400 | 500; error: string};
+type ConfirmResult = {ok: true} | LibFailure<400>;
 
 interface ParticipantRow {
   id: string;
@@ -210,7 +212,11 @@ export async function confirmPasswordReset(
     return {ok: false, status: 500, error: error.message};
   }
   if (!candidate) {
-    return {ok: false, status: 400, error: 'invalid or expired token'};
+    return {
+      ok: false,
+      status: 400,
+      error: ENTRY_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
+    };
   }
 
   const {error: resetError} = await db.rpc('reset_participant_password', {
@@ -219,7 +225,11 @@ export async function confirmPasswordReset(
   });
   if (resetError) {
     if (resetError.code === INVALID_TOKEN_SQLSTATE) {
-      return {ok: false, status: 400, error: 'invalid or expired token'};
+      return {
+        ok: false,
+        status: 400,
+        error: ENTRY_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
+      };
     }
     return {ok: false, status: 500, error: resetError.message};
   }

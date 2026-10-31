@@ -1,19 +1,8 @@
-import type {TournamentType} from '@regional-quiz/shared';
+import {ENTRY_ERROR_CODES, type TournamentType} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
+import type {LibFailure} from './errors';
 import {hashToken} from './token';
-
-/**
- * `invalid_token` is the participant's problem -- the token is unknown,
- * expired, already used, or its entry is no longer awaiting verification --
- * and is the only failure the caller may present as "this link is no longer
- * valid". `internal` is everything else (a Supabase outage, a timeout, a
- * malformed response): the token may well still be good, so the caller must
- * report a server fault instead, or the participant is told to enter again
- * while their entry sits in `pending_verification` and a re-entry is refused
- * as a duplicate.
- */
-type ConfirmFailureReason = 'invalid_token' | 'internal';
 
 /**
  * The tournament a confirmed entry belongs to, as the public list page's
@@ -24,13 +13,22 @@ interface ConfirmedTournament {
   type: TournamentType;
 }
 
+/**
+ * The 400 is the participant's problem -- the token is unknown, expired,
+ * already used, or its entry is no longer awaiting verification -- and is the
+ * only failure the caller may present as "this link is no longer valid". The
+ * 500 is everything else (a Supabase outage, a timeout, a malformed response):
+ * the token may well still be good, so the caller must report a server fault
+ * instead, or the participant is told to enter again while their entry sits
+ * in `pending_verification` and a re-entry is refused as a duplicate.
+ */
 type ConfirmResult =
   | {
       ok: true;
       status: 'confirmed' | 'waitlisted';
       tournament: ConfirmedTournament | null;
     }
-  | {ok: false; reason: ConfirmFailureReason; error: string};
+  | LibFailure<400>;
 
 /**
  * The SQLSTATE the `confirm_entry_by_token` Postgres function raises (see
@@ -72,11 +70,11 @@ export async function confirmEntryByToken(
     if (error.code === INVALID_TOKEN_SQLSTATE) {
       return {
         ok: false,
-        reason: 'invalid_token',
-        error: 'invalid or expired token',
+        status: 400,
+        error: ENTRY_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
       };
     }
-    return {ok: false, reason: 'internal', error: error.message};
+    return {ok: false, status: 500, error: error.message};
   }
 
   return {

@@ -6,6 +6,7 @@ import {
   type FormFieldDef,
 } from '@regional-quiz/shared';
 import type {createDbClient} from './db';
+import type {LibFailure} from './errors';
 
 /**
  * The `form_field_defs` columns every API response exposing a tournament's
@@ -89,8 +90,7 @@ export async function fetchFormFieldDefs(
 }
 
 /** Whether submitted custom field answers fit the tournament's form. */
-export type CustomFieldValuesCheck =
-  {ok: true} | {ok: false; status: 400 | 500; error: string};
+export type CustomFieldValuesCheck = {ok: true} | LibFailure<400>;
 
 /**
  * Checks submitted custom field answers against the tournament's form:

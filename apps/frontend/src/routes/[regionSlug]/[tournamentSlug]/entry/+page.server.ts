@@ -79,10 +79,22 @@ const MAIL_ONLY_ENTRY_ERROR_CODES = [
   ENTRY_ERROR_CODES.SUPERSEDED_BY_LATER_SUBMISSION,
 ] as const;
 
+/** Codes of other pages, which the entry form's API routes never answer. */
+const OTHER_PAGE_ENTRY_ERROR_CODES = [
+  ENTRY_ERROR_CODES.ENTRY_NOT_FOUND,
+  ENTRY_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
+] as const;
+
+/** Codes this form has no wording for. */
+const UNANSWERED_ENTRY_ERROR_CODES = [
+  ...MAIL_ONLY_ENTRY_ERROR_CODES,
+  ...OTHER_PAGE_ENTRY_ERROR_CODES,
+] as const;
+
 /** The codes the entry form can be answered with. */
 type AnsweredEntryErrorCode = Exclude<
   EntryErrorCode,
-  (typeof MAIL_ONLY_ENTRY_ERROR_CODES)[number]
+  (typeof UNANSWERED_ENTRY_ERROR_CODES)[number]
 >;
 
 /**
@@ -130,6 +142,7 @@ const ENTRY_ERROR_MESSAGES: Record<AnsweredEntryErrorCode, string> = {
   [ENTRY_ERROR_CODES.TURNSTILE_VERIFICATION_FAILED]:
     '「私はロボットではありません」の確認に失敗しました。ページを再読み込みして、もう一度お試しください',
   [ENTRY_ERROR_CODES.TOO_MANY_REQUESTS]: TOO_MANY_REQUESTS_MESSAGE,
+  [ENTRY_ERROR_CODES.UNAUTHORIZED]: SESSION_EXPIRED_MESSAGE,
 };
 
 /** Fallbacks for a status whose `error` string isn't one we know. */
@@ -162,7 +175,7 @@ function isAnsweredEntryErrorCode(
 ): code is AnsweredEntryErrorCode {
   return (
     isEntryErrorCode(code) &&
-    !MAIL_ONLY_ENTRY_ERROR_CODES.some(mailOnly => mailOnly === code)
+    !UNANSWERED_ENTRY_ERROR_CODES.some(unanswered => unanswered === code)
   );
 }
 

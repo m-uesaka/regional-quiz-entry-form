@@ -19,7 +19,7 @@ import {
   fetchMailJob,
   recordMailJobProgress,
 } from '../lib/mail-jobs';
-import {internalError} from '../lib/errors';
+import {internalError, respondFailure} from '../lib/errors';
 import {hasVisibleText, sanitizeMailHtml} from '../lib/mail-html';
 import {
   fetchTournamentById,
@@ -115,10 +115,7 @@ export const staffMailRoute = new Hono<StaffEnv>()
         statusFilter,
       );
       if (!result.ok) {
-        return c.json(
-          internalError('failed to read the mail recipients', result.error),
-          500,
-        );
+        return respondFailure(c, result, 'failed to read the mail recipients');
       }
       const {recipients} = result;
 
@@ -134,10 +131,7 @@ export const staffMailRoute = new Hono<StaffEnv>()
         total: recipients.length,
       });
       if (!job.ok) {
-        return c.json(
-          internalError('failed to record the mail job', job.error),
-          500,
-        );
+        return respondFailure(c, job, 'failed to record the mail job');
       }
       const jobId = job.value;
 
@@ -190,12 +184,10 @@ export const staffMailRoute = new Hono<StaffEnv>()
 
       const entries = await fetchResendableEntryIds(c.env, tournamentId);
       if (!entries.ok) {
-        return c.json(
-          internalError(
-            'failed to read the unconfirmed entries',
-            entries.error,
-          ),
-          500,
+        return respondFailure(
+          c,
+          entries,
+          'failed to read the unconfirmed entries',
         );
       }
       const entryIds = entries.value;
@@ -216,10 +208,7 @@ export const staffMailRoute = new Hono<StaffEnv>()
         total: entryIds.length,
       });
       if (!job.ok) {
-        return c.json(
-          internalError('failed to record the mail job', job.error),
-          500,
-        );
+        return respondFailure(c, job, 'failed to record the mail job');
       }
       const jobId = job.value;
 
@@ -261,10 +250,7 @@ export const staffMailRoute = new Hono<StaffEnv>()
       // the middleware above only vouches for the tournament in the path.
       const result = await fetchMailJob(c.env, tournamentId, jobId);
       if (!result.ok) {
-        return c.json(
-          internalError('failed to read the mail job', result.error),
-          500,
-        );
+        return respondFailure(c, result, 'failed to read the mail job');
       }
       if (result.value === null) {
         return c.json({error: 'mail job not found'}, 404);

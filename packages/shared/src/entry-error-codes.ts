@@ -1,3 +1,5 @@
+import type {EntryStatus} from './schemas/entry';
+
 /**
  * The `error` strings the entry flow's API answers with, named once so the
  * backend that sends them and the entry form that translates them can't
@@ -65,11 +67,31 @@ export const ENTRY_ERROR_CODES = {
   TURNSTILE_VERIFICATION_FAILED: 'turnstile verification failed',
   /** From the rate limit in front of the API. */
   TOO_MANY_REQUESTS: 'too many requests',
+  /**
+   * The session names nobody: the participant it was issued to is gone.
+   */
+  UNAUTHORIZED: 'unauthorized',
+  /**
+   * Not an entry of the participant asking, said the same for one of someone
+   * else's as for one that doesn't exist. From mypage, not the entry form.
+   */
+  ENTRY_NOT_FOUND: 'entry not found',
+  /**
+   * A mailed link that can't be used: the entry verification's or either
+   * password reset's. From those pages, not the entry form.
+   */
+  INVALID_OR_EXPIRED_TOKEN: 'invalid or expired token',
 } as const;
 
 /** One of the `error` strings in `ENTRY_ERROR_CODES`. */
 export type EntryErrorCode =
   (typeof ENTRY_ERROR_CODES)[keyof typeof ENTRY_ERROR_CODES];
+
+/**
+ * What editing an entry in a status that can't be edited answers with. Built
+ * from the status rather than listed, so not one of `ENTRY_ERROR_CODES`.
+ */
+export type EntryNotEditableCode = `entry is ${EntryStatus}`;
 
 const ENTRY_ERROR_CODE_VALUES: ReadonlySet<string> = new Set(
   Object.values(ENTRY_ERROR_CODES),
