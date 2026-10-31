@@ -72,7 +72,7 @@ describe.skipIf(!dbReachable)(
   },
 );
 
-// The default is what the dual-entry rule in `lib/entries.ts` falls back to
+// The default is what the dual-entry rule (migration 0017) falls back to
 // for every region that predates the column, so it is pinned down here
 // rather than left to the migration being read correctly.
 describe.skipIf(!dbReachable)(
