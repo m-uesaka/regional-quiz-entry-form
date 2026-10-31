@@ -919,7 +919,9 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
       });
     });
 
-    it('answers 403 for a foreign id on its own', async () => {
+    // A form left open across a staff deletion sends exactly this. The 409 is
+    // what makes it read the regulations again; a 403 would only repeat.
+    it('answers 409 for a regulation that no longer exists', async () => {
       mockSupabase({
         tournament: tournamentRow({
           entryClosesAt: closesAt,
@@ -937,9 +939,9 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
       });
       await settleBackgroundWork();
 
-      expect(res.status).toBe(403);
+      expect(res.status).toBe(409);
       expect((await res.json()) as unknown).toEqual({
-        error: 'regulation not eligible in priority window',
+        error: 'regulation no longer available',
       });
     });
   });

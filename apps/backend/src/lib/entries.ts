@@ -1,6 +1,7 @@
 import {
   EDITABLE_ENTRY_STATUSES,
   ENTRY_ERROR_CODES,
+  isEntryErrorCode,
   isWithinEntryPeriod,
   regulationSelectionRefusal,
   type EntryEditInput,
@@ -74,16 +75,15 @@ export interface EntryTournamentRow {
 }
 
 /**
- * What each way of refusing a regulation selection answers with. A regulation
- * that stopped being offered is a conflict with a change, which choosing
- * again fixes; the rest are a selection the form wouldn't offer.
+ * What each way of refusing a regulation selection answers with. Naming what
+ * isn't on offer is a conflict with a change, which choosing again fixes; the
+ * rest are a selection the form wouldn't send.
  */
 const REGULATION_REFUSALS: Record<
   RegulationSelectionRefusal,
   {status: 403 | 409; error: EntryErrorCode}
 > = {
   empty: {status: 403, error: ENTRY_ERROR_CODES.REGULATION_NOT_ELIGIBLE},
-  unknown: {status: 403, error: ENTRY_ERROR_CODES.REGULATION_NOT_ELIGIBLE},
   'needs-priority': {
     status: 403,
     error: ENTRY_ERROR_CODES.REGULATION_NOT_ELIGIBLE,
@@ -1034,15 +1034,17 @@ async function isStillUnverifiedAccountOf(
  * something only the owner of the address should learn, so the
  * unauthenticated route mails it instead of answering with it.
  */
-const ENTRY_NOTICE_REASONS: Record<string, EntryNoticeReason> = {
-  [ENTRY_ERROR_CODES.INVALID_PASSWORD]: 'password-mismatch',
-  [ENTRY_ERROR_CODES.ALREADY_REGISTERED_IN_ANOTHER_REGION]: 'other-region',
-  [ENTRY_ERROR_CODES.ALREADY_ENTERED]: 'already-entered',
-  [ENTRY_ERROR_CODES.ENTRY_PENDING_VERIFICATION]: 'pending-verification',
-  [ENTRY_ERROR_CODES.COMMON_PASSWORD]: 'common-password',
-  [ENTRY_ERROR_CODES.ALREADY_ENTERED_ANOTHER_TOURNAMENT]: 'dual-entry',
-  [ENTRY_ERROR_CODES.REGULATION_NO_LONGER_AVAILABLE]: 'regulation-unavailable',
-};
+const ENTRY_NOTICE_REASONS: Partial<Record<EntryErrorCode, EntryNoticeReason>> =
+  {
+    [ENTRY_ERROR_CODES.INVALID_PASSWORD]: 'password-mismatch',
+    [ENTRY_ERROR_CODES.ALREADY_REGISTERED_IN_ANOTHER_REGION]: 'other-region',
+    [ENTRY_ERROR_CODES.ALREADY_ENTERED]: 'already-entered',
+    [ENTRY_ERROR_CODES.ENTRY_PENDING_VERIFICATION]: 'pending-verification',
+    [ENTRY_ERROR_CODES.COMMON_PASSWORD]: 'common-password',
+    [ENTRY_ERROR_CODES.ALREADY_ENTERED_ANOTHER_TOURNAMENT]: 'dual-entry',
+    [ENTRY_ERROR_CODES.REGULATION_NO_LONGER_AVAILABLE]:
+      'regulation-unavailable',
+  };
 
 /**
  * Enters an address-and-password submission whose answer the client never
@@ -1089,7 +1091,11 @@ export async function createEntryUnauthenticated(
     return {kind: 'created', entryId: result.entry.id};
   }
 
-  const reason = ENTRY_NOTICE_REASONS[result.error];
+  // Only a known code: `error` can be any thrown or database message, and one
+  // spelling an inherited property would otherwise read as a reason.
+  const reason = isEntryErrorCode(result.error)
+    ? ENTRY_NOTICE_REASONS[result.error]
+    : undefined;
   if (!reason) {
     // The address itself isn't logged: it is what an attacker would be
     // probing for, and nothing here needs it to be diagnosed.

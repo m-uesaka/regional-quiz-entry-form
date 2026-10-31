@@ -61,11 +61,29 @@ const ENTRIES_PAUSED_MESSAGE =
 const SESSION_ENTRY_FIELD = 'entryMode';
 const SESSION_ENTRY_VALUE = 'session';
 
-/** The fallback for a 400, and what a too common password is shown as. */
+/** The fallback for a 400. */
 const CHECK_INPUT_MESSAGE = '入力内容を確認してください';
 
-/** The fallback for a 409, and what a superseded submission is shown as. */
+/** The fallback for a 409. */
 const ALREADY_ENTERED_FALLBACK_MESSAGE = '既にエントリー済みです';
+
+/**
+ * Codes only the anonymous route's background half ends in: they go to the
+ * address's owner by mail or to the log (#117), and a logged-in submission has
+ * no password or unverified account to end in them. So the form is never
+ * answered with one, and has no wording for it.
+ */
+const MAIL_ONLY_ENTRY_ERROR_CODES = [
+  ENTRY_ERROR_CODES.INVALID_PASSWORD,
+  ENTRY_ERROR_CODES.COMMON_PASSWORD,
+  ENTRY_ERROR_CODES.SUPERSEDED_BY_LATER_SUBMISSION,
+] as const;
+
+/** The codes the entry form can be answered with. */
+type AnsweredEntryErrorCode = Exclude<
+  EntryErrorCode,
+  (typeof MAIL_ONLY_ENTRY_ERROR_CODES)[number]
+>;
 
 /**
  * The backend's `error` strings mapped to what the form shows. The API
@@ -75,7 +93,7 @@ const ALREADY_ENTERED_FALLBACK_MESSAGE = '既にエントリー済みです';
  * the status alone — decides the wording. Typed by the codes, so a code
  * added to `ENTRY_ERROR_CODES` without a message here doesn't compile.
  */
-const ENTRY_ERROR_MESSAGES: Record<EntryErrorCode, string> = {
+const ENTRY_ERROR_MESSAGES: Record<AnsweredEntryErrorCode, string> = {
   [ENTRY_ERROR_CODES.INVALID_TOURNAMENT]: '大会が見つかりません',
   [ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED]: 'エントリー期間外です',
   // Staff paused the tournament (0039) between the action's tournament read
@@ -94,8 +112,8 @@ const ENTRY_ERROR_MESSAGES: Record<EntryErrorCode, string> = {
   // that link expires, entering again goes through.
   [ENTRY_ERROR_CODES.ENTRY_PENDING_VERIFICATION]:
     'この大会へのエントリーは確定待ちです。確認メールのリンクを開いて確定してください。メールが見当たらない場合は、マイページでこのエントリーをキャンセルしてから、もう一度エントリーしてください',
-  // What the page offered is no longer on offer: staff changed the
-  // regulations, or a priority phase ended while the form was open. The form
+  // What the page offered is no longer on offer: staff deleted a regulation,
+  // or a priority phase ended while the form was open. The form
   // reads them again (`regulationsChanged`), so choosing again is what fixes
   // it, without losing what was typed.
   [ENTRY_ERROR_CODES.REGULATION_NO_LONGER_AVAILABLE]:
@@ -112,12 +130,6 @@ const ENTRY_ERROR_MESSAGES: Record<EntryErrorCode, string> = {
   [ENTRY_ERROR_CODES.TURNSTILE_VERIFICATION_FAILED]:
     '「私はロボットではありません」の確認に失敗しました。ページを再読み込みして、もう一度お試しください',
   [ENTRY_ERROR_CODES.TOO_MANY_REQUESTS]: TOO_MANY_REQUESTS_MESSAGE,
-  // These three have no wording of their own: each reads as its status's
-  // fallback below, the same as it did before the codes were shared.
-  [ENTRY_ERROR_CODES.INVALID_PASSWORD]: SESSION_EXPIRED_MESSAGE,
-  [ENTRY_ERROR_CODES.COMMON_PASSWORD]: CHECK_INPUT_MESSAGE,
-  [ENTRY_ERROR_CODES.SUPERSEDED_BY_LATER_SUBMISSION]:
-    ALREADY_ENTERED_FALLBACK_MESSAGE,
 };
 
 /** Fallbacks for a status whose `error` string isn't one we know. */
@@ -136,9 +148,22 @@ const ENTRY_STATUS_MESSAGES: Record<number, string> = {
  * @param status The response's status.
  */
 function entryErrorMessage(code: string, status: number): string {
-  return isEntryErrorCode(code)
+  return isAnsweredEntryErrorCode(code)
     ? ENTRY_ERROR_MESSAGES[code]
     : (ENTRY_STATUS_MESSAGES[status] ?? 'エントリーの登録に失敗しました');
+}
+
+/**
+ * Whether an `error` string is one the entry form has wording for.
+ * @param code The `error` string of the response.
+ */
+function isAnsweredEntryErrorCode(
+  code: string,
+): code is AnsweredEntryErrorCode {
+  return (
+    isEntryErrorCode(code) &&
+    !MAIL_ONLY_ENTRY_ERROR_CODES.some(mailOnly => mailOnly === code)
+  );
 }
 
 /**
@@ -215,7 +240,7 @@ async function fetchTournament({
         403,
         (await readErrorCode(res)) === ENTRY_ERROR_CODES.ENTRIES_PAUSED
           ? ENTRIES_PAUSED_MESSAGE
-          : 'エントリー期間外です',
+          : ENTRY_ERROR_MESSAGES[ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED],
       );
     }
     throw error(502, '大会情報の取得に失敗しました');
@@ -328,7 +353,7 @@ export const load: PageServerLoad = async ({
       403,
       availability === 'paused'
         ? ENTRIES_PAUSED_MESSAGE
-        : 'エントリー期間外です',
+        : ENTRY_ERROR_MESSAGES[ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED],
     );
   }
 
@@ -491,7 +516,7 @@ export const actions = {
      */
     const invalid = (schemaErrors: EntryFieldErrors) =>
       fail(400, {
-        error: '入力内容を確認してください',
+        error: CHECK_INPUT_MESSAGE,
         fieldErrors: {
           ...schemaErrors,
           ...customFieldErrors(customFieldValuesErrors, formFieldDefs),

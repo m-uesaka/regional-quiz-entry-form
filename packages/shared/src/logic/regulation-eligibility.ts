@@ -192,16 +192,16 @@ export function selectableRegulations<T extends Omit<RegulationWindow, 'id'>>(
  * Why a selection of regulations is refused:
  *
  * - `empty`: it chooses nothing.
- * - `unknown`: it names an id that isn't one of the tournament's regulations.
- * - `not-offered`: it names a regulation of the tournament that is no longer
- *   on offer (`selectableRegulations()`). Takes precedence over `unknown`
- *   when both apply: only this one is a form overtaken by a change, which
- *   choosing again fixes, whatever else the submission names.
+ * - `not-offered`: it names something not on offer
+ *   (`selectableRegulations()`): a phase that is over, or an id the
+ *   tournament doesn't have, which is what a regulation staff deleted looks
+ *   like from a form left open. Both are a form overtaken by a change, which
+ *   reading the regulations again and choosing again fixes.
  * - `needs-priority`: it claims none of the regulations a priority window
  *   requires one of.
  */
 export type RegulationSelectionRefusal =
-  'empty' | 'unknown' | 'not-offered' | 'needs-priority';
+  'empty' | 'not-offered' | 'needs-priority';
 
 /**
  * Determines whether `selectedRegulationIds` may be chosen at `now`, and if
@@ -238,14 +238,10 @@ export function regulationSelectionRefusal(
   // would refuse an outsider anyway, but as a constraint violation rather
   // than as the refusal the entry form can explain.
   const selectable = selectableRegulations(regulations, now, entryPeriod);
-  const notOnOffer = selectedRegulationIds.filter(
-    selectedId => !selectable.some(regulation => regulation.id === selectedId),
+  const allOnOffer = selectedRegulationIds.every(selectedId =>
+    selectable.some(regulation => regulation.id === selectedId),
   );
-  const anyPhasedOut = notOnOffer.some(selectedId =>
-    regulations.some(regulation => regulation.id === selectedId),
-  );
-  if (anyPhasedOut) return 'not-offered';
-  if (notOnOffer.length > 0) return 'unknown';
+  if (!allOnOffer) return 'not-offered';
 
   const activePriorityIds = activePriorityRegulations(
     regulations,

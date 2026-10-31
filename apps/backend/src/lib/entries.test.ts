@@ -375,7 +375,7 @@ describe.skipIf(!dbReachable)(
       // tournament's regulations — before any row is written. The DB-level
       // guarantee behind it (the shared `tournament_id` on both composite
       // foreign keys) is covered in `db-schema.test.ts`.
-      expect(!result.ok && result.status).toBe(403);
+      expect(!result.ok && result.status).toBe(409);
       // Nothing is left behind.
       const [{count}] = await sql`
         select count(*)::int as count from entries

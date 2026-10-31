@@ -57,8 +57,9 @@
   const hasPriorityWindow = $derived(
     priorityIds.size > 0 && priorityIds.size < ordered.length,
   );
-  const selectionRefused = $derived(
-    regulationSelectionRefusal(regulations, chosen, now, entryPeriod) !== null,
+  const needsPriority = $derived(
+    regulationSelectionRefusal(regulations, chosen, now, entryPeriod) ===
+      'needs-priority',
   );
 
   // A checkbox group has no native "at least one checked", so every box
@@ -108,7 +109,7 @@
       {/if}
     </label>
   {/each}
-  {#if selectionRefused && chosen.length > 0}
+  {#if needsPriority}
     <p class="text-sm text-destructive">
       現在は優先期間中のため、優先対象のレギュレーションを1つ以上選択してください
     </p>

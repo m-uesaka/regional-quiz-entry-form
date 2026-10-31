@@ -14,7 +14,8 @@ export const ENTRY_ERROR_CODES = {
   /**
    * What a submission naming a regulation that is no longer on offer answers
    * with. Reached when the form was left open past the end of a priority
-   * phase (`selectableRegulations()`), or when a refused `entry_regulations`
+   * phase (`selectableRegulations()`) or a regulation staff then deleted, or
+   * when a refused `entry_regulations`
    * write shows the regulation stopped existing between
    * `regulationSelectionRefusal()` and the write — a `sync_regulations()`
    * call that dropped it. Either way it is a conflict with a change, not a

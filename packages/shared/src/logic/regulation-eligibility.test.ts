@@ -118,7 +118,7 @@ describe('regulationSelectionRefusal', () => {
         new Date('2026-08-23T00:00:00Z'),
         ENTRY_PERIOD,
       ),
-    ).toBe('unknown');
+    ).toBe('not-offered');
   });
 });
 
@@ -212,9 +212,9 @@ describe('activePriorityRegulations', () => {
       ).toBeNull();
     });
 
-    // A form overtaken by a change as well: telling it to choose again is
-    // what helps, and it must not depend on the order of the ids.
-    it('calls a phase that is over not offered, even next to an unknown id', () => {
+    // A form overtaken by a change either way: telling it to choose again is
+    // what helps, whatever else it names.
+    it('calls a phase that is over and a deleted id alike not offered', () => {
       const now = new Date('2026-10-31T12:00:01Z');
       const regulations = [priority, general];
 
@@ -228,7 +228,7 @@ describe('activePriorityRegulations', () => {
       }
       expect(
         regulationSelectionRefusal(regulations, ['unknown-reg'], now, period),
-      ).toBe('unknown');
+      ).toBe('not-offered');
     });
 
     it('takes the phase that is over off the offer', () => {
