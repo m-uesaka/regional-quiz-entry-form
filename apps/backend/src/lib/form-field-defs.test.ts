@@ -84,6 +84,34 @@ describe('form field def reads (mocked Supabase)', () => {
       expect(fieldDefs).toBeNull();
       expect(error).toEqual(POSTGREST_ERROR);
     });
+
+    it('treats an answer with no rows as a failed read, not an empty form', async () => {
+      mockFetch(() => new Response('', {status: 200}));
+
+      const {fieldDefs, error} = await fetchFormFieldDefs(db, TOURNAMENT_ID);
+
+      expect(fieldDefs).toBeNull();
+      expect(error).toEqual({
+        message: 'the form field defs read returned no data',
+      });
+    });
+
+    it('still answers an empty list for a tournament with no custom fields', async () => {
+      mockFetch(() => Response.json([]));
+
+      const {fieldDefs, error} = await fetchFormFieldDefs(db, TOURNAMENT_ID);
+
+      expect(error).toBeNull();
+      expect(fieldDefs).toEqual([]);
+    });
+
+    it('throws on a stored row the schema refuses', async () => {
+      mockFetch(() =>
+        Response.json([{...SHIRT_SIZE_ROW, field_type: 'not-a-type'}]),
+      );
+
+      await expect(fetchFormFieldDefs(db, TOURNAMENT_ID)).rejects.toThrow();
+    });
   });
 
   describe('validateCustomFieldValues', () => {
@@ -119,6 +147,15 @@ describe('form field def reads (mocked Supabase)', () => {
         status: 500,
         error: 'connection terminated',
       });
+    });
+
+    // Without this, the required fields would go unchecked.
+    it('refuses to check against an answer with no rows', async () => {
+      mockFetch(() => new Response('', {status: 200}));
+
+      const check = await validateCustomFieldValues(db, TOURNAMENT_ID, {});
+
+      expect(check).toMatchObject({ok: false, status: 500});
     });
   });
 });

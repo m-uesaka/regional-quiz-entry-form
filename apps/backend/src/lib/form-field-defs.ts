@@ -56,8 +56,15 @@ export type FormFieldDefsResult =
  * A failed read comes back as the database's own error rather than a
  * response: some callers log it and answer with `internalError()`, others
  * carry its message in their own result type, so the choice stays with them.
+ * So does an answer with no rows array at all: read as "no custom fields", it
+ * would drop the required fields from the form and from the check of what is
+ * submitted against it.
+ *
+ * A row the schema refuses is not a failed read but data that shouldn't exist,
+ * and throws.
  * @param db The Supabase client to query with.
  * @param tournamentId The tournament whose form fields are read.
+ * @throws ZodError If a stored row doesn't fit `FormFieldDefSchema`.
  */
 export async function fetchFormFieldDefs(
   db: ReturnType<typeof createDbClient>,
@@ -72,7 +79,13 @@ export async function fetchFormFieldDefs(
   if (error) {
     return {fieldDefs: null, error};
   }
-  return {fieldDefs: (data ?? []).map(toFormFieldDef), error: null};
+  if (!data) {
+    return {
+      fieldDefs: null,
+      error: {message: 'the form field defs read returned no data'},
+    };
+  }
+  return {fieldDefs: data.map(toFormFieldDef), error: null};
 }
 
 /** Whether submitted custom field answers fit the tournament's form. */
@@ -82,7 +95,7 @@ export type CustomFieldValuesCheck =
 /**
  * Checks submitted custom field answers against the tournament's form:
  * a 400 for answers that don't fit it, a 500 carrying the database's message
- * when the form can't be read.
+ * when the form can't be read. Throws what `fetchFormFieldDefs()` throws.
  * @param db The Supabase client to query with.
  * @param tournamentId The tournament the answers were submitted to.
  * @param values The submitted answers.

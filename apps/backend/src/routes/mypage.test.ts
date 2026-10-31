@@ -422,6 +422,14 @@ describe.skipIf(!(await isDbReachable()))(
       `;
       const cookie = await participantCookie(participantId);
 
+      // The 401 below only means something for a session that worked.
+      const before = await app.request(
+        '/api/mypage/entries',
+        {headers: {cookie}},
+        env,
+      );
+      expect(before.status).toBe(200);
+
       // Exactly what `reset_participant_password` does to the row, minus the
       // token bookkeeping: the session was valid a moment ago and has to stop
       // working now, rather than a week from now when it expires.
