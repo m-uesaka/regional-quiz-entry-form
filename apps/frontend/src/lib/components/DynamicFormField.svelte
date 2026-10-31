@@ -7,9 +7,7 @@
   import {customFieldName} from '$lib/custom-field-name';
   import FieldLabelText from '$lib/components/FieldLabelText.svelte';
   import FieldError from '$lib/components/form/FieldError.svelte';
-  import Input from '$lib/components/ui/atoms/Input.svelte';
-  import Label from '$lib/components/ui/atoms/Label.svelte';
-  import Textarea from '$lib/components/ui/atoms/Textarea.svelte';
+  import TextField from '$lib/components/form/TextField.svelte';
 
   interface Props {
     field: FormFieldDefYaml;
@@ -79,32 +77,24 @@
      radio/checkbox is what `bind:group` and the server-rendered `required`
      rely on, and the wrapping label is what names each option. -->
 {#if isFreeTextFieldType(field.type)}
-  <div class="flex flex-col gap-1.5">
-    <Label for={controlName}>
+  <!-- `TextField` takes text, and `value` is typed for every kind of field.
+       An answer can also be missing here: a field `invalidateAll()` brought
+       in after the form was seeded has none, and a `bind:` of `undefined` to
+       a bindable with a fallback throws. -->
+  <TextField
+    id={controlName}
+    name={controlName}
+    multiline={field.type === 'textarea'}
+    required={field.required}
+    maxlength={CUSTOM_FIELD_VALUE_MAX_LENGTH}
+    {error}
+    bind:value={() => String(value ?? ''), typed => (value = typed)}
+  >
+    {#snippet label()}
       <FieldLabelText label={field.label} />
       {#if field.required}<span aria-hidden="true" class="ml-0.5 text-destructive">*</span>{/if}
-    </Label>
-    {#if field.type === 'textarea'}
-      <Textarea
-        id={controlName}
-        name={controlName}
-        required={field.required}
-        maxlength={CUSTOM_FIELD_VALUE_MAX_LENGTH}
-        isError={!!error}
-        bind:value
-      />
-    {:else}
-      <Input
-        id={controlName}
-        name={controlName}
-        required={field.required}
-        maxlength={CUSTOM_FIELD_VALUE_MAX_LENGTH}
-        isError={!!error}
-        bind:value
-      />
-    {/if}
-    <FieldError {error} />
-  </div>
+    {/snippet}
+  </TextField>
 {:else if field.type === 'radio'}
   <fieldset class="flex flex-col gap-2">
     <legend class="mb-1.5 text-sm/tight font-medium text-foreground">

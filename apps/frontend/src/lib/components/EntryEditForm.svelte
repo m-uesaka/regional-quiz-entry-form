@@ -1,16 +1,10 @@
 <script lang="ts">
   import {untrack} from 'svelte';
   import {enhance} from '$app/forms';
-  import {
-    ENTRY_FREE_TEXT_MAX_LENGTH,
-    ENTRY_NAME_MAX_LENGTH,
-    toFormFieldDefYaml,
-    type MypageEntryDetail,
-  } from '@regional-quiz/shared';
-  import DynamicFormField from '$lib/components/DynamicFormField.svelte';
-  import FieldError from '$lib/components/form/FieldError.svelte';
-  import TextField from '$lib/components/form/TextField.svelte';
-  import {customFieldName} from '$lib/custom-field-name';
+  import type {MypageEntryDetail} from '@regional-quiz/shared';
+  import CustomFieldsSection from '$lib/components/CustomFieldsSection.svelte';
+  import EntryProfileFields from '$lib/components/EntryProfileFields.svelte';
+  import {initialCustomFieldValues} from '$lib/entry-form';
   import Button from '$lib/components/ui/atoms/Button.svelte';
   import type {
     EntryEditFormValues,
@@ -25,10 +19,6 @@
   }
 
   const {entry, values, fieldErrors}: Props = $props();
-
-  // The stored definitions carry API-shaped keys (`fieldKey` / `fieldType`);
-  // `DynamicFormField` renders the shape the form was authored in.
-  const fields = $derived(entry.formFieldDefs.map(toFormFieldDefYaml));
 
   // A rejected submission comes back with what was typed, so the form starts
   // out showing that rather than resetting to the stored entry.
@@ -48,82 +38,27 @@
   let furigana = $state(initial.furigana);
   let displayName = $state(initial.displayName);
   let freeText = $state(initial.freeText ?? '');
-  let customFieldValues = $state(initialCustomFieldValues());
-
-  function fieldError(field: string): string | undefined {
-    return fieldErrors?.[field]?.[0];
-  }
-
-  /**
-   * The answer every custom field starts out with, keyed by field key.
-   * Every key the form renders is seeded, unanswered ones included, so that
-   * `DynamicFormField` always has a value of the right shape to bind to.
-   */
-  function initialCustomFieldValues(): Record<string, string | string[]> {
-    const answered = initial.customFieldValues;
-    return Object.fromEntries(
-      entry.formFieldDefs.map(fieldDef => [
-        fieldDef.fieldKey,
-        answered[fieldDef.fieldKey] ??
-          (fieldDef.fieldType === 'checkbox' ? [] : ''),
-      ]),
-    );
-  }
+  let customFieldValues = $state(
+    untrack(() =>
+      initialCustomFieldValues(entry.formFieldDefs, initial.customFieldValues),
+    ),
+  );
 </script>
 
 <form method="POST" class="flex flex-col gap-4" use:enhance>
-  <TextField
-    id="name"
-    name="name"
-    label="氏名"
-    bind:value={name}
-    maxlength={ENTRY_NAME_MAX_LENGTH}
-    error={fieldError('name')}
-    required
+  <EntryProfileFields
+    bind:name
+    bind:furigana
+    bind:displayName
+    bind:freeText
+    {fieldErrors}
   />
 
-  <TextField
-    id="furigana"
-    name="furigana"
-    label="ふりがな"
-    bind:value={furigana}
-    maxlength={ENTRY_NAME_MAX_LENGTH}
-    error={fieldError('furigana')}
-    required
+  <CustomFieldsSection
+    formFieldDefs={entry.formFieldDefs}
+    bind:values={customFieldValues}
+    {fieldErrors}
   />
-
-  <TextField
-    id="displayName"
-    name="displayName"
-    label="エントリーリスト掲載名"
-    bind:value={displayName}
-    maxlength={ENTRY_NAME_MAX_LENGTH}
-    error={fieldError('displayName')}
-    required
-  />
-
-  <TextField
-    id="freeText"
-    name="freeText"
-    label="自由記述"
-    multiline
-    bind:value={freeText}
-    maxlength={ENTRY_FREE_TEXT_MAX_LENGTH}
-    error={fieldError('freeText')}
-  />
-
-  {#each fields as field (field.key)}
-    <!-- Keyed by the control's namespaced name, the same key the action
-         files a custom field's message under. -->
-    <DynamicFormField
-      {field}
-      bind:value={customFieldValues[field.key]}
-      error={fieldError(customFieldName(field.key))}
-    />
-  {/each}
-  <!-- Every answer within its own bound can still add up past the combined
-       one; that has no single control to point at. -->
-  <FieldError error={fieldError('customFieldValues')} />
 
   <div class="flex flex-wrap gap-2 pt-2">
     <Button type="submit" variant="primary" tone="solid">保存する</Button>

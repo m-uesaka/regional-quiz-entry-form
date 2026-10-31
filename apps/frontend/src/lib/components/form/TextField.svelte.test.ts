@@ -1,11 +1,14 @@
 import {render, screen} from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import {flushSync, mount, unmount} from 'svelte';
+import {createRawSnippet, flushSync, mount, unmount} from 'svelte';
 import {describe, expect, it} from 'vitest';
 import TextField from './TextField.svelte';
 
 const FIELD = {id: 'name', name: 'name', label: '氏名'};
 const MESSAGE = '入力してください';
+const SNIPPET_LABEL = createRawSnippet(() => ({
+  render: () => '<em>氏名</em>',
+}));
 
 describe('TextField', () => {
   describe.each([
@@ -88,6 +91,22 @@ describe('TextField', () => {
       await unmount(component);
       target.remove();
     });
+  });
+
+  it.each([
+    {control: 'an input', multiline: false},
+    {control: 'a textarea', multiline: true},
+  ] as const)('labels $control with a snippet', ({multiline}) => {
+    render(TextField, {
+      props: {...FIELD, multiline, label: SNIPPET_LABEL, error: MESSAGE},
+    });
+
+    const control = screen.getByRole('textbox', {name: '氏名'});
+    expect(control).toHaveAttribute('id', 'name');
+    expect(control).toHaveAttribute('aria-describedby', 'name-error');
+    expect(control).toHaveAccessibleDescription(MESSAGE);
+    expect(control).toBeInvalid();
+    expect(screen.getByText('氏名').tagName).toBe('EM');
   });
 
   it('reads the message ahead of what else describes the control', () => {

@@ -184,6 +184,78 @@ describe('DynamicFormField', () => {
     expect(input).toHaveValue('東京大学');
   });
 
+  describe.each([
+    {type: 'textarea', tagName: 'TEXTAREA'},
+    {type: 'textfield', tagName: 'INPUT'},
+  ] as const)('as a $type field', ({type, tagName}) => {
+    const field: FormFieldDefYaml = {
+      type,
+      key: 'note',
+      label: '備考',
+      required: true,
+    };
+
+    it('keeps the control the form and the action address it by', () => {
+      render(DynamicFormField, {props: {field, value: '既存'}});
+
+      const control = screen.getByRole('textbox', {name: '備考'});
+      expect(control.tagName).toBe(tagName);
+      expect(control).toHaveAttribute('id', 'custom.note');
+      expect(control).toHaveAttribute('name', 'custom.note');
+      expect(control).toHaveAttribute('maxlength', '2000');
+      expect(control).toBeRequired();
+      expect(control).toHaveValue('既存');
+    });
+
+    it('marks a required field without changing its name', () => {
+      render(DynamicFormField, {props: {field, value: ''}});
+
+      const star = screen.getByText('*');
+      expect(star).toHaveAttribute('aria-hidden', 'true');
+      expect(star.closest('label')).toHaveAttribute('for', 'custom.note');
+    });
+
+    it('describes the control with the message', () => {
+      render(DynamicFormField, {
+        props: {field, value: '', error: '「備考」は必須です'},
+      });
+
+      const control = screen.getByRole('textbox', {name: '備考'});
+      expect(control).toHaveAttribute('aria-describedby', 'custom.note-error');
+      expect(control).toHaveAccessibleDescription('「備考」は必須です');
+      expect(control).toBeInvalid();
+    });
+
+    it('carries no error attributes while there is no message', () => {
+      render(DynamicFormField, {props: {field, value: ''}});
+
+      const control = screen.getByRole('textbox', {name: '備考'});
+      expect(control).not.toHaveAttribute('aria-describedby');
+      expect(control).not.toHaveAttribute('aria-invalid');
+    });
+
+    it('renders an <a> in the label as a link', () => {
+      render(DynamicFormField, {
+        props: {
+          field: {
+            ...field,
+            label: '<a href="https://example.com/note">備考</a>欄',
+          },
+          value: '',
+        },
+      });
+
+      expect(screen.getByRole('link', {name: '備考'})).toHaveAttribute(
+        'href',
+        'https://example.com/note',
+      );
+      expect(screen.getByRole('textbox', {name: /備考\s*欄/})).toHaveAttribute(
+        'id',
+        'custom.note',
+      );
+    });
+  });
+
   it('renders an <a> in a checkbox label as a link opening in a new tab', () => {
     const field: FormFieldDefYaml = {
       type: 'checkbox',
