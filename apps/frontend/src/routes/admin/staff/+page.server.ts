@@ -4,7 +4,12 @@ import {
   TOURNAMENT_TYPE_LABELS,
   TournamentTypeSchema,
 } from '@regional-quiz/shared';
-import {createApiClient, isUnauthorized, readErrorMessage} from '$lib/api';
+import {
+  createApiClient,
+  isUnauthorized,
+  readErrorMessage,
+  resolveApiErrorMessage,
+} from '$lib/api';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {Actions, PageServerLoad} from './$types';
 import {readString} from '$lib/form-data';
@@ -278,10 +283,14 @@ export const actions = {
           'disable',
           409,
           accountId,
-          (await readErrorMessage(res, '')) ===
-            'cannot disable your own account'
-            ? '自分自身のアカウントは無効化できません'
-            : '有効な統括スタッフがいなくなるため、このアカウントは無効化できません',
+          await resolveApiErrorMessage(res, {
+            byCode: {
+              'cannot disable your own account':
+                '自分自身のアカウントは無効化できません',
+            },
+            fallback:
+              '有効な統括スタッフがいなくなるため、このアカウントは無効化できません',
+          }),
         );
       }
       return rowFailure(

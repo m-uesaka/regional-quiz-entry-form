@@ -1,11 +1,16 @@
 import {error, fail, redirect} from '@sveltejs/kit';
 import {
   EDITABLE_ENTRY_STATUSES,
+  ENTRY_ERROR_CODES,
   EntryEditInputSchema,
   findCustomFieldValuesErrors,
   isWithinEntryPeriod,
 } from '@regional-quiz/shared';
-import {createApiClient} from '$lib/api';
+import {
+  createApiClient,
+  resolveApiErrorMessage,
+  type ApiErrorMessages,
+} from '$lib/api';
 import {
   customFieldErrors,
   entrySchemaFieldErrors,
@@ -27,6 +32,37 @@ type EditFieldErrors = Record<string, string[] | undefined>;
 
 /** Nothing to attach per field — the refusal is about the whole edit. */
 const NO_FIELD_ERRORS: EditFieldErrors = {};
+
+const ENTRY_PERIOD_CLOSED_MESSAGE = 'エントリー期間外のため編集できません';
+const ENTRY_CANCELLED_MESSAGE = 'キャンセル済みのエントリーは編集できません';
+
+/** The fallback for a 400, and what a failed check here says itself. */
+const CHECK_INPUT_MESSAGE = '入力内容を確認してください';
+
+/**
+ * The statuses a refused edit is answered with as they are, and their
+ * wording. Anything else is a failure on our side, answered as a 502.
+ */
+const EDIT_STATUS_MESSAGES: Readonly<Record<number, string>> = {
+  400: CHECK_INPUT_MESSAGE,
+  // A 403 neither code below explains comes from something in front of the
+  // API, so it doesn't claim one of the two reasons.
+  403: 'エントリー期間外またはキャンセル済みのため編集できません',
+  404: 'エントリーが見つかりません',
+};
+
+/**
+ * What a refused edit is shown as. Either code can happen between the page
+ * load and this submission, and each is told as `load` tells it.
+ */
+const EDIT_REFUSAL_MESSAGES: ApiErrorMessages = {
+  byCode: {
+    [ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED]: ENTRY_PERIOD_CLOSED_MESSAGE,
+    [ENTRY_ERROR_CODES.ENTRY_CANCELLED]: ENTRY_CANCELLED_MESSAGE,
+  },
+  byStatus: EDIT_STATUS_MESSAGES,
+  fallback: 'エントリーの更新に失敗しました',
+};
 
 /**
  * Loads the participant's own entry, applying the same editability rule as
@@ -58,12 +94,12 @@ export const load: PageServerLoad = async ({cookies, params, fetch, url}) => {
       entry.tournament.entryClosesAt,
     )
   ) {
-    throw error(403, 'エントリー期間外のため編集できません');
+    throw error(403, ENTRY_PERIOD_CLOSED_MESSAGE);
   }
   // The two halves of `isEntryEditable` are checked separately so the
   // participant is told which one refused the edit.
   if (!EDITABLE_ENTRY_STATUSES.includes(entry.status)) {
-    throw error(403, 'キャンセル済みのエントリーは編集できません');
+    throw error(403, ENTRY_CANCELLED_MESSAGE);
   }
 
   return {entry};
@@ -129,11 +165,7 @@ export const actions = {
         ...(parsed.success ? {} : entrySchemaFieldErrors(parsed.error.issues)),
         ...customFieldErrors(customFieldValuesErrors, formFieldDefs),
       };
-      return fail(400, {
-        error: '入力内容を確認してください',
-        fieldErrors,
-        values,
-      });
+      return fail(400, {error: CHECK_INPUT_MESSAGE, fieldErrors, values});
     }
 
     const res = await api.api.mypage.entries[':entryId'].$patch({
@@ -145,33 +177,8 @@ export const actions = {
         // The session can die between the two calls this action makes.
         redirectToParticipantLogin(cookies, url);
       }
-      if (res.status === 400) {
-        return fail(400, {
-          error: '入力内容を確認してください',
-          fieldErrors: NO_FIELD_ERRORS,
-          values,
-        });
-      }
-      // The API answers 403 both when the entry period has closed and when
-      // the entry was cancelled, and the two can only be told apart from a
-      // free-form message. Since either can happen between the page load and
-      // this submission, the message stays neutral about which one refused.
-      if (res.status === 403) {
-        return fail(403, {
-          error: 'エントリー期間外またはキャンセル済みのため編集できません',
-          fieldErrors: NO_FIELD_ERRORS,
-          values,
-        });
-      }
-      if (res.status === 404) {
-        return fail(404, {
-          error: 'エントリーが見つかりません',
-          fieldErrors: NO_FIELD_ERRORS,
-          values,
-        });
-      }
-      return fail(502, {
-        error: 'エントリーの更新に失敗しました',
+      return fail(res.status in EDIT_STATUS_MESSAGES ? res.status : 502, {
+        error: await resolveApiErrorMessage(res, EDIT_REFUSAL_MESSAGES),
         fieldErrors: NO_FIELD_ERRORS,
         values,
       });

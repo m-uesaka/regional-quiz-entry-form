@@ -1819,6 +1819,7 @@ describe.skipIf(!dbReachable)(
 
       expect(result.ok).toBe(false);
       expect(!result.ok && result.status).toBe(403);
+      expect(!result.ok && result.error).toBe('entry is cancelled');
       const [row] = await sql`
         select name from entries where id = ${fixture.entryId}
       `;
