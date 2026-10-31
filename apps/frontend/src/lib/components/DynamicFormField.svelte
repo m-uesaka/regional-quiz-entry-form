@@ -6,6 +6,7 @@
   } from '@regional-quiz/shared';
   import {customFieldName} from '$lib/custom-field-name';
   import FieldLabelText from '$lib/components/FieldLabelText.svelte';
+  import FieldError from '$lib/components/form/FieldError.svelte';
   import Input from '$lib/components/ui/atoms/Input.svelte';
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import Textarea from '$lib/components/ui/atoms/Textarea.svelte';
@@ -78,7 +79,7 @@
      rejected answer is reported in the same place whatever the field
      type is. -->
 {#snippet errorMessage()}
-  {#if error}<p class="text-sm text-destructive">{error}</p>{/if}
+  <FieldError {error} />
 {/snippet}
 
 <!-- The options stay native inputs inside their own `<label>`: a native
