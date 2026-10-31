@@ -327,7 +327,7 @@ export const load: PageServerLoad = async ({
         ? ('paused' as const)
         : ('closed' as const),
     priorityNotices: open
-      ? priorityEntryNotices(regulations, now, tournament.entryClosesAt)
+      ? priorityEntryNotices(regulations, now, tournament)
       : [],
     waitlistOpen:
       open &&

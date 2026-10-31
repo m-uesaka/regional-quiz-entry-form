@@ -747,29 +747,26 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     expect(recorded.mails[0].html).toContain('別の地域');
   });
 
-  // #235: a priority window is judged against this tournament's own close.
-  it("enforces another regulation's window only while it ends before the close", async () => {
+  // #235: a priority window is judged against this tournament's own period.
+  it("enforces another regulation's window only until the general phase", async () => {
     const closesAt = new Date(Date.now() + DAY_MS * 2).toISOString();
+    const priorityEndedAt = new Date(Date.now() - 1000).toISOString();
     const generalWindow = (endsAt: string) => ({
       id: '99999999-9999-4999-8999-999999999999',
-      priority_starts_at: new Date(Date.now() - DAY_MS).toISOString(),
+      priority_starts_at: priorityEndedAt,
       priority_ends_at: endsAt,
     });
     const selected = {
       id: validBody.regulationIds[0],
-      priority_starts_at: null,
-      priority_ends_at: null,
+      priority_starts_at: new Date(Date.now() - DAY_MS / 2).toISOString(),
+      priority_ends_at: priorityEndedAt,
     };
 
     mockSupabase({
       tournament: tournamentRow({
         entryClosesAt: closesAt,
         regulations: [
-          {
-            ...selected,
-            priority_starts_at: new Date(Date.now() - DAY_MS).toISOString(),
-            priority_ends_at: new Date(Date.now() - 1000).toISOString(),
-          },
+          selected,
           generalWindow(new Date(Date.now() + DAY_MS).toISOString()),
         ],
       }),
@@ -782,14 +779,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     mockSupabase({
       tournament: tournamentRow({
         entryClosesAt: closesAt,
-        regulations: [
-          {
-            ...selected,
-            priority_starts_at: new Date(Date.now() - DAY_MS).toISOString(),
-            priority_ends_at: new Date(Date.now() - 1000).toISOString(),
-          },
-          generalWindow(closesAt),
-        ],
+        regulations: [selected, generalWindow(closesAt)],
       }),
       participant: null,
     });

@@ -1,11 +1,11 @@
 <script lang="ts">
-  import type {Regulation} from '@regional-quiz/shared';
+  import type {EntryPeriod, Regulation} from '@regional-quiz/shared';
   import {isRegulationSelectionAllowed} from '@regional-quiz/shared';
 
   interface Props {
     regulations: Regulation[];
-    /** When the tournament stops taking entries. */
-    entryClosesAt: string;
+    /** The tournament's entry period. */
+    entryPeriod: EntryPeriod;
     /**
      * The chosen regulations' ids. Bound, so checking one writes it back to
      * the caller — see "Form controls are bound, not rendered from an
@@ -17,7 +17,7 @@
 
   let {
     regulations,
-    entryClosesAt,
+    entryPeriod,
     value = $bindable(),
     now = new Date(),
   }: Props = $props();
@@ -39,7 +39,7 @@
             regulations,
             [regulation.id],
             now,
-            entryClosesAt,
+            entryPeriod,
           ),
         )
         .map(regulation => regulation.id),
@@ -47,7 +47,7 @@
   );
   const hasPriorityWindow = $derived(priorityIds.size < ordered.length);
   const selectionAllowed = $derived(
-    isRegulationSelectionAllowed(regulations, value, now, entryClosesAt),
+    isRegulationSelectionAllowed(regulations, value, now, entryPeriod),
   );
 
   // A checkbox group has no native "at least one checked", so every box

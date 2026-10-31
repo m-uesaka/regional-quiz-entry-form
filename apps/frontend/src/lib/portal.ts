@@ -174,7 +174,7 @@ export function groupPortalTournaments(
           ? priorityEntryNotices(
               tournament.priorityRegulations,
               now,
-              tournament.entryClosesAt,
+              tournament,
             )
           : [],
       entryPath: tournamentEntryFormPath(
