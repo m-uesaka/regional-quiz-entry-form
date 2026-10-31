@@ -2,6 +2,7 @@ import {
   EDITABLE_ENTRY_STATUSES,
   findCustomFieldValuesError,
   isRegulationSelectionAllowed,
+  selectableRegulations,
   isWithinEntryPeriod,
   type EntryEditInput,
   type EntryInput,
@@ -31,7 +32,7 @@ type CreateEntryResult =
  */
 export type EntrySubmissionCheck =
   | {ok: true; tournament: EntryTournamentRow}
-  | {ok: false; status: 400 | 403 | 500; error: string};
+  | {ok: false; status: 400 | 403 | 409 | 500; error: string};
 
 /**
  * What an unauthenticated entry submission came to, once it has run in the
@@ -81,11 +82,13 @@ const ALREADY_ENTERED_ANOTHER_TOURNAMENT =
   'already entered another tournament in this region';
 
 /**
- * What a refused `entry_regulations` write answers with. Reached only when
- * a regulation the submission named stopped existing between
+ * What a submission naming a regulation that is no longer on offer answers
+ * with. Reached when the form was left open past the end of a priority
+ * phase (`selectableRegulations()`), or when a refused `entry_regulations`
+ * write shows the regulation stopped existing between
  * `isRegulationSelectionAllowed()` and the write — a `sync_regulations()`
- * call that dropped it — so it is a conflict with a concurrent change, not
- * a malformed submission. Spelled out rather than passing the constraint
+ * call that dropped it. Either way it is a conflict with a change, not a
+ * malformed submission. Spelled out rather than passing the constraint
  * violation through, so the entry form has something stable to translate.
  */
 const REGULATION_NO_LONGER_AVAILABLE = 'regulation no longer available';
@@ -432,17 +435,31 @@ export async function checkEntrySubmission(
     priorityStartsAt: regulation.priority_starts_at,
     priorityEndsAt: regulation.priority_ends_at,
   }));
+  const entryPeriod = {
+    entryOpensAt: tournament.entry_opens_at,
+    entryClosesAt: tournament.entry_closes_at,
+  };
   if (
-    !isRegulationSelectionAllowed(regulations, submission.regulationIds, now, {
-      entryOpensAt: tournament.entry_opens_at,
-      entryClosesAt: tournament.entry_closes_at,
-    })
+    !isRegulationSelectionAllowed(
+      regulations,
+      submission.regulationIds,
+      now,
+      entryPeriod,
+    )
   ) {
-    return {
-      ok: false,
-      status: 403,
-      error: 'regulation not eligible in priority window',
-    };
+    const selectable = selectableRegulations(regulations, now, entryPeriod);
+    const noLongerOnOffer = regulations.some(
+      regulation =>
+        submission.regulationIds.includes(regulation.id) &&
+        !selectable.includes(regulation),
+    );
+    return noLongerOnOffer
+      ? {ok: false, status: 409, error: REGULATION_NO_LONGER_AVAILABLE}
+      : {
+          ok: false,
+          status: 403,
+          error: 'regulation not eligible in priority window',
+        };
   }
 
   // Checked here, before the participant lookup, so a submission the rendered

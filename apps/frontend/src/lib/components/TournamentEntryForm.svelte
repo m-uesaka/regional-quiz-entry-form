@@ -1,6 +1,7 @@
 <script lang="ts">
   import {untrack} from 'svelte';
   import {enhance} from '$app/forms';
+  import {invalidateAll} from '$app/navigation';
   import {
     ENTRY_FREE_TEXT_MAX_LENGTH,
     ENTRY_NAME_MAX_LENGTH,
@@ -27,6 +28,8 @@
     regulations: Regulation[];
     /** The tournament's entry period. */
     entryPeriod: EntryPeriod;
+    /** The moment `load` read, which decides the regulations on offer. */
+    now: Date;
     /** What the last rejected submission carried back, if there was one. */
     values?: EntryFormValues;
     fieldErrors?: EntryFieldErrors;
@@ -47,6 +50,7 @@
     formFieldDefs,
     regulations,
     entryPeriod,
+    now,
     values,
     fieldErrors,
     loggedIn = false,
@@ -112,13 +116,19 @@
      rejected submission is reported with `fail()`, which re-renders this
      form in place with the token it already spent still in it, and the
      retry the message invites would then fail the challenge rather than
-     whatever it was actually refused for. See `Turnstile.svelte`. -->
+     whatever it was actually refused for. See `Turnstile.svelte`. A refusal
+     because the regulations changed also reads the page data again: `fail()`
+     doesn't, and the form would go on offering what was just refused. What
+     was typed stays, as the controls own their values. -->
 <form
   method="POST"
   class="flex flex-col gap-4"
   use:enhance={() => {
-    return async ({update}) => {
+    return async ({result, update}) => {
       await update();
+      if (result.type === 'failure' && result.data?.regulationsChanged) {
+        await invalidateAll();
+      }
       turnstile?.reset();
     };
   }}
@@ -250,6 +260,7 @@
     <RegulationSelector
       {regulations}
       {entryPeriod}
+      {now}
       bind:value={regulationIds}
     />
     {#if fieldError('regulationIds')}

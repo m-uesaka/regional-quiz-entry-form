@@ -809,44 +809,88 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
   });
 
   // #235: a priority window is judged against this tournament's own period.
-  it("enforces another regulation's window only until the general phase", async () => {
+  describe('with a priority phase that is over', () => {
     const closesAt = new Date(Date.now() + DAY_MS * 2).toISOString();
     const priorityEndedAt = new Date(Date.now() - 1000).toISOString();
-    const generalWindow = (endsAt: string) => ({
+    const earlierPhase = (id: string) => ({
+      id,
+      priority_starts_at: new Date(Date.now() - DAY_MS / 2).toISOString(),
+      priority_ends_at: priorityEndedAt,
+    });
+    const generalPhase = (endsAt: string) => ({
       id: '99999999-9999-4999-8999-999999999999',
       priority_starts_at: priorityEndedAt,
       priority_ends_at: endsAt,
     });
-    const selected = {
+    const selectedWithoutWindow = {
       id: validBody.regulationIds[0],
-      priority_starts_at: new Date(Date.now() - DAY_MS / 2).toISOString(),
-      priority_ends_at: priorityEndedAt,
+      priority_starts_at: null,
+      priority_ends_at: null,
     };
+    const otherPhaseId = '88888888-8888-4888-8888-888888888888';
 
-    mockSupabase({
-      tournament: tournamentRow({
-        entryClosesAt: closesAt,
-        regulations: [
-          selected,
-          generalWindow(new Date(Date.now() + DAY_MS).toISOString()),
-        ],
-      }),
-      participant: null,
-    });
-    const refused = await postWithContext(TOURNAMENT_PATH, validBody);
-    await settleBackgroundWork();
-    expect(refused.status).toBe(403);
+    it('enforces a later window ending before the close', async () => {
+      mockSupabase({
+        tournament: tournamentRow({
+          entryClosesAt: closesAt,
+          regulations: [
+            selectedWithoutWindow,
+            earlierPhase(otherPhaseId),
+            generalPhase(new Date(Date.now() + DAY_MS).toISOString()),
+          ],
+        }),
+        participant: null,
+      });
 
-    mockSupabase({
-      tournament: tournamentRow({
-        entryClosesAt: closesAt,
-        regulations: [selected, generalWindow(closesAt)],
-      }),
-      participant: null,
+      const res = await postWithContext(TOURNAMENT_PATH, validBody);
+      await settleBackgroundWork();
+
+      expect(res.status).toBe(403);
     });
-    const accepted = await postWithContext(TOURNAMENT_PATH, validBody);
-    await settleBackgroundWork();
-    expect(accepted.status).toBe(202);
+
+    it('accepts what is on offer in the general phase', async () => {
+      mockSupabase({
+        tournament: tournamentRow({
+          entryClosesAt: closesAt,
+          regulations: [
+            selectedWithoutWindow,
+            earlierPhase(otherPhaseId),
+            generalPhase(closesAt),
+          ],
+        }),
+        participant: null,
+      });
+
+      const res = await postWithContext(TOURNAMENT_PATH, validBody);
+      await settleBackgroundWork();
+
+      expect(res.status).toBe(202);
+    });
+
+    it('refuses the phase that is over in the general phase', async () => {
+      const recorded = mockSupabase({
+        tournament: tournamentRow({
+          entryClosesAt: closesAt,
+          regulations: [
+            earlierPhase(validBody.regulationIds[0]),
+            generalPhase(closesAt),
+          ],
+        }),
+        participant: null,
+      });
+
+      const res = await postWithContext(TOURNAMENT_PATH, validBody);
+      await settleBackgroundWork();
+
+      expect(res.status).toBe(409);
+      expect((await res.json()) as unknown).toEqual({
+        error: 'regulation no longer available',
+      });
+      expect(recorded.calls).not.toContainEqual({
+        table: 'entries',
+        method: 'POST',
+      });
+    });
   });
 
   it('refuses a new entry while staff have paused the tournament', async () => {
@@ -988,6 +1032,40 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
       {p_participant_id: PARTICIPANT_ID, p_region_id: REGION_ID},
     ]);
     expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
+  });
+
+  it('reports a regulation taken off the offer directly', async () => {
+    const closesAt = new Date(Date.now() + DAY_MS * 2).toISOString();
+    const priorityEndedAt = new Date(Date.now() - 1000).toISOString();
+    mockSupabase({
+      tournament: tournamentRow({
+        entryClosesAt: closesAt,
+        regulations: [
+          {
+            id: validBody.regulationIds[0],
+            priority_starts_at: new Date(Date.now() - DAY_MS / 2).toISOString(),
+            priority_ends_at: priorityEndedAt,
+          },
+          {
+            id: '99999999-9999-4999-8999-999999999999',
+            priority_starts_at: priorityEndedAt,
+            priority_ends_at: closesAt,
+          },
+        ],
+      }),
+      participant: await registeredParticipant(),
+    });
+
+    const res = await postWithContext(
+      SESSION_PATH,
+      sessionBody,
+      await sessionCookie(),
+    );
+
+    expect(res.status).toBe(409);
+    expect((await res.json()) as unknown).toEqual({
+      error: 'regulation no longer available',
+    });
   });
 
   it('answers a concurrent move of the region as a concurrent submission', async () => {

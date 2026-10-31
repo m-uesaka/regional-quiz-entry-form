@@ -1,6 +1,9 @@
 <script lang="ts">
   import type {EntryPeriod, Regulation} from '@regional-quiz/shared';
-  import {isRegulationSelectionAllowed} from '@regional-quiz/shared';
+  import {
+    isRegulationSelectionAllowed,
+    selectableRegulations,
+  } from '@regional-quiz/shared';
 
   interface Props {
     regulations: Regulation[];
@@ -12,18 +15,28 @@
      * expression" in `apps/frontend/README.md`.
      */
     value: string[];
-    now?: Date;
+    /** The moment `load` read, so the server and the browser agree. */
+    now: Date;
   }
 
   let {
     regulations,
     entryPeriod,
     value = $bindable(),
-    now = new Date(),
+    now,
   }: Props = $props();
 
+  // Only what is on offer, in order. `regulations` itself stays the whole
+  // list for the checks below, which need the phases that are over.
   const ordered = $derived(
-    [...regulations].sort((a, b) => a.displayOrder - b.displayOrder),
+    selectableRegulations(regulations, now, entryPeriod).sort(
+      (a, b) => a.displayOrder - b.displayOrder,
+    ),
+  );
+  // What a rejected submission echoed back can name a regulation the page no
+  // longer shows; it doesn't count as chosen.
+  const chosen = $derived(
+    value.filter(id => ordered.some(regulation => regulation.id === id)),
   );
 
   // Which regulations are inside an active priority window. During one, the
@@ -47,7 +60,7 @@
   );
   const hasPriorityWindow = $derived(priorityIds.size < ordered.length);
   const selectionAllowed = $derived(
-    isRegulationSelectionAllowed(regulations, value, now, entryPeriod),
+    isRegulationSelectionAllowed(regulations, chosen, now, entryPeriod),
   );
 
   // A checkbox group has no native "at least one checked", so every box
@@ -85,7 +98,7 @@
         class="size-4 cursor-pointer accent-primary"
         name="regulationIds"
         value={regulation.id}
-        required={hydrated && value.length === 0}
+        required={hydrated && chosen.length === 0}
         bind:group={value}
       />
       {regulation.label}
@@ -97,7 +110,7 @@
       {/if}
     </label>
   {/each}
-  {#if !selectionAllowed && value.length > 0}
+  {#if !selectionAllowed && chosen.length > 0}
     <p class="text-sm text-destructive">
       現在は優先期間中のため、優先対象のレギュレーションを1つ以上選択してください
     </p>

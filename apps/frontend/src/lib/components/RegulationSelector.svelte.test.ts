@@ -154,6 +154,7 @@ describe('RegulationSelector', () => {
           }),
         ],
         entryPeriod: ENTRY_PERIOD,
+        // A rejected submission echoing the phase that is over.
         value: [REGULATION_A.id],
         now: new Date('2026-08-23T00:00:00Z'),
       },
@@ -161,6 +162,30 @@ describe('RegulationSelector', () => {
 
     expect(screen.queryByText(/優先期間中/)).not.toBeInTheDocument();
     expect(screen.queryByText('優先対象')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('checkbox', {name: /A部門/}),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', {name: /B部門/})).toBeInTheDocument();
+  });
+
+  it('keeps a regulation whose window ended outside the general phase', () => {
+    render(RegulationSelector, {
+      props: {
+        regulations: [
+          buildRegulation({
+            ...REGULATION_A,
+            priorityStartsAt: '2026-08-20T00:00:00+09:00',
+            priorityEndsAt: '2026-08-22T00:00:00+09:00',
+          }),
+          REGULATION_B,
+        ],
+        entryPeriod: ENTRY_PERIOD,
+        value: [],
+        now: new Date('2026-08-23T00:00:00Z'),
+      },
+    });
+
+    expect(screen.getByRole('checkbox', {name: /A部門/})).toBeInTheDocument();
   });
 
   it('says nothing about priority windows when none is active', () => {

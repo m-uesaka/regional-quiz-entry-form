@@ -65,6 +65,8 @@ const SESSION_ENTRY_VALUE = 'session';
  * and "wrong regulation during a priority window"), so the message — not
  * the status alone — decides the wording.
  */
+const REGULATION_NO_LONGER_AVAILABLE = 'regulation no longer available';
+
 const ENTRY_ERROR_MESSAGES: Record<string, string> = {
   'invalid tournament': '大会が見つかりません',
   'entry period closed': 'エントリー期間外です',
@@ -84,10 +86,12 @@ const ENTRY_ERROR_MESSAGES: Record<string, string> = {
   // that link expires, entering again goes through.
   'entry pending verification':
     'この大会へのエントリーは確定待ちです。確認メールのリンクを開いて確定してください。メールが見当たらない場合は、マイページでこのエントリーをキャンセルしてから、もう一度エントリーしてください',
-  // The regulations changed while the form was open, so what the page
-  // offered no longer exists. Reloading is what fixes it.
-  'regulation no longer available':
-    '選択したレギュレーションが変更されました。ページを再読み込みして、もう一度お試しください',
+  // What the page offered is no longer on offer: staff changed the
+  // regulations, or a priority phase ended while the form was open. The form
+  // reads them again (`regulationsChanged`), so choosing again is what fixes
+  // it, without losing what was typed.
+  [REGULATION_NO_LONGER_AVAILABLE]:
+    '選択したレギュレーションが変更されました。選択し直して、もう一度お試しください',
   // Another submission for the same tournament -- from another tab, say --
   // wrote its entry first (#191). Whether that one is confirmed yet depends
   // on its mail, so the participant is sent to mypage to see which.
@@ -313,6 +317,7 @@ export const load: PageServerLoad = async ({
   // preview outside its period shows neither -- as on the portal, where a
   // priority window can outlast its form.
   return {
+    now,
     tournament,
     regulations,
     formFieldDefs,
@@ -525,6 +530,7 @@ export const actions = {
         fieldErrors,
         values,
         loginPath: res.status === 401 ? loginPath : null,
+        regulationsChanged: code === REGULATION_NO_LONGER_AVAILABLE,
       });
     }
 
