@@ -21,5 +21,6 @@ export * from './logic/staff-scope';
 export * from './logic/label-links';
 export * from './logic/entry-verification';
 export * from './logic/link-lifetime';
+export * from './entry-error-codes';
 export * from './mail-sender';
 export * from './client-ip';

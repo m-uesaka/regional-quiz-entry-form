@@ -981,6 +981,24 @@ describe('entry +page.server default action', () => {
     });
   });
 
+  // A property every object inherits is not a code, whatever a plain lookup
+  // in the message table would make of it.
+  it('falls back for a string naming an inherited property', async () => {
+    const result = await actions.default(
+      buildActionEvent({
+        fetch: fakeApi({
+          entryResponse: {status: 403, body: {error: 'constructor'}},
+        }),
+        fields: validFormData(),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: 403,
+      data: {error: 'この内容ではエントリーできません'},
+    });
+  });
+
   it("forwards the widget's token to the API", async () => {
     const turnstileTokens: Array<string | null> = [];
 

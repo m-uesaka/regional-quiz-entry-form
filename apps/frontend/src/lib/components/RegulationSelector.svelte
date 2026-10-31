@@ -1,7 +1,8 @@
 <script lang="ts">
   import type {EntryPeriod, Regulation} from '@regional-quiz/shared';
   import {
-    isRegulationSelectionAllowed,
+    activePriorityRegulations,
+    regulationSelectionRefusal,
     selectableRegulations,
   } from '@regional-quiz/shared';
 
@@ -46,21 +47,19 @@
   // reported instead.
   const priorityIds = $derived(
     new Set(
-      ordered
-        .filter(regulation =>
-          isRegulationSelectionAllowed(
-            regulations,
-            [regulation.id],
-            now,
-            entryPeriod,
-          ),
-        )
-        .map(regulation => regulation.id),
+      activePriorityRegulations(regulations, now, entryPeriod).map(
+        regulation => regulation.id,
+      ),
     ),
   );
-  const hasPriorityWindow = $derived(priorityIds.size < ordered.length);
-  const selectionAllowed = $derived(
-    isRegulationSelectionAllowed(regulations, chosen, now, entryPeriod),
+  // Whether the window narrows anything: with every regulation on offer inside
+  // it, there is nothing to tell apart and nothing to ask for.
+  const hasPriorityWindow = $derived(
+    priorityIds.size > 0 && priorityIds.size < ordered.length,
+  );
+  const needsPriority = $derived(
+    regulationSelectionRefusal(regulations, chosen, now, entryPeriod) ===
+      'needs-priority',
   );
 
   // A checkbox group has no native "at least one checked", so every box
@@ -110,7 +109,7 @@
       {/if}
     </label>
   {/each}
-  {#if !selectionAllowed && chosen.length > 0}
+  {#if needsPriority}
     <p class="text-sm text-destructive">
       現在は優先期間中のため、優先対象のレギュレーションを1つ以上選択してください
     </p>
