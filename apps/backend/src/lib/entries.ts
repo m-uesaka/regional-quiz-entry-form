@@ -1,7 +1,6 @@
 import {
   EDITABLE_ENTRY_STATUSES,
   ENTRY_ERROR_CODES,
-  findCustomFieldValuesError,
   isWithinEntryPeriod,
   regulationSelectionRefusal,
   type EntryEditInput,
@@ -17,8 +16,7 @@ import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import {sendEntryNoticeEmail, type EntryNoticeReason} from './entry-notice';
 import {sendVerificationEmail} from './entry-verification';
-import {FORM_FIELD_DEF_COLUMNS, toFormFieldDef} from './form-field-defs';
-import type {FormFieldDefRow} from './form-field-defs';
+import {validateCustomFieldValues} from './form-field-defs';
 import {hashPassword, verifyPassword} from './password';
 import {tournamentDisplayName} from './tournaments';
 import {verifyAccountPassword} from './password-rehash';
@@ -426,21 +424,13 @@ export async function checkEntrySubmission(
   // Checked here, before the participant lookup, so a submission the rendered
   // form could never have produced is refused without creating an account for
   // it as a side effect.
-  const {data: fieldDefRows, error: fieldDefsError} = await db
-    .from('form_field_defs')
-    .select(FORM_FIELD_DEF_COLUMNS)
-    .eq('tournament_id', tournamentId)
-    .order('display_order', {ascending: true})
-    .returns<FormFieldDefRow[]>();
-  if (fieldDefsError) {
-    return {ok: false, status: 500, error: fieldDefsError.message};
-  }
-  const customFieldValuesError = findCustomFieldValuesError(
-    (fieldDefRows ?? []).map(toFormFieldDef),
+  const customFieldValuesCheck = await validateCustomFieldValues(
+    db,
+    tournamentId,
     submission.customFieldValues,
   );
-  if (customFieldValuesError) {
-    return {ok: false, status: 400, error: customFieldValuesError.message};
+  if (!customFieldValuesCheck.ok) {
+    return customFieldValuesCheck;
   }
   return {ok: true, tournament};
 }
@@ -1273,21 +1263,13 @@ export async function updateOwnEntry(
     return {ok: false, status: 403, error: `entry is ${entry.status}`};
   }
 
-  const {data: fieldDefRows, error: fieldDefsError} = await db
-    .from('form_field_defs')
-    .select(FORM_FIELD_DEF_COLUMNS)
-    .eq('tournament_id', entry.tournament_id)
-    .order('display_order', {ascending: true})
-    .returns<FormFieldDefRow[]>();
-  if (fieldDefsError) {
-    return {ok: false, status: 500, error: fieldDefsError.message};
-  }
-  const customFieldValuesError = findCustomFieldValuesError(
-    (fieldDefRows ?? []).map(toFormFieldDef),
+  const customFieldValuesCheck = await validateCustomFieldValues(
+    db,
+    entry.tournament_id,
     patch.customFieldValues,
   );
-  if (customFieldValuesError) {
-    return {ok: false, status: 400, error: customFieldValuesError.message};
+  if (!customFieldValuesCheck.ok) {
+    return customFieldValuesCheck;
   }
 
   const {error} = await db

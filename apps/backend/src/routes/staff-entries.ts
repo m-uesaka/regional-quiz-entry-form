@@ -15,11 +15,7 @@ import {
   requireStaffForTournament,
 } from '../middleware/staff-auth';
 import {createDbClient} from '../lib/db';
-import {
-  FORM_FIELD_DEF_COLUMNS,
-  toFormFieldDef,
-  type FormFieldDefRow,
-} from '../lib/form-field-defs';
+import {fetchFormFieldDefs} from '../lib/form-field-defs';
 import {buildEntriesCsv} from '../lib/entries-csv';
 import {
   ENTRY_REGULATIONS_COLUMNS,
@@ -177,12 +173,10 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
       // The tournament's custom form fields become the CSV's trailing
       // columns, headed by their `label` in `display_order` — the raw
       // `custom_field_values` keys would be meaningless to staff.
-      const {data: formFieldDefRows, error: formFieldDefsError} = await db
-        .from('form_field_defs')
-        .select(FORM_FIELD_DEF_COLUMNS)
-        .eq('tournament_id', tournamentId)
-        .order('display_order', {ascending: true})
-        .returns<FormFieldDefRow[]>();
+      const {fieldDefs, error: formFieldDefsError} = await fetchFormFieldDefs(
+        db,
+        tournamentId,
+      );
       if (formFieldDefsError) {
         return c.json(
           internalError(
@@ -194,7 +188,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
       }
 
       const csv = buildEntriesCsv(
-        (formFieldDefRows ?? []).map(toFormFieldDef),
+        fieldDefs,
         entryRows.map(row => ({
           name: row.name,
           furigana: row.furigana,
@@ -241,12 +235,10 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
       // tournament, so the staff UI can render each `customFieldValues`
       // entry under its human-readable label instead of the raw storage
       // key.
-      const {data: formFieldDefRows, error: formFieldDefsError} = await db
-        .from('form_field_defs')
-        .select(FORM_FIELD_DEF_COLUMNS)
-        .eq('tournament_id', data.tournament_id)
-        .order('display_order', {ascending: true})
-        .returns<FormFieldDefRow[]>();
+      const {fieldDefs, error: formFieldDefsError} = await fetchFormFieldDefs(
+        db,
+        data.tournament_id,
+      );
       if (formFieldDefsError) {
         return c.json(
           internalError(
@@ -260,7 +252,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
       return c.json(
         StaffEntryDetailSchema.parse({
           ...rowToEntry(data),
-          formFieldDefs: (formFieldDefRows ?? []).map(toFormFieldDef),
+          formFieldDefs: fieldDefs,
         }),
       );
     },
