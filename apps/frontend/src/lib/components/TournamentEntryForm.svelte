@@ -8,6 +8,7 @@
     PASSWORD_MIN_LENGTH,
     toFormFieldDefYaml,
     type FormFieldDef,
+    type EntryPeriod,
     type Regulation,
   } from '@regional-quiz/shared';
   import DynamicFormField from '$lib/components/DynamicFormField.svelte';
@@ -24,6 +25,8 @@
   interface Props {
     formFieldDefs: FormFieldDef[];
     regulations: Regulation[];
+    /** The tournament's entry period. */
+    entryPeriod: EntryPeriod;
     /** What the last rejected submission carried back, if there was one. */
     values?: EntryFormValues;
     fieldErrors?: EntryFieldErrors;
@@ -43,6 +46,7 @@
   const {
     formFieldDefs,
     regulations,
+    entryPeriod,
     values,
     fieldErrors,
     loggedIn = false,
@@ -243,7 +247,11 @@
   {/if}
 
   <div class="flex flex-col gap-1.5">
-    <RegulationSelector {regulations} bind:value={regulationIds} />
+    <RegulationSelector
+      {regulations}
+      {entryPeriod}
+      bind:value={regulationIds}
+    />
     {#if fieldError('regulationIds')}
       <p class="text-sm text-destructive">{fieldError('regulationIds')}</p>
     {/if}

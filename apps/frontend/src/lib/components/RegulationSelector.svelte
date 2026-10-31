@@ -1,9 +1,11 @@
 <script lang="ts">
-  import type {Regulation} from '@regional-quiz/shared';
+  import type {EntryPeriod, Regulation} from '@regional-quiz/shared';
   import {isRegulationSelectionAllowed} from '@regional-quiz/shared';
 
   interface Props {
     regulations: Regulation[];
+    /** The tournament's entry period. */
+    entryPeriod: EntryPeriod;
     /**
      * The chosen regulations' ids. Bound, so checking one writes it back to
      * the caller — see "Form controls are bound, not rendered from an
@@ -13,7 +15,12 @@
     now?: Date;
   }
 
-  let {regulations, value = $bindable(), now = new Date()}: Props = $props();
+  let {
+    regulations,
+    entryPeriod,
+    value = $bindable(),
+    now = new Date(),
+  }: Props = $props();
 
   const ordered = $derived(
     [...regulations].sort((a, b) => a.displayOrder - b.displayOrder),
@@ -28,14 +35,19 @@
     new Set(
       ordered
         .filter(regulation =>
-          isRegulationSelectionAllowed(regulations, [regulation.id], now),
+          isRegulationSelectionAllowed(
+            regulations,
+            [regulation.id],
+            now,
+            entryPeriod,
+          ),
         )
         .map(regulation => regulation.id),
     ),
   );
   const hasPriorityWindow = $derived(priorityIds.size < ordered.length);
   const selectionAllowed = $derived(
-    isRegulationSelectionAllowed(regulations, value, now),
+    isRegulationSelectionAllowed(regulations, value, now, entryPeriod),
   );
 
   // A checkbox group has no native "at least one checked", so every box

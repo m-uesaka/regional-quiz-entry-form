@@ -80,6 +80,7 @@
         <TournamentEntryForm
           formFieldDefs={data.formFieldDefs}
           regulations={data.regulations}
+          entryPeriod={data.tournament}
           values={form?.values}
           fieldErrors={form?.fieldErrors}
           loggedIn={data.loggedIn}

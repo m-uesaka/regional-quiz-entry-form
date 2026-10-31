@@ -543,6 +543,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
   | `priorityEndsAt` | string(datetime) \| null | 省略時は `null` |
 - `displayOrder` は送りません。**配列の並び順がそのまま `display_order`** になるので、並べ替えは配列を並べ替えるだけです。
 - 優先期間は「両方 null」か「両方指定(開始 < 終了)」のみ許容します(Zod と `regulations` の check 制約 `regulations_priority_window_complete` の両方で担保)。
+- 大会を「優先枠 → 一般枠」の順に開くために、一般向けのレギュレーションへ締切までの期間を設定している場合、優先枠の終了後は優先エントリーではなく通常エントリーとして扱います(#235)。優先対象の選択を求めず、ポータルとエントリーフォームにも優先エントリーの案内を出しません。条件は [`database-schema.md`](./database-schema.md) の `regulations` を参照してください。
 - 配列に含まれなかった既存行は削除されますが、**エントリーから参照されている行は削除できません**。`entry_regulations` が複合外部キー `(regulation_id, tournament_id)` で参照しているため、フォーム定義のような delete → insert は使えず、id 指定は update・id 無しは insert・消えた行は「参照が無ければ delete」という差分同期になっています。
 - `regulations` は1件以上必要です(エントリーは必ず1つ以上選ぶため、0件の大会はエントリー不可になる)。
 
@@ -621,7 +622,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 | 400 | `invalid tournament` | `:tournamentId` の大会が存在しない |
 | 400 | `unknown custom field: ...` 等 | `customFieldValues` が大会の `form_field_defs` と一致しない(メッセージは [`form-generation.md`](./form-generation.md) の一覧を参照) |
 | 403 | `entry period closed` | エントリー期間外 |
-| 403 | `regulation not eligible in priority window` | `regulationIds` が空、この大会のものでない id を含む、または優先期間中に優先対象を1つも選んでいない |
+| 403 | `regulation not eligible in priority window` | `regulationIds` が空、この大会のものでない id を含む、または優先期間中に優先対象を1つも選んでいない(一般枠の段階は優先期間中として扱わない。`database-schema.md` の `regulations` を参照) |
 | 500 | `internal server error` | 大会や `form_field_defs` の取得に失敗 |
 
 ### `POST /api/tournaments/:tournamentId/entries/session`
