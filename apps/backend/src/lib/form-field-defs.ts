@@ -1,8 +1,11 @@
 import {
+  findCustomFieldValuesError,
   FormFieldDefSchema,
   labelPlainText,
+  type CustomFieldValues,
   type FormFieldDef,
 } from '@regional-quiz/shared';
+import type {createDbClient} from './db';
 
 /**
  * The `form_field_defs` columns every API response exposing a tournament's
@@ -40,4 +43,62 @@ export function toFormFieldDef(row: FormFieldDefRow): FormFieldDef {
     options: row.options,
     displayOrder: row.display_order,
   });
+}
+
+/** A tournament's custom form fields, or the error that stopped the read. */
+export type FormFieldDefsResult =
+  | {fieldDefs: FormFieldDef[]; error: null}
+  | {fieldDefs: null; error: {message: string}};
+
+/**
+ * Reads a tournament's custom form fields in display order.
+ *
+ * A failed read comes back as the database's own error rather than a
+ * response: some callers log it and answer with `internalError()`, others
+ * carry its message in their own result type, so the choice stays with them.
+ * @param db The Supabase client to query with.
+ * @param tournamentId The tournament whose form fields are read.
+ */
+export async function fetchFormFieldDefs(
+  db: ReturnType<typeof createDbClient>,
+  tournamentId: string,
+): Promise<FormFieldDefsResult> {
+  const {data, error} = await db
+    .from('form_field_defs')
+    .select(FORM_FIELD_DEF_COLUMNS)
+    .eq('tournament_id', tournamentId)
+    .order('display_order', {ascending: true})
+    .returns<FormFieldDefRow[]>();
+  if (error) {
+    return {fieldDefs: null, error};
+  }
+  return {fieldDefs: (data ?? []).map(toFormFieldDef), error: null};
+}
+
+/** Whether submitted custom field answers fit the tournament's form. */
+export type CustomFieldValuesCheck =
+  {ok: true} | {ok: false; status: 400 | 500; error: string};
+
+/**
+ * Checks submitted custom field answers against the tournament's form:
+ * a 400 for answers that don't fit it, a 500 carrying the database's message
+ * when the form can't be read.
+ * @param db The Supabase client to query with.
+ * @param tournamentId The tournament the answers were submitted to.
+ * @param values The submitted answers.
+ */
+export async function validateCustomFieldValues(
+  db: ReturnType<typeof createDbClient>,
+  tournamentId: string,
+  values: CustomFieldValues,
+): Promise<CustomFieldValuesCheck> {
+  const {fieldDefs, error} = await fetchFormFieldDefs(db, tournamentId);
+  if (error) {
+    return {ok: false, status: 500, error: error.message};
+  }
+  const valuesError = findCustomFieldValuesError(fieldDefs, values);
+  if (valuesError) {
+    return {ok: false, status: 400, error: valuesError.message};
+  }
+  return {ok: true};
 }
