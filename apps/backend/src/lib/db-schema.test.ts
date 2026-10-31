@@ -104,12 +104,13 @@ describe.skipIf(!dbReachable)(
   },
 );
 
-// The DB-level backstop for `regions.allows_dual_entry` (migration 0017).
-// `createEntry()` checks the rule before inserting, so what is exercised here
+// The DB-level backstop for `regions.allows_dual_entry` and
+// `claim_participant_region()` (migration 0041). `createEntry()` checks the
+// rule before inserting, so what is exercised here
 // is the window that check leaves open: an insert that arrives as if a
 // concurrent submission had already taken the region's other seat.
 describe.skipIf(!dbReachable)(
-  'check_region_dual_entry() (local Supabase integration)',
+  'check_entry_seat() (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);
     const testEmail = 'db-schema-dual-entry-test@example.com';
@@ -192,6 +193,347 @@ describe.skipIf(!dbReachable)(
     afterAll(async () => {
       await cleanup();
       await sql.close();
+    });
+
+    /**
+     * Re-enters a cancelled entry the way `enterTournament()` does.
+     * @param conn The connection to run on.
+     * @param entryId The cancelled entry.
+     * @param participantId Its participant.
+     * @return The entry as re-entered: no row if it wasn't cancelled.
+     */
+    function reenter(conn: SQL, entryId: string, participantId: string) {
+      return conn`
+        select * from reenter_cancelled_entry(
+          ${entryId}, ${participantId}, '鈴木花子', 'スズキハナコ', '花子',
+          null, '{}'
+        )
+      `;
+    }
+
+    /**
+     * The SQLSTATE a query was refused with.
+     * @param query The query.
+     */
+    async function refusalOf(query: PromiseLike<unknown>) {
+      try {
+        await query;
+        return undefined;
+      } catch (e: unknown) {
+        return (e as {errno?: string}).errno;
+      }
+    }
+
+    it('fires a single check on entries, with the two old functions gone', async () => {
+      const triggers = await sql`
+        select tgname from pg_trigger
+        where tgrelid = 'entries'::regclass
+          and not tgisinternal
+          and tgname like 'entries_check_%'
+      `;
+      const functions = await sql`
+        select proname from pg_proc
+        where proname in ('check_region_dual_entry', 'check_participant_region')
+      `;
+
+      expect(triggers.map((row: {tgname: string}) => row.tgname)).toEqual([
+        'entries_check_seat',
+      ]);
+      expect(functions).toHaveLength(0);
+    });
+
+    it('checks the region before the other tournament', async () => {
+      const {participantId, entryFor} = await seedRegion(false);
+      await sql`insert into entries ${sql(entryFor('saikyoi'))}`;
+      const [otherRegion] = await sql`
+        insert into regions (slug, name, allows_dual_entry)
+        values (${testRegionSlug + '-order'}, 'テスト地域', false)
+        returning id
+      `;
+      await sql`
+        update participants set region_id = ${otherRegion.id}
+        where id = ${participantId}
+      `;
+
+      const code = await refusalOf(
+        sql`insert into entries ${sql(entryFor('shinjinou'))}`,
+      );
+      await sql`delete from entries where participant_id = ${participantId}`;
+      await sql`delete from participants where id = ${participantId}`;
+      await sql`delete from regions where id = ${otherRegion.id}`;
+
+      expect(code).toBe('P0008');
+    });
+
+    it('resets a re-entered row to what a fresh entry would be', async () => {
+      const {participantId, entryFor} = await seedRegion(false);
+      const [entry] = await sql`
+        insert into entries ${sql({
+          ...entryFor('saikyoi', 'cancelled'),
+          free_text: '前回の回答',
+          email_verified_at: '2026-05-01T00:00:00Z',
+          cancelled_at: '2026-05-02T00:00:00Z',
+        })}
+        returning id
+      `;
+
+      const rows = await reenter(sql, entry.id, participantId);
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        id: entry.id,
+        participant_id: participantId,
+        name: '鈴木花子',
+        furigana: 'スズキハナコ',
+        display_name: '花子',
+        free_text: null,
+        custom_field_values: {},
+        status: 'pending_verification',
+        waitlist_position: null,
+        email_verified_at: null,
+        cancelled_at: null,
+      });
+    });
+
+    it("re-enters nothing but the participant's own cancelled row", async () => {
+      const {participantId, entryFor} = await seedRegion(true);
+      const [held] = await sql`
+        insert into entries ${sql(entryFor('saikyoi'))} returning id
+      `;
+      const [cancelled] = await sql`
+        insert into entries ${sql(entryFor('shinjinou', 'cancelled'))}
+        returning id
+      `;
+
+      const notCancelled = await reenter(sql, held.id, participantId);
+      const notOwn = await reenter(
+        sql,
+        cancelled.id,
+        '00000000-0000-0000-0000-000000000000',
+      );
+
+      expect(notCancelled).toHaveLength(0);
+      expect(notOwn).toHaveLength(0);
+    });
+
+    it('refuses a re-entry in the same way as a first entry', async () => {
+      const {participantId, entryFor} = await seedRegion(false);
+      const [cancelled] = await sql`
+        insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}
+        returning id
+      `;
+      await sql`insert into entries ${sql(entryFor('shinjinou'))}`;
+
+      const dualEntry = await refusalOf(
+        reenter(sql, cancelled.id, participantId),
+      );
+
+      await sql`
+        update entries set status = 'cancelled'
+        where participant_id = ${participantId}
+      `;
+      const [otherRegion] = await sql`
+        insert into regions (slug, name, allows_dual_entry)
+        values (${testRegionSlug + '-reenter'}, 'テスト地域', false)
+        returning id
+      `;
+      await sql`
+        update participants set region_id = ${otherRegion.id}
+        where id = ${participantId}
+      `;
+      const otherRegionEntry = await refusalOf(
+        reenter(sql, cancelled.id, participantId),
+      );
+      await sql`delete from entries where participant_id = ${participantId}`;
+      await sql`delete from participants where id = ${participantId}`;
+      await sql`delete from regions where id = ${otherRegion.id}`;
+
+      expect(dualEntry).toBe('P0005');
+      expect(otherRegionEntry).toBe('P0008');
+    });
+
+    // Migrations run before the Worker is deployed, so the Worker of the
+    // previous release writes re-entries directly for a while after 0041.
+    it('still checks a re-entry written directly to the table', async () => {
+      const {participantId, entryFor} = await seedRegion(false);
+      const [first] = await sql`
+        insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}
+        returning id
+      `;
+      const [second] = await sql`
+        insert into entries ${sql(entryFor('shinjinou', 'cancelled'))}
+        returning id
+      `;
+      const directly = (id: string) => sql`
+        update entries
+        set status = 'pending_verification', cancelled_at = null
+        where id = ${id} and status = 'cancelled'
+        returning id
+      `;
+
+      const [reentered] = await directly(first.id);
+      const code = await refusalOf(directly(second.id));
+
+      expect(reentered.id).toBe(first.id);
+      expect(code).toBe('P0005');
+      const [row] = await sql`
+        select count(*)::int as live from entries
+        where participant_id = ${participantId} and status <> 'cancelled'
+      `;
+      expect(row.live).toBe(1);
+    });
+
+    // What `take_over_unverified_participant()` deadlocked against: an update
+    // straight to the table locks the entry first and then waits here. The
+    // entry being free to lock is what shows the participant comes first.
+    it('takes the participant row before the entry row on a re-entry', async () => {
+      const {participantId, entryFor} = await seedRegion(false);
+      const [entry] = await sql`
+        insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}
+        returning id
+      `;
+
+      const holder = await sql.reserve();
+      try {
+        await holder`begin`;
+        await holder`
+          select 1 from participants where id = ${participantId}
+          for no key update
+        `;
+        const reentry = reenter(sql, entry.id, participantId).execute();
+        // Long enough for the re-entry to be queued on the lock.
+        await Bun.sleep(300);
+
+        const locked = await holder`
+          select id from entries where id = ${entry.id} for update nowait
+        `;
+        await holder`commit`;
+
+        expect(locked).toHaveLength(1);
+        expect(await reentry).toHaveLength(1);
+      } finally {
+        holder.release();
+      }
+    });
+
+    it('sees the row a takeover deleted while it waited for the lock', async () => {
+      const {participantId, entryFor} = await seedRegion(false);
+      const [regionRow] = await sql`
+        select region_id from participants where id = ${participantId}
+      `;
+      const [entry] = await sql`
+        insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}
+        returning id
+      `;
+
+      const takingOver = await sql.reserve();
+      try {
+        await takingOver`begin`;
+        await takingOver`
+          select take_over_unverified_participant(
+            ${participantId}, 'new-hash', ${regionRow.region_id}
+          )
+        `;
+        const reentry = reenter(sql, entry.id, participantId).execute();
+        await Bun.sleep(300);
+        await takingOver`commit`;
+
+        expect(await reentry).toHaveLength(0);
+      } finally {
+        takingOver.release();
+      }
+    });
+
+    it('does not deadlock a re-entry with a takeover', async () => {
+      const {participantId, entryFor} = await seedRegion(false);
+      const [regionRow] = await sql`
+        select region_id from participants where id = ${participantId}
+      `;
+      const takingOver = new SQL(DB_URL);
+      const refusals: Array<string | undefined> = [];
+
+      for (let round = 0; round < 20; round++) {
+        await sql`delete from entries where participant_id = ${participantId}`;
+        const [entry] = await sql`
+          insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}
+          returning id
+        `;
+        refusals.push(
+          ...(await Promise.all([
+            refusalOf(reenter(sql, entry.id, participantId)),
+            refusalOf(takingOver`
+              select take_over_unverified_participant(
+                ${participantId}, 'new-hash', ${regionRow.region_id}
+              )
+            `),
+          ])),
+        );
+      }
+      await takingOver.close();
+
+      expect(refusals.filter(code => code !== undefined)).toEqual([]);
+    });
+
+    // `for update` here would also block a foreign key check against the
+    // participant, which is what the weaker lock is for.
+    it('leaves a foreign key check through while a seat is being taken', async () => {
+      const {participantId, entryFor} = await seedRegion(false);
+
+      const entering = await sql.reserve();
+      try {
+        await entering`begin`;
+        await entering`insert into entries ${entering(entryFor('saikyoi'))}`;
+
+        const code = await refusalOf(sql`
+          select 1 from participants where id = ${participantId}
+          for key share nowait
+        `);
+        await entering`rollback`;
+
+        expect(code).toBeUndefined();
+      } finally {
+        entering.release();
+      }
+    });
+
+    // Those paths hold the tournament lock and never the participant's, and
+    // an insert holds the participant's while it waits for the tournament's.
+    // Waiting here would be half of that deadlock, so the participant row is
+    // held throughout and any wait on it fails the test.
+    it('takes no participant lock on a row that already holds a seat', async () => {
+      const {participantId, entryFor} = await seedRegion(false);
+      const [entry] = await sql`
+        insert into entries ${sql({
+          ...entryFor('saikyoi', 'waitlisted'),
+          waitlist_position: 1,
+        })}
+        returning id, tournament_id
+      `;
+
+      const holder = await sql.reserve();
+      const writer = await sql.reserve();
+      try {
+        await holder`begin`;
+        await holder`
+          select 1 from participants where id = ${participantId} for update
+        `;
+        await writer`set lock_timeout = '1s'`;
+
+        const promoted = await writer`
+          select * from promote_waitlisted_entries(${entry.tournament_id})
+        `;
+        const [cancelled] = await writer`
+          select * from cancel_own_entry(${entry.id}, ${participantId})
+        `;
+        await writer`set lock_timeout = 0`;
+        await holder`rollback`;
+
+        expect(promoted).toHaveLength(1);
+        expect(cancelled.previous_status).toBe('confirmed');
+      } finally {
+        holder.release();
+        writer.release();
+      }
     });
 
     it('rejects a second entry in a region that disallows dual entry', async () => {
@@ -294,7 +636,7 @@ describe.skipIf(!dbReachable)(
       expect(regionId).toBe(otherRegion.id);
     });
 
-    // `claim_participant_region()` and `check_participant_region()` take the
+    // `claim_participant_region()` and `check_entry_seat()` take the
     // participant row in turn, which is all that keeps these two apart.
     it('never leaves a participant in two regions when moving concurrently', async () => {
       const {participantId, entryFor} = await seedRegion(false);
@@ -376,10 +718,7 @@ describe.skipIf(!dbReachable)(
     });
 
     // The status changes on a seat the participant already holds must not go
-    // through the check again: `confirm_entry_by_token()` and
-    // `promote_next_waitlisted_entry()` run them while holding the
-    // tournament lock, and re-taking the participant lock there would invite
-    // a deadlock.
+    // through the check again (see the lock test above for why).
     it('leaves a status change on an entry that already holds a seat alone', async () => {
       const {entryFor} = await seedRegion(false);
       const [entry] = await sql`

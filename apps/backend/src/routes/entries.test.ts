@@ -211,6 +211,8 @@ interface MockSupabase {
   takeOvers: Array<Record<string, unknown>>;
   /** The arguments each `claim_participant_region()` call got. */
   regionClaims: Array<Record<string, unknown>>;
+  /** The arguments each `reenter_cancelled_entry()` call got. */
+  reentries: Array<Record<string, unknown>>;
 }
 
 /**
@@ -246,12 +248,17 @@ function mockSupabase(options: {
   activeElsewhere?: boolean;
   /** The SQLSTATE the entry write is refused with, if it is. */
   entryWriteErrorCode?: string;
+  /** The participant's cancelled entry for the tournament, if any. */
+  cancelledEntry?: Record<string, unknown>;
+  /** Makes `reenter_cancelled_entry()` match no row: the row was taken. */
+  reentryMatchesNoRow?: boolean;
 }): MockSupabase {
   const recorded: MockSupabase = {
     calls: [],
     mails: [],
     takeOvers: [],
     regionClaims: [],
+    reentries: [],
   };
   const tournament = options.tournament ?? tournamentRow();
   // Written to by the account creation and the takeover, so the re-read
@@ -281,6 +288,14 @@ function mockSupabase(options: {
           ? Response.json(body[0])
           : new Response(null, {status: 406})
         : Response.json(body);
+
+    const entryWritten = (): Response =>
+      options.entryWriteErrorCode
+        ? Response.json(
+            {code: options.entryWriteErrorCode, message: 'refused'},
+            {status: 400},
+          )
+        : rows([{id: ENTRY_ID}]);
 
     switch (`${method} ${table}`) {
       case 'GET tournaments':
@@ -323,14 +338,20 @@ function mockSupabase(options: {
         return Response.json(!options.activeElsewhere);
       }
       case 'GET entries':
-        return rows([]);
+        return rows(options.cancelledEntry ? [options.cancelledEntry] : []);
+      case 'POST rpc/reenter_cancelled_entry':
+        recorded.reentries.push(
+          JSON.parse(String(init?.body)) as Record<string, unknown>,
+        );
+        if (options.reentryMatchesNoRow) {
+          return Response.json(
+            {code: 'PGRST116', message: 'no rows'},
+            {status: 406},
+          );
+        }
+        return entryWritten();
       case 'POST entries':
-        return options.entryWriteErrorCode
-          ? Response.json(
-              {code: options.entryWriteErrorCode, message: 'refused'},
-              {status: 400},
-            )
-          : rows([{id: ENTRY_ID}]);
+        return entryWritten();
       case 'POST email_verification_tokens':
         return options.failVerificationToken
           ? Response.json({message: 'boom'}, {status: 500})
@@ -1118,6 +1139,95 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
     expect(res.status).toBe(409);
     expect((await res.json()) as unknown).toEqual({
       error: 'regulation no longer available',
+    });
+  });
+
+  describe('re-entering a cancelled entry', () => {
+    const cancelledEntry = {
+      id: ENTRY_ID,
+      name: '以前の氏名',
+      furigana: 'イゼンノシメイ',
+      display_name: '以前',
+      entry_regulations: [],
+      free_text: null,
+      custom_field_values: {},
+      status: 'cancelled',
+      waitlist_position: null,
+      email_verified_at: null,
+      cancelled_at: new Date(Date.now() - DAY_MS).toISOString(),
+    };
+
+    it('writes through the RPC rather than to the table', async () => {
+      const recorded = mockSupabase({
+        participant: await registeredParticipant(),
+        cancelledEntry,
+      });
+
+      const res = await postWithContext(
+        SESSION_PATH,
+        sessionBody,
+        await sessionCookie(),
+      );
+
+      expect(res.status).toBe(201);
+      expect(recorded.reentries).toEqual([
+        {
+          p_entry_id: ENTRY_ID,
+          p_participant_id: PARTICIPANT_ID,
+          p_name: sessionBody.name,
+          p_furigana: sessionBody.furigana,
+          p_display_name: sessionBody.displayName,
+          p_free_text: null,
+          p_custom_field_values: sessionBody.customFieldValues,
+        },
+      ]);
+      expect(
+        recorded.calls.filter(
+          call => call.table === 'entries' && call.method !== 'GET',
+        ),
+      ).toEqual([]);
+    });
+
+    it.each([
+      ['P0005', 'already entered another tournament in this region'],
+      ['P0008', 'concurrent submission'],
+    ])(
+      'answers %s from the trigger like a first entry',
+      async (code, error) => {
+        mockSupabase({
+          participant: await registeredParticipant(),
+          cancelledEntry,
+          entryWriteErrorCode: code,
+        });
+
+        const res = await postWithContext(
+          SESSION_PATH,
+          sessionBody,
+          await sessionCookie(),
+        );
+
+        expect(res.status).toBe(409);
+        expect((await res.json()) as unknown).toEqual({error});
+      },
+    );
+
+    it('answers a row taken in the meantime as a concurrent submission', async () => {
+      mockSupabase({
+        participant: await registeredParticipant(),
+        cancelledEntry,
+        reentryMatchesNoRow: true,
+      });
+
+      const res = await postWithContext(
+        SESSION_PATH,
+        sessionBody,
+        await sessionCookie(),
+      );
+
+      expect(res.status).toBe(409);
+      expect((await res.json()) as unknown).toEqual({
+        error: 'concurrent submission',
+      });
     });
   });
 
