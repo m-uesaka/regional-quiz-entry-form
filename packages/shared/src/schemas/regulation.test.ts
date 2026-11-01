@@ -86,6 +86,24 @@ describe('RegulationSyncInputSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  // "As stored", which `sync_regulations()` is what keeps: a default here
+  // would overwrite the value 0042 worked out.
+  it('leaves closesWithPriority undefined when it is omitted', () => {
+    const result = RegulationSyncInputSchema.parse({
+      regulations: [{label: '一般の部'}],
+    });
+
+    expect(result.regulations[0].closesWithPriority).toBeUndefined();
+  });
+
+  it('rejects closesWithPriority on a regulation with no window', () => {
+    const result = RegulationSyncInputSchema.safeParse({
+      regulations: [{label: '一般の部', closesWithPriority: true}],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it('accepts several new regulations, which carry no ids at all', () => {
     const result = RegulationSyncInputSchema.safeParse({
       regulations: [{label: '一般の部'}, {label: '学生の部'}],

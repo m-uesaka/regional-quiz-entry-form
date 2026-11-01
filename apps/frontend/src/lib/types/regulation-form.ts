@@ -17,6 +17,13 @@ export interface RegulationRowValues {
   label: string;
   priorityStartsAt: string;
   priorityEndsAt: string;
+  /**
+   * The "優先期間の終了後は選択肢から外す" box. Undefined when the submitted
+   * form had no such control, which is a page rendered before it existed:
+   * the save then leaves out the field and keeps what is stored, rather than
+   * reading the missing box as unticked.
+   */
+  closesWithPriority?: boolean;
   /** Whether the row's "削除" box was ticked, i.e. drop it from the save. */
   remove: boolean;
 }

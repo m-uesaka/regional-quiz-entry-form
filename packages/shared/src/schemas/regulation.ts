@@ -14,6 +14,9 @@ export const RegulationSchema = z.object({
   label: z.string(),
   priorityStartsAt: z.string().datetime({offset: true}).nullable(),
   priorityEndsAt: z.string().datetime({offset: true}).nullable(),
+  // Taken off the choices once the marked phases are over (#243); see
+  // `selectableRegulations()`.
+  closesWithPriority: z.boolean(),
   displayOrder: z.number().int(),
 });
 export type Regulation = z.infer<typeof RegulationSchema>;
@@ -42,6 +45,11 @@ export const RegulationUpsertSchema = z
       .datetime({offset: true})
       .nullable()
       .default(null),
+    // Omitted means "as stored": `sync_regulations()` keeps an existing
+    // row's value and starts a new row at false. A blank spreadsheet cell
+    // and a client older than this field both omit it, and neither may
+    // undo the value 0042 worked out for a running tournament.
+    closesWithPriority: z.boolean().optional(),
   })
   .refine(r => (r.priorityStartsAt === null) === (r.priorityEndsAt === null), {
     message: '優先期間は開始と終了の両方を指定してください',
@@ -55,7 +63,11 @@ export const RegulationUpsertSchema = z
       message: '優先期間の終了は開始より後にしてください',
       path: ['priorityEndsAt'],
     },
-  );
+  )
+  .refine(r => r.priorityStartsAt !== null || r.closesWithPriority !== true, {
+    message: '優先期間の終了後に選択肢から外すには、優先期間を指定してください',
+    path: ['closesWithPriority'],
+  });
 export type RegulationUpsert = z.infer<typeof RegulationUpsertSchema>;
 
 /**

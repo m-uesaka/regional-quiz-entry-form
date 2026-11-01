@@ -25,7 +25,7 @@ const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 
 const REGULATION_COLUMNS =
   'id, tournament_id, label, priority_starts_at, priority_ends_at, ' +
-  'display_order';
+  'closes_with_priority, display_order';
 
 /** Shape of a `regulations` row as selected above (snake_case). */
 interface RegulationRow {
@@ -34,6 +34,7 @@ interface RegulationRow {
   label: string;
   priority_starts_at: string | null;
   priority_ends_at: string | null;
+  closes_with_priority: boolean;
   display_order: number;
 }
 
@@ -44,6 +45,7 @@ function rowToRegulation(row: RegulationRow): Regulation {
     label: row.label,
     priorityStartsAt: row.priority_starts_at,
     priorityEndsAt: row.priority_ends_at,
+    closesWithPriority: row.closes_with_priority,
     displayOrder: row.display_order,
   });
 }

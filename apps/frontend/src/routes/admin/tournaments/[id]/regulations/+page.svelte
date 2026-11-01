@@ -241,6 +241,27 @@
             />
           </div>
 
+          <div class="flex flex-col gap-1.5 sm:col-span-2">
+            <input
+              type="hidden"
+              name="regulations[{index}].closesWithPriorityControl"
+              value="1"
+            />
+            <div class="flex items-center gap-2">
+              <Checkbox
+                id="regulation-{index}-closes-with-priority"
+                name="regulations[{index}].closesWithPriority"
+                checked={row.closesWithPriority ?? false}
+              />
+              <Label for="regulation-{index}-closes-with-priority">
+                優先期間の終了後は選択肢から外す
+              </Label>
+            </div>
+            <p class="text-sm text-muted-foreground">
+              外す設定のレギュレーションの優先期間がすべて終わり、他の優先期間もすべて始まった時点で外れます。一般枠のレギュレーションには優先期間を設定しなくて構いません
+            </p>
+          </div>
+
           {#if row.id !== ''}
             <div class="flex items-center gap-2 sm:col-span-2">
               <Checkbox

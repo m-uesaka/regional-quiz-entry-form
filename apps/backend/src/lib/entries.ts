@@ -55,6 +55,7 @@ interface RegulationRow {
   id: string;
   priority_starts_at: string | null;
   priority_ends_at: string | null;
+  closes_with_priority: boolean;
 }
 
 /** The tournament an entry submission is checked against. */
@@ -365,7 +366,8 @@ export async function checkEntrySubmission(
       'id, name, type, region_id, capacity, entry_opens_at, entry_closes_at, ' +
         'entries_paused, ' +
         'regions(name), ' +
-        'regulations(id, priority_starts_at, priority_ends_at)',
+        'regulations(id, priority_starts_at, priority_ends_at, ' +
+        'closes_with_priority)',
     )
     .eq('id', tournamentId)
     .returns<EntryTournamentRow[]>()
@@ -409,16 +411,12 @@ export async function checkEntrySubmission(
     id: regulation.id,
     priorityStartsAt: regulation.priority_starts_at,
     priorityEndsAt: regulation.priority_ends_at,
+    closesWithPriority: regulation.closes_with_priority,
   }));
-  const entryPeriod = {
-    entryOpensAt: tournament.entry_opens_at,
-    entryClosesAt: tournament.entry_closes_at,
-  };
   const regulationRefusal = regulationSelectionRefusal(
     regulations,
     submission.regulationIds,
     now,
-    entryPeriod,
   );
   if (regulationRefusal) {
     return {ok: false, ...REGULATION_REFUSALS[regulationRefusal]};

@@ -7,6 +7,7 @@ interface RegulationRowSource {
   label: string;
   priorityStartsAt: string | null;
   priorityEndsAt: string | null;
+  closesWithPriority?: boolean;
 }
 
 /**
@@ -26,6 +27,7 @@ export function toRegulationRow(
     label: regulation.label,
     priorityStartsAt: toJstDatetimeLocal(regulation.priorityStartsAt),
     priorityEndsAt: toJstDatetimeLocal(regulation.priorityEndsAt),
+    closesWithPriority: regulation.closesWithPriority ?? false,
     remove: false,
   };
 }

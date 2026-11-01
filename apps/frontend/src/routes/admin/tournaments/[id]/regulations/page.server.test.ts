@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import type {Cookies, HttpError} from '@sveltejs/kit';
 import type {Regulation, Tournament} from '@regional-quiz/shared';
+import type {RegulationRowValues} from '$lib/types/regulation-form';
 import {actions, load} from './+page.server';
 
 const TOURNAMENT_ID = '00000000-0000-0000-0000-000000000001';
@@ -25,6 +26,7 @@ const GENERAL: Regulation = {
   label: '一般の部',
   priorityStartsAt: null,
   priorityEndsAt: null,
+  closesWithPriority: false,
   displayOrder: 0,
 };
 
@@ -34,6 +36,7 @@ const STUDENT: Regulation = {
   label: '学生の部',
   priorityStartsAt: '2026-04-01T00:00:00.000Z',
   priorityEndsAt: '2026-04-30T00:00:00.000Z',
+  closesWithPriority: false,
   displayOrder: 1,
 };
 
@@ -56,6 +59,8 @@ function fakeFetch(
     putError?: string;
     tournaments?: Tournament[];
     regulationsStatus?: number;
+    /** The regulations the tournament has stored. */
+    stored?: Regulation[];
     /** What the sheet-import preview answers with. */
     preview?: {status?: number; body: unknown};
   } = {},
@@ -80,7 +85,7 @@ function fakeFetch(
     if (String(input).endsWith('/regulations')) {
       const status = options.regulationsStatus ?? 200;
       return status < 400
-        ? jsonResponse([GENERAL, STUDENT])
+        ? jsonResponse(options.stored ?? [GENERAL, STUDENT])
         : jsonResponse({error: 'tournament not found'}, status);
     }
     return jsonResponse(options.tournaments ?? [TOURNAMENT]);
@@ -150,6 +155,8 @@ function setRow(
     label: string;
     priorityStartsAt?: string;
     priorityEndsAt?: string;
+    /** The box as the page renders it; left out, the page had no box. */
+    closesWithPriority?: boolean;
     remove?: boolean;
   },
 ): void {
@@ -164,6 +171,12 @@ function setRow(
     `regulations[${index}].priorityEndsAt`,
     row.priorityEndsAt ?? '',
   );
+  if (row.closesWithPriority !== undefined) {
+    formData.set(`regulations[${index}].closesWithPriorityControl`, '1');
+  }
+  if (row.closesWithPriority) {
+    formData.set(`regulations[${index}].closesWithPriority`, 'on');
+  }
   if (row.remove) formData.set(`regulations[${index}].remove`, 'on');
 }
 
@@ -319,6 +332,57 @@ describe('admin regulations save action', () => {
     });
   });
 
+  describe('the 優先期間の終了後は選択肢から外す box', () => {
+    const WINDOW = {
+      priorityStartsAt: '2026-04-01T09:00',
+      priorityEndsAt: '2026-04-30T09:00',
+    };
+
+    async function savedRow(closesWithPriority?: boolean) {
+      const log: FetchLog = {putBodies: []};
+      const formData = new FormData();
+      setRow(formData, 0, {
+        id: STUDENT.id,
+        label: '学生の部',
+        ...WINDOW,
+        closesWithPriority,
+      });
+      const event = buildActionEvent(fakeFetch({}, log), formData);
+
+      await expect(actions.save(event)).resolves.toMatchObject({saved: true});
+      return log.putBodies[0].regulations[0];
+    }
+
+    it('sends a ticked box as true', async () => {
+      expect((await savedRow(true)).closesWithPriority).toBe(true);
+    });
+
+    it('sends a box left unticked as false', async () => {
+      expect((await savedRow(false)).closesWithPriority).toBe(false);
+    });
+
+    // A page rendered before the box existed and saved after the deploy.
+    it('leaves the field out when the form had no box', async () => {
+      expect((await savedRow()).closesWithPriority).toBeUndefined();
+    });
+
+    it('refuses a ticked box with no priority window', async () => {
+      const log: FetchLog = {putBodies: []};
+      const formData = new FormData();
+      setRow(formData, 0, {label: '一般の部', closesWithPriority: true});
+      const event = buildActionEvent(fakeFetch({}, log), formData);
+
+      await expect(actions.save(event)).resolves.toMatchObject({
+        status: 400,
+        data: {
+          error:
+            '優先期間の終了後に選択肢から外すには、優先期間を指定してください',
+        },
+      });
+      expect(log.putBodies).toHaveLength(0);
+    });
+  });
+
   it('refuses a half-filled priority window without asking the API', async () => {
     const log: FetchLog = {putBodies: []};
     const formData = new FormData();
@@ -442,6 +506,7 @@ describe('admin regulations import action', () => {
           label: '地元の部',
           priorityStartsAt: '2026-08-01T10:00',
           priorityEndsAt: '2026-08-08T10:00',
+          closesWithPriority: false,
           remove: false,
         },
         {
@@ -450,6 +515,7 @@ describe('admin regulations import action', () => {
           label: '学生の部',
           priorityStartsAt: '',
           priorityEndsAt: '',
+          closesWithPriority: false,
           remove: false,
         },
         {
@@ -458,6 +524,7 @@ describe('admin regulations import action', () => {
           label: '一般の部',
           priorityStartsAt: '',
           priorityEndsAt: '',
+          closesWithPriority: false,
           remove: true,
         },
       ],
@@ -465,6 +532,44 @@ describe('admin regulations import action', () => {
     expect(log.previewBodies).toEqual([{spreadsheetId: 'sheet-id'}]);
     // Reading a sheet saves nothing.
     expect(log.putBodies).toEqual([]);
+  });
+
+  // The stored setting survives a sheet from before the column; a filled-in
+  // cell overrides it.
+  it('takes the setting from the sheet, or else from the stored row', async () => {
+    const stored = [{...STUDENT, closesWithPriority: true}, GENERAL];
+    const window = {
+      priorityStartsAt: '2026-08-01T01:00:00.000Z',
+      priorityEndsAt: '2026-08-08T01:00:00.000Z',
+    };
+    const event = buildImportEvent(
+      fakeFetch({
+        stored,
+        preview: {
+          body: {
+            regulations: [
+              {label: '学生の部', ...window},
+              {label: '一般の部', ...window, closesWithPriority: true},
+              {label: '新しい部', ...window},
+            ],
+          },
+        },
+      }),
+      'sheet-id',
+    );
+
+    const result = await actions.import(event);
+
+    expect(
+      (result as {rows: RegulationRowValues[]}).rows.map(row => [
+        row.label,
+        row.closesWithPriority,
+      ]),
+    ).toEqual([
+      ['学生の部', true],
+      ['一般の部', true],
+      ['新しい部', false],
+    ]);
   });
 
   it("surfaces the preview API's message and keeps the stored rows", async () => {

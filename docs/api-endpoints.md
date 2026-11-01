@@ -521,7 +521,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 
 エントリー期間中は公開、期間外は担当スタッフのみ(`requireOpenEntryPeriodOrStaff()`)。大会に紐づくレギュレーションを `display_order` 昇順で返します。期間中に認証を課さないのは、エントリーフォームが未ログインの訪問者にも選択肢を出す必要があり、レギュレーションが個人情報を含まない(ラベルと優先期間だけ)ためです。期間外はこれ自体が未公開フォームの中身なので、大会取得 API と同じゲートが掛かります。
 
-- `200`: `Regulation[]` — `{id, tournamentId, label, priorityStartsAt, priorityEndsAt, displayOrder}`
+- `200`: `Regulation[]` — `{id, tournamentId, label, priorityStartsAt, priorityEndsAt, closesWithPriority, displayOrder}`
 - `400`: `:tournamentId` が UUID でない
 - `401`: `{"error": "staff session expired"}` — `staff_session` はあるが検証できない(期限切れ等)
 - `403`: `{"error": "entry period closed"}` — 期間外で、担当スタッフのセッションが無い
@@ -541,9 +541,10 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
   | `label` | string | 1〜400文字(`REGULATION_LABEL_MAX_LENGTH`) |
   | `priorityStartsAt` | string(datetime) \| null | 省略時は `null` |
   | `priorityEndsAt` | string(datetime) \| null | 省略時は `null` |
+  | `closesWithPriority` | boolean | 優先期間の終了後に選択肢から外すか。**省略すると、既存行は今の値を保ち、新しい行は `false`**。`true` には優先期間が必要 |
 - `displayOrder` は送りません。**配列の並び順がそのまま `display_order`** になるので、並べ替えは配列を並べ替えるだけです。
 - 優先期間は「両方 null」か「両方指定(開始 < 終了)」のみ許容します(Zod と `regulations` の check 制約 `regulations_priority_window_complete` の両方で担保)。
-- 大会を「優先枠 → 一般枠」の順に開くために、一般向けのレギュレーションへ締切までの期間を設定している場合、優先枠の終了後は優先エントリーではなく通常エントリーとして扱います(#235)。優先対象の選択を求めず、ポータルとエントリーフォームにも優先エントリーの案内を出しません。終わった優先枠のレギュレーションは選択肢から外れ、送信も断ります。条件は [`database-schema.md`](./database-schema.md) の `regulations` を参照してください。
+- `closesWithPriority` の枠の優先期間がすべて終わり、どの優先期間も始まった後は、その枠が選択肢から外れて送信も断られ、外す枠の終了後に始まった他の優先期間は制限でなくなります(#243)。優先対象の選択を求めず、ポータルとエントリーフォームにも優先エントリーの案内を出しません。詳細は [`database-schema.md`](./database-schema.md) の `regulations` を参照してください。
 - 配列に含まれなかった既存行は削除されますが、**エントリーから参照されている行は削除できません**。`entry_regulations` が複合外部キー `(regulation_id, tournament_id)` で参照しているため、フォーム定義のような delete → insert は使えず、id 指定は update・id 無しは insert・消えた行は「参照が無ければ delete」という差分同期になっています。
 - `regulations` は1件以上必要です(エントリーは必ず1つ以上選ぶため、0件の大会はエントリー不可になる)。
 
@@ -786,11 +787,11 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 同じスプレッドシートの「レギュレーション」シート(`REGULATION_SHEET_NAME`)を読み取り、レギュレーションの配列にして返します。**この時点では DB に何も書き込みません。** 保存はレギュレーション管理画面から `PUT /api/tournaments/:tournamentId/regulations` を別途呼びます。大会には依存しないので、リクエストに大会 ID はありません。
 
 - リクエスト: `RegulationSheetImportRequestSchema` — `{spreadsheetId: string}`
-- `200`: `{"regulations": [{label, priorityStartsAt, priorityEndsAt}, ...]}` — シートの行順。`id` は付きません(シートは保存済みの行を知らないため。保存済みの行との突き合わせは呼び出し側が行います)。優先期間はシート上の日時を日本時間として読んだ ISO 8601 文字列、未設定なら `null`。
+- `200`: `{"regulations": [{label, priorityStartsAt, priorityEndsAt, closesWithPriority}, ...]}` — シートの行順。`closesWithPriority` はD列が `外す` なら `true`、`残す` なら `false`、空欄なら付きません。`id` は付きません(シートは保存済みの行を知らないため。保存済みの行との突き合わせは呼び出し側が行います)。優先期間はシート上の日時を日本時間として読んだ ISO 8601 文字列、未設定なら `null`。
 
 | ステータス | 条件 |
 | --- | --- |
-| 400 | 「レギュレーション」シートが無い・スプレッドシート ID が不正・シートにアクセスできない(429 を除く Google からの 4xx)、レギュレーション名が空または重複、優先期間を日時として読めない、優先期間が片方だけ・終了が開始以前、レギュレーションが1件も無い |
+| 400 | 「レギュレーション」シートが無い・スプレッドシート ID が不正・シートにアクセスできない(429 を除く Google からの 4xx)、レギュレーション名が空または重複、優先期間を日時として読めない、優先期間が片方だけ・終了が開始以前、D列が `外す` / `残す` 以外、優先期間が無いのに `外す`、レギュレーションが1件も無い |
 | 502 | Google への接続失敗(ネットワークエラー)または Google からの 5xx |
 | 503 | Google からのレート制限(429) |
 

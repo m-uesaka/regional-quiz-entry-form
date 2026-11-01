@@ -178,6 +178,7 @@ describe('groupPortalTournaments', () => {
         label: '在住',
         priorityStartsAt: '2026-10-01T00:00:00Z',
         priorityEndsAt: '2026-12-31T00:00:00Z',
+        closesWithPriority: false,
       },
     ];
     const [region] = groupPortalTournaments(

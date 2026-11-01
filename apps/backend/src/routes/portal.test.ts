@@ -47,8 +47,14 @@ const PRIORITY_REGULATIONS = [
     label: '開催地域に在住の方',
     priority_starts_at: '2026-11-01T00:00:00+00:00',
     priority_ends_at: '2026-11-05T00:00:00+00:00',
+    closes_with_priority: true,
   },
-  {label: 'どなたでも', priority_starts_at: null, priority_ends_at: null},
+  {
+    label: 'どなたでも',
+    priority_starts_at: null,
+    priority_ends_at: null,
+    closes_with_priority: false,
+  },
 ];
 
 // Mocks the `fetch` call `@supabase/supabase-js` makes for the select (same
@@ -171,6 +177,7 @@ describe('GET /portal/tournaments (mocked Supabase)', () => {
         label: '開催地域に在住の方',
         priorityStartsAt: '2026-11-01T00:00:00+00:00',
         priorityEndsAt: '2026-11-05T00:00:00+00:00',
+        closesWithPriority: true,
       },
     ]);
   });
