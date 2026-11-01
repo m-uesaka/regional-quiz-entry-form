@@ -95,19 +95,20 @@ const REGULATION_REFUSALS: Record<
 };
 
 /**
- * The SQLSTATE `check_region_dual_entry()` (migration 0016) raises. The
- * trigger only fires for a submission that slipped through the check below
- * while a concurrent one was being inserted, so it is a race, not a bug in
- * the caller — but the participant caused it and 409 is still the honest
- * answer.
+ * The SQLSTATE `check_entry_seat()` (migration 0041) raises for a second seat
+ * in a region that allows only one. The trigger only fires for a submission
+ * that slipped through the check below while a concurrent one was being
+ * inserted, so it is a race, not a bug in the caller — but the participant
+ * caused it and 409 is still the honest answer.
  */
 const REGION_DUAL_ENTRY_SQLSTATE = 'P0005';
 
 /**
- * The SQLSTATE `check_participant_region()` (migration 0040) raises: a
- * concurrent submission moved the participant to another region after this
- * one last looked. Nothing need stand in the other region, so this is
- * answered as `CONCURRENT_SUBMISSION` rather than as taking part there.
+ * The SQLSTATE `check_entry_seat()` (migration 0041) raises for a seat outside
+ * the participant's region: a concurrent submission moved the participant to
+ * another region after this one last looked. Nothing need stand in the other
+ * region, so this is answered as `CONCURRENT_SUBMISSION` rather than as taking
+ * part there.
  */
 const PARTICIPANT_REGION_SQLSTATE = 'P0008';
 
@@ -130,8 +131,9 @@ const FOREIGN_KEY_VIOLATION_SQLSTATE = '23503';
 const UNIQUE_VIOLATION_SQLSTATE = '23505';
 
 /**
- * PostgREST's code for a `.single()` that matched no row. On the re-entry
- * update it means a concurrent re-entry already took the cancelled row.
+ * PostgREST's code for a `.single()` that matched no row. On a re-entry it
+ * means the cancelled row is gone: a concurrent re-entry took it, or a
+ * takeover deleted it.
  */
 const NO_ROW_PGRST_CODE = 'PGRST116';
 
@@ -150,9 +152,10 @@ const PARTICIPANT_COLUMNS = 'id, region_id, password_hash, email_verified_at';
 /**
  * The participant's existing entry for the tournament, if there is one.
  *
- * Every column the reuse update in `createEntry()` overwrites is selected,
- * not just the ones the reuse decision is made on, so a re-entry that fails
- * afterwards can put the row back exactly as it was.
+ * Every column `reenter_cancelled_entry()` (migration 0041) overwrites is
+ * selected, not just the ones the reuse decision is made on, so a re-entry
+ * that fails afterwards can put the row back exactly as it was. A column added
+ * to that function's `set` list has to be added here and to `rollbackEntry()`.
  */
 interface ExistingEntryRow {
   id: string;
@@ -256,8 +259,8 @@ async function rollbackEntry(
 
   // A reused row is put back into the cancellation it came from rather than
   // deleted, so a failed re-entry doesn't erase the record of the original
-  // entry. Every column the reuse update overwrote is restored from the
-  // snapshot taken before it: restoring only the status would still leave
+  // entry. Every column `reenter_cancelled_entry()` overwrote is restored from
+  // the snapshot taken before it: restoring only the status would still leave
   // the cancelled entry permanently carrying the failed re-entry's answers
   // and its cleared verification timestamp.
   const {error: restoreError} = await db
@@ -840,44 +843,27 @@ async function enterTournament(
     free_text: input.freeText ?? null,
     custom_field_values: input.customFieldValues,
     status: 'pending_verification',
-    // Explicitly reset on reuse, so a re-entry starts from exactly the state
-    // a freshly inserted row would: unverified, unplaced on the waitlist and
-    // no longer carrying the previous cancellation.
-    waitlist_position: null,
-    email_verified_at: null,
-    cancelled_at: null,
   };
-
-  if (existingEntry) {
-    // The cancelled row still carries the tokens of the entry it was
-    // cancelled from, all burnt or expired (`cancel_own_entry()` and
-    // `lapse_expired_pending_entries()` burn what was left). Dropped before the row goes back
-    // to `pending_verification`, so that until its new link is written it
-    // has no tokens at all -- which is what tells
-    // `lapse_expired_pending_entries()` in a concurrent submission of the
-    // same participant's that this entry is being made, not one whose link
-    // ran out. Only dead tokens go: a concurrent re-entry of this same row
-    // may already have written a live one, which must survive.
-    const {error: tokensError} = await db
-      .from('email_verification_tokens')
-      .delete()
-      .eq('entry_id', existingEntry.id)
-      .or(`used_at.not.is.null,expires_at.lt.${new Date().toISOString()}`);
-    if (tokensError) {
-      return {ok: false, status: 500, error: tokensError.message};
-    }
-  }
 
   const {data: entry, error} = existingEntry
     ? await db
-        .from('entries')
-        // Still filtered on `cancelled`, so two concurrent re-entries behave
-        // like two concurrent first entries: the second one matches no row
-        // and is refused instead of mailing a second verification link for
-        // the same entry.
-        .update(entryValues)
-        .eq('id', existingEntry.id)
-        .eq('status', 'cancelled')
+        // Takes the participant row before the entry's, the order a takeover
+        // takes them in, which an update here would reverse. It also resets
+        // the row to what a fresh insert would be and drops the dead tokens
+        // of the entry it was cancelled from, with the status flip, so a
+        // refused re-entry changes nothing. It matches no row once the row
+        // stopped being `cancelled`, so two concurrent re-entries behave like
+        // two concurrent first entries: the second one is refused instead of
+        // mailing a second verification link for the same entry.
+        .rpc('reenter_cancelled_entry', {
+          p_entry_id: existingEntry.id,
+          p_participant_id: participantId,
+          p_name: entryValues.name,
+          p_furigana: entryValues.furigana,
+          p_display_name: entryValues.display_name,
+          p_free_text: entryValues.free_text,
+          p_custom_field_values: entryValues.custom_field_values,
+        })
         .select('id')
         .single()
     : await db.from('entries').insert(entryValues).select('id').single();
