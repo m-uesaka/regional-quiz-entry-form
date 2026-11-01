@@ -103,7 +103,7 @@ flowchart TB
 | `name` | text | not null | 表示名 |
 | `allows_dual_entry` | boolean | not null, default `false` | 同一地域の最強位と新人王の**両方**にエントリーできるか |
 
-`allows_dual_entry` は requirements.md の「両方に参加することができる**ような地域も存在します**」に対応します。既定を `false` にしているのは、現在の「どの地域でも両方に出られる」挙動が仕様の欠落であって意図された既定ではないためで、許可する地域には運用開始前に明示的に `true` を立ててもらいます。判定は `apps/backend/src/lib/entries.ts` の `createEntry()` が行い、`cancelled` 以外のエントリーが同一地域の別大会にあれば 409 を返します。その裏では `check_entry_seat()` トリガ(マイグレーション `0041`)が同じルールを DB 側でも掛けています(下記)。エントリーポータル(`/portal`)は `GET /api/portal/tournaments` の `regionAllowsDualEntry` でこの設定を受け取り、許可していて最強位・新人王の両方が並んでいる地域に「この地域は最強位と新人王の両方にエントリー可能です(重複エントリー可)」と表示します。地域のルールとしての表示なので、各大会の受付状況(受付開始前 / 受付中 / 受付終了)にかかわらず出します。
+`allows_dual_entry` は requirements.md の「両方に参加することができる**ような地域も存在します**」に対応します。既定を `false` にしているのは、現在の「どの地域でも両方に出られる」挙動が仕様の欠落であって意図された既定ではないためで、許可する地域には運用開始前に明示的に `true` を立ててもらいます。判定は `check_entry_seat()` トリガ(マイグレーション `0041`)だけが行い、`cancelled` 以外のエントリーが同一地域の別大会にあれば書き込みを断ります(下記)。`apps/backend/src/lib/entries.ts` の `enterTournament()` はこれを 409 に変換します。エントリーポータル(`/portal`)は `GET /api/portal/tournaments` の `regionAllowsDualEntry` でこの設定を受け取り、許可していて最強位・新人王の両方が並んでいる地域に「この地域は最強位と新人王の両方にエントリー可能です(重複エントリー可)」と表示します。地域のルールとしての表示なので、各大会の受付状況(受付開始前 / 受付中 / 受付終了)にかかわらず出します。
 
 作成・編集は統括スタッフ向けの `GET` / `POST` / `PATCH /api/regions`(`apps/backend/src/routes/regions.ts`)から行えます。`slug` だけは公開済み URL の一部なので作成時に固定され、更新できません。
 
@@ -607,14 +607,16 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 ### check_entry_seat()(トリガ関数)
 
-`entries` の before insert or update トリガ `entries_check_seat` の本体です(`0041`、#242。`0017` の `check_region_dual_entry()` と `0040` の `check_participant_region()` を統合)。`db.rpc()` からは呼び出しません。
+`entries` の before insert or update トリガ `entries_check_seat` の本体です(`0041`、#242。`0017` の `check_region_dual_entry()` と `0040` の `check_participant_region()` を統合)。`db.rpc()` からは呼び出しません。重複エントリーの判定はここだけにあり、TypeScript 側に事前チェックはありません(#200)。
 
 **枠を取る書き込みだけ**を検査します(INSERT と、`cancelled` の行を再利用する再エントリーの UPDATE)。既に枠を持つ行のステータス変更(`pending_verification` → `confirmed`、キャンセル待ちの繰り上げ、キャンセル)は枠を取ったときに検査済みで、しかも `cancel_own_entry()` などが大会行のロックを持ったまま実行するため、そこで参加者行を取るとデッドロックを招きます(上の「エントリーまわりのロック順」)。
 
 参加者行を `for no key update` でロックしてから、次の順に検査します。地域行ではなく参加者行なのは、同じ地域の無関係な申し込みまで直列化しないためです。
 
 1. **地域の一致。** 参加者の地域と大会の地域が違えば SQLSTATE `P0008`(`participant belongs to another region`)。`claim_participant_region()` の確認からエントリーの書き込みまでの間に、別の送信が地域を移した場合の裏付けです。参加者行で直列化されるので、エントリーが先なら移す側が参加中のエントリーを見て断り、移す側が先ならエントリーが新しい地域を見て断ります。`enterTournament()` は `concurrent submission` の 409 にします。
-2. **重複エントリー。** `regions.allows_dual_entry` が `false` の地域で、同じ地域の別の大会に `cancelled` 以外のエントリーがあれば SQLSTATE `P0005`(`already entered another tournament in this region`)。`createEntry()` は「数える → 書く」なので、地域の 2 大会への申し込みが同時に来ると両方が 0 件を数えて両方とも通り、片方を取り消す経路も無いまま 2 枠を占有してしまいます。この窓を閉じるバックストップです。2 つ目のトランザクションは参加者行で待たされ、1 つ目のコミット後にその行を見て弾かれます。`createEntry()` は TypeScript 側の判定と同じ 409 `already entered another tournament in this region` に変換するので、フォームの文面は変わりません。
+2. **重複エントリー。** `regions.allows_dual_entry` が `false` の地域で、同じ地域の別の大会に `cancelled` 以外のエントリーがあれば SQLSTATE `P0005`(`already entered another tournament in this region`)。アプリケーション側で「数える → 書く」と、地域の 2 大会への申し込みが同時に来たときに両方が 0 件を数えて両方とも通り、片方を取り消す経路も無いまま 2 枠を占有してしまいます。数えるのも書くのも参加者行のロックの下で行うので、この窓がありません。2 つ目のトランザクションは参加者行で待たされ、1 つ目のコミット後にその行を見て弾かれます。`enterTournament()` はこれを 409 `already entered another tournament in this region` に変換します(未認証の経路では案内メール `dual-entry` になります)。
+
+`P0005` と `P0008` は PostgREST では HTTP 500 として返り、Supabase の API ログにも 500 と記録されます。`enterTournament()` は SQLSTATE を見て 409 に変換するので、利用者への応答は変わりません。通常の拒否なので、API のエラー率を見るときはこの分を割り引きます。
 
 検査は `entries` への直接の UPDATE でも同じように動きます。マイグレーションは Worker のデプロイより先に走るので、`0041` の適用後もしばらくは、再エントリーを直接 UPDATE で書く古い Worker が動いているためです。
 

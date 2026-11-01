@@ -162,6 +162,21 @@ const PASSWORD_CHANGED_AT = '2026-10-01T00:00:00.000Z';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** The cancelled entry a re-entry reuses, as `enterTournament()` reads it. */
+const CANCELLED_ENTRY = {
+  id: ENTRY_ID,
+  name: '以前の氏名',
+  furigana: 'イゼンノシメイ',
+  display_name: '以前',
+  entry_regulations: [],
+  free_text: null,
+  custom_field_values: {},
+  status: 'cancelled',
+  waitlist_position: null,
+  email_verified_at: null,
+  cancelled_at: new Date(Date.now() - DAY_MS).toISOString(),
+};
+
 /** A tournament taking entries, as `checkEntrySubmission()` selects it. */
 function tournamentRow(
   overrides: {
@@ -180,9 +195,7 @@ function tournamentRow(
     entry_closes_at:
       overrides.entryClosesAt ?? new Date(Date.now() + DAY_MS).toISOString(),
     entries_paused: overrides.entriesPaused ?? false,
-    // Lets the dual-entry check be skipped; that rule is the integration
-    // tests' business.
-    regions: {allows_dual_entry: true},
+    regions: {name: '東京'},
     regulations: overrides.regulations ?? [
       {
         id: validBody.regulationIds[0],
@@ -293,7 +306,9 @@ function mockSupabase(options: {
       options.entryWriteErrorCode
         ? Response.json(
             {code: options.entryWriteErrorCode, message: 'refused'},
-            {status: 400},
+            // What PostgREST answers: 500 for a code the triggers raise, and
+            // 409 for Postgres' own constraint violations.
+            {status: options.entryWriteErrorCode.startsWith('P0') ? 500 : 409},
           )
         : rows([{id: ENTRY_ID}]);
 
@@ -1008,6 +1023,34 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     });
     expect(recorded.mails).toHaveLength(0);
   });
+
+  describe.each([
+    ['a first entry', undefined, 'entries'],
+    ['a re-entry', CANCELLED_ENTRY, 'rpc/reenter_cancelled_entry'],
+  ])('refused by the dual-entry trigger on %s', (_, cancelledEntry, table) => {
+    it('mails the owner and leaves nothing else behind', async () => {
+      const recorded = mockSupabase({
+        participant: await registeredParticipant(),
+        entryWriteErrorCode: 'P0005',
+        cancelledEntry,
+      });
+
+      const res = await observable(
+        await postWithContext(TOURNAMENT_PATH, validBody),
+      );
+      await settleBackgroundWork();
+
+      expect(res).toEqual({status: 202, body: JSON.stringify({ok: true})});
+      expect(recorded.mails).toHaveLength(1);
+      expect(recorded.mails[0].subject).toBe(
+        entryNoticeSubject(TOURNAMENT_NAME),
+      );
+      expect(recorded.mails[0].html).toContain('もう一方の大会');
+      // The write is the last thing tried: nothing follows it, and with no
+      // row written there is nothing to roll back.
+      expect(recorded.calls.at(-1)).toEqual({table, method: 'POST'});
+    });
+  });
 });
 
 describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', () => {
@@ -1143,24 +1186,10 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
   });
 
   describe('re-entering a cancelled entry', () => {
-    const cancelledEntry = {
-      id: ENTRY_ID,
-      name: '以前の氏名',
-      furigana: 'イゼンノシメイ',
-      display_name: '以前',
-      entry_regulations: [],
-      free_text: null,
-      custom_field_values: {},
-      status: 'cancelled',
-      waitlist_position: null,
-      email_verified_at: null,
-      cancelled_at: new Date(Date.now() - DAY_MS).toISOString(),
-    };
-
     it('writes through the RPC rather than to the table', async () => {
       const recorded = mockSupabase({
         participant: await registeredParticipant(),
-        cancelledEntry,
+        cancelledEntry: CANCELLED_ENTRY,
       });
 
       const res = await postWithContext(
@@ -1196,7 +1225,7 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
       async (code, error) => {
         mockSupabase({
           participant: await registeredParticipant(),
-          cancelledEntry,
+          cancelledEntry: CANCELLED_ENTRY,
           entryWriteErrorCode: code,
         });
 
@@ -1214,7 +1243,7 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
     it('answers a row taken in the meantime as a concurrent submission', async () => {
       mockSupabase({
         participant: await registeredParticipant(),
-        cancelledEntry,
+        cancelledEntry: CANCELLED_ENTRY,
         reentryMatchesNoRow: true,
       });
 
@@ -1246,6 +1275,31 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
     expect(res.status).toBe(409);
     expect((await res.json()) as unknown).toEqual({
       error: 'concurrent submission',
+    });
+  });
+
+  describe.each([
+    ['a first entry', undefined],
+    ['a re-entry', CANCELLED_ENTRY],
+  ])('refused by the dual-entry trigger on %s', (_, cancelledEntry) => {
+    it('answers 409 and mails nothing', async () => {
+      const recorded = mockSupabase({
+        participant: await registeredParticipant(),
+        entryWriteErrorCode: 'P0005',
+        cancelledEntry,
+      });
+
+      const res = await postWithContext(
+        SESSION_PATH,
+        sessionBody,
+        await sessionCookie(),
+      );
+
+      expect(res.status).toBe(409);
+      expect((await res.json()) as unknown).toEqual({
+        error: 'already entered another tournament in this region',
+      });
+      expect(recorded.mails).toHaveLength(0);
     });
   });
 });

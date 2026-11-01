@@ -70,7 +70,7 @@ export interface EntryTournamentRow {
   entries_paused: boolean;
   // A to-one embed, so PostgREST answers with the region object itself
   // rather than a single-element array (unlike `regulations` below).
-  regions: {allows_dual_entry: boolean; name: string};
+  regions: {name: string};
   regulations: RegulationRow[];
 }
 
@@ -96,10 +96,10 @@ const REGULATION_REFUSALS: Record<
 
 /**
  * The SQLSTATE `check_entry_seat()` (migration 0041) raises for a second seat
- * in a region that allows only one. The trigger only fires for a submission
- * that slipped through the check below while a concurrent one was being
- * inserted, so it is a race, not a bug in the caller — but the participant
- * caused it and 409 is still the honest answer.
+ * in a region that allows only one. That trigger is the only place the rule of
+ * `regions.allows_dual_entry` lives: it decides under the participant's row
+ * lock, so nothing checked ahead of the write could add to it, and a copy here
+ * could only drift from it.
  */
 const REGION_DUAL_ENTRY_SQLSTATE = 'P0005';
 
@@ -364,16 +364,16 @@ export async function checkEntrySubmission(
     .select(
       'id, name, type, region_id, capacity, entry_opens_at, entry_closes_at, ' +
         'entries_paused, ' +
-        'regions(allows_dual_entry, name), ' +
+        'regions(name), ' +
         'regulations(id, priority_starts_at, priority_ends_at)',
     )
     .eq('id', tournamentId)
     .returns<EntryTournamentRow[]>()
     .maybeSingle();
-  // A failing select is not the same as an unknown tournament: the embeds
-  // read columns added by later migrations, so a stale PostgREST schema
-  // cache would otherwise turn every submission into 「大会が見つかりません」
-  // with nothing logged. Kept apart so the 500 says so.
+  // A failing select is not the same as an unknown tournament: a stale
+  // PostgREST schema cache or an outage would otherwise turn every submission
+  // into 「大会が見つかりません」 with nothing logged. Kept apart so the 500
+  // says so.
   if (tournamentError) {
     return {ok: false, status: 500, error: tournamentError.message};
   }
@@ -704,8 +704,9 @@ async function withdrawnTournamentNames(
  * -- into a checked tournament: lapses their entries whose verification
  * link expired unused, reuses their own cancelled entry if there is one,
  * moves them to the tournament's region unless they are taking part in
- * another one, enforces the region's dual-entry rule, writes the entry and
- * its regulations and mails the verification link.
+ * another one, writes the entry -- which is what the region's dual-entry
+ * rule refuses, by trigger -- and its regulations and mails the verification
+ * link.
  * @param env The Worker bindings.
  * @param tournament The checked tournament.
  * @param participantId The participant being entered.
@@ -734,11 +735,12 @@ async function enterTournament(
   // An entry whose verification link expired unused can never be confirmed,
   // yet it would still refuse a re-entry below as `already entered` and, in
   // a region without dual entry, hold the region's other tournament too
-  // (#172). Cancelling those first lets both checks below treat them like
-  // any cancellation: this tournament's row is reused with a fresh link, and
-  // the other tournament's no longer counts. Entries whose link is still
-  // valid are left alone. Done here rather than by a scheduled sweep, since
-  // only a new entry from the same participant is ever held up by one.
+  // (#172). Cancelling those first lets the check below and the seat trigger
+  // treat them like any cancellation: this tournament's row is reused with a
+  // fresh link, and the other tournament's no longer counts. Entries whose
+  // link is still valid are left alone. Done here rather than by a scheduled
+  // sweep, since only a new entry from the same participant is ever held up
+  // by one.
   const {error: lapseError} = await db.rpc('lapse_expired_pending_entries', {
     p_participant_id: participantId,
   });
@@ -800,40 +802,6 @@ async function enterTournament(
     }
   }
 
-  // requirements.md only says that regions allowing both 最強位 and 新人王
-  // exist, so the region decides. Where it doesn't allow both, an entry in
-  // the region's *other* tournament blocks this one. `tournament_id` is
-  // excluded rather than the whole region matched loosely, so re-entering
-  // this same tournament after cancelling still goes through — that row was
-  // already checked above.
-  if (!tournament.regions.allows_dual_entry) {
-    const {count, error: dualEntryError} = await db
-      .from('entries')
-      .select('id, tournaments!inner(region_id)', {count: 'exact', head: true})
-      .eq('participant_id', participantId)
-      .eq('tournaments.region_id', tournament.region_id)
-      .neq('tournament_id', tournamentId)
-      // Every status but `cancelled` occupies the region, expressed by
-      // exclusion rather than by listing the occupying ones: a status added
-      // to the `entry_status` enum later would otherwise fall out of the
-      // list silently and re-open double entry. `pending_verification`
-      // counts on purpose — it is a seat held before the mail was
-      // confirmed, and skipping it would let a participant hold both
-      // tournaments by simply never following the link. One whose link
-      // expired was cancelled above, so only a still-valid link holds it.
-      .neq('status', 'cancelled');
-    if (dualEntryError) {
-      return {ok: false, status: 500, error: dualEntryError.message};
-    }
-    if ((count ?? 0) > 0) {
-      return {
-        ok: false,
-        status: 409,
-        error: ENTRY_ERROR_CODES.ALREADY_ENTERED_ANOTHER_TOURNAMENT,
-      };
-    }
-  }
-
   const entryValues = {
     participant_id: participantId,
     tournament_id: tournamentId,
@@ -868,9 +836,9 @@ async function enterTournament(
         .single()
     : await db.from('entries').insert(entryValues).select('id').single();
   if (error?.code === REGION_DUAL_ENTRY_SQLSTATE) {
-    // The check above lost a race with a concurrent submission for the
-    // region's other tournament; the trigger is what actually kept the
-    // participant from holding both seats.
+    // The statement or function was rolled back, so nothing was written: the
+    // row stays the cancellation it was, with its tokens, and there is
+    // nothing to roll back here.
     return {
       ok: false,
       status: 409,
