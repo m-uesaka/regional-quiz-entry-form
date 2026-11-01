@@ -414,7 +414,7 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | 経路 | ロック順 |
 | --- | --- |
 | エントリーの INSERT | 参加者行(`check_entry_seat()`)→ 大会行(外部キー検査の `for key share`) |
-| `reenter_cancelled_entry()` | 参加者行 → `entries` 行 |
+| `reenter_cancelled_entry()` | 参加者行 → トークン行 → `entries` 行 |
 | `confirm_entry_by_token()` | 参加者行 → トークン行 → 大会行 → `entries` 行 |
 | `take_over_unverified_participant()` | 参加者行 → トークン行 → `entries` 行(削除) |
 | `cancel_own_entry()` / `lapse_expired_pending_entries()` | トークン行 → 大会行 → `entries` 行 |
@@ -423,7 +423,7 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 
 - 参加者行を取る経路は、どれも**最初に**取ります。強さは `for no key update` で揃えているので、同じ参加者の書き込みはここで直列化され、外部キー検査の `for key share` とは衝突しません。例外は `reset_participant_password()` と `reset_tournament_entries()` の `for update` です。前者は `entries` に書きません。
 - `cancel_own_entry()` / `lapse_expired_pending_entries()` / `promote_waitlisted_entries()` は参加者行を取りません。大会行を持ったまま、既に枠を持つ行のステータスを変えるので、そこで参加者行を取ると、参加者行を持って大会行を待つ INSERT や確定と逆順になります。`check_entry_seat()` が枠を取る書き込みしか検査しないのはこのためです。
-- `reset_tournament_entries()` だけが上の順に反しますが、受付期間外にしか動かず(`P0007`)、エントリーの INSERT と再エントリーは受付期間内にしか始まらないので、重なるのは受付終了の瞬間の行き違いに限られます。確定や上書きとの逆順は `0038` からのものです。
+- `reset_tournament_entries()` だけが上の順に反します。確定や上書きとの逆順は `0038` からのものですが、再エントリーとの逆順は `0041` で新しく生じました(以前の直接の UPDATE は `entries` 行 → 参加者行で、リセットと同じ順でした)。リセットは受付期間外にしか動かず(`P0007`)、エントリーの INSERT と再エントリーは受付期間内にしか始まらないので、重なるのは受付終了の瞬間の行き違いに限られます。起きると `40P01` で片方が中断され、再エントリーは 500 に、リセットは全体が巻き戻ります。どちらもやり直せて、データは壊れません。
 
 ### sync_form_field_defs(p_tournament_id, p_rows)
 
@@ -522,11 +522,14 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 キャンセル済みのエントリー行を再エントリーとして上書きし、更新した行を返します(`0041`、#242)。`enterTournament()` が、同じ大会にキャンセル済みの行があるときに INSERT の代わりに呼びます。
 
 1. 参加者行を `for no key update` でロックする。
-2. **別の文で**、`p_entry_id` の行を、`p_participant_id` のもので `cancelled` のときだけ、入力の値と `pending_verification` で上書きする。`waitlist_position` / `email_verified_at` / `cancelled_at` は null に戻すので、新しく入れた行と同じ状態から始まります。
+2. `p_entry_id` の行が `p_participant_id` のもので `cancelled` なら、その行の使用済みと期限切れのトークンを削除する。有効なトークンは残す。
+3. **別の文で**、同じ条件で、入力の値と `pending_verification` で行を上書きする。`waitlist_position` / `email_verified_at` / `cancelled_at` は null に戻すので、新しく入れた行と同じ状態から始まります。
 
 - 関数にしたのはロック順のためです。`entries` への直接の UPDATE は BEFORE ROW トリガが動く前に行をロックするので、トリガの中で参加者行を取ると「`entries` 行 → 参加者行」になり、`take_over_unverified_participant()` とデッドロックしました。先に参加者行を取れば、上書きとはそこで直列化されます。
 - 待っている間に行が `cancelled` でなくなっていれば(同時の再エントリーが取った、上書きが消した)0 行を返します。`setof entries` を返すので、呼び出し側は INSERT と同じ `.select('id').single()` で受けられ、0 行は `PGRST116` として `concurrent submission` の 409 になります。
-- 地域と重複エントリーの検査は `check_entry_seat()` のままなので、`P0008` / `P0005` はそのまま呼び出し側に返ります。
+- 地域と重複エントリーの検査は `check_entry_seat()` のままなので、`P0008` / `P0005` はそのまま呼び出し側に返ります。トークンの削除も同じトランザクションなので、断られた再エントリーは何も残しません。
+- トークンの削除とステータスの変更が一度に見えるので、新しいリンクを書くまでの間、行は「確定待ちでトークンが無い」状態になります。これが同じ参加者の同時の送信の `lapse_expired_pending_entries()` に、作成中で期限切れではないと伝えます。
+- 上書きする列を増やすときは、失敗時に元へ戻す `ExistingEntryRow` と `rollbackEntry()`(`lib/entries.ts`)も同じ列に揃えます。
 
 ### claim_participant_region(p_participant_id, p_region_id)
 

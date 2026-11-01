@@ -1,5 +1,5 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'bun:test';
-import {SQL} from 'bun';
+import {SQL, type ReservedSQL} from 'bun';
 import {readFileSync} from 'node:fs';
 import {DB_URL, isDbReachable} from '../test-support/db';
 
@@ -212,7 +212,9 @@ describe.skipIf(!dbReachable)(
     }
 
     /**
-     * The SQLSTATE a query was refused with.
+     * The SQLSTATE a query was refused with, or undefined if it succeeded.
+     * A failure that isn't Postgres refusing it, such as a lost connection,
+     * is thrown, so that it can't read as a success.
      * @param query The query.
      */
     async function refusalOf(query: PromiseLike<unknown>) {
@@ -220,8 +222,62 @@ describe.skipIf(!dbReachable)(
         await query;
         return undefined;
       } catch (e: unknown) {
-        return (e as {errno?: string}).errno;
+        const {errno} = e as {errno?: string};
+        if (!errno) {
+          throw e;
+        }
+        return errno;
       }
+    }
+
+    /**
+     * Hands a reserved connection back clean, whether the test finished on it
+     * or threw half way: a transaction left open would hold its locks against
+     * `cleanup()`, and hang the suite instead of failing one test.
+     * @param conn The connection.
+     */
+    async function releaseClean(conn: ReservedSQL) {
+      try {
+        await conn`rollback`;
+        await conn`set lock_timeout = 0`;
+      } finally {
+        conn.release();
+      }
+    }
+
+    /**
+     * Adds a verification token to an entry.
+     * @param entryId The entry.
+     * @param state A used token, an expired one or a live one.
+     * @return The token's id.
+     */
+    async function addToken(
+      entryId: string,
+      state: 'used' | 'expired' | 'live',
+    ): Promise<string> {
+      const [token] = await sql`
+        insert into email_verification_tokens
+          (entry_id, token_hash, expires_at, used_at)
+        values (
+          ${entryId},
+          ${crypto.randomUUID()},
+          now() + ${state === 'expired' ? '-1 hour' : '1 hour'}::interval,
+          ${state === 'used' ? new Date() : null}
+        )
+        returning id
+      `;
+      return token.id as string;
+    }
+
+    /**
+     * The ids of an entry's verification tokens.
+     * @param entryId The entry.
+     */
+    async function tokenIdsOf(entryId: string): Promise<string[]> {
+      const rows = await sql`
+        select id from email_verification_tokens where entry_id = ${entryId}
+      `;
+      return rows.map((row: {id: string}) => row.id);
     }
 
     it('fires a single check on entries, with the two old functions gone', async () => {
@@ -293,6 +349,58 @@ describe.skipIf(!dbReachable)(
         email_verified_at: null,
         cancelled_at: null,
       });
+    });
+
+    it('drops only the dead tokens of the row it re-enters', async () => {
+      const {participantId, entryFor} = await seedRegion(false);
+      const [entry] = await sql`
+        insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}
+        returning id
+      `;
+      await addToken(entry.id, 'used');
+      await addToken(entry.id, 'expired');
+      const live = await addToken(entry.id, 'live');
+
+      await reenter(sql, entry.id, participantId);
+
+      expect(await tokenIdsOf(entry.id)).toEqual([live]);
+      await sql`
+        delete from email_verification_tokens where entry_id = ${entry.id}
+      `;
+    });
+
+    it('keeps the tokens of a re-entry it refuses', async () => {
+      const {participantId, entryFor} = await seedRegion(false);
+      const [cancelled] = await sql`
+        insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}
+        returning id
+      `;
+      await sql`insert into entries ${sql(entryFor('shinjinou'))}`;
+      const used = await addToken(cancelled.id, 'used');
+
+      const code = await refusalOf(reenter(sql, cancelled.id, participantId));
+
+      expect(code).toBe('P0005');
+      expect(await tokenIdsOf(cancelled.id)).toEqual([used]);
+      await sql`
+        delete from email_verification_tokens where entry_id = ${cancelled.id}
+      `;
+    });
+
+    it('leaves the tokens of a row that is no longer cancelled', async () => {
+      const {participantId, entryFor} = await seedRegion(true);
+      const [entry] = await sql`
+        insert into entries ${sql(entryFor('saikyoi'))} returning id
+      `;
+      const used = await addToken(entry.id, 'used');
+
+      const rows = await reenter(sql, entry.id, participantId);
+
+      expect(rows).toHaveLength(0);
+      expect(await tokenIdsOf(entry.id)).toEqual([used]);
+      await sql`
+        delete from email_verification_tokens where entry_id = ${entry.id}
+      `;
     });
 
     it("re-enters nothing but the participant's own cancelled row", async () => {
@@ -394,6 +502,7 @@ describe.skipIf(!dbReachable)(
       `;
 
       const holder = await sql.reserve();
+      let queued: PromiseLike<unknown> | undefined;
       try {
         await holder`begin`;
         await holder`
@@ -401,6 +510,7 @@ describe.skipIf(!dbReachable)(
           for no key update
         `;
         const reentry = reenter(sql, entry.id, participantId).execute();
+        queued = reentry;
         // Long enough for the re-entry to be queued on the lock.
         await Bun.sleep(300);
 
@@ -412,7 +522,8 @@ describe.skipIf(!dbReachable)(
         expect(locked).toHaveLength(1);
         expect(await reentry).toHaveLength(1);
       } finally {
-        holder.release();
+        await releaseClean(holder);
+        await Promise.allSettled([queued]);
       }
     });
 
@@ -427,6 +538,7 @@ describe.skipIf(!dbReachable)(
       `;
 
       const takingOver = await sql.reserve();
+      let queued: PromiseLike<unknown> | undefined;
       try {
         await takingOver`begin`;
         await takingOver`
@@ -435,12 +547,14 @@ describe.skipIf(!dbReachable)(
           )
         `;
         const reentry = reenter(sql, entry.id, participantId).execute();
+        queued = reentry;
         await Bun.sleep(300);
         await takingOver`commit`;
 
         expect(await reentry).toHaveLength(0);
       } finally {
-        takingOver.release();
+        await releaseClean(takingOver);
+        await Promise.allSettled([queued]);
       }
     });
 
@@ -452,24 +566,27 @@ describe.skipIf(!dbReachable)(
       const takingOver = new SQL(DB_URL);
       const refusals: Array<string | undefined> = [];
 
-      for (let round = 0; round < 20; round++) {
-        await sql`delete from entries where participant_id = ${participantId}`;
-        const [entry] = await sql`
-          insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}
-          returning id
-        `;
-        refusals.push(
-          ...(await Promise.all([
-            refusalOf(reenter(sql, entry.id, participantId)),
-            refusalOf(takingOver`
-              select take_over_unverified_participant(
-                ${participantId}, 'new-hash', ${regionRow.region_id}
-              )
-            `),
-          ])),
-        );
+      try {
+        for (let round = 0; round < 20; round++) {
+          await sql`delete from entries where participant_id = ${participantId}`;
+          const [entry] = await sql`
+            insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}
+            returning id
+          `;
+          refusals.push(
+            ...(await Promise.all([
+              refusalOf(reenter(sql, entry.id, participantId)),
+              refusalOf(takingOver`
+                select take_over_unverified_participant(
+                  ${participantId}, 'new-hash', ${regionRow.region_id}
+                )
+              `),
+            ])),
+          );
+        }
+      } finally {
+        await takingOver.close();
       }
-      await takingOver.close();
 
       expect(refusals.filter(code => code !== undefined)).toEqual([]);
     });
@@ -488,11 +605,10 @@ describe.skipIf(!dbReachable)(
           select 1 from participants where id = ${participantId}
           for key share nowait
         `);
-        await entering`rollback`;
 
         expect(code).toBeUndefined();
       } finally {
-        entering.release();
+        await releaseClean(entering);
       }
     });
 
@@ -525,14 +641,12 @@ describe.skipIf(!dbReachable)(
         const [cancelled] = await writer`
           select * from cancel_own_entry(${entry.id}, ${participantId})
         `;
-        await writer`set lock_timeout = 0`;
-        await holder`rollback`;
 
         expect(promoted).toHaveLength(1);
         expect(cancelled.previous_status).toBe('confirmed');
       } finally {
-        holder.release();
-        writer.release();
+        await releaseClean(writer);
+        await releaseClean(holder);
       }
     });
 

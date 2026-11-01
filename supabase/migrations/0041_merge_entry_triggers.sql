@@ -21,7 +21,7 @@
 -- ロック順(P: 参加者行、Tk: トークン行、T: 大会行、E: `entries` 行)。
 --
 -- - エントリーの INSERT            P → T(外部キー検査の key share)
--- - `reenter_cancelled_entry()`    P → E
+-- - `reenter_cancelled_entry()`    P → Tk → E
 -- - `confirm_entry_by_token()`     P → Tk → T → E
 -- - `take_over_unverified_participant()`  P → Tk → E
 -- - `cancel_own_entry()`、`lapse_expired_pending_entries()`  Tk → T → E(P なし)
@@ -33,9 +33,12 @@
 -- P を持って T を待つ INSERT や確定と逆順になる。
 --
 -- 唯一の例外は `reset_tournament_entries()` の T → E → P(参加者も消すとき)。
--- 受付期間外にしか動かず(`P0007`)、INSERT や再エントリーは受付期間内にしか
--- 始まらないので、重なるのは受付終了の瞬間の行き違いに限られる。確定と上書きとの
--- 逆順は 0038 からのもの。この関数は変えない。
+-- 確定と上書きとの逆順は 0038 からのものだが、再エントリーとの逆順はこの
+-- マイグレーションで新しく生じる。以前の直接の UPDATE は E → P で、リセットと
+-- 同じ順だった。受付期間外にしか動かず(`P0007`)、INSERT や再エントリーは
+-- 受付期間内にしか始まらないので、重なるのは受付終了の瞬間の行き違いに限られる。
+-- 起きれば `40P01` で片方が中断され、再エントリーなら 500、リセットなら全体が
+-- 巻き戻る。どちらもやり直せてデータは壊れないので、この関数は変えない。
 --
 -- デプロイの順序: マイグレーションは Worker より先に走る。適用後もしばらくは
 -- 古い Worker が `entries` を直接 UPDATE するので、トリガは再エントリーの検査と
@@ -132,6 +135,13 @@ drop function check_participant_region();
 -- 再エントリーは新しく入れた行と同じ状態から始める。確定待ちで、未確認で、
 -- キャンセル待ちの順位も、以前のキャンセルの記録も持たない。
 --
+-- 行に残っている使用済みと期限切れのトークンも、ここで消す。新しいリンクを書く
+-- までトークンが 1 つも無いことが、同じ参加者の同時の送信の
+-- `lapse_expired_pending_entries()` に、この行は作成中で期限切れではないと伝える。
+-- 行のステータスと同じトランザクションなので、`P0005` / `P0008` で断られた
+-- 再エントリーは何も残さない。消すのは行がまだ `cancelled` のときだけで、同時の
+-- 再エントリーが先に取った行の有効なリンクには触れない。
+--
 -- 行が `cancelled` でなくなっていれば何も更新せず、0 行を返す。同時の再エントリー
 -- が先に取った場合と、`take_over_unverified_participant()` が行を消した場合で、
 -- どちらも参加者行のロックを待っていた間に起きる。UPDATE は別の文なので、それを
@@ -155,6 +165,14 @@ begin
   perform 1 from participants p
     where p.id = p_participant_id
     for no key update;
+
+  delete from email_verification_tokens t
+    using entries e
+    where t.entry_id = p_entry_id
+      and e.id = t.entry_id
+      and e.participant_id = p_participant_id
+      and e.status = 'cancelled'
+      and (t.used_at is not null or t.expires_at < now());
 
   return query
     update entries e
@@ -180,3 +198,7 @@ revoke all on function reenter_cancelled_entry(
 grant execute on function reenter_cancelled_entry(
   uuid, uuid, text, text, text, text, jsonb
 ) to service_role;
+
+-- 新しい Worker はこの関数を呼ぶ。Worker より先に PostgREST が読み直せるよう、
+-- スキーマキャッシュの更新を明示する。
+notify pgrst, 'reload schema';
