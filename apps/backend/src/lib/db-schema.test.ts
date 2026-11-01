@@ -72,8 +72,8 @@ describe.skipIf(!dbReachable)(
   },
 );
 
-// The default is what the dual-entry rule (migration 0017) falls back to
-// for every region that predates the column, so it is pinned down here
+// The default is what the dual-entry rule (`check_entry_seat()`, migration
+// 0041) falls back to for every region that predates the column, so it is pinned down here
 // rather than left to the migration being read correctly.
 describe.skipIf(!dbReachable)(
   'regions table (local Supabase integration)',
@@ -104,11 +104,10 @@ describe.skipIf(!dbReachable)(
   },
 );
 
-// The DB-level backstop for `regions.allows_dual_entry` and
-// `claim_participant_region()` (migration 0041). `createEntry()` checks the
-// rule before inserting, so what is exercised here
-// is the window that check leaves open: an insert that arrives as if a
-// concurrent submission had already taken the region's other seat.
+// The only place the rule of `regions.allows_dual_entry` is enforced, and the
+// backstop for `claim_participant_region()` (migration 0041). `createEntry()`
+// has no check of its own for the former (#200): these tests are what pin the
+// rule down.
 describe.skipIf(!dbReachable)(
   'check_entry_seat() (local Supabase integration)',
   () => {

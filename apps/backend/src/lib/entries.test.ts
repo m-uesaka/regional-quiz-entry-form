@@ -1103,7 +1103,8 @@ describe.skipIf(!dbReachable)(
 
       it('goes through with a fresh link once the other entry is cancelled', async () => {
         const seat = await holdOtherTournament('re-entry-dual-off-retry');
-        await createEntry(env, seat.tournamentId, seat.input);
+        const refused = await createEntry(env, seat.tournamentId, seat.input);
+        const before = await tokenHashes(seat.cancelledEntryId);
         await sql`
           update entries set status = 'cancelled', cancelled_at = now()
           where id = ${seat.heldEntryId}
@@ -1112,9 +1113,19 @@ describe.skipIf(!dbReachable)(
 
         const result = await createEntry(env, seat.tournamentId, seat.input);
 
+        expect(refused.ok).toBe(false);
         expect(result.ok).toBe(true);
         expect(result.ok && result.entry.id).toBe(seat.cancelledEntryId);
         expect(mailSendCount).toBe(1);
+        // The used token and the expired one went, the live one stayed, and
+        // the link just mailed was added.
+        const after = await tokenHashes(seat.cancelledEntryId);
+        const fresh = after.filter(hash => !before.includes(hash));
+        const kept = after.filter(hash => before.includes(hash));
+        expect(before).toHaveLength(3);
+        expect(fresh).toHaveLength(1);
+        expect(kept).toHaveLength(1);
+        expect(kept[0]).toStartWith('live-');
       });
     });
 

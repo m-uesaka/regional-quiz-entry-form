@@ -370,10 +370,10 @@ export async function checkEntrySubmission(
     .eq('id', tournamentId)
     .returns<EntryTournamentRow[]>()
     .maybeSingle();
-  // A failing select is not the same as an unknown tournament: the embeds
-  // read columns added by later migrations, so a stale PostgREST schema
-  // cache would otherwise turn every submission into 「大会が見つかりません」
-  // with nothing logged. Kept apart so the 500 says so.
+  // A failing select is not the same as an unknown tournament: a stale
+  // PostgREST schema cache or an outage would otherwise turn every submission
+  // into 「大会が見つかりません」 with nothing logged. Kept apart so the 500
+  // says so.
   if (tournamentError) {
     return {ok: false, status: 500, error: tournamentError.message};
   }
@@ -736,10 +736,11 @@ async function enterTournament(
   // yet it would still refuse a re-entry below as `already entered` and, in
   // a region without dual entry, hold the region's other tournament too
   // (#172). Cancelling those first lets the check below and the seat trigger
-  // treat them like any cancellation: this tournament's row is reused with a fresh link, and
-  // the other tournament's no longer counts. Entries whose link is still
-  // valid are left alone. Done here rather than by a scheduled sweep, since
-  // only a new entry from the same participant is ever held up by one.
+  // treat them like any cancellation: this tournament's row is reused with a
+  // fresh link, and the other tournament's no longer counts. Entries whose
+  // link is still valid are left alone. Done here rather than by a scheduled
+  // sweep, since only a new entry from the same participant is ever held up
+  // by one.
   const {error: lapseError} = await db.rpc('lapse_expired_pending_entries', {
     p_participant_id: participantId,
   });

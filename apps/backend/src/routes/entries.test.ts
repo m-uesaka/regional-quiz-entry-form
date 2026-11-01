@@ -1186,12 +1186,10 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
   });
 
   describe('re-entering a cancelled entry', () => {
-    const cancelledEntry = CANCELLED_ENTRY;
-
     it('writes through the RPC rather than to the table', async () => {
       const recorded = mockSupabase({
         participant: await registeredParticipant(),
-        cancelledEntry,
+        cancelledEntry: CANCELLED_ENTRY,
       });
 
       const res = await postWithContext(
@@ -1227,7 +1225,7 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
       async (code, error) => {
         mockSupabase({
           participant: await registeredParticipant(),
-          cancelledEntry,
+          cancelledEntry: CANCELLED_ENTRY,
           entryWriteErrorCode: code,
         });
 
@@ -1245,7 +1243,7 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
     it('answers a row taken in the meantime as a concurrent submission', async () => {
       mockSupabase({
         participant: await registeredParticipant(),
-        cancelledEntry,
+        cancelledEntry: CANCELLED_ENTRY,
         reentryMatchesNoRow: true,
       });
 
