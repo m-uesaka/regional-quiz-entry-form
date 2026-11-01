@@ -213,12 +213,6 @@ describe.skipIf(!dbReachable)(
       `;
     }
 
-    /**
-     * Marks the account under `email` as verified, the way following any of
-     * its verification links would (`confirm_entry_by_token()`). Without it
-     * a second submission under the same address takes the account over
-     * instead of being held to it (#189).
-     */
     async function participantIdOf(email: string): Promise<string> {
       const [participant] = await sql`
         select id from participants where email = ${email}
@@ -226,6 +220,12 @@ describe.skipIf(!dbReachable)(
       return participant.id;
     }
 
+    /**
+     * Marks the account under `email` as verified, the way following any of
+     * its verification links would (`confirm_entry_by_token()`). Without it
+     * a second submission under the same address takes the account over
+     * instead of being held to it (#189).
+     */
     async function verifyAddress(email: string): Promise<void> {
       await sql`
         update participants set email_verified_at = now()
@@ -945,8 +945,7 @@ describe.skipIf(!dbReachable)(
       /**
        * A participant whose entry for the region's 最強位 tournament was
        * cancelled and who then entered its 新人王 tournament, so re-entering
-       * the first gets past the cleanup of the cancelled row's dead tokens
-       * and is refused by `check_region_dual_entry()` at the write.
+       * the first is refused by `check_entry_seat()` at the write.
        * @param suffix The region slug suffix, as in `createFixture()`.
        * @param options.verified Whether the address has been verified.
        */
@@ -1024,7 +1023,7 @@ describe.skipIf(!dbReachable)(
         return rows.map((row: {token_hash: string}) => row.token_hash);
       }
 
-      it('changes nothing but the removal of dead tokens', async () => {
+      it('changes nothing, the tokens included', async () => {
         const seat = await holdOtherTournament('re-entry-dual-off');
         const before = await readState(seat.cancelledEntryId, seat.input.email);
 
@@ -1043,10 +1042,8 @@ describe.skipIf(!dbReachable)(
         ).toEqual(before);
         expect(before.participant.region_id).toBe(seat.regionId);
         expect(mailSendCount).toBe(0);
-        // The used token and the expired one went; the live one did not.
-        const hashes = await tokenHashes(seat.cancelledEntryId);
-        expect(hashes.length).toBe(1);
-        expect(hashes[0]).toStartWith('live-');
+        // The token cleanup is rolled back with the refused write.
+        expect(await tokenHashes(seat.cancelledEntryId)).toHaveLength(3);
       });
 
       it('leaves an unverified account as it was', async () => {
