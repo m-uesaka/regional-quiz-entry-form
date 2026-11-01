@@ -71,7 +71,7 @@ export interface EntryTournamentRow {
   entries_paused: boolean;
   // A to-one embed, so PostgREST answers with the region object itself
   // rather than a single-element array (unlike `regulations` below).
-  regions: {allows_dual_entry: boolean; name: string};
+  regions: {name: string};
   regulations: RegulationRow[];
 }
 
@@ -96,19 +96,20 @@ const REGULATION_REFUSALS: Record<
 };
 
 /**
- * The SQLSTATE `check_region_dual_entry()` (migration 0016) raises. The
- * trigger only fires for a submission that slipped through the check below
- * while a concurrent one was being inserted, so it is a race, not a bug in
- * the caller — but the participant caused it and 409 is still the honest
- * answer.
+ * The SQLSTATE `check_entry_seat()` (migration 0041) raises for a second seat
+ * in a region that allows only one. That trigger is the only place the rule of
+ * `regions.allows_dual_entry` lives: it decides under the participant's row
+ * lock, so nothing checked ahead of the write could add to it, and a copy here
+ * could only drift from it.
  */
 const REGION_DUAL_ENTRY_SQLSTATE = 'P0005';
 
 /**
- * The SQLSTATE `check_participant_region()` (migration 0040) raises: a
- * concurrent submission moved the participant to another region after this
- * one last looked. Nothing need stand in the other region, so this is
- * answered as `CONCURRENT_SUBMISSION` rather than as taking part there.
+ * The SQLSTATE `check_entry_seat()` (migration 0041) raises for a seat outside
+ * the participant's region: a concurrent submission moved the participant to
+ * another region after this one last looked. Nothing need stand in the other
+ * region, so this is answered as `CONCURRENT_SUBMISSION` rather than as taking
+ * part there.
  */
 const PARTICIPANT_REGION_SQLSTATE = 'P0008';
 
@@ -131,8 +132,9 @@ const FOREIGN_KEY_VIOLATION_SQLSTATE = '23503';
 const UNIQUE_VIOLATION_SQLSTATE = '23505';
 
 /**
- * PostgREST's code for a `.single()` that matched no row. On the re-entry
- * update it means a concurrent re-entry already took the cancelled row.
+ * PostgREST's code for a `.single()` that matched no row. On a re-entry it
+ * means the cancelled row is gone: a concurrent re-entry took it, or a
+ * takeover deleted it.
  */
 const NO_ROW_PGRST_CODE = 'PGRST116';
 
@@ -151,9 +153,10 @@ const PARTICIPANT_COLUMNS = 'id, region_id, password_hash, email_verified_at';
 /**
  * The participant's existing entry for the tournament, if there is one.
  *
- * Every column the reuse update in `createEntry()` overwrites is selected,
- * not just the ones the reuse decision is made on, so a re-entry that fails
- * afterwards can put the row back exactly as it was.
+ * Every column `reenter_cancelled_entry()` (migration 0041) overwrites is
+ * selected, not just the ones the reuse decision is made on, so a re-entry
+ * that fails afterwards can put the row back exactly as it was. A column added
+ * to that function's `set` list has to be added here and to `rollbackEntry()`.
  */
 interface ExistingEntryRow {
   id: string;
@@ -257,8 +260,8 @@ async function rollbackEntry(
 
   // A reused row is put back into the cancellation it came from rather than
   // deleted, so a failed re-entry doesn't erase the record of the original
-  // entry. Every column the reuse update overwrote is restored from the
-  // snapshot taken before it: restoring only the status would still leave
+  // entry. Every column `reenter_cancelled_entry()` overwrote is restored from
+  // the snapshot taken before it: restoring only the status would still leave
   // the cancelled entry permanently carrying the failed re-entry's answers
   // and its cleared verification timestamp.
   const {error: restoreError} = await db
@@ -362,17 +365,17 @@ export async function checkEntrySubmission(
     .select(
       'id, name, type, region_id, capacity, entry_opens_at, entry_closes_at, ' +
         'entries_paused, ' +
-        'regions(allows_dual_entry, name), ' +
+        'regions(name), ' +
         'regulations(id, priority_starts_at, priority_ends_at, ' +
         'closes_with_priority)',
     )
     .eq('id', tournamentId)
     .returns<EntryTournamentRow[]>()
     .maybeSingle();
-  // A failing select is not the same as an unknown tournament: the embeds
-  // read columns added by later migrations, so a stale PostgREST schema
-  // cache would otherwise turn every submission into 「大会が見つかりません」
-  // with nothing logged. Kept apart so the 500 says so.
+  // A failing select is not the same as an unknown tournament: a stale
+  // PostgREST schema cache or an outage would otherwise turn every submission
+  // into 「大会が見つかりません」 with nothing logged. Kept apart so the 500
+  // says so.
   if (tournamentError) {
     return {ok: false, status: 500, error: tournamentError.message};
   }
@@ -699,8 +702,9 @@ async function withdrawnTournamentNames(
  * -- into a checked tournament: lapses their entries whose verification
  * link expired unused, reuses their own cancelled entry if there is one,
  * moves them to the tournament's region unless they are taking part in
- * another one, enforces the region's dual-entry rule, writes the entry and
- * its regulations and mails the verification link.
+ * another one, writes the entry -- which is what the region's dual-entry
+ * rule refuses, by trigger -- and its regulations and mails the verification
+ * link.
  * @param env The Worker bindings.
  * @param tournament The checked tournament.
  * @param participantId The participant being entered.
@@ -729,11 +733,12 @@ async function enterTournament(
   // An entry whose verification link expired unused can never be confirmed,
   // yet it would still refuse a re-entry below as `already entered` and, in
   // a region without dual entry, hold the region's other tournament too
-  // (#172). Cancelling those first lets both checks below treat them like
-  // any cancellation: this tournament's row is reused with a fresh link, and
-  // the other tournament's no longer counts. Entries whose link is still
-  // valid are left alone. Done here rather than by a scheduled sweep, since
-  // only a new entry from the same participant is ever held up by one.
+  // (#172). Cancelling those first lets the check below and the seat trigger
+  // treat them like any cancellation: this tournament's row is reused with a
+  // fresh link, and the other tournament's no longer counts. Entries whose
+  // link is still valid are left alone. Done here rather than by a scheduled
+  // sweep, since only a new entry from the same participant is ever held up
+  // by one.
   const {error: lapseError} = await db.rpc('lapse_expired_pending_entries', {
     p_participant_id: participantId,
   });
@@ -795,40 +800,6 @@ async function enterTournament(
     }
   }
 
-  // requirements.md only says that regions allowing both 最強位 and 新人王
-  // exist, so the region decides. Where it doesn't allow both, an entry in
-  // the region's *other* tournament blocks this one. `tournament_id` is
-  // excluded rather than the whole region matched loosely, so re-entering
-  // this same tournament after cancelling still goes through — that row was
-  // already checked above.
-  if (!tournament.regions.allows_dual_entry) {
-    const {count, error: dualEntryError} = await db
-      .from('entries')
-      .select('id, tournaments!inner(region_id)', {count: 'exact', head: true})
-      .eq('participant_id', participantId)
-      .eq('tournaments.region_id', tournament.region_id)
-      .neq('tournament_id', tournamentId)
-      // Every status but `cancelled` occupies the region, expressed by
-      // exclusion rather than by listing the occupying ones: a status added
-      // to the `entry_status` enum later would otherwise fall out of the
-      // list silently and re-open double entry. `pending_verification`
-      // counts on purpose — it is a seat held before the mail was
-      // confirmed, and skipping it would let a participant hold both
-      // tournaments by simply never following the link. One whose link
-      // expired was cancelled above, so only a still-valid link holds it.
-      .neq('status', 'cancelled');
-    if (dualEntryError) {
-      return {ok: false, status: 500, error: dualEntryError.message};
-    }
-    if ((count ?? 0) > 0) {
-      return {
-        ok: false,
-        status: 409,
-        error: ENTRY_ERROR_CODES.ALREADY_ENTERED_ANOTHER_TOURNAMENT,
-      };
-    }
-  }
-
   const entryValues = {
     participant_id: participantId,
     tournament_id: tournamentId,
@@ -838,51 +809,34 @@ async function enterTournament(
     free_text: input.freeText ?? null,
     custom_field_values: input.customFieldValues,
     status: 'pending_verification',
-    // Explicitly reset on reuse, so a re-entry starts from exactly the state
-    // a freshly inserted row would: unverified, unplaced on the waitlist and
-    // no longer carrying the previous cancellation.
-    waitlist_position: null,
-    email_verified_at: null,
-    cancelled_at: null,
   };
-
-  if (existingEntry) {
-    // The cancelled row still carries the tokens of the entry it was
-    // cancelled from, all burnt or expired (`cancel_own_entry()` and
-    // `lapse_expired_pending_entries()` burn what was left). Dropped before the row goes back
-    // to `pending_verification`, so that until its new link is written it
-    // has no tokens at all -- which is what tells
-    // `lapse_expired_pending_entries()` in a concurrent submission of the
-    // same participant's that this entry is being made, not one whose link
-    // ran out. Only dead tokens go: a concurrent re-entry of this same row
-    // may already have written a live one, which must survive.
-    const {error: tokensError} = await db
-      .from('email_verification_tokens')
-      .delete()
-      .eq('entry_id', existingEntry.id)
-      .or(`used_at.not.is.null,expires_at.lt.${new Date().toISOString()}`);
-    if (tokensError) {
-      return {ok: false, status: 500, error: tokensError.message};
-    }
-  }
 
   const {data: entry, error} = existingEntry
     ? await db
-        .from('entries')
-        // Still filtered on `cancelled`, so two concurrent re-entries behave
-        // like two concurrent first entries: the second one matches no row
-        // and is refused instead of mailing a second verification link for
-        // the same entry.
-        .update(entryValues)
-        .eq('id', existingEntry.id)
-        .eq('status', 'cancelled')
+        // Takes the participant row before the entry's, the order a takeover
+        // takes them in, which an update here would reverse. It also resets
+        // the row to what a fresh insert would be and drops the dead tokens
+        // of the entry it was cancelled from, with the status flip, so a
+        // refused re-entry changes nothing. It matches no row once the row
+        // stopped being `cancelled`, so two concurrent re-entries behave like
+        // two concurrent first entries: the second one is refused instead of
+        // mailing a second verification link for the same entry.
+        .rpc('reenter_cancelled_entry', {
+          p_entry_id: existingEntry.id,
+          p_participant_id: participantId,
+          p_name: entryValues.name,
+          p_furigana: entryValues.furigana,
+          p_display_name: entryValues.display_name,
+          p_free_text: entryValues.free_text,
+          p_custom_field_values: entryValues.custom_field_values,
+        })
         .select('id')
         .single()
     : await db.from('entries').insert(entryValues).select('id').single();
   if (error?.code === REGION_DUAL_ENTRY_SQLSTATE) {
-    // The check above lost a race with a concurrent submission for the
-    // region's other tournament; the trigger is what actually kept the
-    // participant from holding both seats.
+    // The statement or function was rolled back, so nothing was written: the
+    // row stays the cancellation it was, with its tokens, and there is
+    // nothing to roll back here.
     return {
       ok: false,
       status: 409,

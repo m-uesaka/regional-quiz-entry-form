@@ -656,9 +656,9 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 2. その大会の `form_field_defs` を取得し、`customFieldValues` を `findCustomFieldValuesError()` で照合(未定義キー、選択肢にない値、必須項目の空欄、型の不一致を 400 で弾く)。
 3. 未ログインならメールアドレスから participant を検索し、既存なら**パスワード照合**、無ければ新規作成(PBKDF2 でハッシュ化)。ログイン中ならセッションの participant を使う。
 4. その participant の確定待ちエントリーのうち、**確認リンクの期限が切れたもの**を `cancelled` にする(DB 関数 `lapse_expired_pending_entries()`、#172。後述)。
-5. 同じ大会の既存エントリーを確認。`cancelled` なら**その行を再利用**して上書き(`unique (participant_id, tournament_id)` があるため2行目は作れない)、確認リンクが有効な確定待ちなら `entry pending verification`、それ以外なら `already entered` で 409。
+5. 同じ大会の既存エントリーを確認。`cancelled` なら**その行を再利用**して上書き(`unique (participant_id, tournament_id)` があるため2行目は作れない。書き込みは DB 関数 `reenter_cancelled_entry()`)、確認リンクが有効な確定待ちなら `entry pending verification`、それ以外なら `already entered` で 409。
 6. 確認済みの participant なら、DB 関数 `claim_participant_region()` で地域をこの大会の地域に移す(#236。後述)。移せなければ `already registered in another region` で 409。
-7. 地域が重複参加を許していなければ(`regions.allows_dual_entry` が false)、同一地域の**別**大会に有効なエントリーが無いことを確認。
+7. エントリーを書き込む。地域が重複参加を許していなければ(`regions.allows_dual_entry` が false)、同一地域の**別**大会に有効なエントリーがあるときはトリガ `check_entry_seat()` が断り(`P0005`)、`already entered another tournament in this region` で 409。別の送信がアカウントを他の地域へ移していれば、トリガは地域の不一致を `P0008` で断り、`concurrent submission` の 409(未認証の経路では案内メール `processing-failed`)になります。
 8. 確認メールを送信。
 
 `customFieldValues` の照合を participant の検索・作成より前に置いているのは、フォームからは生成し得ない回答を弾いた結果としてアカウントだけが作られる、という副作用を残さないためです。編集 API(`PATCH /api/mypage/entries/:entryId`)と同じ `findCustomFieldValuesError()` を使うので、新規と編集で通る回答は一致します。
@@ -672,7 +672,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 
 後者を残すのは、キャンセルに期限が無いためです。これを数えないと、ある地域の大会に出た後でキャンセルして別の地域の大会に出られてしまいます。受付中のキャンセルと、確定しないまま取り消されたエントリー(期限切れを含む)は地域を押さえません。期限切れの確定待ちは 4. で `cancelled` になっています。
 
-地域を移すのは確認済みの参加者を、パスワードかセッションで本人と確かめた後だけです。この順にしたため、パスワードが違えば別の地域に参加中でも不受理通知は `password-mismatch` になります。未確認のアカウントの地域はアカウントの作成時と上書き時に決まるので、6. は行いません。確認からエントリーの書き込みまでの間に別の送信が地域を移すと、`check_participant_region()` トリガ(`0040`)が書き込みを断り、`concurrent submission` で 409 を返します。
+地域を移すのは確認済みの参加者を、パスワードかセッションで本人と確かめた後だけです。この順にしたため、パスワードが違えば別の地域に参加中でも不受理通知は `password-mismatch` になります。未確認のアカウントの地域はアカウントの作成時と上書き時に決まるので、6. は行いません。確認からエントリーの書き込みまでの間に別の送信が地域を移すと、`check_entry_seat()` トリガ(`0041`)が書き込みを断り、`concurrent submission` で 409 を返します。
 
 **確認メールの期限切れ(#172)。** 確認リンク(24 時間)を開かないまま期限が切れたエントリーは、もう確定できないのに `pending_verification` のまま残り、同じ大会への再エントリーを `already entered` で、重複参加を許さない地域ではもう一方の大会へのエントリーも断っていました。そこで 4. で、その参加者の確定待ちエントリーのうち**確認トークンが 1 つ以上あり、そのどれもが使用済みか期限切れのもの**を `cancelled` にし(残っていたトークンも使用済みにする)、以後は参加者自身のキャンセルと同じ扱いにしています。同じ大会なら行が再利用されて新しい確認メールが届き、もう一方の大会の枠も空きます。リンクがまだ有効な確定待ちは今までどおり断り、未ログインの経路では不受理通知(`pending-verification`)で「確認メールのリンクを開く / 見当たらなければマイページでキャンセルしてから再エントリー」を案内します。
 

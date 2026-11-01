@@ -49,6 +49,17 @@ describe.skipIf(!dbReachable)(
       expect(rows).toEqual([]);
     });
 
+    it('lets service_role re-enter a cancelled entry', async () => {
+      const [{allowed}] = await sql`
+        select has_function_privilege(
+          'service_role',
+          'reenter_cancelled_entry(uuid, uuid, text, text, text, text, jsonb)',
+          'execute'
+        ) as allowed
+      `;
+      expect(allowed).toBe(true);
+    });
+
     // Checked on objects actually created, not on `pg_default_acl`: PUBLIC's
     // EXECUTE on a new function is a built-in default that never shows up
     // there, so reading the catalog alone would miss it coming back.
