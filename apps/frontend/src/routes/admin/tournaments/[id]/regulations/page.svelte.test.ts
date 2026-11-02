@@ -22,6 +22,7 @@ const GENERAL: Regulation = {
   label: '一般の部',
   priorityStartsAt: null,
   priorityEndsAt: null,
+  closesWithPriority: false,
   displayOrder: 0,
 };
 
@@ -32,6 +33,7 @@ const STUDENT: Regulation = {
   // 2026-04-01 09:00 JST.
   priorityStartsAt: '2026-04-01T00:00:00.000Z',
   priorityEndsAt: '2026-04-30T00:00:00.000Z',
+  closesWithPriority: false,
   displayOrder: 1,
 };
 
@@ -72,6 +74,16 @@ describe('admin regulations +page.svelte', () => {
     expect(screen.getAllByLabelText(/優先期間の終了/)[0]).toHaveValue(
       '2026-04-30T09:00',
     );
+  });
+
+  it('shows the stored 優先期間の終了後は選択肢から外す setting', () => {
+    renderPage([{...STUDENT, closesWithPriority: true}, GENERAL]);
+
+    const boxes = screen.getAllByRole('checkbox', {
+      name: '優先期間の終了後は選択肢から外す',
+    });
+    expect(boxes[0]).toBeChecked();
+    expect(boxes[1]).not.toBeChecked();
   });
 
   it('offers a delete box only for a regulation that has been saved', () => {

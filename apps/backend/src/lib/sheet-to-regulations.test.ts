@@ -9,6 +9,52 @@ import {
 const AUG_1_2026 = 46235;
 
 describe('sheetValuesToRegulations', () => {
+  describe('the 優先期間後 column', () => {
+    const WINDOW = ['2026-08-01 10:00', '2026-08-08 10:00'];
+
+    it('reads 外す and 残す', () => {
+      const [closes, stays] = sheetValuesToRegulations([
+        ['在住', ...WINDOW, '外す'],
+        ['在学', ...WINDOW, ' 残す '],
+      ]);
+
+      expect(closes.closesWithPriority).toBe(true);
+      expect(stays.closesWithPriority).toBe(false);
+    });
+
+    // A sheet from before the column, or a cell nobody filled in: the save
+    // has to keep what 0042 stored, so this can't be read as false.
+    it('leaves the setting out for a missing or blank cell', () => {
+      const [missing, blank] = sheetValuesToRegulations([
+        ['在住', ...WINDOW],
+        ['在学', ...WINDOW, ''],
+      ]);
+
+      expect(missing.closesWithPriority).toBeUndefined();
+      expect(blank.closesWithPriority).toBeUndefined();
+    });
+
+    it.each([['はい'], [true], [1]])('refuses %p, naming the row', cell => {
+      expect(() =>
+        sheetValuesToRegulations([['一般'], ['在住', ...WINDOW, cell]]),
+      ).toThrow(
+        '3行目: 優先期間後の扱いは「外す」か「残す」で指定してください',
+      );
+    });
+
+    it('refuses 外す on a regulation with no window, naming the row', () => {
+      expect(() =>
+        sheetValuesToRegulations([['一般', '', '', '外す']]),
+      ).toThrow('2行目: 優先期間の終了後に選択肢から外すには');
+    });
+
+    it('does not skip a row holding only this column', () => {
+      expect(() =>
+        sheetValuesToRegulations([['一般'], ['', '', '', '外す']]),
+      ).toThrow('3行目: レギュレーション名が空です');
+    });
+  });
+
   it('reads labels in sheet order, with no priority window when blank', () => {
     expect(
       sheetValuesToRegulations([['一般の部'], ['学生の部', '', '']]),
@@ -109,7 +155,7 @@ describe('fetchRegulationSheetValues', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('reads A2:C of the regulation tab, unformatted', async () => {
+  it('reads A2:D of the regulation tab, unformatted', async () => {
     let requested = '';
     globalThis.fetch = ((input: string) => {
       requested = input;
@@ -124,7 +170,7 @@ describe('fetchRegulationSheetValues', () => {
 
     const url = new URL(requested);
     expect(decodeURIComponent(url.pathname)).toBe(
-      "/v4/spreadsheets/sheet-id/values/'レギュレーション'!A2:C",
+      "/v4/spreadsheets/sheet-id/values/'レギュレーション'!A2:D",
     );
     expect(url.searchParams.get('valueRenderOption')).toBe('UNFORMATTED_VALUE');
     expect(url.searchParams.get('dateTimeRenderOption')).toBe('SERIAL_NUMBER');

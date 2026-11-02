@@ -201,6 +201,7 @@ function tournamentRow(
         id: validBody.regulationIds[0],
         priority_starts_at: null,
         priority_ends_at: null,
+        closes_with_priority: false,
       },
     ],
   };
@@ -844,7 +845,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     expect(recorded.mails[0].html).toContain('別の地域');
   });
 
-  // #235: a priority window is judged against this tournament's own period.
+  // #243: a priority phase closes because staff marked it to.
   describe('with a priority phase that is over', () => {
     const closesAt = new Date(Date.now() + DAY_MS * 2).toISOString();
     const priorityEndedAt = new Date(Date.now() - 1000).toISOString();
@@ -852,26 +853,29 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
       id,
       priority_starts_at: new Date(Date.now() - DAY_MS / 2).toISOString(),
       priority_ends_at: priorityEndedAt,
+      closes_with_priority: true,
     });
     const generalPhase = (endsAt: string) => ({
       id: '99999999-9999-4999-8999-999999999999',
       priority_starts_at: priorityEndedAt,
       priority_ends_at: endsAt,
+      closes_with_priority: false,
     });
     const selectedWithoutWindow = {
       id: validBody.regulationIds[0],
       priority_starts_at: null,
       priority_ends_at: null,
+      closes_with_priority: false,
     };
     const otherPhaseId = '88888888-8888-4888-8888-888888888888';
 
-    it('enforces a later window ending before the close', async () => {
+    it('enforces a later window when nothing is marked to close', async () => {
       mockSupabase({
         tournament: tournamentRow({
           entryClosesAt: closesAt,
           regulations: [
             selectedWithoutWindow,
-            earlierPhase(otherPhaseId),
+            {...earlierPhase(otherPhaseId), closes_with_priority: false},
             generalPhase(new Date(Date.now() + DAY_MS).toISOString()),
           ],
         }),
@@ -1162,11 +1166,13 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
             id: validBody.regulationIds[0],
             priority_starts_at: new Date(Date.now() - DAY_MS / 2).toISOString(),
             priority_ends_at: priorityEndedAt,
+            closes_with_priority: true,
           },
           {
             id: '99999999-9999-4999-8999-999999999999',
             priority_starts_at: priorityEndedAt,
             priority_ends_at: closesAt,
+            closes_with_priority: false,
           },
         ],
       }),

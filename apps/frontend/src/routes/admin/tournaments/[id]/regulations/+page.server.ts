@@ -51,6 +51,8 @@ interface ImportedRegulation {
   label: string;
   priorityStartsAt: string | null;
   priorityEndsAt: string | null;
+  // Left out for a blank cell, which leaves the stored value as it is.
+  closesWithPriority?: boolean;
 }
 
 /**
@@ -151,6 +153,7 @@ export const actions = {
         label: row.label,
         priorityStartsAt: fromJstDatetimeLocal(row.priorityStartsAt),
         priorityEndsAt: fromJstDatetimeLocal(row.priorityEndsAt),
+        closesWithPriority: row.closesWithPriority,
       })),
     });
     if (!parsed.success) {
@@ -275,7 +278,8 @@ export const actions = {
  * one of the same name and becomes an update of it — which is what keeps
  * existing entries pointing at their regulation when only its priority
  * window or its position changed. A name the tournament doesn't have yet is
- * a new row.
+ * a new row. A blank "優先期間後" cell keeps the stored regulation's setting,
+ * unless the sheet row has no priority window.
  *
  * Stored regulations the sheet no longer lists follow, ticked for removal
  * rather than dropped: the staff member sees what the import is about to
@@ -296,7 +300,18 @@ function mergeImportedRegulations(
       candidate => candidate.label === regulation.label,
     );
     const [match] = index === -1 ? [] : unmatched.splice(index, 1);
-    return toRegulationRow({...regulation, id: match?.id});
+    return toRegulationRow({
+      ...regulation,
+      id: match?.id,
+      // A row the sheet left without a window can't close, whatever was
+      // stored: carrying a stored `true` over would tick a box the save then
+      // refuses, where the bulk import stores false for the same sheet.
+      closesWithPriority:
+        regulation.closesWithPriority ??
+        (regulation.priorityStartsAt === null
+          ? false
+          : match?.closesWithPriority),
+    });
   });
   return [
     ...rows,
@@ -340,6 +355,14 @@ function readRegulationRows(formData: FormData): RegulationRowValues[] {
         break;
       case 'priorityEndsAt':
         row.priorityEndsAt = String(value);
+        break;
+      case 'closesWithPriorityControl':
+        // Rendered beside the box, so a box left unticked can be told from
+        // a page that had no box at all.
+        row.closesWithPriority ??= false;
+        break;
+      case 'closesWithPriority':
+        row.closesWithPriority = true;
         break;
       case 'remove':
         // A checkbox submits nothing at all when it is left unticked, so
