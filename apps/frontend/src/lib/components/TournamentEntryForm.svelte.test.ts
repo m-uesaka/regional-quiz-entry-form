@@ -14,6 +14,7 @@ const REGULATIONS: Regulation[] = [
     label: '一般の部',
     priorityStartsAt: null,
     priorityEndsAt: null,
+    closesWithPriority: false,
     displayOrder: 0,
   },
 ];
@@ -83,10 +84,6 @@ function renderForm(
     props: {
       formFieldDefs: FORM_FIELD_DEFS,
       regulations: REGULATIONS,
-      entryPeriod: {
-        entryOpensAt: '2020-01-01T00:00:00.000Z',
-        entryClosesAt: '2099-01-01T00:00:00.000Z',
-      },
       now: new Date('2026-01-01T00:00:00.000Z'),
       ...options,
     },
