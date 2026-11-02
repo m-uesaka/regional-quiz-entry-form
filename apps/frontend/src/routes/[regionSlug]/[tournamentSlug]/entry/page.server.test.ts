@@ -8,6 +8,11 @@ import type {
   Tournament,
 } from '@regional-quiz/shared';
 import {formatJstDateTime} from '$lib/jst-datetime';
+import {fakeCookies} from '../../../../test-support/fake-cookies';
+import {
+  GENERAL_STAFF,
+  staffLocals,
+} from '../../../../test-support/staff-locals';
 import {actions, load} from './+page.server';
 
 // Well in the past relative to any plausible test run time, so this is
@@ -51,14 +56,6 @@ const FORM_FIELD_DEFS: FormFieldDef[] = [
     displayOrder: 0,
   },
 ];
-
-const GENERAL_STAFF: StaffClaims = {
-  sub: '00000000-0000-0000-0000-000000000003',
-  role: 'general',
-  regionId: null,
-  tournamentType: null,
-  sessionsValidFrom: 1756085025678,
-};
 
 /** 地域スタッフ covering exactly the tournament under test. */
 const OWN_REGIONAL_STAFF: StaffClaims = {
@@ -163,13 +160,9 @@ function buildEvent(options: {
       tournamentSlug: options.tournamentSlug ?? 'saikyoi',
     },
     fetch: options.fetch,
-    locals: {staff: options.staff, participant: null},
+    locals: staffLocals(options.staff),
     url: new URL('http://localhost/tokyo/saikyoi/entry'),
-    cookies: {
-      delete: (name: string) => {
-        options.deletedCookies?.push(name);
-      },
-    },
+    cookies: fakeCookies(options.deletedCookies),
   } as unknown as Parameters<typeof load>[0];
 }
 
@@ -503,11 +496,7 @@ function buildActionEvent(options: {
     }),
     locals: {staff: null, participant: options.participant ?? null},
     url: new URL('http://localhost/tokyo/saikyoi/entry'),
-    cookies: {
-      delete: (name: string) => {
-        options.deletedCookies?.push(name);
-      },
-    },
+    cookies: fakeCookies(options.deletedCookies),
   } as unknown as Parameters<typeof actions.default>[0];
 }
 

@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import type {Cookies, HttpError, Redirect} from '@sveltejs/kit';
+import type {HttpError, Redirect} from '@sveltejs/kit';
 import {
   CUSTOM_FIELD_VALUE_MAX_LENGTH,
   ENTRY_FREE_TEXT_MAX_LENGTH,
@@ -10,6 +10,9 @@ import {
   fakePlatform,
   TOKYO_SAIKYOI_LIST_KEY,
 } from '../../../../../test-support/fake-platform';
+import {fakeCookies} from '../../../../../test-support/fake-cookies';
+import {fakeFetch} from '../../../../../test-support/fake-fetch';
+import {jsonResponse} from '../../../../../test-support/json-response';
 import {actions, load} from './+page.server';
 
 const OPEN_PERIOD = {
@@ -66,7 +69,7 @@ interface FetchLog {
  * Builds a fake `fetch` answering the entry-detail GET and the PATCH the
  * action makes, so a test can assert on the body actually sent.
  */
-function fakeFetch(
+function fakeApi(
   options: {
     entry?: MypageEntryDetail;
     detailStatus?: number;
@@ -75,34 +78,21 @@ function fakeFetch(
   } = {},
   log: FetchLog = {patchBodies: []},
 ): typeof fetch {
-  return (async (input, init) => {
-    if (init?.method === 'PATCH') {
-      log.patchBodies.push(JSON.parse(String(init.body)));
-      const body =
-        options.patchError === undefined
-          ? {ok: true}
-          : {error: options.patchError};
-      return new Response(JSON.stringify(body), {
-        status: options.patchStatus ?? 200,
-        headers: {'Content-Type': 'application/json'},
-      });
-    }
-    return new Response(JSON.stringify(options.entry ?? ENTRY), {
-      status: options.detailStatus ?? 200,
-      headers: {'Content-Type': 'application/json'},
-    });
-  }) as typeof fetch;
-}
-
-/**
- * Builds a stand-in for `event.cookies` that records the names deleted on
- * it, which is how a refused session is cleared.
- * @param deleted The array every `delete()` call appends its name to.
- */
-function fakeCookies(deleted: string[]): Cookies {
-  return {
-    delete: (name: string) => deleted.push(name),
-  } as unknown as Cookies;
+  return fakeFetch([
+    {
+      method: 'PATCH',
+      respond: ({body}) => {
+        log.patchBodies.push(body);
+        return jsonResponse(
+          options.patchError === undefined
+            ? {ok: true}
+            : {error: options.patchError},
+          options.patchStatus ?? 200,
+        );
+      },
+    },
+    {status: options.detailStatus ?? 200, body: options.entry ?? ENTRY},
+  ]);
 }
 
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
@@ -148,14 +138,14 @@ function validFormData(): FormData {
 
 describe('mypage entry edit +page.server load', () => {
   it('returns the entry when the entry period is open', async () => {
-    const event = buildLoadEvent(fakeFetch());
+    const event = buildLoadEvent(fakeApi());
 
     await expect(load(event)).resolves.toEqual({entry: ENTRY});
   });
 
   it('redirects to the login page when not logged in', async () => {
     const deleted: string[] = [];
-    const event = buildLoadEvent(fakeFetch({detailStatus: 401}), deleted);
+    const event = buildLoadEvent(fakeApi({detailStatus: 401}), deleted);
 
     await expect(load(event)).rejects.toMatchObject({
       status: 303,
@@ -165,7 +155,7 @@ describe('mypage entry edit +page.server load', () => {
   });
 
   it("throws 404 when the entry is not the participant's own", async () => {
-    const event = buildLoadEvent(fakeFetch({detailStatus: 404}));
+    const event = buildLoadEvent(fakeApi({detailStatus: 404}));
 
     await expect(load(event)).rejects.toMatchObject({
       status: 404,
@@ -181,7 +171,7 @@ describe('mypage entry edit +page.server load', () => {
         entryClosesAt: '2020-01-02T00:00:00.000Z',
       },
     };
-    const event = buildLoadEvent(fakeFetch({entry: closed}));
+    const event = buildLoadEvent(fakeApi({entry: closed}));
 
     await expect(load(event)).rejects.toMatchObject({
       status: 403,
@@ -190,7 +180,7 @@ describe('mypage entry edit +page.server load', () => {
 
   it('throws 403 for a cancelled entry even within the entry period', async () => {
     const cancelled: MypageEntryDetail = {...ENTRY, status: 'cancelled'};
-    const event = buildLoadEvent(fakeFetch({entry: cancelled}));
+    const event = buildLoadEvent(fakeApi({entry: cancelled}));
 
     await expect(load(event)).rejects.toMatchObject({
       status: 403,
@@ -201,7 +191,7 @@ describe('mypage entry edit +page.server load', () => {
 describe('mypage entry edit form action', () => {
   it('sends the edited fields and redirects to mypage', async () => {
     const log: FetchLog = {patchBodies: []};
-    const event = buildActionEvent(fakeFetch({}, log), validFormData());
+    const event = buildActionEvent(fakeApi({}, log), validFormData());
 
     await expect(actions.default(event)).rejects.toMatchObject({
       status: 303,
@@ -237,7 +227,7 @@ describe('mypage entry edit form action', () => {
     };
     const formData = validFormData();
     formData.delete('custom.agree_to_rules');
-    const event = buildActionEvent(fakeFetch({entry}, log), formData);
+    const event = buildActionEvent(fakeApi({entry}, log), formData);
 
     await expect(actions.default(event)).rejects.toMatchObject({status: 303});
     expect(log.patchBodies[0]).toMatchObject({
@@ -249,7 +239,7 @@ describe('mypage entry edit form action', () => {
     const log: FetchLog = {patchBodies: []};
     const formData = validFormData();
     formData.delete('custom.agree_to_rules');
-    const event = buildActionEvent(fakeFetch({}, log), formData);
+    const event = buildActionEvent(fakeApi({}, log), formData);
 
     await expect(actions.default(event)).resolves.toMatchObject({
       status: 400,
@@ -267,7 +257,7 @@ describe('mypage entry edit form action', () => {
     const log: FetchLog = {patchBodies: []};
     const formData = validFormData();
     formData.set('displayName', 'あ'.repeat(ENTRY_NAME_MAX_LENGTH + 1));
-    const event = buildActionEvent(fakeFetch({}, log), formData);
+    const event = buildActionEvent(fakeApi({}, log), formData);
 
     await expect(actions.default(event)).resolves.toMatchObject({
       status: 400,
@@ -287,7 +277,7 @@ describe('mypage entry edit form action', () => {
     const formData = validFormData();
     formData.delete('custom.t_shirt_size');
     formData.delete('custom.agree_to_rules');
-    const event = buildActionEvent(fakeFetch({}, log), formData);
+    const event = buildActionEvent(fakeApi({}, log), formData);
 
     await expect(actions.default(event)).resolves.toMatchObject({
       status: 400,
@@ -304,7 +294,7 @@ describe('mypage entry edit form action', () => {
   it('fails with 400 and keeps the submitted values when a required field is empty', async () => {
     const formData = validFormData();
     formData.set('displayName', '');
-    const event = buildActionEvent(fakeFetch(), formData);
+    const event = buildActionEvent(fakeApi(), formData);
 
     await expect(actions.default(event)).resolves.toMatchObject({
       status: 400,
@@ -325,7 +315,7 @@ describe('mypage entry edit form action', () => {
   it('redirects to the login page when the session died before the read', async () => {
     const deleted: string[] = [];
     const event = buildActionEvent(
-      fakeFetch({detailStatus: 401}),
+      fakeApi({detailStatus: 401}),
       validFormData(),
       deleted,
     );
@@ -340,7 +330,7 @@ describe('mypage entry edit form action', () => {
   it('redirects to the login page when the session died before the save', async () => {
     const deleted: string[] = [];
     const event = buildActionEvent(
-      fakeFetch({patchStatus: 401}),
+      fakeApi({patchStatus: 401}),
       validFormData(),
       deleted,
     );
@@ -354,7 +344,7 @@ describe('mypage entry edit form action', () => {
 
   it('fails with 400 when the backend rejects the custom field answers', async () => {
     const event = buildActionEvent(
-      fakeFetch({patchStatus: 400}),
+      fakeApi({patchStatus: 400}),
       validFormData(),
     );
 
@@ -368,7 +358,7 @@ describe('mypage entry edit form action', () => {
     ['entry is cancelled', 'キャンセル済みのエントリーは編集できません'],
   ])('tells a 403 %s apart', async (code, message) => {
     const event = buildActionEvent(
-      fakeFetch({patchStatus: 403, patchError: code}),
+      fakeApi({patchStatus: 403, patchError: code}),
       validFormData(),
     );
 
@@ -380,7 +370,7 @@ describe('mypage entry edit form action', () => {
 
   it('claims neither reason for a 403 that names neither', async () => {
     const event = buildActionEvent(
-      fakeFetch({patchStatus: 403, patchError: 'forbidden'}),
+      fakeApi({patchStatus: 403, patchError: 'forbidden'}),
       validFormData(),
     );
 
@@ -395,7 +385,7 @@ describe('mypage entry edit form action', () => {
 
   it('fails with 404 when the entry has gone', async () => {
     const event = buildActionEvent(
-      fakeFetch({patchStatus: 404, patchError: 'entry not found'}),
+      fakeApi({patchStatus: 404, patchError: 'entry not found'}),
       validFormData(),
     );
 
@@ -407,7 +397,7 @@ describe('mypage entry edit form action', () => {
 
   it('answers a failure on our side as a 502', async () => {
     const event = buildActionEvent(
-      fakeFetch({patchStatus: 500, patchError: 'internal error'}),
+      fakeApi({patchStatus: 500, patchError: 'internal error'}),
       validFormData(),
     );
 
@@ -421,7 +411,7 @@ describe('mypage entry edit form action', () => {
     const log: FetchLog = {patchBodies: []};
     const formData = validFormData();
     formData.set('custom.not_a_real_field', 'injected');
-    const event = buildActionEvent(fakeFetch({}, log), formData);
+    const event = buildActionEvent(fakeApi({}, log), formData);
 
     await expect(actions.default(event)).rejects.toMatchObject({status: 303});
     expect(log.patchBodies[0]).toMatchObject({
@@ -450,7 +440,7 @@ describe('mypage entry edit form action', () => {
     const freeText = `${line}\n`.repeat(200).slice(0, -1);
     expect(freeText.length).toBeLessThanOrEqual(ENTRY_FREE_TEXT_MAX_LENGTH);
     formData.set('freeText', freeText.replaceAll('\n', '\r\n'));
-    const event = buildActionEvent(fakeFetch({}, log), formData);
+    const event = buildActionEvent(fakeApi({}, log), formData);
 
     await expect(actions.default(event)).rejects.toMatchObject({
       status: 303,
@@ -479,7 +469,7 @@ describe('mypage entry edit form action', () => {
       'custom.message',
       'あ'.repeat(CUSTOM_FIELD_VALUE_MAX_LENGTH + 1),
     );
-    const event = buildActionEvent(fakeFetch({entry}, log), formData);
+    const event = buildActionEvent(fakeApi({entry}, log), formData);
 
     const result = await actions.default(event);
 
@@ -504,12 +494,7 @@ describe('mypage entry edit form action', () => {
     it('drops it once the edit is saved', async () => {
       const {platform, stored} = fakePlatform();
       stored.set(TOKYO_SAIKYOI_LIST_KEY, Response.json([]));
-      const event = buildActionEvent(
-        fakeFetch(),
-        validFormData(),
-        [],
-        platform,
-      );
+      const event = buildActionEvent(fakeApi(), validFormData(), [], platform);
 
       await expect(actions.default(event)).rejects.toMatchObject({
         status: 303,
@@ -521,7 +506,7 @@ describe('mypage entry edit form action', () => {
       const {platform, stored} = fakePlatform();
       stored.set(TOKYO_SAIKYOI_LIST_KEY, Response.json([]));
       const event = buildActionEvent(
-        fakeFetch({patchStatus: 403}),
+        fakeApi({patchStatus: 403}),
         validFormData(),
         [],
         platform,

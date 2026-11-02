@@ -1,6 +1,8 @@
 import {describe, expect, it} from 'vitest';
 import type {Cookies, HttpError, Redirect} from '@sveltejs/kit';
 import type {MypageEntry} from '@regional-quiz/shared';
+import {fakeCookies} from '../../test-support/fake-cookies';
+import {fakeFetch} from '../../test-support/fake-fetch';
 import {
   fakePlatform,
   TOKYO_SAIKYOI_LIST_KEY,
@@ -25,26 +27,13 @@ const ENTRIES: MypageEntry[] = [
 ];
 
 /** Builds a fake `fetch` returning the given entries and status. */
-function fakeFetch(options: {
+function fakeApi(options: {
   entries?: MypageEntry[];
   status?: number;
 }): typeof fetch {
-  return (async () =>
-    new Response(JSON.stringify(options.entries ?? []), {
-      status: options.status ?? 200,
-      headers: {'Content-Type': 'application/json'},
-    })) as typeof fetch;
-}
-
-/**
- * Builds a stand-in for `event.cookies` that records the names deleted on
- * it, which is how a refused session is cleared.
- * @param deleted The array every `delete()` call appends its name to.
- */
-function fakeCookies(deleted: string[]): Cookies {
-  return {
-    delete: (name: string) => deleted.push(name),
-  } as unknown as Cookies;
+  return fakeFetch([
+    {status: options.status ?? 200, body: options.entries ?? []},
+  ]);
 }
 
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
@@ -92,23 +81,19 @@ function buildCancelEvent(
 
 /** Builds a fake `fetch` answering the DELETE with the given status. */
 function fakeDeleteFetch(status: number): typeof fetch {
-  return (async () =>
-    new Response(status === 200 ? JSON.stringify({ok: true}) : '{}', {
-      status,
-      headers: {'Content-Type': 'application/json'},
-    })) as typeof fetch;
+  return fakeFetch([{status, body: status === 200 ? {ok: true} : {}}]);
 }
 
 describe('mypage +page.server load', () => {
   it("returns the logged-in participant's entries", async () => {
-    const event = buildEvent(fakeFetch({entries: ENTRIES}));
+    const event = buildEvent(fakeApi({entries: ENTRIES}));
 
     await expect(load(event)).resolves.toEqual({entries: ENTRIES});
   });
 
   it('redirects to the login page when not logged in', async () => {
     const deleted: string[] = [];
-    const event = buildEvent(fakeFetch({status: 401}), deleted);
+    const event = buildEvent(fakeApi({status: 401}), deleted);
 
     await expect(load(event)).rejects.toMatchObject({
       status: 303,
@@ -120,7 +105,7 @@ describe('mypage +page.server load', () => {
   });
 
   it('throws 502 when the entries request fails', async () => {
-    const event = buildEvent(fakeFetch({status: 500}));
+    const event = buildEvent(fakeApi({status: 500}));
 
     await expect(load(event)).rejects.toMatchObject({
       status: 502,
