@@ -12,7 +12,9 @@ const MIGRATION_URL = new URL(
   import.meta.url,
 );
 
-const REGION_SLUG = 'regulations-backfill-test-region';
+// Unique per run, so a run stopped before its `afterAll` leaves nothing the
+// next one collides with.
+const REGION_SLUG = `regulations-backfill-test-${crypto.randomUUID()}`;
 
 /** The statement 0042 fills the column with, as it shipped. */
 function backfillStatement(): string {
@@ -146,7 +148,7 @@ describe.skipIf(!(await isDbReachable()))(
         priorityEndsAt: '2026-11-10T00:00:00Z',
       };
 
-      const save = (regulations: unknown[]) =>
+      const sync = (regulations: unknown[]) =>
         sql`select sync_regulations(${tournamentId}, ${regulations}::jsonb)`;
       const stored = async (): Promise<
         Array<{id: string; label: string; closes_with_priority: boolean}>
@@ -155,6 +157,15 @@ describe.skipIf(!(await isDbReachable()))(
         where tournament_id = ${tournamentId}
         order by display_order
       `;
+      // Saves `regulations` followed by a general regulation that never
+      // closes, kept by id, since a set that all closes is refused (P0009).
+      const save = async (regulations: unknown[]) => {
+        const general = (await stored()).find(r => r.label === '一般');
+        return sync([
+          ...regulations,
+          general ? {id: general.id, label: '一般'} : {label: '一般'},
+        ]);
+      };
 
       beforeAll(async () => {
         const [region] = await sql`
@@ -231,6 +242,30 @@ describe.skipIf(!(await isDbReachable()))(
           ['優先', true],
           ['一般', false],
         ]);
+      });
+
+      it('refuses a set that all closes', async () => {
+        const [{id}] = await stored();
+
+        await expect(
+          sync([{id, label: '優先', ...WINDOW, closesWithPriority: true}]),
+        ).rejects.toMatchObject({errno: 'P0009'});
+      });
+
+      // The schema only sees what is sent; an omitted key keeps a stored
+      // true, so the function checks the saved values.
+      it('refuses a set that all closes through kept values', async () => {
+        const [{id}] = await stored();
+        await sql`
+          update regulations set closes_with_priority = true where id = ${id}
+        `;
+
+        await expect(
+          sync([{id, label: '優先', ...WINDOW}]),
+        ).rejects.toMatchObject({
+          errno: 'P0009',
+        });
+        expect((await stored()).map(r => r.label)).toEqual(['優先', '一般']);
       });
 
       it('clears the value along with the window', async () => {

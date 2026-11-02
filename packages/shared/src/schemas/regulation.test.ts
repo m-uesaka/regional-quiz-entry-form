@@ -1,5 +1,6 @@
 import {describe, expect, it} from 'bun:test';
 import {
+  NO_LASTING_REGULATION_MESSAGE,
   REGULATION_LABEL_MAX_LENGTH,
   RegulationSyncInputSchema,
   RegulationUpsertSchema,
@@ -102,6 +103,43 @@ describe('RegulationSyncInputSchema', () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  // Once the marked phases are over, nothing would be left to choose.
+  it('rejects a set where every regulation closes', () => {
+    const window = {
+      priorityStartsAt: '2026-11-01T00:00:00Z',
+      priorityEndsAt: '2026-11-05T00:00:00Z',
+    };
+    const result = RegulationSyncInputSchema.safeParse({
+      regulations: [
+        {label: '第1次優先', ...window, closesWithPriority: true},
+        {label: '第2次優先', ...window, closesWithPriority: true},
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.message).toBe(
+      NO_LASTING_REGULATION_MESSAGE,
+    );
+  });
+
+  // An omitted value may be a stored true, which `sync_regulations()`
+  // checks; the schema can only refuse what it is sent.
+  it('accepts a set whose only other regulation omits the setting', () => {
+    const result = RegulationSyncInputSchema.safeParse({
+      regulations: [
+        {
+          label: '優先',
+          priorityStartsAt: '2026-11-01T00:00:00Z',
+          priorityEndsAt: '2026-11-05T00:00:00Z',
+          closesWithPriority: true,
+        },
+        {label: '一般の部'},
+      ],
+    });
+
+    expect(result.success).toBe(true);
   });
 
   it('accepts several new regulations, which carry no ids at all', () => {

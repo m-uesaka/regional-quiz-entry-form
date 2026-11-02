@@ -71,16 +71,34 @@ export const RegulationUpsertSchema = z
 export type RegulationUpsert = z.infer<typeof RegulationUpsertSchema>;
 
 /**
+ * Why a save is refused when every regulation is marked to close: once the
+ * marked phases are over, `selectableRegulations()` would offer nothing and
+ * every submission would be refused while the tournament still reads as
+ * open. Shared by the schema below and the backend, which reports the same
+ * refusal from `sync_regulations()` (`P0009`) for a save whose omitted
+ * values keep stored `true`s.
+ */
+export const NO_LASTING_REGULATION_MESSAGE =
+  '優先期間の終了後も選択肢に残るレギュレーションが1つ以上必要です';
+
+/**
  * Request body of the regulation save API: the tournament's regulations in
  * full, as the whole set should look afterwards.
  *
  * At least one regulation is required — an entry has to name one, so a
- * tournament with none can't be entered at all.
+ * tournament with none can't be entered at all. For the same reason at least
+ * one must not be marked to close (`NO_LASTING_REGULATION_MESSAGE`). This
+ * only sees the values sent: an omitted one keeps what is stored, which
+ * `sync_regulations()` checks.
  */
 export const RegulationSyncInputSchema = z.object({
   regulations: z
     .array(RegulationUpsertSchema)
     .min(1)
+    .refine(
+      regulations => regulations.some(r => r.closesWithPriority !== true),
+      {message: NO_LASTING_REGULATION_MESSAGE},
+    )
     // Two elements naming the same existing row would make the sync
     // ambiguous (and the upsert behind it fails outright when a single
     // statement touches one row twice), so they're rejected here instead.

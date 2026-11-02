@@ -8,6 +8,7 @@ import {
   it,
 } from 'bun:test';
 import {SQL} from 'bun';
+import {NO_LASTING_REGULATION_MESSAGE} from '@regional-quiz/shared';
 import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
 import type {TournamentRow} from '../lib/tournaments';
@@ -487,6 +488,31 @@ describe.skipIf(!(await isDbReachable()))(
       expect(res.status).toBe(200);
       expect((await regulationsOf(tournamentId)).map(row => row.label)).toEqual(
         ['残る'],
+      );
+    });
+
+    // The schema passes it: the omitted value keeps the stored true.
+    it('returns 400 when every regulation would close once saved', async () => {
+      const {tournamentId} = await createTestTournament('all-close');
+      const window = {
+        priorityStartsAt: '2026-11-01T00:00:00Z',
+        priorityEndsAt: '2026-11-05T00:00:00Z',
+      };
+      await put(tournamentId, [
+        {label: '優先', ...window, closesWithPriority: true},
+        {label: '一般'},
+      ]);
+      const [closing] = await regulationsOf(tournamentId);
+
+      const res = await put(tournamentId, [
+        {id: closing.id, label: '優先', ...window},
+      ]);
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body.error).toBe(NO_LASTING_REGULATION_MESSAGE);
+      expect((await regulationsOf(tournamentId)).map(row => row.label)).toEqual(
+        ['優先', '一般'],
       );
     });
 

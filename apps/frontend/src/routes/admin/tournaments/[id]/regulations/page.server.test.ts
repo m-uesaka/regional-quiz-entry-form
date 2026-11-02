@@ -347,6 +347,8 @@ describe('admin regulations save action', () => {
         ...WINDOW,
         closesWithPriority,
       });
+      // A set that all closes is refused, so one regulation stays.
+      setRow(formData, 1, {id: GENERAL.id, label: '一般の部'});
       const event = buildActionEvent(fakeFetch({}, log), formData);
 
       await expect(actions.save(event)).resolves.toMatchObject({saved: true});
@@ -412,6 +414,21 @@ describe('admin regulations save action', () => {
     await expect(actions.save(event)).resolves.toMatchObject({
       status: 400,
       data: {error: 'レギュレーションは1つ以上必要です'},
+    });
+    expect(log.putBodies).toEqual([]);
+  });
+
+  // The ticked box is a setting someone entered, not a row left blank.
+  it('keeps a new row whose only input is the ticked box', async () => {
+    const log: FetchLog = {putBodies: []};
+    const formData = new FormData();
+    setRow(formData, 0, {id: GENERAL.id, label: '一般の部'});
+    setRow(formData, 1, {label: '', closesWithPriority: true});
+    const event = buildActionEvent(fakeFetch({}, log), formData);
+
+    await expect(actions.save(event)).resolves.toMatchObject({
+      status: 400,
+      data: {error: 'レギュレーション名を入力してください'},
     });
     expect(log.putBodies).toEqual([]);
   });
@@ -569,6 +586,38 @@ describe('admin regulations import action', () => {
       ['学生の部', true],
       ['一般の部', true],
       ['新しい部', false],
+    ]);
+  });
+
+  // The save would refuse a ticked box with no window, and the bulk import
+  // stores false for the same sheet.
+  it('does not carry a stored setting onto a row the sheet left without a window', async () => {
+    const stored = [{...STUDENT, closesWithPriority: true}, GENERAL];
+    const event = buildImportEvent(
+      fakeFetch({
+        stored,
+        preview: {
+          body: {
+            regulations: [
+              {label: '学生の部', priorityStartsAt: null, priorityEndsAt: null},
+              {label: '一般の部', priorityStartsAt: null, priorityEndsAt: null},
+            ],
+          },
+        },
+      }),
+      'sheet-id',
+    );
+
+    const result = await actions.import(event);
+
+    expect(
+      (result as {rows: RegulationRowValues[]}).rows.map(row => [
+        row.label,
+        row.closesWithPriority,
+      ]),
+    ).toEqual([
+      ['学生の部', false],
+      ['一般の部', false],
     ]);
   });
 

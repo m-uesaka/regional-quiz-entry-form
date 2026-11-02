@@ -15,6 +15,7 @@ import {
 import {createDbClient} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {
+  NoLastingRegulationError,
   RegulationInUseError,
   syncRegulations,
   UnknownRegulationError,
@@ -99,11 +100,14 @@ export const regulationsRoute = new Hono<StaffEnv>()
         if (e instanceof TournamentNotFoundError) {
           return c.json({error: 'tournament not found'}, 404);
         }
-        // Both of these are staff mistakes the submitted form can be
-        // corrected for, and nothing has been written — the sync is one
-        // transaction — so the message names the offending regulations and
-        // is rendered by the staff screen verbatim.
-        if (e instanceof UnknownRegulationError) {
+        // These are staff mistakes the submitted form can be corrected for,
+        // and nothing has been written — the sync is one transaction — so
+        // the message says what to fix (naming the offending regulations
+        // where there are any) and is rendered by the staff screen verbatim.
+        if (
+          e instanceof UnknownRegulationError ||
+          e instanceof NoLastingRegulationError
+        ) {
           return c.json({error: e.message}, 400);
         }
         if (e instanceof RegulationInUseError) {

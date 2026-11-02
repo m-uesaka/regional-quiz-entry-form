@@ -442,13 +442,13 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 
 1. 大会行を `for update` でロック(存在しなければ SQLSTATE `P0002`)。同一大会への同時保存を直列化します。
 2. `id` 付き要素のうち、**この大会のレギュレーションでない** id を洗い出して SQLSTATE `P0003`(`detail` に id 一覧)。これが無いと、よその大会の行を `on conflict (id) do update` で書き換えてしまいます。
-3. `id` 付きは update、`id` 無しは insert(`display_order` は配列の添字)。要素に `closesWithPriority` が無ければ、既存の行は今の値を保ち、新しい行は `false` になります(古い Worker・開いたままの古い画面・シートの空欄がこの形で届くため。`0042`)。優先期間が無い行は `false` にします。
+3. `id` 付きは update、`id` 無しは insert(`display_order` は配列の添字)。要素に `closesWithPriority` が無ければ、既存の行は今の値を保ち、新しい行は `false` になります(古い Worker・開いたままの古い画面・シートの空欄がこの形で届くため。`0042`)。優先期間が無い行は `false` にします。保存後の行がすべて `true` なら SQLSTATE `P0009` を raise します。優先期間が終わると選べる枠が無くなり、受付中なのに誰もエントリーできなくなるためです。省略した値は今の値を保つので、入力ではなく保存後の値で判定します(`0042`)。
 4. 配列から消えた行のうち `entries` から参照されているものがあれば SQLSTATE `P0004`(`detail` にラベル一覧)を raise してロールバック。
 5. 残った「消えた行」を delete。
 
 エントリーの新規作成が 4 の検査をすり抜けることはありません。`entries.tournament_id` の外部キーにより、エントリーの insert は 1 でロックした大会行に対して `for key share` を取ります。これは `for update` と競合するため、保存中はエントリー作成が待たされ(逆に保存側が待たされ)、4 と 5 は必ず同じ状態を見ます。
 
-TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(404)、`P0003` → `UnknownRegulationError`(400)、`P0004` → `RegulationInUseError`(409)に変換します。スタッフ画面がそのまま表示するので、id / ラベルの一覧はメッセージ本体ではなく例外の `detail` に載せ、日本語の文面は TypeScript 側で組み立てています。
+TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(404)、`P0003` → `UnknownRegulationError`(400)、`P0004` → `RegulationInUseError`(409)、`P0009` → `NoLastingRegulationError`(400)に変換します。スタッフ画面がそのまま表示するので、id / ラベルの一覧はメッセージ本体ではなく例外の `detail` に載せ、日本語の文面は TypeScript 側で組み立てています。
 
 ### confirm_entry_by_token(p_token_hash)
 

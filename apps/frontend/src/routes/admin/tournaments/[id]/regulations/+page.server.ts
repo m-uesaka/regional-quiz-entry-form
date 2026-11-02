@@ -278,7 +278,8 @@ export const actions = {
  * one of the same name and becomes an update of it — which is what keeps
  * existing entries pointing at their regulation when only its priority
  * window or its position changed. A name the tournament doesn't have yet is
- * a new row. A blank "優先期間後" cell keeps the stored regulation's setting.
+ * a new row. A blank "優先期間後" cell keeps the stored regulation's setting,
+ * unless the sheet row has no priority window.
  *
  * Stored regulations the sheet no longer lists follow, ticked for removal
  * rather than dropped: the staff member sees what the import is about to
@@ -302,8 +303,14 @@ function mergeImportedRegulations(
     return toRegulationRow({
       ...regulation,
       id: match?.id,
+      // A row the sheet left without a window can't close, whatever was
+      // stored: carrying a stored `true` over would tick a box the save then
+      // refuses, where the bulk import stores false for the same sheet.
       closesWithPriority:
-        regulation.closesWithPriority ?? match?.closesWithPriority,
+        regulation.closesWithPriority ??
+        (regulation.priorityStartsAt === null
+          ? false
+          : match?.closesWithPriority),
     });
   });
   return [

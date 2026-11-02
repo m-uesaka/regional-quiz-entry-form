@@ -673,7 +673,9 @@ async function importRow(
       );
     }
     // A regulation still in use is something staff can act on: put the
-    // regulation back on the sheet, or register the tournament by hand.
+    // regulation back on the sheet, or register the tournament by hand. So
+    // is a sheet whose blank 優先期間後 cells keep every stored regulation
+    // marked to close.
     const syncFailure = regulationSyncFailure(error);
     if (syncFailure) {
       return failed(row.row, row, syncFailure.message);

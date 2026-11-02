@@ -77,7 +77,10 @@ where r.id = e.id
 -- 引いておく(`coalesce` を `do update` 側に書いても null の挿入で落ちる)。
 -- 引数は変わらないので、古い Worker も `import_tournament()`(`0036`)も同じ形で
 -- 呼べる。`import_tournament()` は要素に id を足して渡すだけなので、キーは
--- そのまま届く。それ以外は 0018 と同じである。
+-- そのまま届く。
+--
+-- 保存後にすべての行が外れる設定なら `P0009` で断る(下記)。それ以外は 0018
+-- と同じである。
 create or replace function sync_regulations(
   p_tournament_id uuid,
   p_regulations jsonb
@@ -147,6 +150,17 @@ begin
     returning id
   )
   select coalesce(array_agg(id), '{}'::uuid[]) into v_keep from upserted;
+
+  -- すべての行が外れる設定だと、外れた後に選べる枠が無くなり、受付中なのに
+  -- 誰もエントリーできない。省略したキーは今の値を保つので、入力だけでは
+  -- 判断できず、保存後の値で検査する。
+  if cardinality(v_keep) > 0 and not exists (
+    select 1 from regulations r
+    where r.id = any (v_keep) and not r.closes_with_priority
+  ) then
+    raise exception 'every regulation closes with its priority window'
+      using errcode = 'P0009';
+  end if;
 
   select array_agg(r.label order by r.display_order) into v_in_use
   from regulations r

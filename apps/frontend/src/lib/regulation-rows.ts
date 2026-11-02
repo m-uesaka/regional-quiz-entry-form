@@ -51,7 +51,9 @@ export function emptyRegulationRow(): RegulationRowValues {
  * schema should report, not a row to silently discard.
  *
  * "表示順" is deliberately not looked at: a number on its own names no
- * regulation, so a row carrying only that is still one to drop.
+ * regulation, so a row carrying only that is still one to drop. A ticked
+ * "優先期間の終了後は選択肢から外す" box is a setting someone entered, so the
+ * row is kept and the save asks for its label.
  *
  * @param row The row to judge.
  */
@@ -60,6 +62,7 @@ export function isUntouchedNewRegulationRow(row: RegulationRowValues): boolean {
     row.id === '' &&
     row.label.trim() === '' &&
     row.priorityStartsAt === '' &&
-    row.priorityEndsAt === ''
+    row.priorityEndsAt === '' &&
+    row.closesWithPriority !== true
   );
 }
