@@ -8,10 +8,14 @@ import {
   type RegionCreateInput,
   type RegionUpdateInput,
 } from '@regional-quiz/shared';
-import type {Tables, TablesInsert, TablesUpdate} from '../types/database';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
-import {createDbClient} from '../lib/db';
+import {
+  createDbClient,
+  type Tables,
+  type TablesInsert,
+  type TablesUpdate,
+} from '../lib/db';
 import {internalError} from '../lib/errors';
 
 const RegionIdParamSchema = z.object({id: z.string().uuid()});
@@ -40,18 +44,26 @@ function rowToRegion(row: RegionRow): Region {
 }
 
 /**
- * Turns the API's camelCase input into the columns Supabase writes. Only
- * `allowsDualEntry` needs renaming — `slug` and `name` are spelled the same
- * on both sides — and every field the caller omitted is left out of the row,
- * so a PATCH updates exactly what it sent. The update schema refuses a body
- * that would leave nothing at all.
- * @param input The validated create or update body.
+ * Turns a create body into the columns Supabase writes. Every column is
+ * listed, so the return type checks that each one an insert requires is set.
+ * @param input The validated create body.
  */
-function toRegionRow(input: RegionCreateInput): TablesInsert<'regions'>;
-function toRegionRow(input: RegionUpdateInput): TablesUpdate<'regions'>;
-function toRegionRow(
-  input: RegionCreateInput | RegionUpdateInput,
-): TablesUpdate<'regions'> {
+function toRegionInsert(input: RegionCreateInput): TablesInsert<'regions'> {
+  return {
+    slug: input.slug,
+    name: input.name,
+    allows_dual_entry: input.allowsDualEntry,
+  };
+}
+
+/**
+ * Turns a PATCH body into the columns Supabase writes. Only
+ * `allowsDualEntry` needs renaming, and every field the caller omitted is
+ * left out of the row, so a PATCH updates exactly what it sent. The update
+ * schema refuses a body that would leave nothing at all.
+ * @param input The validated update body.
+ */
+function toRegionUpdate(input: RegionUpdateInput): TablesUpdate<'regions'> {
   const {allowsDualEntry, ...rest} = input;
   return allowsDualEntry === undefined
     ? rest
@@ -78,7 +90,7 @@ export const regionsRoute = new Hono<StaffEnv>()
     const db = createDbClient(c.env);
     const {data, error} = await db
       .from('regions')
-      .insert(toRegionRow(c.req.valid('json')))
+      .insert(toRegionInsert(c.req.valid('json')))
       .select(REGION_COLUMNS)
       .single();
     if (error) {
@@ -106,7 +118,7 @@ export const regionsRoute = new Hono<StaffEnv>()
       const db = createDbClient(c.env);
       const {data, error} = await db
         .from('regions')
-        .update(toRegionRow(c.req.valid('json')))
+        .update(toRegionUpdate(c.req.valid('json')))
         .eq('id', c.req.valid('param').id)
         .select(REGION_COLUMNS)
         .single();

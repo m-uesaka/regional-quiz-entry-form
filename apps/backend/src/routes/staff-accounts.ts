@@ -5,10 +5,9 @@ import {
   StaffAccountCreateInputSchema,
   type StaffAccount,
 } from '@regional-quiz/shared';
-import type {Tables} from '../types/database';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
-import {createDbClient} from '../lib/db';
+import {createDbClient, type Tables} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {isPasswordHashUsable, UNUSABLE_PASSWORD_HASH} from '../lib/password';
 import {sendStaffPasswordLink} from '../lib/staff-password-reset';

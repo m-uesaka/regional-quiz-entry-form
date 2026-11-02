@@ -7,16 +7,14 @@ import {
   EntrySchema,
   StaffEntryDetailSchema,
   StaffEntryListQuerySchema,
-  type CustomFieldValues,
   type Entry,
 } from '@regional-quiz/shared';
-import type {Tables} from '../types/database';
 import type {StaffEnv} from '../types/env';
 import {
   requireStaffForEntry,
   requireStaffForTournament,
 } from '../middleware/staff-auth';
-import {createDbClient, type DbClient} from '../lib/db';
+import {createDbClient, type DbClient, type Tables} from '../lib/db';
 import {fetchFormFieldDefs} from '../lib/form-field-defs';
 import {buildEntriesCsv} from '../lib/entries-csv';
 import {
@@ -50,15 +48,6 @@ const ENTRY_COLUMNS = `
 // can't fall behind it when the entry gains a field.
 const ENTRY_CSV_COLUMNS = `${ENTRY_COLUMNS}, created_at` as const;
 
-/**
- * What every select of `ENTRY_COLUMNS` overrides in the inferred row:
- * `custom_field_values` is `jsonb`, generated as `Json`, but every stored
- * value originated from an `EntryInput['customFieldValues']`.
- */
-interface EntryRowOverride {
-  custom_field_values: CustomFieldValues;
-}
-
 /** Shape of an `entries` row as selected for the CSV export. */
 interface EntryCsvRow extends EntryRow, Pick<Tables<'entries'>, 'created_at'> {}
 
@@ -87,26 +76,23 @@ function fetchAllEntryCsvRows(
       .eq('tournament_id', tournamentId)
       .order('created_at', {ascending: true})
       .order('id', {ascending: true})
-      .range(from, to)
-      .overrideTypes<EntryRowOverride[]>(),
+      .range(from, to),
   );
 }
 
 /** Shape of an `entries` row as selected above (snake_case). */
-interface EntryRow
-  extends
-    Pick<
-      Tables<'entries'>,
-      | 'id'
-      | 'tournament_id'
-      | 'name'
-      | 'furigana'
-      | 'display_name'
-      | 'free_text'
-      | 'status'
-      | 'waitlist_position'
-    >,
-    EntryRowOverride {
+interface EntryRow extends Pick<
+  Tables<'entries'>,
+  | 'id'
+  | 'tournament_id'
+  | 'name'
+  | 'furigana'
+  | 'display_name'
+  | 'free_text'
+  | 'status'
+  | 'waitlist_position'
+  | 'custom_field_values'
+> {
   // To-one and always there: `entries.participant_id` is a not-null
   // foreign key.
   participants: Pick<Tables<'participants'>, 'email'>;
@@ -159,8 +145,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
         return query
           .order('created_at', {ascending: true})
           .order('id', {ascending: true})
-          .range(from, to)
-          .overrideTypes<EntryRowOverride[]>();
+          .range(from, to);
       }, page);
       if (error) {
         return c.json(internalError('failed to read the entries', error), 500);
@@ -238,8 +223,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
         .from('entries')
         .select(ENTRY_COLUMNS)
         .eq('id', c.req.valid('param').entryId)
-        .maybeSingle()
-        .overrideTypes<EntryRowOverride>();
+        .maybeSingle();
       if (error) {
         return c.json(internalError('failed to read the entry', error), 500);
       }

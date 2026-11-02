@@ -3,29 +3,15 @@ import {
   DashboardTournamentSummarySchema,
   type DashboardTournamentSummary,
 } from '@regional-quiz/shared';
-import type {Database} from '../types/database';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
-import {createDbClient} from '../lib/db';
+import {createDbClient, type Database} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {tournamentDisplayName} from '../lib/tournaments';
 
-/** A `tournament_entry_summary()` row as the generated types describe it. */
-type GeneratedSummaryRow =
+/** Shape of a `tournament_entry_summary()` row (snake_case). */
+type TournamentEntrySummaryRow =
   Database['public']['Functions']['tournament_entry_summary']['Returns'][number];
-
-/**
- * Shape of a `tournament_entry_summary()` row (snake_case). The generator
- * types every column a function returns as non-null, but these two carry the
- * nullable `tournaments.name` and `tournaments.capacity`.
- */
-interface TournamentEntrySummaryRow extends Omit<
-  GeneratedSummaryRow,
-  'tournament_name' | 'capacity'
-> {
-  tournament_name: string | null;
-  capacity: number | null;
-}
 
 function rowToSummary(
   row: TournamentEntrySummaryRow,

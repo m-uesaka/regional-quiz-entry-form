@@ -80,9 +80,7 @@ export async function confirmEntryByToken(
 
   return {
     ok: true,
-    // Typed as any `entry_status`: the function only ever returns the two a
-    // confirmation can end in, which the generated types can't express.
-    entryStatus: data as 'confirmed' | 'waitlisted',
+    entryStatus: data,
     tournament: await readConfirmedTournament(env, tokenHash),
   };
 }

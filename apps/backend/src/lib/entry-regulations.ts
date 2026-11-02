@@ -8,7 +8,7 @@
  * which PostgREST makes no promise about for an embedded resource.
  */
 
-import type {Tables} from '../types/database';
+import type {Tables} from './db';
 
 /**
  * One row of the join, with its regulation embedded. The embed is not

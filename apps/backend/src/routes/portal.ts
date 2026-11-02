@@ -5,9 +5,8 @@ import {
   PortalTournamentSchema,
   type PortalTournament,
 } from '@regional-quiz/shared';
-import type {Tables} from '../types/database';
 import type {Env} from '../types/env';
-import {createDbClient} from '../lib/db';
+import {createDbClient, type Tables} from '../lib/db';
 import {internalError} from '../lib/errors';
 
 /** A `tournaments` row with its region embedded, as selected below. */

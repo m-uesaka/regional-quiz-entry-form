@@ -1,6 +1,5 @@
-import type {Tables} from '../types/database';
 import type {Bindings} from '../types/env';
-import {createDbClient} from './db';
+import {createDbClient, type Tables} from './db';
 import type {InternalResult} from './errors';
 
 /**

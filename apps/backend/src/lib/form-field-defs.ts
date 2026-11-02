@@ -5,8 +5,7 @@ import {
   type CustomFieldValues,
   type FormFieldDef,
 } from '@regional-quiz/shared';
-import type {Tables} from '../types/database';
-import type {DbClient} from './db';
+import type {DbClient, Tables} from './db';
 import type {LibFailure} from './errors';
 
 /**

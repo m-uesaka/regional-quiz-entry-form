@@ -8,10 +8,9 @@ import {
   MypageEntrySchema,
   type MypageEntry,
 } from '@regional-quiz/shared';
-import type {Tables} from '../types/database';
 import type {ParticipantEnv} from '../types/env';
 import {requireParticipant} from '../middleware/participant-auth';
-import {createDbClient} from '../lib/db';
+import {createDbClient, type Tables} from '../lib/db';
 import {cancelOwnEntry, updateOwnEntry} from '../lib/entries';
 import {internalError, respondFailure} from '../lib/errors';
 import {tournamentDisplayName} from '../lib/tournaments';

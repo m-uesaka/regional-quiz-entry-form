@@ -6,14 +6,13 @@ import {
   RegulationSyncInputSchema,
   type Regulation,
 } from '@regional-quiz/shared';
-import type {Tables} from '../types/database';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
 import {
   byTournamentIdParam,
   requireOpenEntryPeriodOrStaff,
 } from '../middleware/entry-period';
-import {createDbClient} from '../lib/db';
+import {createDbClient, type Tables} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {
   NoLastingRegulationError,

@@ -6,7 +6,6 @@ import {
   isEntryErrorCode,
   isWithinEntryPeriod,
   regulationSelectionRefusal,
-  type CustomFieldValues,
   type EntryEditInput,
   type EntryErrorCode,
   type EntryInput,
@@ -14,9 +13,13 @@ import {
   type RegulationSelectionRefusal,
 } from '@regional-quiz/shared';
 import {isCommonPassword} from '@regional-quiz/shared/password-policy';
-import type {Tables, TablesInsert} from '../types/database';
 import type {Bindings} from '../types/env';
-import {createDbClient, type DbClient} from './db';
+import {
+  createDbClient,
+  type DbClient,
+  type Tables,
+  type TablesInsert,
+} from './db';
 import {sendEntryNoticeEmail, type EntryNoticeReason} from './entry-notice';
 import {sendVerificationEmail} from './entry-verification';
 import type {LibFailure} from './errors';
@@ -171,14 +174,12 @@ interface ExistingEntryRow extends Pick<
   | 'waitlist_position'
   | 'email_verified_at'
   | 'cancelled_at'
+  | 'custom_field_values'
 > {
   // The row's own regulation selection, as a to-many embed. Restored as a
   // whole on rollback, because the reuse path replaces the set rather than
   // editing it in place.
   entry_regulations: Array<Pick<Tables<'entry_regulations'>, 'regulation_id'>>;
-  // Narrower than the column's generated `Json`: every stored value
-  // originated from an `EntryInput['customFieldValues']`.
-  custom_field_values: CustomFieldValues;
 }
 
 /** The columns of `ExistingEntryRow`, for the snapshot select. */
@@ -551,10 +552,8 @@ async function createEntryAfterCheck(
     if (takeOverError) {
       return {ok: false, status: 500, error: takeOverError.message};
     }
-    // Null, not an array, when the address turned out to be verified -- the
-    // generated types make every function result non-null, so this check
-    // must stay a runtime one.
-    if (Array.isArray(withdrawn)) {
+    // Null when the address turned out to be verified (see below).
+    if (withdrawn !== null) {
       return enterTournament(
         env,
         tournament,
@@ -755,8 +754,7 @@ async function enterTournament(
     .select(EXISTING_ENTRY_COLUMNS)
     .eq('participant_id', participantId)
     .eq('tournament_id', tournamentId)
-    .maybeSingle()
-    .overrideTypes<Pick<ExistingEntryRow, 'custom_field_values'>>();
+    .maybeSingle();
   if (existingEntryError) {
     return {ok: false, status: 500, error: existingEntryError.message};
   }
@@ -827,10 +825,7 @@ async function enterTournament(
           p_name: entryValues.name,
           p_furigana: entryValues.furigana,
           p_display_name: entryValues.display_name,
-          // The generated types make every function argument non-null, but
-          // the function takes a null `p_free_text` as-is, as the insert below
-          // does.
-          p_free_text: entryValues.free_text as string,
+          p_free_text: entryValues.free_text,
           p_custom_field_values: entryValues.custom_field_values,
         })
         .select('id')

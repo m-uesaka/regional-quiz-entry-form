@@ -3,9 +3,8 @@ import {
   type FormDefinitionYaml,
   type TournamentType,
 } from '@regional-quiz/shared';
-import type {TablesInsert} from '../types/database';
 import type {Bindings} from '../types/env';
-import {createDbClient} from './db';
+import {createDbClient, type TablesInsert} from './db';
 import {
   TOURNAMENT_NOT_FOUND_SQLSTATE,
   TournamentNotFoundError,

@@ -10,9 +10,8 @@ import {
   type EntryListItem,
   type PageQuery,
 } from '@regional-quiz/shared';
-import type {Tables} from '../types/database';
 import type {Env} from '../types/env';
-import {createDbClient} from '../lib/db';
+import {createDbClient, type Tables} from '../lib/db';
 import {fetchPage, toPageResponse} from '../lib/paged-select';
 import {internalError} from '../lib/errors';
 import {

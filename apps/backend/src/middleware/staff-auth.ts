@@ -8,9 +8,8 @@ import {
   StaffClaimsSchema,
   type StaffClaims,
 } from '@regional-quiz/shared';
-import type {Tables} from '../types/database';
 import type {Bindings, StaffEnv} from '../types/env';
-import {createDbClient} from '../lib/db';
+import {createDbClient, type Tables} from '../lib/db';
 import {
   fetchTournamentById,
   tournamentLookupFailure,

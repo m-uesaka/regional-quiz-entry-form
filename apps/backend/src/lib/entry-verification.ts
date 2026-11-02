@@ -1,7 +1,6 @@
 import {ENTRY_VERIFICATION_TOKEN_TTL_MS} from '@regional-quiz/shared';
-import type {Tables} from '../types/database';
 import type {Bindings} from '../types/env';
-import {createDbClient} from './db';
+import {createDbClient, type Tables} from './db';
 import type {InternalResult} from './errors';
 import {createMailSender, type SendMailInput} from './mailer';
 import {fetchAllRows} from './paged-select';

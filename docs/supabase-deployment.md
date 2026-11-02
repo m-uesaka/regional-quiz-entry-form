@@ -77,16 +77,17 @@ bunx supabase stop
 # ローカル DB にマイグレーションを適用してから
 bun run db:migrate
 
-# ローカル DB のスキーマから型を生成し直す(= supabase gen types typescript --local --schema public)
+# ローカル DB のスキーマから型を生成し直す(scripts/gen-db-types.sh。生成に失敗したときは既存のファイルを残す)
 bun run db:types
 ```
 
 - 生成元はローカル DB です。`bun run db:types` の前に、そのマイグレーションがローカル DB に適用されている(`bun run db:migrate` 済み、または `bunx supabase db reset` 済み)ことを確認してください。他のブランチのマイグレーションが当たったままの DB から生成すると、そのブランチのテーブルやカラムまで型に入ります。
 - 再生成後に `bun run typecheck` を流すと、カラムの改名・削除や型の変更で壊れる select / insert / RPC 呼び出しがコンパイルエラーとして出ます。
-- 生成物は生成されたままの形でコミットします。そのため `gts lint` の対象からは外しています(`apps/backend/eslint.config.cjs`)。`tsc` の型検査は通常どおり掛かります。
-- CI の `integration` ジョブは、全マイグレーションを当てたローカル Supabase から型を生成し直し、コミット済みのファイルと差分があれば失敗します。再生成を忘れた PR はここで止まります。
+- 生成物は生成されたままの形でコミットします。そのため `gts lint`(`apps/backend/eslint.config.cjs`)と Prettier(ルートの `.prettierignore`)の対象からは外しています。`tsc` の型検査は通常どおり掛かります。
+- CI の `integration` ジョブは、統合テストの後に、全マイグレーションを当てたローカル Supabase から型を生成し直し、コミット済みのファイルと差分があれば失敗します。再生成を忘れた PR はここで止まります(テストが失敗しても、この確認は実行されます)。
 - 生成結果は Supabase CLI のバージョンでも変わることがあります。CLI(ルートの `devDependencies` と CI の `supabase/setup-cli` のバージョン)を上げたときも再生成してください。
-- 生成された型では、DB 関数の引数と戻り値の列はすべて非 null として表されます(Supabase の型生成の制約)。null を渡す・受け取る箇所では、呼び出し側でコメント付きで型を補っています(例: `apps/backend/src/lib/entries.ts` の `p_free_text`、`apps/backend/src/routes/staff-dashboard.ts` の `TournamentEntrySummaryRow`)。
+- 生成された型では、DB 関数の引数と戻り値の列はすべて非 null として表され、`jsonb` 列は `Json` になります(Supabase の型生成の制約)。生成器が知りえないこうした点は、`apps/backend/src/lib/db.ts` の `Database` で 1 か所にまとめて上書きしています(`entries.custom_field_values`、null を渡す・返す DB 関数など)。呼び出し側でキャストや `.overrideTypes()` を足さず、ここに追記してください。
+- 行の型(`Tables` / `TablesInsert` / `TablesUpdate`)も上書きを反映した `apps/backend/src/lib/db.ts` のものを import します。`apps/backend/src/types/database.ts` を直接 import するのは `lib/db.ts` だけです。
 
 ## 5. Supabase CLI でのプロジェクトリンクと手動デプロイ
 

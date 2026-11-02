@@ -640,9 +640,7 @@ async function importRow(
       p_region_id: prepared.regionId,
       p_type: prepared.type,
       p_overwrite: action === 'overwrite',
-      // The generated types make every function argument non-null, but the
-      // function stores a null `p_capacity` as an uncapped tournament.
-      p_capacity: prepared.capacity as number,
+      p_capacity: prepared.capacity,
       p_entry_opens_at: prepared.entryOpensAt,
       p_entry_closes_at: prepared.entryClosesAt,
       p_form_fields: prepared.formFields,

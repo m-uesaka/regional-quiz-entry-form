@@ -15,7 +15,7 @@
     "db:migrate": "supabase db push --local",
     "db:migrate:remote": "supabase db push",
     "db:new": "supabase migration new",
-    "db:types": "supabase gen types typescript --local --schema public > apps/backend/src/types/database.ts"
+    "db:types": "bash scripts/gen-db-types.sh"
   },
   "devDependencies": {
     "supabase": "^2.115.0",
