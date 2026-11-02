@@ -8,14 +8,18 @@
  * which PostgREST makes no promise about for an embedded resource.
  */
 
+import type {Tables} from './db';
+
 /**
  * One row of the join, with its regulation embedded. The embed is not
  * nullable: a join row exists only because both of its composite foreign
  * keys resolve, so there is always a regulation behind it.
  */
-export interface EntryRegulationRow {
-  regulation_id: string;
-  regulations: {label: string; display_order: number};
+export interface EntryRegulationRow extends Pick<
+  Tables<'entry_regulations'>,
+  'regulation_id'
+> {
+  regulations: Pick<Tables<'regulations'>, 'label' | 'display_order'>;
 }
 
 /** The `select` fragment that reads the rows above. */

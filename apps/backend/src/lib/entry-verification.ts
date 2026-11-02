@@ -1,10 +1,6 @@
-import {
-  ENTRY_VERIFICATION_TOKEN_TTL_MS,
-  type EntryStatus,
-  type TournamentType,
-} from '@regional-quiz/shared';
+import {ENTRY_VERIFICATION_TOKEN_TTL_MS} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
-import {createDbClient} from './db';
+import {createDbClient, type Tables} from './db';
 import type {InternalResult} from './errors';
 import {createMailSender, type SendMailInput} from './mailer';
 import {fetchAllRows} from './paged-select';
@@ -82,7 +78,7 @@ async function issueVerificationMail(
       ).toISOString(),
     })
     .select('id')
-    .single<{id: string}>();
+    .single();
   if (error) {
     // Don't send a link whose token was never persisted -- the recipient
     // would click through to a token that can never be found.
@@ -138,10 +134,10 @@ export async function discardVerificationToken(
 }
 
 /** The columns of a verification token that say whether it still works. */
-interface TokenStateRow {
-  expires_at: string;
-  used_at: string | null;
-}
+type TokenStateRow = Pick<
+  Tables<'email_verification_tokens'>,
+  'expires_at' | 'used_at'
+>;
 
 /**
  * Whether any of an entry's verification tokens can still confirm it --
@@ -154,12 +150,6 @@ function hasLiveToken(tokens: readonly TokenStateRow[], now: Date): boolean {
   return tokens.some(
     token => token.used_at === null && new Date(token.expires_at) >= now,
   );
-}
-
-/** Shape of the `entries` rows `fetchResendableEntryIds()` reads. */
-interface PendingEntryRow {
-  id: string;
-  email_verification_tokens: TokenStateRow[];
 }
 
 /**
@@ -179,15 +169,14 @@ export async function fetchResendableEntryIds(
   tournamentId: string,
 ): Promise<InternalResult<string[]>> {
   const db = createDbClient(env);
-  const result = await fetchAllRows<PendingEntryRow>((from, to) =>
+  const result = await fetchAllRows((from, to) =>
     db
       .from('entries')
       .select('id, email_verification_tokens(expires_at, used_at)')
       .eq('tournament_id', tournamentId)
       .eq('status', 'pending_verification')
       .order('id', {ascending: true})
-      .range(from, to)
-      .returns<PendingEntryRow[]>(),
+      .range(from, to),
   );
   if (result.error) {
     return {ok: false, status: 500, error: result.error.message};
@@ -199,20 +188,6 @@ export async function fetchResendableEntryIds(
       .filter(row => !hasLiveToken(row.email_verification_tokens, now))
       .map(row => row.id),
   };
-}
-
-/** Shape of the `entries` row `prepareVerificationResend()` reads. */
-interface ResendEntryRow {
-  id: string;
-  status: EntryStatus;
-  participants: {email: string};
-  tournaments: {
-    name: string | null;
-    type: TournamentType;
-    capacity: number | null;
-    regions: {name: string};
-  };
-  email_verification_tokens: TokenStateRow[];
 }
 
 /**
@@ -238,12 +213,13 @@ export async function prepareVerificationResend(
   const {data, error} = await db
     .from('entries')
     .select(
-      'id, status, participants!inner(email), ' +
-        'tournaments!inner(name, type, capacity, regions!inner(name)), ' +
-        'email_verification_tokens(expires_at, used_at)',
+      `
+        id, status, participants!inner(email),
+        tournaments!inner(name, type, capacity, regions!inner(name)),
+        email_verification_tokens(expires_at, used_at)
+      `,
     )
     .eq('id', entryId)
-    .returns<ResendEntryRow[]>()
     .maybeSingle();
   if (error) {
     return {ok: false, status: 500, error: error.message};

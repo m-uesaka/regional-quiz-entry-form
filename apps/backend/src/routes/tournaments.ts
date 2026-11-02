@@ -5,9 +5,11 @@ import {
   TournamentCreateInputSchema,
   TournamentOrderInputSchema,
   TournamentResetInputSchema,
+  type TournamentCreateInput,
   type TournamentResetResponse,
   TournamentTypeSchema,
   TournamentUpdateInputSchema,
+  type TournamentUpdateInput,
   type TournamentUpdateResponse,
   type WaitlistPromotion,
 } from '@regional-quiz/shared';
@@ -17,18 +19,10 @@ import {
   byTournamentSlugParams,
   requireOpenEntryPeriodOrStaff,
 } from '../middleware/entry-period';
-import {createDbClient} from '../lib/db';
+import {createDbClient, type TablesInsert, type TablesUpdate} from '../lib/db';
 import {internalError} from '../lib/errors';
-import {
-  FORM_FIELD_DEF_COLUMNS,
-  toFormFieldDef,
-  type FormFieldDefRow,
-} from '../lib/form-field-defs';
-import {
-  rowToTournament,
-  TOURNAMENT_COLUMNS,
-  type TournamentRow,
-} from '../lib/tournaments';
+import {FORM_FIELD_DEF_COLUMNS, toFormFieldDef} from '../lib/form-field-defs';
+import {rowToTournament, TOURNAMENT_COLUMNS} from '../lib/tournaments';
 import {promoteWaitlistedEntries} from '../lib/waitlist';
 
 const TournamentIdParamSchema = z.object({id: z.string().uuid()});
@@ -82,27 +76,46 @@ const ENTRY_PERIOD_OPEN_SQLSTATE = 'P0007';
 /** What a tournament delete answers when entries still point at it. */
 const TOURNAMENT_HAS_ENTRIES_MESSAGE = 'エントリーがある大会は削除できません';
 
-/** The one row `reset_tournament_entries()` (0038) returns. */
-interface ResetTournamentEntriesRow {
-  deleted_entry_count: number;
-  deleted_participant_count: number;
-  kept_participant_count: number;
-}
-
 const TournamentBySlugParamSchema = z.object({
   regionSlug: z.string(),
   tournamentSlug: TournamentTypeSchema,
 });
 
 /**
- * Maps the camelCase fields the client sends to the snake_case columns
- * `tournaments` actually has. Used for both create (all fields present) and
- * update (only the fields the caller chose to change).
+ * How a tournament name the client sent is stored: blank is stored as null,
+ * which reads back as the default name for the tournament's region and type
+ * at the time (0024).
  */
-function toTournamentRow(
-  input: Partial<z.infer<typeof TournamentCreateInputSchema>>,
-): Record<string, unknown> {
-  const row: Record<string, unknown> = {};
+function storedTournamentName(name: string): string | null {
+  return name === '' ? null : name;
+}
+
+/**
+ * Maps a create body to the snake_case columns `tournaments` has. Every
+ * column is listed, so the return type checks that each one an insert
+ * requires is set.
+ */
+function toTournamentInsert(
+  input: TournamentCreateInput,
+): TablesInsert<'tournaments'> {
+  return {
+    region_id: input.regionId,
+    type: input.type,
+    name: storedTournamentName(input.name),
+    capacity: input.capacity,
+    entry_opens_at: input.entryOpensAt,
+    entry_closes_at: input.entryClosesAt,
+  };
+}
+
+/**
+ * Maps a PATCH body to the snake_case columns `tournaments` has, leaving out
+ * every field the caller did not send so the update changes only those.
+ */
+function toTournamentUpdate(
+  input: TournamentUpdateInput,
+): TablesUpdate<'tournaments'> {
+  const row: TablesUpdate<'tournaments'> = {};
   if (input.regionId !== undefined) {
     row.region_id = input.regionId;
   }
@@ -110,9 +123,7 @@ function toTournamentRow(
     row.type = input.type;
   }
   if (input.name !== undefined) {
-    // Blank is stored as null, which reads back as the default name for the
-    // tournament's region and type at the time (0024).
-    row.name = input.name === '' ? null : input.name;
+    row.name = storedTournamentName(input.name);
   }
   if (input.capacity !== undefined) {
     row.capacity = input.capacity;
@@ -141,8 +152,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
       .select(TOURNAMENT_COLUMNS)
       // The order general staff set with `PUT /order` below.
       .order('display_order', {ascending: true})
-      .order('id', {ascending: true})
-      .returns<TournamentRow[]>();
+      .order('id', {ascending: true});
     if (error) {
       return c.json(
         internalError('failed to read the tournaments', error),
@@ -206,14 +216,13 @@ export const tournamentsRoute = new Hono<StaffEnv>()
       const {data, error} = await db
         .from('tournaments')
         .select(
-          `${TOURNAMENT_COLUMNS}, form_field_defs(${FORM_FIELD_DEF_COLUMNS})`,
+          `${TOURNAMENT_COLUMNS}, form_field_defs(${FORM_FIELD_DEF_COLUMNS})` as const,
         )
         .eq('id', c.req.valid('param').id)
         .order('display_order', {
           referencedTable: 'form_field_defs',
           ascending: true,
         })
-        .returns<(TournamentRow & {form_field_defs: FormFieldDefRow[]})[]>()
         .maybeSingle();
       if (error) {
         return c.json(
@@ -239,9 +248,8 @@ export const tournamentsRoute = new Hono<StaffEnv>()
       const db = createDbClient(c.env);
       const {data, error} = await db
         .from('tournaments')
-        .insert(toTournamentRow(c.req.valid('json')))
+        .insert(toTournamentInsert(c.req.valid('json')))
         .select(TOURNAMENT_COLUMNS)
-        .returns<TournamentRow[]>()
         .single();
       if (error) {
         const {body, status} = tournamentWriteError(
@@ -264,10 +272,9 @@ export const tournamentsRoute = new Hono<StaffEnv>()
       const input = c.req.valid('json');
       const {data, error} = await db
         .from('tournaments')
-        .update(toTournamentRow(input))
+        .update(toTournamentUpdate(input))
         .eq('id', id)
         .select(TOURNAMENT_COLUMNS)
-        .returns<TournamentRow[]>()
         .single();
       if (error) {
         // PGRST116: `.single()` found no matching row to update. Its
@@ -378,9 +385,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
           500,
         );
       }
-      // Cast rather than `.returns()`, for the reason `lib/waitlist.ts`
-      // gives: the client isn't built with generated Database types.
-      const [row] = (data as ResetTournamentEntriesRow[] | null) ?? [];
+      const [row] = data ?? [];
       if (!row) {
         return c.json({error: 'tournament not found'}, 404);
       }

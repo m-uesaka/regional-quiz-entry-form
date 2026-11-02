@@ -1,9 +1,4 @@
-import {
-  COMMON_ERROR_CODES,
-  type StaffLoginScope,
-  type StaffRole,
-  type TournamentType,
-} from '@regional-quiz/shared';
+import {COMMON_ERROR_CODES, type StaffLoginScope} from '@regional-quiz/shared';
 import type {StaffPasswordResetConfirmInput} from '@regional-quiz/shared/password-policy';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
@@ -67,25 +62,6 @@ export type StaffPasswordLinkResult =
 
 export type StaffPasswordResetResult = {ok: true} | LibFailure<400>;
 
-interface ResetTokenRow {
-  id: string;
-}
-
-/**
- * The scope of a staff account, as the setup mail names it. The region's
- * tournaments are embedded whole because `staff_accounts` has no foreign
- * key to `tournaments`; the one of the account's type is picked out below.
- */
-interface StaffAccountScopeRow {
-  role: StaffRole;
-  tournament_type: TournamentType | null;
-  // Null for `general` staff, who have no region.
-  regions: {
-    name: string;
-    tournaments: Array<{name: string | null; type: TournamentType}>;
-  } | null;
-}
-
 /**
  * Names the account a setup mail is for. One address may hold a 最強位 and a
  * 新人王 account at once (#166), so 「スタッフアカウント」 alone wouldn't say
@@ -103,11 +79,14 @@ async function describeStaffAccount(
   env: Bindings,
   staffAccountId: string,
 ): Promise<{ok: true; label: string} | {ok: false; error: string}> {
+  // The scope of the account, as the setup mail names it. The region's
+  // tournaments are embedded whole because `staff_accounts` has no foreign
+  // key to `tournaments`; the one of the account's type is picked out below.
+  // `regions` is null for `general` staff, who have no region.
   const {data, error} = await createDbClient(env)
     .from('staff_accounts')
     .select('role, tournament_type, regions(name, tournaments(name, type))')
     .eq('id', staffAccountId)
-    .returns<StaffAccountScopeRow[]>()
     .maybeSingle();
   if (error) {
     return {ok: false, error: error.message};
@@ -256,11 +235,6 @@ export function staffPasswordMailSubject(
   );
 }
 
-/** Shape of the account lookup in `requestStaffPasswordReset()`. */
-interface StaffAccountIdRow {
-  id: string;
-}
-
 /**
  * Mails a reset link to the staff account named by `email` and `scope`,
  * for a staff member who forgot their password (#175).
@@ -288,13 +262,12 @@ export async function requestStaffPasswordReset(
   email: string,
   scope: StaffLoginScope,
 ): Promise<void> {
-  const {data: account, error} =
-    await findStaffAccountByScope<StaffAccountIdRow>(
-      createDbClient(env),
-      email,
-      scope,
-      'id',
-    );
+  const {data: account, error} = await findStaffAccountByScope(
+    createDbClient(env),
+    email,
+    scope,
+    'id',
+  );
   if (error) {
     console.error('failed to look up the staff account to reset', {
       error: error.message,
@@ -350,7 +323,6 @@ export async function confirmStaffPasswordReset(
     .eq('token_hash', tokenHash)
     .is('used_at', null)
     .gt('expires_at', new Date().toISOString())
-    .returns<ResetTokenRow[]>()
     .maybeSingle();
   // A failed read must not be reported as a bad token: that would tell the
   // staff member their link had expired when the database was simply down.

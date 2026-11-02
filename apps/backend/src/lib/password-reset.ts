@@ -19,15 +19,6 @@ const TOKEN_TTL_MS = 60 * 60 * 1000;
 
 type ConfirmResult = {ok: true} | LibFailure<400>;
 
-interface ParticipantRow {
-  id: string;
-  email_verified_at: string | null;
-}
-
-interface ResetTokenRow {
-  id: string;
-}
-
 /**
  * The SQLSTATE the `reset_participant_password` Postgres function raises
  * (currently defined by
@@ -67,7 +58,6 @@ export async function requestPasswordReset(
     .from('participants')
     .select('id, email_verified_at')
     .eq('email', email)
-    .returns<ParticipantRow[]>()
     .maybeSingle();
   if (error) {
     console.error('failed to look up the participant to reset', {
@@ -204,7 +194,6 @@ export async function confirmPasswordReset(
     .eq('token_hash', tokenHash)
     .is('used_at', null)
     .gt('expires_at', new Date().toISOString())
-    .returns<ResetTokenRow[]>()
     .maybeSingle();
   // A failed read must not be reported as a bad token: that would tell the
   // participant their link had expired when the database was simply down.

@@ -12,7 +12,7 @@ import {
   byTournamentIdParam,
   requireOpenEntryPeriodOrStaff,
 } from '../middleware/entry-period';
-import {createDbClient} from '../lib/db';
+import {createDbClient, type Tables} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {
   NoLastingRegulationError,
@@ -24,20 +24,22 @@ import {TournamentNotFoundError} from '../lib/tournament-errors';
 
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 
-const REGULATION_COLUMNS =
-  'id, tournament_id, label, priority_starts_at, priority_ends_at, ' +
-  'closes_with_priority, display_order';
+const REGULATION_COLUMNS = `
+  id, tournament_id, label, priority_starts_at, priority_ends_at,
+  closes_with_priority, display_order
+`;
 
 /** Shape of a `regulations` row as selected above (snake_case). */
-interface RegulationRow {
-  id: string;
-  tournament_id: string;
-  label: string;
-  priority_starts_at: string | null;
-  priority_ends_at: string | null;
-  closes_with_priority: boolean;
-  display_order: number;
-}
+type RegulationRow = Pick<
+  Tables<'regulations'>,
+  | 'id'
+  | 'tournament_id'
+  | 'label'
+  | 'priority_starts_at'
+  | 'priority_ends_at'
+  | 'closes_with_priority'
+  | 'display_order'
+>;
 
 function rowToRegulation(row: RegulationRow): Regulation {
   return RegulationSchema.parse({
@@ -70,8 +72,7 @@ export const regulationsRoute = new Hono<StaffEnv>()
         .from('regulations')
         .select(REGULATION_COLUMNS)
         .eq('tournament_id', c.req.valid('param').tournamentId)
-        .order('display_order', {ascending: true})
-        .returns<RegulationRow[]>();
+        .order('display_order', {ascending: true});
       if (error) {
         return c.json(
           internalError('failed to read the regulations', error),

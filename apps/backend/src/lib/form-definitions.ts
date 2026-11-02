@@ -1,11 +1,10 @@
 import {
   toFormFieldDefRows,
-  TournamentTypeSchema,
   type FormDefinitionYaml,
   type TournamentType,
 } from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
-import {createDbClient} from './db';
+import {createDbClient, type TablesInsert} from './db';
 import {
   TOURNAMENT_NOT_FOUND_SQLSTATE,
   TournamentNotFoundError,
@@ -25,7 +24,7 @@ export {TournamentNotFoundError};
  */
 export function formFieldDefSyncRows(
   definition: FormDefinitionYaml,
-): Array<Record<string, unknown>> {
+): Array<Omit<TablesInsert<'form_field_defs'>, 'tournament_id'>> {
   return toFormFieldDefRows(definition, '').map(row => ({
     field_key: row.fieldKey,
     label: row.label,
@@ -104,13 +103,9 @@ export async function syncFormFieldDefs(
   if (!tournament) {
     throw new TournamentNotFoundError(tournamentId);
   }
-  // The client is created without generated database types, so the selected
-  // row comes back as `any`. Parsing (rather than asserting) keeps the
-  // narrowing honest: `tournaments.type` is the `tournament_type` Postgres
-  // enum, whose values are exactly the ones `TournamentTypeSchema` accepts
-  // (see `supabase/migrations/0001_init.sql`), so this only throws if the
-  // database schema and the shared schema have drifted apart.
-  const type: TournamentType = TournamentTypeSchema.parse(tournament.type);
+  // `tournaments.type` is the `tournament_type` Postgres enum, whose values
+  // (in the generated `Database` types) are exactly `TournamentType`'s.
+  const type: TournamentType = tournament.type;
   if (type !== definition.tournamentSlug) {
     throw new TournamentSlugMismatchError(type, definition.tournamentSlug);
   }
