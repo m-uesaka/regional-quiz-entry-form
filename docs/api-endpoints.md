@@ -521,7 +521,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 
 エントリー期間中は公開、期間外は担当スタッフのみ(`requireOpenEntryPeriodOrStaff()`)。大会に紐づくレギュレーションを `display_order` 昇順で返します。期間中に認証を課さないのは、エントリーフォームが未ログインの訪問者にも選択肢を出す必要があり、レギュレーションが個人情報を含まない(ラベルと優先期間だけ)ためです。期間外はこれ自体が未公開フォームの中身なので、大会取得 API と同じゲートが掛かります。
 
-- `200`: `Regulation[]` — `{id, tournamentId, label, priorityStartsAt, priorityEndsAt, displayOrder}`
+- `200`: `Regulation[]` — `{id, tournamentId, label, priorityStartsAt, priorityEndsAt, closesWithPriority, displayOrder}`
 - `400`: `:tournamentId` が UUID でない
 - `401`: `{"error": "staff session expired"}` — `staff_session` はあるが検証できない(期限切れ等)
 - `403`: `{"error": "entry period closed"}` — 期間外で、担当スタッフのセッションが無い
@@ -541,14 +541,16 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
   | `label` | string | 1〜400文字(`REGULATION_LABEL_MAX_LENGTH`) |
   | `priorityStartsAt` | string(datetime) \| null | 省略時は `null` |
   | `priorityEndsAt` | string(datetime) \| null | 省略時は `null` |
+  | `closesWithPriority` | boolean | 優先期間の終了後に選択肢から外すか。**省略すると、既存行は今の値を保ち、新しい行は `false`**。`true` には優先期間が必要 |
 - `displayOrder` は送りません。**配列の並び順がそのまま `display_order`** になるので、並べ替えは配列を並べ替えるだけです。
 - 優先期間は「両方 null」か「両方指定(開始 < 終了)」のみ許容します(Zod と `regulations` の check 制約 `regulations_priority_window_complete` の両方で担保)。
-- 大会を「優先枠 → 一般枠」の順に開くために、一般向けのレギュレーションへ締切までの期間を設定している場合、優先枠の終了後は優先エントリーではなく通常エントリーとして扱います(#235)。優先対象の選択を求めず、ポータルとエントリーフォームにも優先エントリーの案内を出しません。終わった優先枠のレギュレーションは選択肢から外れ、送信も断ります。条件は [`database-schema.md`](./database-schema.md) の `regulations` を参照してください。
+- `closesWithPriority` の枠の優先期間がすべて終わり、どの優先期間も始まった後は、その枠が選択肢から外れて送信も断られ、外す枠の終了後に始まった他の優先期間は制限でなくなります(#243)。優先対象の選択を求めず、ポータルとエントリーフォームにも優先エントリーの案内を出しません。詳細は [`database-schema.md`](./database-schema.md) の `regulations` を参照してください。
 - 配列に含まれなかった既存行は削除されますが、**エントリーから参照されている行は削除できません**。`entry_regulations` が複合外部キー `(regulation_id, tournament_id)` で参照しているため、フォーム定義のような delete → insert は使えず、id 指定は update・id 無しは insert・消えた行は「参照が無ければ delete」という差分同期になっています。
 - `regulations` は1件以上必要です(エントリーは必ず1つ以上選ぶため、0件の大会はエントリー不可になる)。
+- 保存後に `closesWithPriority` でない行が1件以上必要です。すべて外れる設定だと、外れた後に選べる枠が無くなるためです。送った値だけでなく、省略して保たれた値も含めて判定します。
 
 - `200`: `{"ok": true}`
-- `400`: `:tournamentId` が UUID でない / リクエストが `RegulationSyncInputSchema` に合わない / `id` がこの大会のレギュレーションでない(`この大会に存在しないレギュレーションが指定されています: ...`)
+- `400`: `:tournamentId` が UUID でない / リクエストが `RegulationSyncInputSchema` に合わない / `id` がこの大会のレギュレーションでない(`この大会に存在しないレギュレーションが指定されています: ...`)/ 保存後にすべての行が `closesWithPriority`(`優先期間の終了後も選択肢に残るレギュレーションが1つ以上必要です`)
 - `401`: スタッフセッションが無い
 - `403`: 地域スタッフ
 - `404`: `{"error": "tournament not found"}`
@@ -655,9 +657,9 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 2. その大会の `form_field_defs` を取得し、`customFieldValues` を `findCustomFieldValuesError()` で照合(未定義キー、選択肢にない値、必須項目の空欄、型の不一致を 400 で弾く)。
 3. 未ログインならメールアドレスから participant を検索し、既存なら**パスワード照合**、無ければ新規作成(PBKDF2 でハッシュ化)。ログイン中ならセッションの participant を使う。
 4. その participant の確定待ちエントリーのうち、**確認リンクの期限が切れたもの**を `cancelled` にする(DB 関数 `lapse_expired_pending_entries()`、#172。後述)。
-5. 同じ大会の既存エントリーを確認。`cancelled` なら**その行を再利用**して上書き(`unique (participant_id, tournament_id)` があるため2行目は作れない)、確認リンクが有効な確定待ちなら `entry pending verification`、それ以外なら `already entered` で 409。
+5. 同じ大会の既存エントリーを確認。`cancelled` なら**その行を再利用**して上書き(`unique (participant_id, tournament_id)` があるため2行目は作れない。書き込みは DB 関数 `reenter_cancelled_entry()`)、確認リンクが有効な確定待ちなら `entry pending verification`、それ以外なら `already entered` で 409。
 6. 確認済みの participant なら、DB 関数 `claim_participant_region()` で地域をこの大会の地域に移す(#236。後述)。移せなければ `already registered in another region` で 409。
-7. 地域が重複参加を許していなければ(`regions.allows_dual_entry` が false)、同一地域の**別**大会に有効なエントリーが無いことを確認。
+7. エントリーを書き込む。地域が重複参加を許していなければ(`regions.allows_dual_entry` が false)、同一地域の**別**大会に有効なエントリーがあるときはトリガ `check_entry_seat()` が断り(`P0005`)、`already entered another tournament in this region` で 409。別の送信がアカウントを他の地域へ移していれば、トリガは地域の不一致を `P0008` で断り、`concurrent submission` の 409(未認証の経路では案内メール `processing-failed`)になります。
 8. 確認メールを送信。
 
 `customFieldValues` の照合を participant の検索・作成より前に置いているのは、フォームからは生成し得ない回答を弾いた結果としてアカウントだけが作られる、という副作用を残さないためです。編集 API(`PATCH /api/mypage/entries/:entryId`)と同じ `findCustomFieldValuesError()` を使うので、新規と編集で通る回答は一致します。
@@ -671,7 +673,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 
 後者を残すのは、キャンセルに期限が無いためです。これを数えないと、ある地域の大会に出た後でキャンセルして別の地域の大会に出られてしまいます。受付中のキャンセルと、確定しないまま取り消されたエントリー(期限切れを含む)は地域を押さえません。期限切れの確定待ちは 4. で `cancelled` になっています。
 
-地域を移すのは確認済みの参加者を、パスワードかセッションで本人と確かめた後だけです。この順にしたため、パスワードが違えば別の地域に参加中でも不受理通知は `password-mismatch` になります。未確認のアカウントの地域はアカウントの作成時と上書き時に決まるので、6. は行いません。確認からエントリーの書き込みまでの間に別の送信が地域を移すと、`check_participant_region()` トリガ(`0040`)が書き込みを断り、`concurrent submission` で 409 を返します。
+地域を移すのは確認済みの参加者を、パスワードかセッションで本人と確かめた後だけです。この順にしたため、パスワードが違えば別の地域に参加中でも不受理通知は `password-mismatch` になります。未確認のアカウントの地域はアカウントの作成時と上書き時に決まるので、6. は行いません。確認からエントリーの書き込みまでの間に別の送信が地域を移すと、`check_entry_seat()` トリガ(`0041`)が書き込みを断り、`concurrent submission` で 409 を返します。
 
 **確認メールの期限切れ(#172)。** 確認リンク(24 時間)を開かないまま期限が切れたエントリーは、もう確定できないのに `pending_verification` のまま残り、同じ大会への再エントリーを `already entered` で、重複参加を許さない地域ではもう一方の大会へのエントリーも断っていました。そこで 4. で、その参加者の確定待ちエントリーのうち**確認トークンが 1 つ以上あり、そのどれもが使用済みか期限切れのもの**を `cancelled` にし(残っていたトークンも使用済みにする)、以後は参加者自身のキャンセルと同じ扱いにしています。同じ大会なら行が再利用されて新しい確認メールが届き、もう一方の大会の枠も空きます。リンクがまだ有効な確定待ちは今までどおり断り、未ログインの経路では不受理通知(`pending-verification`)で「確認メールのリンクを開く / 見当たらなければマイページでキャンセルしてから再エントリー」を案内します。
 
@@ -786,11 +788,11 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 同じスプレッドシートの「レギュレーション」シート(`REGULATION_SHEET_NAME`)を読み取り、レギュレーションの配列にして返します。**この時点では DB に何も書き込みません。** 保存はレギュレーション管理画面から `PUT /api/tournaments/:tournamentId/regulations` を別途呼びます。大会には依存しないので、リクエストに大会 ID はありません。
 
 - リクエスト: `RegulationSheetImportRequestSchema` — `{spreadsheetId: string}`
-- `200`: `{"regulations": [{label, priorityStartsAt, priorityEndsAt}, ...]}` — シートの行順。`id` は付きません(シートは保存済みの行を知らないため。保存済みの行との突き合わせは呼び出し側が行います)。優先期間はシート上の日時を日本時間として読んだ ISO 8601 文字列、未設定なら `null`。
+- `200`: `{"regulations": [{label, priorityStartsAt, priorityEndsAt, closesWithPriority}, ...]}` — シートの行順。`closesWithPriority` はD列が `外す` なら `true`、`残す` なら `false`、空欄なら付きません。`id` は付きません(シートは保存済みの行を知らないため。保存済みの行との突き合わせは呼び出し側が行います)。優先期間はシート上の日時を日本時間として読んだ ISO 8601 文字列、未設定なら `null`。
 
 | ステータス | 条件 |
 | --- | --- |
-| 400 | 「レギュレーション」シートが無い・スプレッドシート ID が不正・シートにアクセスできない(429 を除く Google からの 4xx)、レギュレーション名が空または重複、優先期間を日時として読めない、優先期間が片方だけ・終了が開始以前、レギュレーションが1件も無い |
+| 400 | 「レギュレーション」シートが無い・スプレッドシート ID が不正・シートにアクセスできない(429 を除く Google からの 4xx)、レギュレーション名が空または重複、優先期間を日時として読めない、優先期間が片方だけ・終了が開始以前、D列が `外す` / `残す` 以外、優先期間が無いのに `外す`、レギュレーションが1件も無い |
 | 502 | Google への接続失敗(ネットワークエラー)または Google からの 5xx |
 | 503 | Google からのレート制限(429) |
 

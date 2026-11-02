@@ -24,8 +24,8 @@ export const ENTRY_ERROR_CODES = {
    */
   REGULATION_NO_LONGER_AVAILABLE: 'regulation no longer available',
   /**
-   * The error the dual-entry rule answers with, from both the check and the
-   * trigger's SQLSTATE mapping, so the entry form has one string to translate.
+   * The error the dual-entry rule answers with: `check_entry_seat()` raises
+   * `P0005` at the write, and `enterTournament()` maps that SQLSTATE to this.
    */
   ALREADY_ENTERED_ANOTHER_TOURNAMENT:
     'already entered another tournament in this region',

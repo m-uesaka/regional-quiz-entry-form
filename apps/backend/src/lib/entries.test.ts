@@ -6,6 +6,7 @@ import {
   cancelOwnEntry,
   checkEntrySubmission,
   createEntry,
+  createEntryForParticipant,
   createEntryUnauthenticated,
   updateOwnEntry,
 } from './entries';
@@ -210,6 +211,13 @@ describe.skipIf(!dbReachable)(
         select id, ${tournamentId}, '山田太郎', 'ヤマダタロウ', '太郎', ${status}::entry_status
           from participants where email = ${email}
       `;
+    }
+
+    async function participantIdOf(email: string): Promise<string> {
+      const [participant] = await sql`
+        select id from participants where email = ${email}
+      `;
+      return participant.id;
     }
 
     /**
@@ -873,6 +881,252 @@ describe.skipIf(!dbReachable)(
         select id from entries where tournament_id = ${shinjinou.tournamentId}
       `;
       expect(rows.length).toBe(0);
+    });
+
+    it('createEntryUnauthenticated notifies by mail instead of failing for dual entry', async () => {
+      const {saikyoi, shinjinou} = await createRegionPair(
+        'unauth-dual-off',
+        false,
+      );
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      const firstResult = await createEntry(
+        env,
+        saikyoi.tournamentId,
+        validInput({email, regulationIds: [saikyoi.regulationId]}),
+      );
+      expect(firstResult.ok).toBe(true);
+      await verifyAddress(email);
+      mailSendCount = 0;
+
+      const outcome = await enterUnauthenticated(
+        shinjinou.tournamentId,
+        validInput({email, regulationIds: [shinjinou.regulationId]}),
+      );
+
+      expect(outcome).toEqual({kind: 'notified', reason: 'dual-entry'});
+      expect(mailSendCount).toBe(1);
+      const rows = await sql`
+        select id from entries where tournament_id = ${shinjinou.tournamentId}
+      `;
+      expect(rows.length).toBe(0);
+    });
+
+    it('refuses a logged-in participant a second tournament for dual entry', async () => {
+      const {saikyoi, shinjinou} = await createRegionPair(
+        'session-dual-off',
+        false,
+      );
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      const firstResult = await createEntry(
+        env,
+        saikyoi.tournamentId,
+        validInput({email, regulationIds: [saikyoi.regulationId]}),
+      );
+      expect(firstResult.ok).toBe(true);
+      await verifyAddress(email);
+      mailSendCount = 0;
+
+      const result = await createEntryForParticipant(
+        env,
+        shinjinou.tournamentId,
+        await participantIdOf(email),
+        validInput({regulationIds: [shinjinou.regulationId]}),
+      );
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.status).toBe(409);
+      expect(!result.ok && result.error).toBe(
+        'already entered another tournament in this region',
+      );
+      expect(mailSendCount).toBe(0);
+    });
+
+    describe('re-entering a tournament while holding the other one', () => {
+      /**
+       * A participant whose entry for the region's 最強位 tournament was
+       * cancelled and who then entered its 新人王 tournament, so re-entering
+       * the first is refused by `check_entry_seat()` at the write.
+       * @param suffix The region slug suffix, as in `createFixture()`.
+       * @param options.verified Whether the address has been verified.
+       */
+      async function holdOtherTournament(
+        suffix: string,
+        {verified = true} = {},
+      ) {
+        const {saikyoi, shinjinou} = await createRegionPair(suffix, false);
+        const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+        const input = validInput({
+          email,
+          regulationIds: [saikyoi.regulationId],
+        });
+        const cancelled = await createEntry(env, saikyoi.tournamentId, input);
+        if (!cancelled.ok) throw new Error(cancelled.error);
+        if (verified) {
+          await verifyAddress(email);
+        }
+        await sql`
+          update entries set status = 'cancelled', cancelled_at = now()
+          where id = ${cancelled.entry.id}
+        `;
+        await sql`
+          update email_verification_tokens set used_at = now()
+          where entry_id = ${cancelled.entry.id}
+        `;
+        await sql`
+          insert into email_verification_tokens (entry_id, token_hash, expires_at)
+          values
+            (${cancelled.entry.id}, ${crypto.randomUUID()}, now() - interval '1 hour'),
+            (${cancelled.entry.id}, ${'live-' + crypto.randomUUID()}, now() + interval '1 hour')
+        `;
+        const held = await createEntry(env, shinjinou.tournamentId, {
+          ...input,
+          regulationIds: [shinjinou.regulationId],
+        });
+        if (!held.ok) throw new Error(held.error);
+        mailSendCount = 0;
+        return {
+          input,
+          regionId: saikyoi.regionId,
+          tournamentId: saikyoi.tournamentId,
+          cancelledEntryId: cancelled.entry.id,
+          heldEntryId: held.entry.id,
+        };
+      }
+
+      /**
+       * What a refused re-entry must leave as it found it.
+       * @param entryId The cancelled entry.
+       * @param email The participant's address.
+       */
+      async function readState(entryId: string, email: string) {
+        const [entry] = await sql`select * from entries where id = ${entryId}`;
+        const regulations = await sql`
+          select regulation_id from entry_regulations
+          where entry_id = ${entryId} order by regulation_id
+        `;
+        const [participant] = await sql`
+          select region_id, password_hash, email_verified_at
+          from participants where email = ${email}
+        `;
+        return {entry, regulations: [...regulations], participant};
+      }
+
+      /**
+       * The token hashes left on an entry.
+       * @param entryId The entry.
+       */
+      async function tokenHashes(entryId: string): Promise<string[]> {
+        const rows = await sql`
+          select token_hash from email_verification_tokens
+          where entry_id = ${entryId}
+        `;
+        return rows.map((row: {token_hash: string}) => row.token_hash);
+      }
+
+      it('changes nothing, the tokens included', async () => {
+        const seat = await holdOtherTournament('re-entry-dual-off');
+        const before = await readState(seat.cancelledEntryId, seat.input.email);
+
+        const result = await createEntry(env, seat.tournamentId, {
+          ...seat.input,
+          displayName: '再エントリー太郎',
+        });
+
+        expect(result.ok).toBe(false);
+        expect(!result.ok && result.status).toBe(409);
+        expect(!result.ok && result.error).toBe(
+          'already entered another tournament in this region',
+        );
+        expect(
+          await readState(seat.cancelledEntryId, seat.input.email),
+        ).toEqual(before);
+        expect(before.participant.region_id).toBe(seat.regionId);
+        expect(mailSendCount).toBe(0);
+        // The token cleanup is rolled back with the refused write.
+        expect(await tokenHashes(seat.cancelledEntryId)).toHaveLength(3);
+      });
+
+      it('leaves an unverified account as it was', async () => {
+        const seat = await holdOtherTournament('re-entry-dual-off-unverified', {
+          verified: false,
+        });
+        const before = await readState(seat.cancelledEntryId, seat.input.email);
+
+        const result = await createEntry(env, seat.tournamentId, seat.input);
+
+        expect(!result.ok && result.error).toBe(
+          'already entered another tournament in this region',
+        );
+        expect(
+          await readState(seat.cancelledEntryId, seat.input.email),
+        ).toEqual(before);
+        expect(mailSendCount).toBe(0);
+      });
+
+      it('createEntryUnauthenticated notifies by mail', async () => {
+        const seat = await holdOtherTournament('re-entry-dual-off-unauth');
+        const before = await readState(seat.cancelledEntryId, seat.input.email);
+
+        const outcome = await enterUnauthenticated(
+          seat.tournamentId,
+          seat.input,
+        );
+
+        expect(outcome).toEqual({kind: 'notified', reason: 'dual-entry'});
+        expect(mailSendCount).toBe(1);
+        expect(
+          await readState(seat.cancelledEntryId, seat.input.email),
+        ).toEqual(before);
+      });
+
+      it('answers a logged-in participant 409', async () => {
+        const seat = await holdOtherTournament('re-entry-dual-off-session');
+        const before = await readState(seat.cancelledEntryId, seat.input.email);
+
+        const result = await createEntryForParticipant(
+          env,
+          seat.tournamentId,
+          await participantIdOf(seat.input.email),
+          seat.input,
+        );
+
+        expect(result.ok).toBe(false);
+        expect(!result.ok && result.status).toBe(409);
+        expect(!result.ok && result.error).toBe(
+          'already entered another tournament in this region',
+        );
+        expect(mailSendCount).toBe(0);
+        expect(
+          await readState(seat.cancelledEntryId, seat.input.email),
+        ).toEqual(before);
+      });
+
+      it('goes through with a fresh link once the other entry is cancelled', async () => {
+        const seat = await holdOtherTournament('re-entry-dual-off-retry');
+        const refused = await createEntry(env, seat.tournamentId, seat.input);
+        const before = await tokenHashes(seat.cancelledEntryId);
+        await sql`
+          update entries set status = 'cancelled', cancelled_at = now()
+          where id = ${seat.heldEntryId}
+        `;
+        mailSendCount = 0;
+
+        const result = await createEntry(env, seat.tournamentId, seat.input);
+
+        expect(refused.ok).toBe(false);
+        expect(result.ok).toBe(true);
+        expect(result.ok && result.entry.id).toBe(seat.cancelledEntryId);
+        expect(mailSendCount).toBe(1);
+        // The used token and the expired one went, the live one stayed, and
+        // the link just mailed was added.
+        const after = await tokenHashes(seat.cancelledEntryId);
+        const fresh = after.filter(hash => !before.includes(hash));
+        const kept = after.filter(hash => before.includes(hash));
+        expect(before).toHaveLength(3);
+        expect(fresh).toHaveLength(1);
+        expect(kept).toHaveLength(1);
+        expect(kept[0]).toStartWith('live-');
+      });
     });
 
     it('allows a second tournament when the region allows dual entry', async () => {
