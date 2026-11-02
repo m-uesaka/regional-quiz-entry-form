@@ -10,7 +10,7 @@ import {
 } from '@regional-quiz/shared';
 import type {ParticipantEnv} from '../types/env';
 import {requireParticipant} from '../middleware/participant-auth';
-import {createDbClient} from '../lib/db';
+import {createDbClient, type Tables} from '../lib/db';
 import {cancelOwnEntry, updateOwnEntry} from '../lib/entries';
 import {internalError, respondFailure} from '../lib/errors';
 import {tournamentDisplayName} from '../lib/tournaments';
@@ -18,45 +18,30 @@ import {fetchFormFieldDefs} from '../lib/form-field-defs';
 import {
   ENTRY_REGULATIONS_COLUMNS,
   entryRegulationLabels,
-  type EntryRegulationRow,
 } from '../lib/entry-regulations';
 
 const EntryIdParamSchema = z.object({entryId: z.string().uuid()});
 
-const LIST_COLUMNS =
-  'id, tournament_id, status, waitlist_position, ' +
-  'tournaments(name, type, region_id, entry_opens_at, entry_closes_at, ' +
-  'regions(slug, name))';
+const LIST_COLUMNS = `
+  id, tournament_id, status, waitlist_position,
+  tournaments(name, type, region_id, entry_opens_at, entry_closes_at,
+  regions(slug, name))
+`;
 
-const DETAIL_COLUMNS =
-  LIST_COLUMNS +
-  ', name, furigana, display_name, free_text, custom_field_values, ' +
-  ENTRY_REGULATIONS_COLUMNS;
+const DETAIL_COLUMNS = `${LIST_COLUMNS},
+  name, furigana, display_name, free_text, custom_field_values,
+  ${ENTRY_REGULATIONS_COLUMNS}
+` as const;
 
 /** Shape of an `entries` row as selected by `LIST_COLUMNS` (snake_case). */
-interface MypageEntryRow {
-  id: string;
-  tournament_id: string;
-  status: MypageEntry['status'];
-  waitlist_position: number | null;
-  tournaments: {
-    name: string | null;
-    type: MypageEntry['tournament']['type'];
-    region_id: string;
-    entry_opens_at: string;
-    entry_closes_at: string;
-    regions: {slug: string; name: string};
-  };
-}
-
-/** Shape of the single-entry row selected by `DETAIL_COLUMNS`. */
-interface MypageEntryDetailRow extends MypageEntryRow {
-  name: string;
-  furigana: string;
-  display_name: string;
-  free_text: string | null;
-  custom_field_values: Record<string, string | string[]>;
-  entry_regulations: EntryRegulationRow[];
+interface MypageEntryRow extends Pick<
+  Tables<'entries'>,
+  'id' | 'tournament_id' | 'status' | 'waitlist_position'
+> {
+  tournaments: Pick<
+    Tables<'tournaments'>,
+    'name' | 'type' | 'region_id' | 'entry_opens_at' | 'entry_closes_at'
+  > & {regions: Pick<Tables<'regions'>, 'slug' | 'name'>};
 }
 
 function rowToMypageEntry(row: MypageEntryRow): MypageEntry {
@@ -87,8 +72,7 @@ export const mypageRoute = new Hono<ParticipantEnv>()
     const {data, error} = await db
       .from('entries')
       .select(LIST_COLUMNS)
-      .eq('participant_id', c.get('participantId'))
-      .returns<MypageEntryRow[]>();
+      .eq('participant_id', c.get('participantId'));
     if (error) {
       return c.json(
         internalError('failed to read the own entries', error),
@@ -109,7 +93,6 @@ export const mypageRoute = new Hono<ParticipantEnv>()
         .select(DETAIL_COLUMNS)
         .eq('id', c.req.valid('param').entryId)
         .eq('participant_id', c.get('participantId'))
-        .returns<MypageEntryDetailRow[]>()
         .maybeSingle();
       if (error) {
         return c.json(

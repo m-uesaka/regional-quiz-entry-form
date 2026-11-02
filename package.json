@@ -14,7 +14,8 @@
     "db:stop": "supabase stop",
     "db:migrate": "supabase db push --local",
     "db:migrate:remote": "supabase db push",
-    "db:new": "supabase migration new"
+    "db:new": "supabase migration new",
+    "db:types": "bash scripts/gen-db-types.sh"
   },
   "devDependencies": {
     "supabase": "^2.115.0",

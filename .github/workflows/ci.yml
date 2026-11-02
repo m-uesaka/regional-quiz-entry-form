@@ -62,6 +62,21 @@ jobs:
       - run: bun test --reporter=junit --reporter-outfile=integration-junit.xml
         working-directory: apps/backend
       - run: bash .github/scripts/assert-no-skipped-tests.sh apps/backend/integration-junit.xml
+      # `apps/backend/src/types/database.ts` is generated from the migrations
+      # (`bun run db:types`) and committed. Regenerated here from the stack the
+      # migrations were just applied to, so a migration merged without it
+      # fails here rather than surfacing as type errors in someone else's PR.
+      #
+      # The generator runs `postgres-meta` as a one-off container, which the
+      # start script leaves out of the stack, so this step pulls that image.
+      #
+      # After the tests, and run even when they fail, so stale types do not
+      # hide the test results and a failing test does not hide stale types.
+      - name: Check the generated database types are up to date
+        if: ${{ !cancelled() }}
+        run: |
+          bun run db:types
+          git diff --exit-code -- apps/backend/src/types/database.ts
 
   e2e:
     runs-on: ubuntu-latest

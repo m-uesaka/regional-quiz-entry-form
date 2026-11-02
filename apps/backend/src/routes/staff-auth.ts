@@ -9,8 +9,6 @@ import {
   type StaffLoginInput,
   type StaffPasswordResetRequestInput,
   type StaffLoginResponse,
-  type StaffRole,
-  type TournamentType,
 } from '@regional-quiz/shared';
 import {StaffPasswordResetConfirmInputSchema} from '@regional-quiz/shared/password-policy';
 import type {Env} from '../types/env';
@@ -44,18 +42,6 @@ const SESSION_COOKIE_OPTIONS = {
   path: '/',
 } as const;
 
-interface StaffAccountRow {
-  id: string;
-  password_hash: string;
-  role: StaffRole;
-  region_id: string | null;
-  tournament_type: TournamentType | null;
-  sessions_valid_from: string;
-  // The joined `regions` row, null for `general` staff (who have no
-  // `region_id`). Only the slug is read: the staff screens are keyed by it.
-  regions: {slug: string} | null;
-}
-
 // Matches the period both login limiters count over (`wrangler.toml`).
 const LOGIN_LIMIT_PERIOD_SECONDS = 60;
 
@@ -86,14 +72,18 @@ export const staffAuthRoute = new Hono<Env>()
       // (#156) isn't looked for, so it gets the same 401 -- after the same
       // PBKDF2 work -- as an address that was never registered: whoever
       // holds its password learns nothing from trying it.
-      const {data: staff, error} =
-        await findStaffAccountByScope<StaffAccountRow>(
-          createDbClient(c.env),
-          email,
-          scope,
-          'id, password_hash, role, region_id, tournament_type, ' +
-            'sessions_valid_from, regions(slug)',
-        );
+      //
+      // `regions` is null for `general` staff, who have no `region_id`. Only
+      // its slug is read: the staff screens are keyed by it.
+      const {data: staff, error} = await findStaffAccountByScope(
+        createDbClient(c.env),
+        email,
+        scope,
+        `
+          id, password_hash, role, region_id, tournament_type,
+          sessions_valid_from, regions(slug)
+        `,
+      );
 
       if (error) {
         return c.json({error: 'internal server error'}, 500);

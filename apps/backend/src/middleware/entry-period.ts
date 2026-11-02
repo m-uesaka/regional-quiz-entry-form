@@ -1,7 +1,11 @@
 import type {Context} from 'hono';
 import {createMiddleware} from 'hono/factory';
 import {getCookie} from 'hono/cookie';
-import {ENTRY_ERROR_CODES, entryAvailability} from '@regional-quiz/shared';
+import {
+  ENTRY_ERROR_CODES,
+  entryAvailability,
+  TournamentTypeSchema,
+} from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {
   fetchTournamentById,
@@ -23,13 +27,22 @@ type TournamentResolver = (c: Context<Env>) => Promise<TournamentRow | null>;
 export const byTournamentIdParam: TournamentResolver = c =>
   fetchTournamentById(c.env, c.req.param('tournamentId') ?? '');
 
-/** For the public routes keyed by `:regionSlug` / `:tournamentSlug`. */
-export const byTournamentSlugParams: TournamentResolver = c =>
-  fetchTournamentBySlug(
+/**
+ * For the public routes keyed by `:regionSlug` / `:tournamentSlug`. Those
+ * routes validate the slug before this runs, so one that names no tournament
+ * type is only answered here as no tournament for completeness.
+ */
+export const byTournamentSlugParams: TournamentResolver = async c => {
+  const type = TournamentTypeSchema.safeParse(c.req.param('tournamentSlug'));
+  if (!type.success) {
+    return null;
+  }
+  return fetchTournamentBySlug(
     c.env,
     c.req.param('regionSlug') ?? '',
-    c.req.param('tournamentSlug') ?? '',
+    type.data,
   );
+};
 
 /**
  * Lets anyone through while the tournament's entry period is open, and only

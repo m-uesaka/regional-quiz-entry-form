@@ -4,6 +4,7 @@
 
 - スキーマ定義の正本: `supabase/migrations/*.sql`
 - Supabase プロジェクトの作成・マイグレーション適用手順: [`supabase-deployment.md`](./supabase-deployment.md)
+- バックエンドが使う TypeScript の型(`apps/backend/src/types/database.ts`): マイグレーションから `bun run db:types` で生成する([`supabase-deployment.md`](./supabase-deployment.md) 4.1)
 - API から見た各テーブルの使われ方: [`api-endpoints.md`](./api-endpoints.md)
 - `form_field_defs` テーブルの生成元となる YAML: [`form-generation.md`](./form-generation.md)
 
