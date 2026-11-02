@@ -1,4 +1,4 @@
-import {ENTRY_ERROR_CODES, type TournamentType} from '@regional-quiz/shared';
+import {COMMON_ERROR_CODES, type TournamentType} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import type {LibFailure} from './errors';
@@ -25,7 +25,8 @@ interface ConfirmedTournament {
 type ConfirmResult =
   | {
       ok: true;
-      status: 'confirmed' | 'waitlisted';
+      // Not `status`, which on a failure is the HTTP status.
+      entryStatus: 'confirmed' | 'waitlisted';
       tournament: ConfirmedTournament | null;
     }
   | LibFailure<400>;
@@ -71,7 +72,7 @@ export async function confirmEntryByToken(
       return {
         ok: false,
         status: 400,
-        error: ENTRY_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
+        error: COMMON_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
       };
     }
     return {ok: false, status: 500, error: error.message};
@@ -79,7 +80,7 @@ export async function confirmEntryByToken(
 
   return {
     ok: true,
-    status: data as 'confirmed' | 'waitlisted',
+    entryStatus: data as 'confirmed' | 'waitlisted',
     tournament: await readConfirmedTournament(env, tokenHash),
   };
 }

@@ -1,5 +1,6 @@
 import {
   EDITABLE_ENTRY_STATUSES,
+  COMMON_ERROR_CODES,
   ENTRY_ERROR_CODES,
   isEntryErrorCode,
   isWithinEntryPeriod,
@@ -1139,7 +1140,7 @@ export async function createEntryForParticipant(
   if (!participant) {
     // `requireParticipant()` read this same row a moment ago, so it was
     // deleted in between; the session no longer names anyone.
-    return {ok: false, status: 401, error: ENTRY_ERROR_CODES.UNAUTHORIZED};
+    return {ok: false, status: 401, error: COMMON_ERROR_CODES.UNAUTHORIZED};
   }
   return enterTournament(
     env,
@@ -1199,7 +1200,7 @@ export async function updateOwnEntry(
     return {ok: false, status: 500, error: lookupError.message};
   }
   if (!entry) {
-    return {ok: false, status: 404, error: ENTRY_ERROR_CODES.ENTRY_NOT_FOUND};
+    return {ok: false, status: 404, error: COMMON_ERROR_CODES.ENTRY_NOT_FOUND};
   }
 
   if (
@@ -1287,7 +1288,7 @@ export async function cancelOwnEntry(
   // the SETOF row shape has to be asserted here — same as in `./waitlist`.
   const cancelled = (data as CancelledEntryRow[] | null)?.[0];
   if (!cancelled) {
-    return {ok: false, status: 404, error: ENTRY_ERROR_CODES.ENTRY_NOT_FOUND};
+    return {ok: false, status: 404, error: COMMON_ERROR_CODES.ENTRY_NOT_FOUND};
   }
 
   if (cancelled.previous_status === 'confirmed') {

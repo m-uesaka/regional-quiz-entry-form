@@ -1,5 +1,6 @@
 import {afterAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
+import {COMMON_ERROR_CODES} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {confirmEntryByToken} from './entry-confirmation';
 import {generateToken, hashToken} from './token';
@@ -150,7 +151,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       expect(result).toEqual({
         ok: true,
-        status: 'confirmed',
+        entryStatus: 'confirmed',
         // What the frontend needs to drop the list from its cache (#125).
         tournament: {regionSlug: `${testRegionSlug}-confirm`, type: 'saikyoi'},
       });
@@ -260,7 +261,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       expect(result).toEqual({
         ok: true,
-        status: 'waitlisted',
+        entryStatus: 'waitlisted',
         tournament: {
           regionSlug: `${testRegionSlug}-capacity`,
           type: 'saikyoi',
@@ -286,7 +287,11 @@ describe.skipIf(!(await isDbReachable()))(
 
       const result = await confirmEntryByToken(env, token);
 
-      expect(result).toMatchObject({ok: false, status: 400});
+      expect(result).toEqual({
+        ok: false,
+        status: 400,
+        error: COMMON_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
+      });
     });
 
     it('rejects an already-used token', async () => {
@@ -300,7 +305,11 @@ describe.skipIf(!(await isDbReachable()))(
 
       const result = await confirmEntryByToken(env, token);
 
-      expect(result).toMatchObject({ok: false, status: 400});
+      expect(result).toEqual({
+        ok: false,
+        status: 400,
+        error: COMMON_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
+      });
     });
 
     it('rejects a valid token whose entry is no longer pending', async () => {
@@ -317,7 +326,11 @@ describe.skipIf(!(await isDbReachable()))(
 
       const result = await confirmEntryByToken(env, token);
 
-      expect(result).toMatchObject({ok: false, status: 400});
+      expect(result).toEqual({
+        ok: false,
+        status: 400,
+        error: COMMON_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
+      });
       const [entryRow] = await sql`
         select status from entries where id = ${entryId}
       `;
@@ -327,7 +340,11 @@ describe.skipIf(!(await isDbReachable()))(
     it('rejects an unknown token', async () => {
       const result = await confirmEntryByToken(env, generateToken());
 
-      expect(result).toMatchObject({ok: false, status: 400});
+      expect(result).toEqual({
+        ok: false,
+        status: 400,
+        error: COMMON_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
+      });
     });
   },
 );

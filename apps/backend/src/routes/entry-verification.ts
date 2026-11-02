@@ -26,6 +26,6 @@ export const entryVerificationRoute = new Hono<Env>().post(
       // endpoint anyone with a link can reach, so it stays in the log.
       return respondFailure(c, result, 'failed to confirm the entry');
     }
-    return c.json({status: result.status, tournament: result.tournament});
+    return c.json({status: result.entryStatus, tournament: result.tournament});
   },
 );

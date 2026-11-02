@@ -1,4 +1,4 @@
-import {ENTRY_ERROR_CODES} from '@regional-quiz/shared';
+import {COMMON_ERROR_CODES} from '@regional-quiz/shared';
 import type {PasswordResetConfirmInput} from '@regional-quiz/shared/password-policy';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
@@ -215,7 +215,7 @@ export async function confirmPasswordReset(
     return {
       ok: false,
       status: 400,
-      error: ENTRY_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
+      error: COMMON_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
     };
   }
 
@@ -228,7 +228,7 @@ export async function confirmPasswordReset(
       return {
         ok: false,
         status: 400,
-        error: ENTRY_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
+        error: COMMON_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
       };
     }
     return {ok: false, status: 500, error: resetError.message};

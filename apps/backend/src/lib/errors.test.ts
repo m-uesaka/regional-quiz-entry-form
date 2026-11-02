@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, spyOn} from 'bun:test';
-import {ENTRY_ERROR_CODES} from '@regional-quiz/shared';
+import {COMMON_ERROR_CODES, ENTRY_ERROR_CODES} from '@regional-quiz/shared';
 import {Hono, type TypedResponse} from 'hono';
 import {respondFailure, type InternalFailure, type LibFailure} from './errors';
 
@@ -29,7 +29,7 @@ describe('respondFailure', () => {
     const {status, body} = await request({
       ok: false,
       status: 404,
-      error: ENTRY_ERROR_CODES.ENTRY_NOT_FOUND,
+      error: COMMON_ERROR_CODES.ENTRY_NOT_FOUND,
     });
 
     expect(status).toBe(404);
@@ -91,7 +91,7 @@ describe('LibFailure', () => {
       // @ts-expect-error A custom field message starts with a known reason.
       {ok: false, status: 400, error: 'duplicate key value: shirt_size'},
       // @ts-expect-error 404 is not one of the statuses declared here.
-      {ok: false, status: 404, error: ENTRY_ERROR_CODES.ENTRY_NOT_FOUND},
+      {ok: false, status: 404, error: COMMON_ERROR_CODES.ENTRY_NOT_FOUND},
     ];
 
     expect(failures).toHaveLength(6);

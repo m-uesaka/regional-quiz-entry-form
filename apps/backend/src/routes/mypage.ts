@@ -2,6 +2,7 @@ import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
 import {
+  COMMON_ERROR_CODES,
   EntryEditInputSchema,
   MypageEntryDetailSchema,
   MypageEntrySchema,
@@ -117,7 +118,7 @@ export const mypageRoute = new Hono<ParticipantEnv>()
         );
       }
       if (!data) {
-        return c.json({error: 'entry not found'}, 404);
+        return c.json({error: COMMON_ERROR_CODES.ENTRY_NOT_FOUND}, 404);
       }
 
       // The tournament's custom form fields, so the edit screen can

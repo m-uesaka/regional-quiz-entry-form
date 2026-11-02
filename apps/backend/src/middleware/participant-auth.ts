@@ -2,6 +2,7 @@ import {createMiddleware} from 'hono/factory';
 import {getCookie} from 'hono/cookie';
 import {verify} from 'hono/jwt';
 import {
+  COMMON_ERROR_CODES,
   ParticipantClaimsSchema,
   type ParticipantClaims,
 } from '@regional-quiz/shared';
@@ -47,7 +48,7 @@ export function requireParticipant() {
       c.env.SESSION_SECRET,
     );
     if (!claims) {
-      return c.json({error: 'unauthorized'}, 401);
+      return c.json({error: COMMON_ERROR_CODES.UNAUTHORIZED}, 401);
     }
 
     // The signature alone can't tell whether this session was cut short: it
@@ -88,7 +89,7 @@ export function requireParticipant() {
       !participant.email_verified_at ||
       Date.parse(participant.password_changed_at) !== claims.pwdChangedAt
     ) {
-      return c.json({error: 'unauthorized'}, 401);
+      return c.json({error: COMMON_ERROR_CODES.UNAUTHORIZED}, 401);
     }
 
     c.set('participantId', claims.sub);

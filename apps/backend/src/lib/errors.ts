@@ -1,4 +1,5 @@
 import type {
+  CommonErrorCode,
   CustomFieldValuesErrorMessage,
   EntryErrorCode,
   EntryNotEditableCode,
@@ -32,12 +33,18 @@ export function internalError(
 export type ClientFailureStatus = 400 | 401 | 403 | 404 | 409;
 
 /**
- * What a client may be told a refusal was. Every member is fixed by the code
- * or built from fixed parts, so a database message has no way into a 4xx: the
- * frontend picks its wording by these strings (#191, #195).
+ * What a client may be told a refusal was. The frontend picks its wording by
+ * these strings (#191, #195). The codes are fixed, and a custom field
+ * rejection is a fixed prefix followed by the field's key, so a database
+ * message only gets into a 4xx if code puts it after one of those prefixes.
+ * The type can't rule that out, so take those messages from
+ * `findCustomFieldValuesError()` and don't write them by hand.
  */
 export type ClientFailureCode =
-  EntryErrorCode | EntryNotEditableCode | CustomFieldValuesErrorMessage;
+  | EntryErrorCode
+  | CommonErrorCode
+  | EntryNotEditableCode
+  | CustomFieldValuesErrorMessage;
 
 /** A lib function refusing the client, in the client's own terms. */
 export interface ClientFailure<S extends ClientFailureStatus> {

@@ -1,5 +1,5 @@
 import {
-  ENTRY_ERROR_CODES,
+  COMMON_ERROR_CODES,
   type StaffLoginScope,
   type StaffRole,
   type TournamentType,
@@ -361,7 +361,7 @@ export async function confirmStaffPasswordReset(
     return {
       ok: false,
       status: 400,
-      error: ENTRY_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
+      error: COMMON_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
     };
   }
 
@@ -374,7 +374,7 @@ export async function confirmStaffPasswordReset(
       return {
         ok: false,
         status: 400,
-        error: ENTRY_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
+        error: COMMON_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
       };
     }
     return {ok: false, status: 500, error: resetError.message};
