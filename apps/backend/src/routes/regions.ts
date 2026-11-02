@@ -10,7 +10,12 @@ import {
 } from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
-import {createDbClient} from '../lib/db';
+import {
+  createDbClient,
+  type Tables,
+  type TablesInsert,
+  type TablesUpdate,
+} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {
   duplicate,
@@ -23,12 +28,10 @@ import {
 const RegionIdParamSchema = z.object({id: z.string().uuid()});
 
 /** Shape of a `regions` row as returned by Supabase. */
-interface RegionRow {
-  id: string;
-  slug: string;
-  name: string;
-  allows_dual_entry: boolean;
-}
+type RegionRow = Pick<
+  Tables<'regions'>,
+  'id' | 'slug' | 'name' | 'allows_dual_entry'
+>;
 
 /** The columns of `RegionRow`, for every select in this file. */
 const REGION_COLUMNS = 'id, slug, name, allows_dual_entry';
@@ -48,16 +51,26 @@ function rowToRegion(row: RegionRow): Region {
 }
 
 /**
- * Turns the API's camelCase input into the columns Supabase writes. Only
- * `allowsDualEntry` needs renaming — `slug` and `name` are spelled the same
- * on both sides — and every field the caller omitted is left out of the row,
- * so a PATCH updates exactly what it sent. The update schema refuses a body
- * that would leave nothing at all.
- * @param input The validated create or update body.
+ * Turns a create body into the columns Supabase writes. Every column is
+ * listed, so the return type checks that each one an insert requires is set.
+ * @param input The validated create body.
  */
-function toRegionRow(
-  input: RegionCreateInput | RegionUpdateInput,
-): Record<string, unknown> {
+function toRegionInsert(input: RegionCreateInput): TablesInsert<'regions'> {
+  return {
+    slug: input.slug,
+    name: input.name,
+    allows_dual_entry: input.allowsDualEntry,
+  };
+}
+
+/**
+ * Turns a PATCH body into the columns Supabase writes. Only
+ * `allowsDualEntry` needs renaming, and every field the caller omitted is
+ * left out of the row, so a PATCH updates exactly what it sent. The update
+ * schema refuses a body that would leave nothing at all.
+ * @param input The validated update body.
+ */
+function toRegionUpdate(input: RegionUpdateInput): TablesUpdate<'regions'> {
   const {allowsDualEntry, ...rest} = input;
   return allowsDualEntry === undefined
     ? rest
@@ -74,8 +87,7 @@ export const regionsRoute = new Hono<StaffEnv>()
     const {data, error} = await db
       .from('regions')
       .select(REGION_COLUMNS)
-      .order('name', {ascending: true})
-      .returns<RegionRow[]>();
+      .order('name', {ascending: true});
     if (error) {
       return c.json(internalError('failed to read the regions', error), 500);
     }
@@ -85,9 +97,8 @@ export const regionsRoute = new Hono<StaffEnv>()
     const db = createDbClient(c.env);
     const {data, error} = await db
       .from('regions')
-      .insert(toRegionRow(c.req.valid('json')))
+      .insert(toRegionInsert(c.req.valid('json')))
       .select(REGION_COLUMNS)
-      .returns<RegionRow[]>()
       .single();
     if (error) {
       // A unique violation here can only be the `slug` column. A slug
@@ -116,10 +127,9 @@ export const regionsRoute = new Hono<StaffEnv>()
       const db = createDbClient(c.env);
       const {data, error} = await db
         .from('regions')
-        .update(toRegionRow(c.req.valid('json')))
+        .update(toRegionUpdate(c.req.valid('json')))
         .eq('id', c.req.valid('param').id)
         .select(REGION_COLUMNS)
-        .returns<RegionRow[]>()
         .single();
       if (error) {
         // `.single()` found no row to update. Its message talks about the

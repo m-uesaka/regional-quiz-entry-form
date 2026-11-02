@@ -72,14 +72,9 @@ export async function confirmEntryByToken(
 
   return {
     ok: true,
-    entryStatus: data as 'confirmed' | 'waitlisted',
+    entryStatus: data,
     tournament: await readConfirmedTournament(env, tokenHash),
   };
-}
-
-/** Shape of the token row as selected by `readConfirmedTournament`. */
-interface ConfirmedTournamentRow {
-  entries: {tournaments: {type: TournamentType; regions: {slug: string}}};
 }
 
 /**
@@ -97,7 +92,7 @@ async function readConfirmedTournament(
     .from('email_verification_tokens')
     .select('entries(tournaments(type, regions(slug)))')
     .eq('token_hash', tokenHash)
-    .maybeSingle<ConfirmedTournamentRow>();
+    .maybeSingle();
   if (error || !data) {
     return null;
   }

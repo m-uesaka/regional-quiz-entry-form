@@ -37,11 +37,6 @@ export const DEFAULT_EXCLUDED_STATUSES: readonly EntryStatus[] = [
 
 type RecipientsResult = {ok: true; recipients: string[]} | InternalFailure;
 
-/** Shape of the `entries` rows selected for their participant's address. */
-interface RecipientRow {
-  participants: {email: string};
-}
-
 /**
  * Collects the addresses to mail for one tournament's entries.
  *
@@ -99,8 +94,7 @@ export async function fetchTournamentRecipients(
       // of overlapping: without an order PostgREST makes no promise that
       // two ranges see the same row order.
       .order('id', {ascending: true})
-      .range(page * pageSize, (page + 1) * pageSize - 1)
-      .returns<RecipientRow[]>();
+      .range(page * pageSize, (page + 1) * pageSize - 1);
     if (error) {
       return {ok: false, status: 500, error: error.message};
     }
