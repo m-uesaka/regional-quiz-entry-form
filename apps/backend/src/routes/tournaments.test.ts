@@ -235,7 +235,8 @@ describe('tournaments routes (database errors)', () => {
     const res = await request('POST');
     const text = await res.text();
 
-    expect(res.status).toBe(400);
+    // A unique violation is a 409 on every route (#199).
+    expect(res.status).toBe(409);
     expect(JSON.parse(text)).toEqual({
       error: 'この地域には同じ種別の大会がすでにあります',
     });
@@ -1079,6 +1080,18 @@ describe.skipIf(!dbReachable)(
       expect(res.status).toBe(400);
       expect((await res.json()) as unknown).toEqual({
         error: '指定された地域が存在しません',
+      });
+    });
+
+    it('refuses a second tournament of the same type in a region with 409', async () => {
+      const regionId = await createTestRegion('duplicate-type');
+      const first = await postTournament(regionId, {});
+      const second = await postTournament(regionId, {});
+
+      expect(first.status).toBe(201);
+      expect(second.status).toBe(409);
+      expect((await second.json()) as unknown).toEqual({
+        error: 'この地域には同じ種別の大会がすでにあります',
       });
     });
 
