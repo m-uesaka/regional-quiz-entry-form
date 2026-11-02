@@ -387,7 +387,8 @@ describe('mypage entry edit form action', () => {
     await expect(actions.default(event)).resolves.toMatchObject({
       status: 403,
       data: {
-        error: 'エントリー期間外またはキャンセル済みのため編集できません',
+        error:
+          'このエントリーは現在編集できません。ページを再読み込みしてお試しください',
       },
     });
   });

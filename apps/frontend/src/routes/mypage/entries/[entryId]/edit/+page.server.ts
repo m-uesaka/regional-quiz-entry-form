@@ -1,9 +1,10 @@
 import {error, fail, redirect} from '@sveltejs/kit';
 import {
-  EDITABLE_ENTRY_STATUSES,
+  ENTRY_EDIT_ERROR_CODES,
   ENTRY_ERROR_CODES,
   EntryEditInputSchema,
   findCustomFieldValuesErrors,
+  isEditableEntryStatus,
   isWithinEntryPeriod,
 } from '@regional-quiz/shared';
 import {
@@ -45,9 +46,10 @@ const CHECK_INPUT_MESSAGE = '入力内容を確認してください';
  */
 const EDIT_STATUS_MESSAGES: Readonly<Record<number, string>> = {
   400: CHECK_INPUT_MESSAGE,
-  // A 403 neither code below explains comes from something in front of the
-  // API, so it doesn't claim one of the two reasons.
-  403: 'エントリー期間外またはキャンセル済みのため編集できません',
+  // The API's own 403s carry one of the two codes below, so a 403 without
+  // one comes from something in front of it. Neither reason may be true,
+  // so it names none and points at reloading.
+  403: 'このエントリーは現在編集できません。ページを再読み込みしてお試しください',
   404: 'エントリーが見つかりません',
 };
 
@@ -58,7 +60,7 @@ const EDIT_STATUS_MESSAGES: Readonly<Record<number, string>> = {
 const EDIT_REFUSAL_MESSAGES: ApiErrorMessages = {
   byCode: {
     [ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED]: ENTRY_PERIOD_CLOSED_MESSAGE,
-    [ENTRY_ERROR_CODES.ENTRY_CANCELLED]: ENTRY_CANCELLED_MESSAGE,
+    [ENTRY_EDIT_ERROR_CODES.ENTRY_CANCELLED]: ENTRY_CANCELLED_MESSAGE,
   },
   byStatus: EDIT_STATUS_MESSAGES,
   fallback: 'エントリーの更新に失敗しました',
@@ -98,7 +100,7 @@ export const load: PageServerLoad = async ({cookies, params, fetch, url}) => {
   }
   // The two halves of `isEntryEditable` are checked separately so the
   // participant is told which one refused the edit.
-  if (!EDITABLE_ENTRY_STATUSES.includes(entry.status)) {
+  if (!isEditableEntryStatus(entry.status)) {
     throw error(403, ENTRY_CANCELLED_MESSAGE);
   }
 

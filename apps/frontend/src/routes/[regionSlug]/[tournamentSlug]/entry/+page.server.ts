@@ -84,14 +84,8 @@ type MailOnlyEntryErrorCode =
   | typeof ENTRY_ERROR_CODES.COMMON_PASSWORD
   | typeof ENTRY_ERROR_CODES.SUPERSEDED_BY_LATER_SUBMISSION;
 
-/**
- * The codes the entry form can be answered with. `ENTRY_CANCELLED` is an edit
- * of an existing entry being refused, which this form doesn't do.
- */
-type AnsweredEntryErrorCode = Exclude<
-  EntryErrorCode,
-  MailOnlyEntryErrorCode | typeof ENTRY_ERROR_CODES.ENTRY_CANCELLED
->;
+/** The codes the entry form can be answered with. */
+type AnsweredEntryErrorCode = Exclude<EntryErrorCode, MailOnlyEntryErrorCode>;
 
 /**
  * The backend's `error` strings mapped to what the form shows. The API
