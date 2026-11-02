@@ -68,3 +68,55 @@ export async function readErrorMessage(
   }
   return fallback;
 }
+
+/** What each way a backend refusal can be told apart is shown as. */
+export interface ApiErrorMessages {
+  /** Wording by the `error` string, which decides first. */
+  byCode?: Readonly<Record<string, string>>;
+  /** Wording by status, for an `error` string `byCode` doesn't know. */
+  byStatus?: Readonly<Record<number, string>>;
+  /** What a refusal neither table knows is shown as. */
+  fallback: string;
+}
+
+/**
+ * What a refusal is shown as: its `error` string's wording, or its status's,
+ * or the fallback. The code comes first because one status can stand for
+ * several refusals (403 is both "entry period closed" and "entry is
+ * cancelled"). For a caller that needs the code too, which it can only read
+ * once; anything else wants {@link resolveApiErrorMessage}.
+ *
+ * @param code The `error` string of the response.
+ * @param status The response's status.
+ * @param messages The wording to choose from.
+ */
+export function pickApiErrorMessage(
+  code: string,
+  status: number,
+  {byCode = {}, byStatus = {}, fallback}: ApiErrorMessages,
+): string {
+  // The code comes over the wire, so an inherited name like `constructor`
+  // must not find anything.
+  return Object.hasOwn(byCode, code)
+    ? byCode[code]
+    : (byStatus[status] ?? fallback);
+}
+
+/**
+ * Reads a refusal and answers with what it is shown as. See
+ * {@link pickApiErrorMessage}. For an `error` string meant to be shown as it
+ * is, use {@link readErrorMessage}.
+ *
+ * @param res The failed API response.
+ * @param messages The wording to choose from.
+ */
+export async function resolveApiErrorMessage(
+  res: {status: number; json(): Promise<unknown>},
+  messages: ApiErrorMessages,
+): Promise<string> {
+  return pickApiErrorMessage(
+    await readErrorMessage(res, ''),
+    res.status,
+    messages,
+  );
+}

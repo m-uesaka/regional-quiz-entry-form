@@ -1,5 +1,10 @@
 import {describe, expect, it} from 'bun:test';
-import {ENTRY_ERROR_CODES, isEntryErrorCode} from './entry-error-codes';
+import {
+  ENTRY_EDIT_ERROR_CODES,
+  ENTRY_ERROR_CODES,
+  isEntryErrorCode,
+  NOT_EDITABLE_ENTRY_CODES,
+} from './entry-error-codes';
 
 describe('ENTRY_ERROR_CODES', () => {
   // Pinned rather than derived: these are the wire format, and an entry form
@@ -38,5 +43,26 @@ describe('isEntryErrorCode', () => {
     expect(isEntryErrorCode('something new')).toBe(false);
     expect(isEntryErrorCode('')).toBe(false);
     expect(isEntryErrorCode('constructor')).toBe(false);
+  });
+});
+
+describe('ENTRY_EDIT_ERROR_CODES', () => {
+  it('keeps the wire values', () => {
+    expect(ENTRY_EDIT_ERROR_CODES).toEqual({
+      ENTRY_CANCELLED: 'entry is cancelled',
+    });
+  });
+
+  // The entry form keys its wording on `ENTRY_ERROR_CODES` alone.
+  it('is not one of the entry codes', () => {
+    expect(isEntryErrorCode(ENTRY_EDIT_ERROR_CODES.ENTRY_CANCELLED)).toBe(
+      false,
+    );
+  });
+
+  it('names a code for each status that cannot be edited', () => {
+    expect(NOT_EDITABLE_ENTRY_CODES).toEqual({
+      cancelled: 'entry is cancelled',
+    });
   });
 });

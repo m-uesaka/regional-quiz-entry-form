@@ -2,7 +2,7 @@ import type {
   CommonErrorCode,
   CustomFieldValuesErrorMessage,
   EntryErrorCode,
-  EntryNotEditableCode,
+  EntryEditErrorCode,
 } from '@regional-quiz/shared';
 import type {Context} from 'hono';
 
@@ -43,7 +43,7 @@ export type ClientFailureStatus = 400 | 401 | 403 | 404 | 409;
 export type ClientFailureCode =
   | EntryErrorCode
   | CommonErrorCode
-  | EntryNotEditableCode
+  | EntryEditErrorCode
   | CustomFieldValuesErrorMessage;
 
 /** A lib function refusing the client, in the client's own terms. */

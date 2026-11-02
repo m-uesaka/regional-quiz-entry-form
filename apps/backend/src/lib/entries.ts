@@ -1,7 +1,8 @@
 import {
-  EDITABLE_ENTRY_STATUSES,
   COMMON_ERROR_CODES,
   ENTRY_ERROR_CODES,
+  isEditableEntryStatus,
+  NOT_EDITABLE_ENTRY_CODES,
   isEntryErrorCode,
   isWithinEntryPeriod,
   regulationSelectionRefusal,
@@ -1215,8 +1216,12 @@ export async function updateOwnEntry(
       error: ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED,
     };
   }
-  if (!EDITABLE_ENTRY_STATUSES.includes(entry.status)) {
-    return {ok: false, status: 403, error: `entry is ${entry.status}`};
+  if (!isEditableEntryStatus(entry.status)) {
+    return {
+      ok: false,
+      status: 403,
+      error: NOT_EDITABLE_ENTRY_CODES[entry.status],
+    };
   }
 
   const customFieldValuesCheck = await validateCustomFieldValues(
