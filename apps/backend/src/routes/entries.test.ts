@@ -162,6 +162,21 @@ const PASSWORD_CHANGED_AT = '2026-10-01T00:00:00.000Z';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** The cancelled entry a re-entry reuses, as `enterTournament()` reads it. */
+const CANCELLED_ENTRY = {
+  id: ENTRY_ID,
+  name: '以前の氏名',
+  furigana: 'イゼンノシメイ',
+  display_name: '以前',
+  entry_regulations: [],
+  free_text: null,
+  custom_field_values: {},
+  status: 'cancelled',
+  waitlist_position: null,
+  email_verified_at: null,
+  cancelled_at: new Date(Date.now() - DAY_MS).toISOString(),
+};
+
 /** A tournament taking entries, as `checkEntrySubmission()` selects it. */
 function tournamentRow(
   overrides: {
@@ -180,14 +195,13 @@ function tournamentRow(
     entry_closes_at:
       overrides.entryClosesAt ?? new Date(Date.now() + DAY_MS).toISOString(),
     entries_paused: overrides.entriesPaused ?? false,
-    // Lets the dual-entry check be skipped; that rule is the integration
-    // tests' business.
-    regions: {allows_dual_entry: true},
+    regions: {name: '東京'},
     regulations: overrides.regulations ?? [
       {
         id: validBody.regulationIds[0],
         priority_starts_at: null,
         priority_ends_at: null,
+        closes_with_priority: false,
       },
     ],
   };
@@ -211,6 +225,8 @@ interface MockSupabase {
   takeOvers: Array<Record<string, unknown>>;
   /** The arguments each `claim_participant_region()` call got. */
   regionClaims: Array<Record<string, unknown>>;
+  /** The arguments each `reenter_cancelled_entry()` call got. */
+  reentries: Array<Record<string, unknown>>;
 }
 
 /**
@@ -246,12 +262,17 @@ function mockSupabase(options: {
   activeElsewhere?: boolean;
   /** The SQLSTATE the entry write is refused with, if it is. */
   entryWriteErrorCode?: string;
+  /** The participant's cancelled entry for the tournament, if any. */
+  cancelledEntry?: Record<string, unknown>;
+  /** Makes `reenter_cancelled_entry()` match no row: the row was taken. */
+  reentryMatchesNoRow?: boolean;
 }): MockSupabase {
   const recorded: MockSupabase = {
     calls: [],
     mails: [],
     takeOvers: [],
     regionClaims: [],
+    reentries: [],
   };
   const tournament = options.tournament ?? tournamentRow();
   // Written to by the account creation and the takeover, so the re-read
@@ -281,6 +302,16 @@ function mockSupabase(options: {
           ? Response.json(body[0])
           : new Response(null, {status: 406})
         : Response.json(body);
+
+    const entryWritten = (): Response =>
+      options.entryWriteErrorCode
+        ? Response.json(
+            {code: options.entryWriteErrorCode, message: 'refused'},
+            // What PostgREST answers: 500 for a code the triggers raise, and
+            // 409 for Postgres' own constraint violations.
+            {status: options.entryWriteErrorCode.startsWith('P0') ? 500 : 409},
+          )
+        : rows([{id: ENTRY_ID}]);
 
     switch (`${method} ${table}`) {
       case 'GET tournaments':
@@ -323,14 +354,20 @@ function mockSupabase(options: {
         return Response.json(!options.activeElsewhere);
       }
       case 'GET entries':
-        return rows([]);
+        return rows(options.cancelledEntry ? [options.cancelledEntry] : []);
+      case 'POST rpc/reenter_cancelled_entry':
+        recorded.reentries.push(
+          JSON.parse(String(init?.body)) as Record<string, unknown>,
+        );
+        if (options.reentryMatchesNoRow) {
+          return Response.json(
+            {code: 'PGRST116', message: 'no rows'},
+            {status: 406},
+          );
+        }
+        return entryWritten();
       case 'POST entries':
-        return options.entryWriteErrorCode
-          ? Response.json(
-              {code: options.entryWriteErrorCode, message: 'refused'},
-              {status: 400},
-            )
-          : rows([{id: ENTRY_ID}]);
+        return entryWritten();
       case 'POST email_verification_tokens':
         return options.failVerificationToken
           ? Response.json({message: 'boom'}, {status: 500})
@@ -808,7 +845,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     expect(recorded.mails[0].html).toContain('別の地域');
   });
 
-  // #235: a priority window is judged against this tournament's own period.
+  // #243: a priority phase closes because staff marked it to.
   describe('with a priority phase that is over', () => {
     const closesAt = new Date(Date.now() + DAY_MS * 2).toISOString();
     const priorityEndedAt = new Date(Date.now() - 1000).toISOString();
@@ -816,26 +853,29 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
       id,
       priority_starts_at: new Date(Date.now() - DAY_MS / 2).toISOString(),
       priority_ends_at: priorityEndedAt,
+      closes_with_priority: true,
     });
     const generalPhase = (endsAt: string) => ({
       id: '99999999-9999-4999-8999-999999999999',
       priority_starts_at: priorityEndedAt,
       priority_ends_at: endsAt,
+      closes_with_priority: false,
     });
     const selectedWithoutWindow = {
       id: validBody.regulationIds[0],
       priority_starts_at: null,
       priority_ends_at: null,
+      closes_with_priority: false,
     };
     const otherPhaseId = '88888888-8888-4888-8888-888888888888';
 
-    it('enforces a later window ending before the close', async () => {
+    it('enforces a later window when nothing is marked to close', async () => {
       mockSupabase({
         tournament: tournamentRow({
           entryClosesAt: closesAt,
           regulations: [
             selectedWithoutWindow,
-            earlierPhase(otherPhaseId),
+            {...earlierPhase(otherPhaseId), closes_with_priority: false},
             generalPhase(new Date(Date.now() + DAY_MS).toISOString()),
           ],
         }),
@@ -987,6 +1027,34 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     });
     expect(recorded.mails).toHaveLength(0);
   });
+
+  describe.each([
+    ['a first entry', undefined, 'entries'],
+    ['a re-entry', CANCELLED_ENTRY, 'rpc/reenter_cancelled_entry'],
+  ])('refused by the dual-entry trigger on %s', (_, cancelledEntry, table) => {
+    it('mails the owner and leaves nothing else behind', async () => {
+      const recorded = mockSupabase({
+        participant: await registeredParticipant(),
+        entryWriteErrorCode: 'P0005',
+        cancelledEntry,
+      });
+
+      const res = await observable(
+        await postWithContext(TOURNAMENT_PATH, validBody),
+      );
+      await settleBackgroundWork();
+
+      expect(res).toEqual({status: 202, body: JSON.stringify({ok: true})});
+      expect(recorded.mails).toHaveLength(1);
+      expect(recorded.mails[0].subject).toBe(
+        entryNoticeSubject(TOURNAMENT_NAME),
+      );
+      expect(recorded.mails[0].html).toContain('もう一方の大会');
+      // The write is the last thing tried: nothing follows it, and with no
+      // row written there is nothing to roll back.
+      expect(recorded.calls.at(-1)).toEqual({table, method: 'POST'});
+    });
+  });
 });
 
 describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', () => {
@@ -1098,11 +1166,13 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
             id: validBody.regulationIds[0],
             priority_starts_at: new Date(Date.now() - DAY_MS / 2).toISOString(),
             priority_ends_at: priorityEndedAt,
+            closes_with_priority: true,
           },
           {
             id: '99999999-9999-4999-8999-999999999999',
             priority_starts_at: priorityEndedAt,
             priority_ends_at: closesAt,
+            closes_with_priority: false,
           },
         ],
       }),
@@ -1121,6 +1191,81 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
     });
   });
 
+  describe('re-entering a cancelled entry', () => {
+    it('writes through the RPC rather than to the table', async () => {
+      const recorded = mockSupabase({
+        participant: await registeredParticipant(),
+        cancelledEntry: CANCELLED_ENTRY,
+      });
+
+      const res = await postWithContext(
+        SESSION_PATH,
+        sessionBody,
+        await sessionCookie(),
+      );
+
+      expect(res.status).toBe(201);
+      expect(recorded.reentries).toEqual([
+        {
+          p_entry_id: ENTRY_ID,
+          p_participant_id: PARTICIPANT_ID,
+          p_name: sessionBody.name,
+          p_furigana: sessionBody.furigana,
+          p_display_name: sessionBody.displayName,
+          p_free_text: null,
+          p_custom_field_values: sessionBody.customFieldValues,
+        },
+      ]);
+      expect(
+        recorded.calls.filter(
+          call => call.table === 'entries' && call.method !== 'GET',
+        ),
+      ).toEqual([]);
+    });
+
+    it.each([
+      ['P0005', 'already entered another tournament in this region'],
+      ['P0008', 'concurrent submission'],
+    ])(
+      'answers %s from the trigger like a first entry',
+      async (code, error) => {
+        mockSupabase({
+          participant: await registeredParticipant(),
+          cancelledEntry: CANCELLED_ENTRY,
+          entryWriteErrorCode: code,
+        });
+
+        const res = await postWithContext(
+          SESSION_PATH,
+          sessionBody,
+          await sessionCookie(),
+        );
+
+        expect(res.status).toBe(409);
+        expect((await res.json()) as unknown).toEqual({error});
+      },
+    );
+
+    it('answers a row taken in the meantime as a concurrent submission', async () => {
+      mockSupabase({
+        participant: await registeredParticipant(),
+        cancelledEntry: CANCELLED_ENTRY,
+        reentryMatchesNoRow: true,
+      });
+
+      const res = await postWithContext(
+        SESSION_PATH,
+        sessionBody,
+        await sessionCookie(),
+      );
+
+      expect(res.status).toBe(409);
+      expect((await res.json()) as unknown).toEqual({
+        error: 'concurrent submission',
+      });
+    });
+  });
+
   it('answers a concurrent move of the region as a concurrent submission', async () => {
     mockSupabase({
       participant: await registeredParticipant(),
@@ -1136,6 +1281,31 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
     expect(res.status).toBe(409);
     expect((await res.json()) as unknown).toEqual({
       error: 'concurrent submission',
+    });
+  });
+
+  describe.each([
+    ['a first entry', undefined],
+    ['a re-entry', CANCELLED_ENTRY],
+  ])('refused by the dual-entry trigger on %s', (_, cancelledEntry) => {
+    it('answers 409 and mails nothing', async () => {
+      const recorded = mockSupabase({
+        participant: await registeredParticipant(),
+        entryWriteErrorCode: 'P0005',
+        cancelledEntry,
+      });
+
+      const res = await postWithContext(
+        SESSION_PATH,
+        sessionBody,
+        await sessionCookie(),
+      );
+
+      expect(res.status).toBe(409);
+      expect((await res.json()) as unknown).toEqual({
+        error: 'already entered another tournament in this region',
+      });
+      expect(recorded.mails).toHaveLength(0);
     });
   });
 });

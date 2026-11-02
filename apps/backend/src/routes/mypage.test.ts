@@ -240,7 +240,7 @@ describe.skipIf(!(await isDbReachable()))(
 
     it('returns entries for both saikyoi and shinjinou in the same region', async () => {
       // Only a dual-entry region can hold this shape at all: everywhere else
-      // `check_region_dual_entry()` (migration 0016) refuses the second row.
+      // `check_entry_seat()` (migration 0041) refuses the second row.
       const regionId = await createRegion('both-types', true);
       const saikyoiId = await createTournament(regionId, 'saikyoi');
       const shinjinouId = await createTournament(regionId, 'shinjinou');

@@ -22,6 +22,7 @@ interface PortalTournamentRow {
     label: string;
     priority_starts_at: string | null;
     priority_ends_at: string | null;
+    closes_with_priority: boolean;
   }>;
   // `!inner` makes PostgREST drop a tournament without a region rather than
   // answer `null` here, but the type stays honest about the join.
@@ -70,6 +71,7 @@ function rowToPortalTournament(
               label: regulation.label,
               priorityStartsAt: regulation.priority_starts_at,
               priorityEndsAt: regulation.priority_ends_at,
+              closesWithPriority: regulation.closes_with_priority,
             },
           ]
         : [],
@@ -108,7 +110,8 @@ export const portalRoute = new Hono<Env>().get('/tournaments', async c => {
       'type, name, entry_opens_at, entry_closes_at, entries_paused, ' +
         'capacity, ' +
         'regions!inner(slug, name, allows_dual_entry), ' +
-        'regulations(label, priority_starts_at, priority_ends_at)',
+        'regulations(label, priority_starts_at, priority_ends_at, ' +
+        'closes_with_priority)',
     )
     // The order general staff set (`reorder_tournaments()`, 0032); `id`
     // only breaks a tie, which the column's sequence default never makes.

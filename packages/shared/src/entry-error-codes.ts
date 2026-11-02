@@ -1,3 +1,5 @@
+import type {EntryStatus} from './schemas/entry';
+
 /**
  * The `error` strings the entry flow's API answers with, named once so the
  * backend that sends them and the entry form that translates them can't
@@ -30,8 +32,8 @@ export const ENTRY_ERROR_CODES = {
    */
   REGULATION_NO_LONGER_AVAILABLE: 'regulation no longer available',
   /**
-   * The error the dual-entry rule answers with, from both the check and the
-   * trigger's SQLSTATE mapping, so the entry form has one string to translate.
+   * The error the dual-entry rule answers with: `check_entry_seat()` raises
+   * `P0005` at the write, and `enterTournament()` maps that SQLSTATE to this.
    */
   ALREADY_ENTERED_ANOTHER_TOURNAMENT:
     'already entered another tournament in this region',
@@ -76,6 +78,12 @@ export const ENTRY_ERROR_CODES = {
 /** One of the `error` strings in `ENTRY_ERROR_CODES`. */
 export type EntryErrorCode =
   (typeof ENTRY_ERROR_CODES)[keyof typeof ENTRY_ERROR_CODES];
+
+/**
+ * What editing an entry in a status that can't be edited answers with. Built
+ * from the status rather than listed, so not one of `ENTRY_ERROR_CODES`.
+ */
+export type EntryNotEditableCode = `entry is ${EntryStatus}`;
 
 const ENTRY_ERROR_CODE_VALUES: ReadonlySet<string> = new Set(
   Object.values(ENTRY_ERROR_CODES),
