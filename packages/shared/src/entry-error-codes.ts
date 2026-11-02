@@ -1,3 +1,5 @@
+import type {NonEditableEntryStatus} from './schemas/entry';
+
 /**
  * The `error` strings the entry flow's API answers with, named once so the
  * backend that sends them and the entry form that translates them can't
@@ -70,6 +72,36 @@ export const ENTRY_ERROR_CODES = {
 /** One of the `error` strings in `ENTRY_ERROR_CODES`. */
 export type EntryErrorCode =
   (typeof ENTRY_ERROR_CODES)[keyof typeof ENTRY_ERROR_CODES];
+
+/**
+ * The `error` strings only an edit of an existing entry answers with, kept
+ * apart from `ENTRY_ERROR_CODES` so the entry form's set holds only what a
+ * submission can be answered with. An edit can also be refused with
+ * `ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED`. Wire format: rename a key, never a
+ * value.
+ */
+export const ENTRY_EDIT_ERROR_CODES = {
+  /**
+   * The entry was cancelled while the edit form was open. Said apart from
+   * `ENTRY_PERIOD_CLOSED`, which refuses an edit with the same 403.
+   */
+  ENTRY_CANCELLED: 'entry is cancelled',
+} as const;
+
+/** One of the `error` strings in `ENTRY_EDIT_ERROR_CODES`. */
+export type EntryEditErrorCode =
+  (typeof ENTRY_EDIT_ERROR_CODES)[keyof typeof ENTRY_EDIT_ERROR_CODES];
+
+/**
+ * The code an edit refused for the entry's status answers with. A status
+ * that can't be edited has to be given a code here, so one added later
+ * fails to compile instead of being told as cancelled.
+ */
+export const NOT_EDITABLE_ENTRY_CODES: Readonly<
+  Record<NonEditableEntryStatus, EntryEditErrorCode>
+> = {
+  cancelled: ENTRY_EDIT_ERROR_CODES.ENTRY_CANCELLED,
+};
 
 const ENTRY_ERROR_CODE_VALUES: ReadonlySet<string> = new Set(
   Object.values(ENTRY_ERROR_CODES),

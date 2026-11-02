@@ -1,9 +1,6 @@
 <script lang="ts">
   import {enhance} from '$app/forms';
-  import {
-    EDITABLE_ENTRY_STATUSES,
-    isEntryEditable,
-  } from '@regional-quiz/shared';
+  import {isEditableEntryStatus, isEntryEditable} from '@regional-quiz/shared';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
   import Button, {buttonVariants} from '$lib/components/ui/atoms/Button.svelte';
@@ -47,7 +44,7 @@
                 size: 'small',
               })}>編集する</a
             >
-          {:else if !EDITABLE_ENTRY_STATUSES.includes(entry.status)}
+          {:else if !isEditableEntryStatus(entry.status)}
             <p class="text-sm text-muted-foreground">
               キャンセル済みのエントリーは編集できません
             </p>

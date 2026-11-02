@@ -4,6 +4,7 @@ import {getCookie} from 'hono/cookie';
 import {verify} from 'hono/jwt';
 import {
   canPreviewTournament,
+  COMMON_ERROR_CODES,
   StaffClaimsSchema,
   type StaffClaims,
   type TournamentType,
@@ -180,7 +181,7 @@ async function authenticateStaff<T>(
     c.env.SESSION_SECRET,
   );
   if (!staff) {
-    return c.json({error: 'unauthorized'}, 401);
+    return c.json({error: COMMON_ERROR_CODES.UNAUTHORIZED}, 401);
   }
   const [check, authorization] = await Promise.all([
     isSessionCurrent(c.env, staff),
@@ -190,7 +191,7 @@ async function authenticateStaff<T>(
     return c.json({error: 'internal server error'}, 500);
   }
   if (!check.current) {
-    return c.json({error: 'unauthorized'}, 401);
+    return c.json({error: COMMON_ERROR_CODES.UNAUTHORIZED}, 401);
   }
   switch (authorization.decision) {
     case 'error':

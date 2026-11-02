@@ -2,6 +2,7 @@ import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
 import {
+  COMMON_ERROR_CODES,
   EntryEditInputSchema,
   MypageEntryDetailSchema,
   MypageEntrySchema,
@@ -11,7 +12,7 @@ import type {ParticipantEnv} from '../types/env';
 import {requireParticipant} from '../middleware/participant-auth';
 import {createDbClient} from '../lib/db';
 import {cancelOwnEntry, updateOwnEntry} from '../lib/entries';
-import {internalError} from '../lib/errors';
+import {internalError, respondFailure} from '../lib/errors';
 import {tournamentDisplayName} from '../lib/tournaments';
 import {fetchFormFieldDefs} from '../lib/form-field-defs';
 import {
@@ -117,7 +118,7 @@ export const mypageRoute = new Hono<ParticipantEnv>()
         );
       }
       if (!data) {
-        return c.json({error: 'entry not found'}, 404);
+        return c.json({error: COMMON_ERROR_CODES.ENTRY_NOT_FOUND}, 404);
       }
 
       // The tournament's custom form fields, so the edit screen can
@@ -162,13 +163,7 @@ export const mypageRoute = new Hono<ParticipantEnv>()
         c.req.valid('json'),
       );
       if (!result.ok) {
-        if (result.status === 500) {
-          return c.json(
-            internalError('failed to update the own entry', result.error),
-            500,
-          );
-        }
-        return c.json({error: result.error}, result.status);
+        return respondFailure(c, result, 'failed to update the own entry');
       }
       return c.json({ok: true});
     },
@@ -183,13 +178,7 @@ export const mypageRoute = new Hono<ParticipantEnv>()
         c.req.valid('param').entryId,
       );
       if (!result.ok) {
-        if (result.status === 500) {
-          return c.json(
-            internalError('failed to cancel the own entry', result.error),
-            500,
-          );
-        }
-        return c.json({error: result.error}, result.status);
+        return respondFailure(c, result, 'failed to cancel the own entry');
       }
       return c.json({ok: true});
     },

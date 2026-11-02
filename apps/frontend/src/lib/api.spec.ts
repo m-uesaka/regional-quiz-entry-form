@@ -1,5 +1,10 @@
 import {describe, expect, it} from 'vitest';
-import {createApiClient, readErrorMessage} from './api';
+import {
+  createApiClient,
+  pickApiErrorMessage,
+  readErrorMessage,
+  resolveApiErrorMessage,
+} from './api';
 
 describe('createApiClient', () => {
   it('builds a client that issues requests through the given fetch implementation', async () => {
@@ -32,5 +37,66 @@ describe('readErrorMessage', () => {
         readErrorMessage(new Response(body, {status: 502}), 'fallback'),
       ).resolves.toBe('fallback');
     }
+  });
+});
+
+describe('pickApiErrorMessage', () => {
+  const messages = {
+    byCode: {known: 'code wording'},
+    byStatus: {403: 'status wording'},
+    fallback: 'fallback wording',
+  };
+
+  it('prefers the wording of the code to that of the status', () => {
+    expect(pickApiErrorMessage('known', 403, messages)).toBe('code wording');
+  });
+
+  it('falls back to the status for a code it does not know', () => {
+    expect(pickApiErrorMessage('unknown', 403, messages)).toBe(
+      'status wording',
+    );
+    expect(pickApiErrorMessage('', 403, messages)).toBe('status wording');
+  });
+
+  it('falls back when neither table knows the refusal', () => {
+    expect(pickApiErrorMessage('unknown', 500, messages)).toBe(
+      'fallback wording',
+    );
+  });
+
+  it('takes an inherited property name for an unknown code', () => {
+    expect(pickApiErrorMessage('constructor', 500, messages)).toBe(
+      'fallback wording',
+    );
+  });
+
+  it('needs neither table', () => {
+    expect(pickApiErrorMessage('known', 403, {fallback: 'fallback'})).toBe(
+      'fallback',
+    );
+  });
+});
+
+describe('resolveApiErrorMessage', () => {
+  const messages = {
+    byCode: {known: 'code wording'},
+    byStatus: {502: 'status wording'},
+    fallback: 'fallback wording',
+  };
+
+  it('resolves the code in the body', async () => {
+    const res = new Response(JSON.stringify({error: 'known'}), {status: 400});
+
+    await expect(resolveApiErrorMessage(res, messages)).resolves.toBe(
+      'code wording',
+    );
+  });
+
+  it('leaves a non-JSON body to the status', async () => {
+    const res = new Response('<html>bad gateway</html>', {status: 502});
+
+    await expect(resolveApiErrorMessage(res, messages)).resolves.toBe(
+      'status wording',
+    );
   });
 });

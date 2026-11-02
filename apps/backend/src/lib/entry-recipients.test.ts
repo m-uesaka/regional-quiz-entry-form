@@ -171,6 +171,10 @@ describe('fetchTournamentRecipients', () => {
 
     const result = await fetchTournamentRecipients(ENV, TOURNAMENT_ID);
 
-    expect(result).toEqual({ok: false, error: 'db is down'});
+    expect(result).toEqual({
+      ok: false,
+      status: 500,
+      error: 'db is down',
+    });
   });
 });

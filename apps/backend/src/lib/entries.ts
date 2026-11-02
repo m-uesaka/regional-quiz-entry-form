@@ -1,6 +1,8 @@
 import {
-  EDITABLE_ENTRY_STATUSES,
+  COMMON_ERROR_CODES,
   ENTRY_ERROR_CODES,
+  isEditableEntryStatus,
+  NOT_EDITABLE_ENTRY_CODES,
   isEntryErrorCode,
   isWithinEntryPeriod,
   regulationSelectionRefusal,
@@ -17,6 +19,7 @@ import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import {sendEntryNoticeEmail, type EntryNoticeReason} from './entry-notice';
 import {sendVerificationEmail} from './entry-verification';
+import type {LibFailure} from './errors';
 import {validateCustomFieldValues} from './form-field-defs';
 import {hashPassword, verifyPassword} from './password';
 import {tournamentDisplayName} from './tournaments';
@@ -24,16 +27,14 @@ import {verifyAccountPassword} from './password-rehash';
 import {promoteWaitlistedEntries} from './waitlist';
 
 type CreateEntryResult =
-  | {ok: true; entry: {id: string}}
-  | {ok: false; status: 400 | 401 | 403 | 409 | 500; error: string};
+  {ok: true; entry: {id: string}} | LibFailure<400 | 401 | 403 | 409>;
 
 /**
  * What the address-independent half of an entry submission concluded: the
  * tournament it can go on to enter, or why it can't.
  */
 export type EntrySubmissionCheck =
-  | {ok: true; tournament: EntryTournamentRow}
-  | {ok: false; status: 400 | 403 | 409 | 500; error: string};
+  {ok: true; tournament: EntryTournamentRow} | LibFailure<400 | 403 | 409>;
 
 /**
  * What an unauthenticated entry submission came to, once it has run in the
@@ -45,11 +46,9 @@ export type CreateEntryOutcome =
   | {kind: 'notified'; reason: EntryNoticeReason}
   | {kind: 'failed'; error: string};
 
-type UpdateOwnEntryResult =
-  {ok: true} | {ok: false; status: 400 | 403 | 404 | 500; error: string};
+type UpdateOwnEntryResult = {ok: true} | LibFailure<400 | 403 | 404>;
 
-type CancelOwnEntryResult =
-  {ok: true} | {ok: false; status: 404 | 500; error: string};
+type CancelOwnEntryResult = {ok: true} | LibFailure<404>;
 
 interface RegulationRow {
   id: string;
@@ -1142,7 +1141,7 @@ export async function createEntryForParticipant(
   if (!participant) {
     // `requireParticipant()` read this same row a moment ago, so it was
     // deleted in between; the session no longer names anyone.
-    return {ok: false, status: 401, error: 'unauthorized'};
+    return {ok: false, status: 401, error: COMMON_ERROR_CODES.UNAUTHORIZED};
   }
   return enterTournament(
     env,
@@ -1202,7 +1201,7 @@ export async function updateOwnEntry(
     return {ok: false, status: 500, error: lookupError.message};
   }
   if (!entry) {
-    return {ok: false, status: 404, error: 'entry not found'};
+    return {ok: false, status: 404, error: COMMON_ERROR_CODES.ENTRY_NOT_FOUND};
   }
 
   if (
@@ -1217,8 +1216,12 @@ export async function updateOwnEntry(
       error: ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED,
     };
   }
-  if (!EDITABLE_ENTRY_STATUSES.includes(entry.status)) {
-    return {ok: false, status: 403, error: `entry is ${entry.status}`};
+  if (!isEditableEntryStatus(entry.status)) {
+    return {
+      ok: false,
+      status: 403,
+      error: NOT_EDITABLE_ENTRY_CODES[entry.status],
+    };
   }
 
   const customFieldValuesCheck = await validateCustomFieldValues(
@@ -1290,7 +1293,7 @@ export async function cancelOwnEntry(
   // the SETOF row shape has to be asserted here — same as in `./waitlist`.
   const cancelled = (data as CancelledEntryRow[] | null)?.[0];
   if (!cancelled) {
-    return {ok: false, status: 404, error: 'entry not found'};
+    return {ok: false, status: 404, error: COMMON_ERROR_CODES.ENTRY_NOT_FOUND};
   }
 
   if (cancelled.previous_status === 'confirmed') {

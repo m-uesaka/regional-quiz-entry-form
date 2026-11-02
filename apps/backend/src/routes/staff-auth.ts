@@ -16,7 +16,7 @@ import {StaffPasswordResetConfirmInputSchema} from '@regional-quiz/shared/passwo
 import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
 import {verifyAccountPassword} from '../lib/password-rehash';
-import {internalError} from '../lib/errors';
+import {respondFailure} from '../lib/errors';
 import {findStaffAccountByScope} from '../lib/staff-account-lookup';
 import {
   confirmStaffPasswordReset,
@@ -192,16 +192,11 @@ export const staffAuthRoute = new Hono<Env>()
         c.req.valid('json'),
       );
       if (!result.ok) {
-        if (result.status === 500) {
-          return c.json(
-            internalError(
-              'failed to confirm the staff password reset',
-              result.error,
-            ),
-            500,
-          );
-        }
-        return c.json({error: result.error}, result.status);
+        return respondFailure(
+          c,
+          result,
+          'failed to confirm the staff password reset',
+        );
       }
       return c.json({ok: true});
     },
