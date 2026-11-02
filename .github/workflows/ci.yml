@@ -57,6 +57,17 @@ jobs:
           version: 2.115.0
       - run: bun install
       - run: bash .github/scripts/start-local-supabase.sh
+      # `apps/backend/src/types/database.ts` is generated from the migrations
+      # (`bun run db:types`) and committed. Regenerated here from the stack the
+      # migrations were just applied to, so a migration merged without it
+      # fails here rather than surfacing as type errors in someone else's PR.
+      #
+      # The generator runs `postgres-meta` as a one-off container, which the
+      # start script leaves out of the stack, so this step pulls that image.
+      - name: Check the generated database types are up to date
+        run: |
+          bun run db:types
+          git diff --exit-code -- apps/backend/src/types/database.ts
       # The whole package rather than a list of files, which would quietly
       # miss the next file to gain an integration suite.
       - run: bun test --reporter=junit --reporter-outfile=integration-junit.xml
