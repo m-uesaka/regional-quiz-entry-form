@@ -5,6 +5,7 @@ import {createDbClient} from './db';
 import type {LibFailure} from './errors';
 import {createMailSender} from './mailer';
 import {hashPassword} from './password';
+import {INVALID_TOKEN_SQLSTATE} from './pg-errors';
 import {
   buildSystemMail,
   describeLinkLifetime,
@@ -27,16 +28,6 @@ interface ParticipantRow {
 interface ResetTokenRow {
   id: string;
 }
-
-/**
- * The SQLSTATE the `reset_participant_password` Postgres function raises
- * (currently defined by
- * `supabase/migrations/0011_participants_password_changed_at.sql`, which
- * redefines `0009_reset_participant_password_fn.sql` and
- * `0010_reset_participant_password_participant_lock.sql`) when the token is
- * unknown, already used, or expired.
- */
-const INVALID_TOKEN_SQLSTATE = 'P0003';
 
 /**
  * Issues a one-time password reset token for the participant registered

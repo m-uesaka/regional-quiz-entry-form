@@ -12,6 +12,13 @@ import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
 import {createDbClient} from '../lib/db';
 import {internalError} from '../lib/errors';
+import {
+  duplicate,
+  mapPgError,
+  NO_ROW_PGRST_CODE,
+  noRow,
+  UNIQUE_VIOLATION_SQLSTATE,
+} from '../lib/pg-errors';
 
 const RegionIdParamSchema = z.object({id: z.string().uuid()});
 
@@ -83,19 +90,21 @@ export const regionsRoute = new Hono<StaffEnv>()
       .returns<RegionRow[]>()
       .single();
     if (error) {
-      // 23505 is a unique violation, which here can only be the `slug`
-      // column. A slug already in use is an input mistake the staff can fix
-      // themselves, so it gets a 409 they can act on rather than a 500.
+      // A unique violation here can only be the `slug` column. A slug
+      // already in use is an input mistake the staff can fix themselves, so
+      // it gets a 409 they can act on rather than a 500.
       //
       // Nothing else here is caller-fixable: the body is already validated,
       // `name` is a plain `text` column and `regions` has no foreign keys, so
       // the remaining failures are Supabase being unreachable or rejecting
       // our key. Those belong in the Worker log as a 500, not in the response
       // as a 400 the admin UI would render as a form error.
-      if (error.code === '23505') {
-        return c.json({error: 'slug already in use'}, 409);
-      }
-      return c.json(internalError('failed to create the region', error), 500);
+      const {body, status} = mapPgError(
+        error,
+        {[UNIQUE_VIOLATION_SQLSTATE]: duplicate('slug already in use')},
+        'failed to create the region',
+      );
+      return c.json(body, status);
     }
     return c.json(rowToRegion(data), 201);
   })
@@ -113,14 +122,16 @@ export const regionsRoute = new Hono<StaffEnv>()
         .returns<RegionRow[]>()
         .single();
       if (error) {
-        // PGRST116: `.single()` found no row to update. Its message talks
-        // about the query shape rather than the region, so it is replaced —
-        // the same translation `routes/tournaments.ts` does. Everything else
-        // is server-side, for the same reason as in the create handler.
-        if (error.code === 'PGRST116') {
-          return c.json({error: 'region not found'}, 404);
-        }
-        return c.json(internalError('failed to update the region', error), 500);
+        // `.single()` found no row to update. Its message talks about the
+        // query shape rather than the region, so it is replaced -- the same
+        // translation `routes/tournaments.ts` does. Everything else is
+        // server-side, for the same reason as in the create handler.
+        const {body, status} = mapPgError(
+          error,
+          {[NO_ROW_PGRST_CODE]: noRow('region not found')},
+          'failed to update the region',
+        );
+        return c.json(body, status);
       }
       return c.json(rowToRegion(data));
     },

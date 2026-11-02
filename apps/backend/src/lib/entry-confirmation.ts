@@ -2,6 +2,7 @@ import {COMMON_ERROR_CODES, type TournamentType} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import type {LibFailure} from './errors';
+import {INVALID_TOKEN_SQLSTATE} from './pg-errors';
 import {hashToken} from './token';
 
 /**
@@ -30,15 +31,6 @@ type ConfirmResult =
       tournament: ConfirmedTournament | null;
     }
   | LibFailure<400>;
-
-/**
- * The SQLSTATE the `confirm_entry_by_token` Postgres function raises (see
- * `supabase/migrations/0003_confirm_entry_by_token_fn.sql`, amended by
- * `0008_confirm_entry_by_token_entry_status.sql`) when the token is unknown,
- * expired, or already used, or when the entry it was issued for is no longer
- * awaiting verification (it was cancelled in the meantime).
- */
-const INVALID_TOKEN_SQLSTATE = 'P0003';
 
 /**
  * Confirms the `entries` row a verification token was issued for.

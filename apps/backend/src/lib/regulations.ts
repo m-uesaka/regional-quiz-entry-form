@@ -5,34 +5,13 @@ import {
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import {
+  FOREIGN_KEY_VIOLATION_SQLSTATE,
+  NO_LASTING_REGULATION_SQLSTATE,
+  REGULATION_IN_USE_SQLSTATE,
   TOURNAMENT_NOT_FOUND_SQLSTATE,
-  TournamentNotFoundError,
-} from './tournament-errors';
-
-/**
- * The SQLSTATEs the `sync_regulations` Postgres function raises (defined in
- * `supabase/migrations/0014_sync_regulations_fn.sql`, redefined against the
- * `entry_regulations` join table in `0018_entry_regulations.sql` and with
- * `closes_with_priority` in `0042_regulations_closes_with_priority.sql`) for
- * the failures the caller is expected to report rather than treat as a
- * server error.
- */
-const UNKNOWN_REGULATION_SQLSTATE = 'P0003';
-const REGULATION_IN_USE_SQLSTATE = 'P0004';
-const NO_LASTING_REGULATION_SQLSTATE = 'P0009';
-
-/**
- * Postgres' own `foreign_key_violation`, which the final delete in
- * `sync_regulations()` does reach. The in-use check ahead of it no longer
- * rules that out: an entry's regulations are written to `entry_regulations`
- * by a statement of their own (`replaceEntryRegulations()` in
- * `lib/entries.ts`), and that table has no foreign key to `tournaments`, so
- * the insert takes no lock on the tournament row the function holds
- * `for update`. One that commits between the check and the delete fails the
- * delete here instead — the same answer as P0004, reached a moment later,
- * which is why both are reported as "a regulation is still in use".
- */
-const FOREIGN_KEY_VIOLATION_SQLSTATE = '23503';
+  UNKNOWN_REGULATION_SQLSTATE,
+} from './pg-errors';
+import {TournamentNotFoundError} from './tournament-errors';
 
 /**
  * Thrown when a request names a regulation `id` that doesn't belong to the
@@ -142,6 +121,15 @@ export function regulationSyncFailure(error: {
       return new RegulationInUseError(error.details ?? '');
     case NO_LASTING_REGULATION_SQLSTATE:
       return new NoLastingRegulationError();
+    // The final delete in `sync_regulations()` does reach this. The in-use
+    // check ahead of it doesn't rule it out: an entry's regulations are
+    // written to `entry_regulations` by a statement of their own
+    // (`replaceEntryRegulations()` in `lib/entries.ts`), and that table has
+    // no foreign key to `tournaments`, so the insert takes no lock on the
+    // tournament row the function holds `for update`. One that commits
+    // between the check and the delete fails the delete here instead -- the
+    // same answer as P0004, reached a moment later.
+    //
     // No labels here: `details` is Postgres' own wording about the
     // constraint, which describes the database rather than anything the
     // staff member can act on.

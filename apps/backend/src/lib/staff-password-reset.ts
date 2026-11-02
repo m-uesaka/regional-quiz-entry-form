@@ -12,6 +12,10 @@ import {findStaffAccountByScope} from './staff-account-lookup';
 import {createMailSender} from './mailer';
 import {hashPassword} from './password';
 import {
+  INVALID_TOKEN_SQLSTATE,
+  STAFF_ACCOUNT_DISABLED_SQLSTATE,
+} from './pg-errors';
+import {
   buildSystemMail,
   describeLinkLifetime,
   systemMailSubject,
@@ -41,21 +45,6 @@ const REQUESTED_TOKEN_TTL_MS = 60 * 60 * 1000;
  * and how the mail words it.
  */
 export type StaffPasswordLinkKind = 'issued' | 'requested';
-
-/**
- * The SQLSTATE `reset_staff_password` (defined by
- * `supabase/migrations/0015_staff_accounts_scope_and_password_reset.sql`)
- * raises when the token is unknown, already used, or expired.
- */
-const INVALID_TOKEN_SQLSTATE = 'P0003';
-
-/**
- * The SQLSTATE `issue_staff_password_link` (defined by
- * `supabase/migrations/0027_staff_account_enable_and_link_locking.sql`) and
- * `add_staff_password_link` (`0031_add_staff_password_link_fn.sql`) raise
- * when the account is disabled (#156).
- */
-const ACCOUNT_DISABLED_SQLSTATE = 'P0005';
 
 /**
  * The outcome of issuing a link. A failure carries the underlying message for
@@ -191,7 +180,7 @@ export async function sendStaffPasswordLink(
     // click through to a token that can never be found.
     return {
       ok: false,
-      disabled: issueError.code === ACCOUNT_DISABLED_SQLSTATE,
+      disabled: issueError.code === STAFF_ACCOUNT_DISABLED_SQLSTATE,
       error: issueError.message,
     };
   }

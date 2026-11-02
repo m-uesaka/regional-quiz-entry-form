@@ -1,4 +1,5 @@
 import type {Page, PageQuery} from '@regional-quiz/shared';
+import {RANGE_NOT_SATISFIABLE_PGRST_CODE} from './pg-errors';
 
 // Supabase's Data API caps a single response at `max_rows` rows
 // (`supabase/config.toml`), and it does so silently: a query matching more
@@ -72,9 +73,6 @@ export async function fetchAllRows<T>(
   }
 }
 
-/** PostgREST's code for a `range()` whose offset is past the last row. */
-const RANGE_NOT_SATISFIABLE = 'PGRST103';
-
 /** Either one page of rows and the total row count, or the error. */
 export type PageResult<T> =
   | {rows: T[]; total: number; error: null}
@@ -109,7 +107,7 @@ export async function fetchPage<T>(
   const {limit, offset} = page;
   const {data, count, error} = await selectPage(offset, offset + limit - 1);
   if (error) {
-    if (error.code !== RANGE_NOT_SATISFIABLE) {
+    if (error.code !== RANGE_NOT_SATISFIABLE_PGRST_CODE) {
       return {rows: null, total: null, error};
     }
     // With an exact count, PostgREST refuses an offset past the last row

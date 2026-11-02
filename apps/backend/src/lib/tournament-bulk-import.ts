@@ -37,6 +37,7 @@ import {createDbClient} from './db';
 import {formFieldDefSyncRows} from './form-definitions';
 import {JST_OFFSET_MS} from './jst';
 import {regulationSyncFailure} from './regulations';
+import {IMPORT_ACTION_STALE_SQLSTATE} from './pg-errors';
 import {classifySheetImportError} from './sheet-import-errors';
 import {
   DuplicateOptionError,
@@ -83,12 +84,6 @@ const DATE_TIME_PATTERN =
 
 // `54`, `1,000`, `54人`. Blank is "no capacity".
 const CAPACITY_PATTERN = /^(\d[\d,]*)人?$/;
-
-/**
- * Raised by `import_tournament()` (0036) when the tournament has been
- * created (for `create`) or deleted (for `overwrite`) since the preview.
- */
-const IMPORT_ACTION_STALE_SQLSTATE = 'P0006';
 
 const TYPES_BY_LABEL = new Map<string, TournamentType>(
   TournamentTypeSchema.options.map(type => [
