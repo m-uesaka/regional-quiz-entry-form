@@ -1,5 +1,6 @@
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
+import type {InternalResult} from './errors';
 
 /**
  * What a staff bulk send is recorded as while it runs and after it ends.
@@ -48,8 +49,6 @@ interface MailJobContentRow {
   body_html: string;
 }
 
-type Result<T> = {ok: true; value: T} | {ok: false; error: string};
-
 function rowToMailJob(row: MailJobRow): MailJob {
   return {
     id: row.id,
@@ -85,7 +84,7 @@ export async function createMailJob(
     bodyHtml: string;
     total: number;
   },
-): Promise<Result<string>> {
+): Promise<InternalResult<string>> {
   const db = createDbClient(env);
   const {data, error} = await db
     .from('mail_jobs')
@@ -98,7 +97,7 @@ export async function createMailJob(
     .select('id')
     .single<{id: string}>();
   if (error) {
-    return {ok: false, error: error.message};
+    return {ok: false, status: 500, error: error.message};
   }
   return {ok: true, value: data.id};
 }
@@ -115,7 +114,7 @@ export async function createMailJob(
 export async function fetchMailJobContent(
   env: Bindings,
   jobId: string,
-): Promise<Result<MailJobContent | null>> {
+): Promise<InternalResult<MailJobContent | null>> {
   const db = createDbClient(env);
   const {data, error} = await db
     .from('mail_jobs')
@@ -123,7 +122,7 @@ export async function fetchMailJobContent(
     .eq('id', jobId)
     .maybeSingle<MailJobContentRow>();
   if (error) {
-    return {ok: false, error: error.message};
+    return {ok: false, status: 500, error: error.message};
   }
   if (!data) {
     return {ok: true, value: null};
@@ -150,7 +149,7 @@ export async function fetchMailJob(
   env: Bindings,
   tournamentId: string,
   jobId: string,
-): Promise<Result<MailJob | null>> {
+): Promise<InternalResult<MailJob | null>> {
   const db = createDbClient(env);
   const {data, error} = await db
     .from('mail_jobs')
@@ -161,7 +160,7 @@ export async function fetchMailJob(
     .eq('tournament_id', tournamentId)
     .maybeSingle<MailJobRow>();
   if (error) {
-    return {ok: false, error: error.message};
+    return {ok: false, status: 500, error: error.message};
   }
   return {ok: true, value: data ? rowToMailJob(data) : null};
 }
@@ -184,7 +183,7 @@ export async function recordMailJobProgress(
   env: Bindings,
   jobId: string,
   progress: {sent: number; failed: number},
-): Promise<Result<void>> {
+): Promise<InternalResult<void>> {
   const db = createDbClient(env);
   const {error} = await db.rpc('record_mail_job_progress', {
     p_job_id: jobId,
@@ -192,7 +191,7 @@ export async function recordMailJobProgress(
     p_failed: progress.failed,
   });
   if (error) {
-    return {ok: false, error: error.message};
+    return {ok: false, status: 500, error: error.message};
   }
   return {ok: true, value: undefined};
 }

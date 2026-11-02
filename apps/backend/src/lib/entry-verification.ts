@@ -5,6 +5,7 @@ import {
 } from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
+import type {InternalResult} from './errors';
 import {createMailSender, type SendMailInput} from './mailer';
 import {fetchAllRows} from './paged-select';
 import {
@@ -14,8 +15,6 @@ import {
 } from './system-mail';
 import {generateToken, hashToken} from './token';
 import {tournamentDisplayName} from './tournaments';
-
-type Result<T> = {ok: true; value: T} | {ok: false; error: string};
 
 /**
  * Issues a one-time email verification token for `entryId` and mails a
@@ -128,13 +127,13 @@ async function issueVerificationMail(
 export async function discardVerificationToken(
   env: Bindings,
   tokenId: string,
-): Promise<Result<void>> {
+): Promise<InternalResult<void>> {
   const {error} = await createDbClient(env)
     .from('email_verification_tokens')
     .delete()
     .eq('id', tokenId);
   return error
-    ? {ok: false, error: error.message}
+    ? {ok: false, status: 500, error: error.message}
     : {ok: true, value: undefined};
 }
 
@@ -178,7 +177,7 @@ interface PendingEntryRow {
 export async function fetchResendableEntryIds(
   env: Bindings,
   tournamentId: string,
-): Promise<Result<string[]>> {
+): Promise<InternalResult<string[]>> {
   const db = createDbClient(env);
   const result = await fetchAllRows<PendingEntryRow>((from, to) =>
     db
@@ -191,7 +190,7 @@ export async function fetchResendableEntryIds(
       .returns<PendingEntryRow[]>(),
   );
   if (result.error) {
-    return {ok: false, error: result.error.message};
+    return {ok: false, status: 500, error: result.error.message};
   }
   const now = new Date();
   return {
@@ -234,7 +233,7 @@ interface ResendEntryRow {
 export async function prepareVerificationResend(
   env: Bindings,
   entryId: string,
-): Promise<Result<IssuedVerificationMail | null>> {
+): Promise<InternalResult<IssuedVerificationMail | null>> {
   const db = createDbClient(env);
   const {data, error} = await db
     .from('entries')
@@ -247,7 +246,7 @@ export async function prepareVerificationResend(
     .returns<ResendEntryRow[]>()
     .maybeSingle();
   if (error) {
-    return {ok: false, error: error.message};
+    return {ok: false, status: 500, error: error.message};
   }
   if (
     !data ||
@@ -274,6 +273,7 @@ export async function prepareVerificationResend(
   } catch (issueError) {
     return {
       ok: false,
+      status: 500,
       error:
         issueError instanceof Error ? issueError.message : String(issueError),
     };

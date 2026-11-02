@@ -12,7 +12,7 @@ import {
   createEntryForParticipant,
   createEntryUnauthenticated,
 } from '../lib/entries';
-import {internalError} from '../lib/errors';
+import {respondFailure} from '../lib/errors';
 import {requireParticipant} from '../middleware/participant-auth';
 import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
 import {requireTurnstile} from '../middleware/turnstile';
@@ -60,15 +60,7 @@ export const entriesRoute = new Hono<Env>().post(
       input,
     );
     if (!check.ok) {
-      // A 500 here carries whatever Supabase said -- kept server-side. The
-      // 4xx messages are the ones the form maps to its own wording.
-      if (check.status === 500) {
-        return c.json(
-          internalError('failed to check the entry', check.error),
-          500,
-        );
-      }
-      return c.json({error: check.error}, check.status);
+      return respondFailure(c, check, 'failed to check the entry');
     }
 
     // Everything past this point depends on the address: whether it is
@@ -117,13 +109,7 @@ export const entrySessionRoute = new Hono<ParticipantEnv>().post(
       c.req.valid('json'),
     );
     if (!result.ok) {
-      if (result.status === 500) {
-        return c.json(
-          internalError('failed to create the entry', result.error),
-          500,
-        );
-      }
-      return c.json({error: result.error}, result.status);
+      return respondFailure(c, result, 'failed to create the entry');
     }
     return c.json(result.entry, 201);
   },
