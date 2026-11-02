@@ -33,7 +33,7 @@ import {
   type WaitlistPromotion,
 } from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
-import {createDbClient} from './db';
+import {createDbClient, type DbClient} from './db';
 import {formFieldDefSyncRows} from './form-definitions';
 import {JST_OFFSET_MS} from './jst';
 import {regulationSyncFailure} from './regulations';
@@ -225,7 +225,7 @@ interface PreparedRow {
   capacity: number | null;
   entryOpensAt: string;
   entryClosesAt: string;
-  formFields: Array<Record<string, unknown>>;
+  formFields: ReturnType<typeof formFieldDefSyncRows>;
   formFieldLabels: string[];
   regulations: RegulationUpsert[];
 }
@@ -233,7 +233,7 @@ interface PreparedRow {
 /** What every run needs besides the rows: the regions and tournaments. */
 interface ImportContext {
   env: Bindings;
-  db: ReturnType<typeof createDbClient>;
+  db: DbClient;
   /** The ids of the regions of each name. */
   regionIds: Map<string, string[]>;
   /** The tournaments there are, by `tournamentKey()`. */
@@ -473,26 +473,12 @@ async function loadContext(env: Bindings, now: Date): Promise<ImportContext> {
   // One client for the whole run rather than one per row.
   const db = createDbClient(env);
   const [regionsRead, tournamentsRead] = await Promise.all([
-    db
-      .from('regions')
-      .select('id, name')
-      .returns<Array<{id: string; name: string}>>(),
+    db.from('regions').select('id, name'),
     db
       .from('tournaments')
       .select(
         'id, region_id, type, name, capacity, entry_opens_at, entry_closes_at',
-      )
-      .returns<
-        Array<{
-          id: string;
-          region_id: string;
-          type: TournamentType;
-          name: string | null;
-          capacity: number | null;
-          entry_opens_at: string;
-          entry_closes_at: string;
-        }>
-      >(),
+      ),
   ]);
   if (regionsRead.error) {
     throw new Error(`failed to read the regions: ${regionsRead.error.message}`);
@@ -654,13 +640,14 @@ async function importRow(
       p_region_id: prepared.regionId,
       p_type: prepared.type,
       p_overwrite: action === 'overwrite',
-      p_capacity: prepared.capacity,
+      // The generated types make every function argument non-null, but the
+      // function stores a null `p_capacity` as an uncapped tournament.
+      p_capacity: prepared.capacity as number,
       p_entry_opens_at: prepared.entryOpensAt,
       p_entry_closes_at: prepared.entryClosesAt,
       p_form_fields: prepared.formFields,
       p_regulations: prepared.regulations,
     })
-    .returns<Array<{tournament_id: string; created: boolean}>>()
     .single();
   if (error) {
     if (error.code === IMPORT_ACTION_STALE_SQLSTATE) {

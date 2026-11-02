@@ -11,11 +11,6 @@ import {createDbClient} from '../lib/db';
 
 export const PARTICIPANT_SESSION_COOKIE = 'participant_session';
 
-interface ParticipantSessionRow {
-  password_changed_at: string;
-  email_verified_at: string | null;
-}
-
 async function readParticipantClaims(
   token: string | undefined,
   secret: string,
@@ -61,7 +56,6 @@ export function requireParticipant() {
       .from('participants')
       .select('password_changed_at, email_verified_at')
       .eq('id', claims.sub)
-      .returns<ParticipantSessionRow[]>()
       .maybeSingle();
     if (error) {
       // Not a 401: the session may well be fine and we simply couldn't check

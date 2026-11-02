@@ -5,7 +5,8 @@ import {
   type CustomFieldValues,
   type FormFieldDef,
 } from '@regional-quiz/shared';
-import type {createDbClient} from './db';
+import type {Tables} from '../types/database';
+import type {DbClient} from './db';
 import type {LibFailure} from './errors';
 
 /**
@@ -15,18 +16,21 @@ import type {LibFailure} from './errors';
 export const FORM_FIELD_DEF_COLUMNS =
   'field_key, label, field_type, required, options, display_order';
 
-/** Shape of a `form_field_defs` row as selected above (snake_case). */
-export interface FormFieldDefRow {
-  field_key: string;
-  label: string;
-  // A plain `string` at the database boundary (the column is `text` with a
-  // check constraint, not an enum); `toFormFieldDef()` is what narrows it to
-  // the `FormFieldType` union at runtime.
-  field_type: string;
-  required: boolean;
-  options: string[] | null;
-  display_order: number;
-}
+/**
+ * Shape of a `form_field_defs` row as selected above (snake_case). Looser
+ * than the API shape at the database boundary -- `field_type` is a plain
+ * `text` column with a check constraint, not an enum, and `options` is
+ * `jsonb` -- and `toFormFieldDef()` is what narrows both at runtime.
+ */
+export type FormFieldDefRow = Pick<
+  Tables<'form_field_defs'>,
+  | 'field_key'
+  | 'label'
+  | 'field_type'
+  | 'required'
+  | 'options'
+  | 'display_order'
+>;
 
 /**
  * Converts a selected `form_field_defs` row into the camelCase API shape,
@@ -68,15 +72,14 @@ export type FormFieldDefsResult =
  * @throws ZodError If a stored row doesn't fit `FormFieldDefSchema`.
  */
 export async function fetchFormFieldDefs(
-  db: ReturnType<typeof createDbClient>,
+  db: DbClient,
   tournamentId: string,
 ): Promise<FormFieldDefsResult> {
   const {data, error} = await db
     .from('form_field_defs')
     .select(FORM_FIELD_DEF_COLUMNS)
     .eq('tournament_id', tournamentId)
-    .order('display_order', {ascending: true})
-    .returns<FormFieldDefRow[]>();
+    .order('display_order', {ascending: true});
   if (error) {
     return {fieldDefs: null, error};
   }
@@ -101,7 +104,7 @@ export type CustomFieldValuesCheck = {ok: true} | LibFailure<400>;
  * @param values The submitted answers.
  */
 export async function validateCustomFieldValues(
-  db: ReturnType<typeof createDbClient>,
+  db: DbClient,
   tournamentId: string,
   values: CustomFieldValues,
 ): Promise<CustomFieldValuesCheck> {

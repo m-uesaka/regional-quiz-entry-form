@@ -10,6 +10,7 @@ import {
   type EntryListItem,
   type PageQuery,
 } from '@regional-quiz/shared';
+import type {Tables} from '../types/database';
 import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
 import {fetchPage, toPageResponse} from '../lib/paged-select';
@@ -26,13 +27,16 @@ const TournamentBySlugParamSchema = z.object({
   tournamentSlug: TournamentTypeSchema,
 });
 
-/** Shape of an `entries` row as selected below (snake_case). */
-interface EntryListRow {
-  display_name: string;
-  status: 'confirmed' | 'waitlisted' | 'cancelled';
-  waitlist_position: number | null;
-  email_verified_at: string;
-}
+/**
+ * Shape of an `entries` row as selected below (snake_case). The select's
+ * filters leave only `confirmed`, `waitlisted` and `cancelled` rows, each
+ * with an `email_verified_at`, which the column types can't say;
+ * `EntryListItemSchema` is what holds the row to that.
+ */
+type EntryListRow = Pick<
+  Tables<'entries'>,
+  'display_name' | 'status' | 'waitlist_position' | 'email_verified_at'
+>;
 
 function rowToEntryListItem(row: EntryListRow): EntryListItem {
   return EntryListItemSchema.parse({
@@ -93,8 +97,7 @@ async function respondWithEntryList(
         .not('email_verified_at', 'is', null)
         .order('email_verified_at', {ascending: true})
         .order('id', {ascending: true})
-        .range(from, to)
-        .returns<EntryListRow[]>(),
+        .range(from, to),
     page,
   );
   if (error) {

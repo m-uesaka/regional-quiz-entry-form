@@ -7,8 +7,8 @@ import {
   COMMON_ERROR_CODES,
   StaffClaimsSchema,
   type StaffClaims,
-  type TournamentType,
 } from '@regional-quiz/shared';
+import type {Tables} from '../types/database';
 import type {Bindings, StaffEnv} from '../types/env';
 import {createDbClient} from '../lib/db';
 import {
@@ -19,10 +19,10 @@ import {
 
 export const STAFF_SESSION_COOKIE = 'staff_session';
 
-export interface TournamentScopeRow {
-  region_id: string;
-  type: TournamentType;
-}
+export type TournamentScopeRow = Pick<
+  Tables<'tournaments'>,
+  'region_id' | 'type'
+>;
 
 /**
  * Verifies and parses the `staff_session` cookie.
@@ -66,11 +66,6 @@ export async function readStaffClaims(
   }
 }
 
-interface StaffSessionRow {
-  sessions_valid_from: string;
-  disabled_at: string | null;
-}
-
 /** What `isSessionCurrent()` found out, or that it couldn't find out. */
 export type SessionCheck = {ok: true; current: boolean} | {ok: false};
 
@@ -108,7 +103,6 @@ export async function isSessionCurrent(
     .from('staff_accounts')
     .select('sessions_valid_from, disabled_at')
     .eq('id', staff.sub)
-    .returns<StaffSessionRow[]>()
     .maybeSingle();
   if (error) {
     console.error('failed to check the session against the staff account', {
@@ -287,10 +281,6 @@ export function requireStaffForTournament() {
   });
 }
 
-interface EntryScopeRow {
-  tournaments: TournamentScopeRow | null;
-}
-
 /**
  * Same scope check as `requireStaffForTournament()`, but for routes keyed by
  * an `:entryId` param instead of `:tournamentId` (e.g. the single-entry
@@ -304,8 +294,7 @@ export function requireStaffForEntry() {
       const {data: entry, error} = await createDbClient(c.env)
         .from('entries')
         .select('tournaments(region_id, type)')
-        .eq('id', c.req.param('entryId'))
-        .returns<EntryScopeRow[]>()
+        .eq('id', c.req.param('entryId') ?? '')
         .maybeSingle();
       if (error) return AUTHORIZATION_ERROR;
       return isInScope(staff, entry?.tournaments ?? null) ? ALLOWED : FORBIDDEN;

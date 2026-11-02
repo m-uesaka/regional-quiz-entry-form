@@ -7,15 +7,16 @@ import {
   EntrySchema,
   StaffEntryDetailSchema,
   StaffEntryListQuerySchema,
+  type CustomFieldValues,
   type Entry,
-  type EntryStatus,
 } from '@regional-quiz/shared';
+import type {Tables} from '../types/database';
 import type {StaffEnv} from '../types/env';
 import {
   requireStaffForEntry,
   requireStaffForTournament,
 } from '../middleware/staff-auth';
-import {createDbClient} from '../lib/db';
+import {createDbClient, type DbClient} from '../lib/db';
 import {fetchFormFieldDefs} from '../lib/form-field-defs';
 import {buildEntriesCsv} from '../lib/entries-csv';
 import {
@@ -35,21 +36,31 @@ import {internalError} from '../lib/errors';
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 const EntryIdParamSchema = z.object({entryId: z.string().uuid()});
 
-const ENTRY_COLUMNS =
-  'id, tournament_id, name, furigana, display_name, ' +
-  'free_text, custom_field_values, status, waitlist_position, ' +
-  'participants(email), ' +
-  // An entry may claim several regulations, so they come through the
-  // `entry_regulations` join table rather than off the entry itself.
-  ENTRY_REGULATIONS_COLUMNS;
+// An entry may claim several regulations, so they come through the
+// `entry_regulations` join table rather than off the entry itself.
+const ENTRY_COLUMNS = `
+  id, tournament_id, name, furigana, display_name,
+  free_text, custom_field_values, status, waitlist_position,
+  participants(email),
+  ${ENTRY_REGULATIONS_COLUMNS}
+` as const;
 
 // Everything the list reads, and when the entry was made: the export is
 // the list's rows in full (#178), so it is built from the same select and
 // can't fall behind it when the entry gains a field.
-const ENTRY_CSV_COLUMNS = `${ENTRY_COLUMNS}, created_at`;
+const ENTRY_CSV_COLUMNS = `${ENTRY_COLUMNS}, created_at` as const;
+
+/**
+ * What every select of `ENTRY_COLUMNS` overrides in the inferred row:
+ * `custom_field_values` is `jsonb`, generated as `Json`, but every stored
+ * value originated from an `EntryInput['customFieldValues']`.
+ */
+interface EntryRowOverride {
+  custom_field_values: CustomFieldValues;
+}
 
 /** Shape of an `entries` row as selected for the CSV export. */
-type EntryCsvRow = EntryRow & {created_at: string};
+interface EntryCsvRow extends EntryRow, Pick<Tables<'entries'>, 'created_at'> {}
 
 // Excel on Windows reads a BOM-less file as the system's legacy encoding,
 // which turns every Japanese cell into mojibake, so the export is served
@@ -66,7 +77,7 @@ const UTF8_BOM = '\uFEFF';
  * @param tournamentId The tournament whose entries are exported.
  */
 function fetchAllEntryCsvRows(
-  db: ReturnType<typeof createDbClient>,
+  db: DbClient,
   tournamentId: string,
 ): Promise<AllRowsResult<EntryCsvRow>> {
   return fetchAllRows<EntryCsvRow>((from, to) =>
@@ -77,24 +88,28 @@ function fetchAllEntryCsvRows(
       .order('created_at', {ascending: true})
       .order('id', {ascending: true})
       .range(from, to)
-      .returns<EntryCsvRow[]>(),
+      .overrideTypes<EntryRowOverride[]>(),
   );
 }
 
 /** Shape of an `entries` row as selected above (snake_case). */
-interface EntryRow {
-  id: string;
-  tournament_id: string;
-  name: string;
-  furigana: string;
-  display_name: string;
-  free_text: string | null;
-  custom_field_values: Record<string, string | string[]>;
-  status: EntryStatus;
-  waitlist_position: number | null;
+interface EntryRow
+  extends
+    Pick<
+      Tables<'entries'>,
+      | 'id'
+      | 'tournament_id'
+      | 'name'
+      | 'furigana'
+      | 'display_name'
+      | 'free_text'
+      | 'status'
+      | 'waitlist_position'
+    >,
+    EntryRowOverride {
   // To-one and always there: `entries.participant_id` is a not-null
   // foreign key.
-  participants: {email: string};
+  participants: Pick<Tables<'participants'>, 'email'>;
   entry_regulations: EntryRegulationRow[];
 }
 
@@ -145,7 +160,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
           .order('created_at', {ascending: true})
           .order('id', {ascending: true})
           .range(from, to)
-          .returns<EntryRow[]>();
+          .overrideTypes<EntryRowOverride[]>();
       }, page);
       if (error) {
         return c.json(internalError('failed to read the entries', error), 500);
@@ -223,8 +238,8 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
         .from('entries')
         .select(ENTRY_COLUMNS)
         .eq('id', c.req.valid('param').entryId)
-        .returns<EntryRow[]>()
-        .maybeSingle();
+        .maybeSingle()
+        .overrideTypes<EntryRowOverride>();
       if (error) {
         return c.json(internalError('failed to read the entry', error), 500);
       }

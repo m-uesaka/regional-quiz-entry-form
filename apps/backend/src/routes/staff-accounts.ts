@@ -4,9 +4,8 @@ import {z} from 'zod';
 import {
   StaffAccountCreateInputSchema,
   type StaffAccount,
-  type StaffRole,
-  type TournamentType,
 } from '@regional-quiz/shared';
+import type {Tables} from '../types/database';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
 import {createDbClient} from '../lib/db';
@@ -16,9 +15,10 @@ import {sendStaffPasswordLink} from '../lib/staff-password-reset';
 
 const StaffAccountIdParamSchema = z.object({id: z.string().uuid()});
 
-const STAFF_ACCOUNT_COLUMNS =
-  'id, email, password_hash, role, region_id, tournament_type, ' +
-  'disabled_at, regions(slug, name)';
+const STAFF_ACCOUNT_COLUMNS = `
+  id, email, password_hash, role, region_id, tournament_type,
+  disabled_at, regions(slug, name)
+`;
 
 /**
  * The SQLSTATEs `disable_staff_account()` / `enable_staff_account()`
@@ -30,16 +30,18 @@ const ACCOUNT_NOT_FOUND_SQLSTATE = 'P0002';
 const LAST_GENERAL_STAFF_SQLSTATE = 'P0004';
 
 /** Shape of a `staff_accounts` row as selected above. */
-interface StaffAccountRow {
-  id: string;
-  email: string;
-  password_hash: string;
-  role: StaffRole;
-  region_id: string | null;
-  tournament_type: TournamentType | null;
-  disabled_at: string | null;
+interface StaffAccountRow extends Pick<
+  Tables<'staff_accounts'>,
+  | 'id'
+  | 'email'
+  | 'password_hash'
+  | 'role'
+  | 'region_id'
+  | 'tournament_type'
+  | 'disabled_at'
+> {
   // The joined `regions` row, null for `general` staff, who have no region.
-  regions: {slug: string; name: string} | null;
+  regions: Pick<Tables<'regions'>, 'slug' | 'name'> | null;
 }
 
 // `password_hash` is read but never carried across: the list reports only
@@ -72,8 +74,7 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
     const {data, error} = await db
       .from('staff_accounts')
       .select(STAFF_ACCOUNT_COLUMNS)
-      .order('created_at', {ascending: true})
-      .returns<StaffAccountRow[]>();
+      .order('created_at', {ascending: true});
     if (error) {
       return c.json(
         internalError('failed to read the staff accounts', error),
@@ -105,7 +106,6 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
             input.role === 'regional' ? input.tournamentType : null,
         })
         .select(STAFF_ACCOUNT_COLUMNS)
-        .returns<StaffAccountRow[]>()
         .single();
       if (error) {
         // 23505 is the unique violation on (`email`, `tournament_type`)
@@ -170,7 +170,6 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
         .from('staff_accounts')
         .select('id, email')
         .eq('id', c.req.valid('param').id)
-        .returns<Array<{id: string; email: string}>>()
         .maybeSingle();
       if (error) {
         return c.json(
@@ -239,7 +238,6 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
         .update({sessions_valid_from: new Date().toISOString()})
         .eq('id', c.req.valid('param').id)
         .select('id')
-        .returns<Array<{id: string}>>()
         .maybeSingle();
       if (error) {
         return c.json(

@@ -1,21 +1,9 @@
-import type {TournamentType, WaitlistPromotion} from '@regional-quiz/shared';
+import type {WaitlistPromotion} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
-import {createDbClient} from './db';
+import {createDbClient, type DbClient} from './db';
 import {createMailSender} from './mailer';
 import {buildSystemMail, systemMailSubject} from './system-mail';
 import {tournamentDisplayName} from './tournaments';
-
-interface PromotedEntryRow {
-  entry_id: string;
-  participant_email: string;
-}
-
-/** What the promotion mail needs to name the tournament. */
-interface PromotedTournamentRow {
-  name: string | null;
-  type: TournamentType;
-  regions: {name: string};
-}
 
 // How many promotion mails are in flight at once. Clearing the capacity of
 // a tournament with a long waitlist promotes everyone on it, and one mail
@@ -52,7 +40,7 @@ export async function promoteWaitlistedEntries(
   env: Bindings,
   tournamentId: string,
   options: {
-    db?: ReturnType<typeof createDbClient>;
+    db?: DbClient;
     tournamentName?: string;
   } = {},
 ): Promise<WaitlistPromotion> {
@@ -63,13 +51,7 @@ export async function promoteWaitlistedEntries(
   if (error) {
     throw new Error(error.message);
   }
-  // `db` isn't constructed with generated Database types (see `./db`), so
-  // the client can't infer the SETOF row shape for a bare `.rpc()` call; a
-  // `.returns<PromotedEntryRow[]>()` chained onto it also doesn't help here,
-  // since the library resolves the pre-override result to `any` for an
-  // untyped client and its array/single-object override check special-cases
-  // `any` into an error union instead of the requested array type.
-  const promoted = (data as PromotedEntryRow[] | null) ?? [];
+  const promoted = data ?? [];
   if (promoted.length === 0) {
     return {promotedCount: 0, mailFailedCount: 0};
   }
@@ -136,14 +118,13 @@ function buildPromotionMail(
  * @return The name, or `undefined` when it couldn't be read.
  */
 async function readTournamentName(
-  db: ReturnType<typeof createDbClient>,
+  db: DbClient,
   tournamentId: string,
 ): Promise<string | undefined> {
   const {data: tournament, error} = await db
     .from('tournaments')
     .select('name, type, regions(name)')
     .eq('id', tournamentId)
-    .returns<PromotedTournamentRow[]>()
     .maybeSingle();
   if (error || !tournament) {
     console.error('failed to read the tournament for the promotion mail', {

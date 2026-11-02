@@ -1,3 +1,4 @@
+import type {Tables} from '../types/database';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import type {InternalResult} from './errors';
@@ -31,23 +32,17 @@ export interface MailJobContent {
 }
 
 /** Shape of a `mail_jobs` row (snake_case), minus the body. */
-interface MailJobRow {
-  id: string;
-  tournament_id: string;
-  subject: string;
-  total: number;
-  sent: number;
-  failed: number;
-  created_at: string;
-  updated_at: string;
-}
-
-/** The columns `MailJobContent` is built from. */
-interface MailJobContentRow {
-  id: string;
-  subject: string;
-  body_html: string;
-}
+type MailJobRow = Pick<
+  Tables<'mail_jobs'>,
+  | 'id'
+  | 'tournament_id'
+  | 'subject'
+  | 'total'
+  | 'sent'
+  | 'failed'
+  | 'created_at'
+  | 'updated_at'
+>;
 
 function rowToMailJob(row: MailJobRow): MailJob {
   return {
@@ -95,7 +90,7 @@ export async function createMailJob(
       total: job.total,
     })
     .select('id')
-    .single<{id: string}>();
+    .single();
   if (error) {
     return {ok: false, status: 500, error: error.message};
   }
@@ -120,7 +115,7 @@ export async function fetchMailJobContent(
     .from('mail_jobs')
     .select('id, subject, body_html')
     .eq('id', jobId)
-    .maybeSingle<MailJobContentRow>();
+    .maybeSingle();
   if (error) {
     return {ok: false, status: 500, error: error.message};
   }
@@ -158,7 +153,7 @@ export async function fetchMailJob(
     )
     .eq('id', jobId)
     .eq('tournament_id', tournamentId)
-    .maybeSingle<MailJobRow>();
+    .maybeSingle();
   if (error) {
     return {ok: false, status: 500, error: error.message};
   }

@@ -8,6 +8,7 @@ import {
   type RegionCreateInput,
   type RegionUpdateInput,
 } from '@regional-quiz/shared';
+import type {Tables, TablesInsert, TablesUpdate} from '../types/database';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
 import {createDbClient} from '../lib/db';
@@ -16,12 +17,10 @@ import {internalError} from '../lib/errors';
 const RegionIdParamSchema = z.object({id: z.string().uuid()});
 
 /** Shape of a `regions` row as returned by Supabase. */
-interface RegionRow {
-  id: string;
-  slug: string;
-  name: string;
-  allows_dual_entry: boolean;
-}
+type RegionRow = Pick<
+  Tables<'regions'>,
+  'id' | 'slug' | 'name' | 'allows_dual_entry'
+>;
 
 /** The columns of `RegionRow`, for every select in this file. */
 const REGION_COLUMNS = 'id, slug, name, allows_dual_entry';
@@ -48,9 +47,11 @@ function rowToRegion(row: RegionRow): Region {
  * that would leave nothing at all.
  * @param input The validated create or update body.
  */
+function toRegionRow(input: RegionCreateInput): TablesInsert<'regions'>;
+function toRegionRow(input: RegionUpdateInput): TablesUpdate<'regions'>;
 function toRegionRow(
   input: RegionCreateInput | RegionUpdateInput,
-): Record<string, unknown> {
+): TablesUpdate<'regions'> {
   const {allowsDualEntry, ...rest} = input;
   return allowsDualEntry === undefined
     ? rest
@@ -67,8 +68,7 @@ export const regionsRoute = new Hono<StaffEnv>()
     const {data, error} = await db
       .from('regions')
       .select(REGION_COLUMNS)
-      .order('name', {ascending: true})
-      .returns<RegionRow[]>();
+      .order('name', {ascending: true});
     if (error) {
       return c.json(internalError('failed to read the regions', error), 500);
     }
@@ -80,7 +80,6 @@ export const regionsRoute = new Hono<StaffEnv>()
       .from('regions')
       .insert(toRegionRow(c.req.valid('json')))
       .select(REGION_COLUMNS)
-      .returns<RegionRow[]>()
       .single();
     if (error) {
       // 23505 is a unique violation, which here can only be the `slug`
@@ -110,7 +109,6 @@ export const regionsRoute = new Hono<StaffEnv>()
         .update(toRegionRow(c.req.valid('json')))
         .eq('id', c.req.valid('param').id)
         .select(REGION_COLUMNS)
-        .returns<RegionRow[]>()
         .single();
       if (error) {
         // PGRST116: `.single()` found no row to update. Its message talks

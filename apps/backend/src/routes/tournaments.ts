@@ -5,12 +5,15 @@ import {
   TournamentCreateInputSchema,
   TournamentOrderInputSchema,
   TournamentResetInputSchema,
+  type TournamentCreateInput,
   type TournamentResetResponse,
   TournamentTypeSchema,
   TournamentUpdateInputSchema,
+  type TournamentUpdateInput,
   type TournamentUpdateResponse,
   type WaitlistPromotion,
 } from '@regional-quiz/shared';
+import type {TablesInsert, TablesUpdate} from '../types/database';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
 import {
@@ -19,16 +22,8 @@ import {
 } from '../middleware/entry-period';
 import {createDbClient} from '../lib/db';
 import {internalError} from '../lib/errors';
-import {
-  FORM_FIELD_DEF_COLUMNS,
-  toFormFieldDef,
-  type FormFieldDefRow,
-} from '../lib/form-field-defs';
-import {
-  rowToTournament,
-  TOURNAMENT_COLUMNS,
-  type TournamentRow,
-} from '../lib/tournaments';
+import {FORM_FIELD_DEF_COLUMNS, toFormFieldDef} from '../lib/form-field-defs';
+import {rowToTournament, TOURNAMENT_COLUMNS} from '../lib/tournaments';
 import {promoteWaitlistedEntries} from '../lib/waitlist';
 
 const TournamentIdParamSchema = z.object({id: z.string().uuid()});
@@ -82,13 +77,6 @@ const ENTRY_PERIOD_OPEN_SQLSTATE = 'P0007';
 /** What a tournament delete answers when entries still point at it. */
 const TOURNAMENT_HAS_ENTRIES_MESSAGE = 'エントリーがある大会は削除できません';
 
-/** The one row `reset_tournament_entries()` (0038) returns. */
-interface ResetTournamentEntriesRow {
-  deleted_entry_count: number;
-  deleted_participant_count: number;
-  kept_participant_count: number;
-}
-
 const TournamentBySlugParamSchema = z.object({
   regionSlug: z.string(),
   tournamentSlug: TournamentTypeSchema,
@@ -96,13 +84,20 @@ const TournamentBySlugParamSchema = z.object({
 
 /**
  * Maps the camelCase fields the client sends to the snake_case columns
- * `tournaments` actually has. Used for both create (all fields present) and
- * update (only the fields the caller chose to change).
+ * `tournaments` actually has. Used for both create (all fields present, so
+ * every column an insert requires is set) and update (only the fields the
+ * caller chose to change).
  */
 function toTournamentRow(
-  input: Partial<z.infer<typeof TournamentCreateInputSchema>>,
-): Record<string, unknown> {
-  const row: Record<string, unknown> = {};
+  input: TournamentCreateInput,
+): TablesInsert<'tournaments'>;
+function toTournamentRow(
+  input: TournamentUpdateInput,
+): TablesUpdate<'tournaments'>;
+function toTournamentRow(
+  input: Partial<TournamentCreateInput>,
+): TablesUpdate<'tournaments'> {
+  const row: TablesUpdate<'tournaments'> = {};
   if (input.regionId !== undefined) {
     row.region_id = input.regionId;
   }
@@ -141,8 +136,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
       .select(TOURNAMENT_COLUMNS)
       // The order general staff set with `PUT /order` below.
       .order('display_order', {ascending: true})
-      .order('id', {ascending: true})
-      .returns<TournamentRow[]>();
+      .order('id', {ascending: true});
     if (error) {
       return c.json(
         internalError('failed to read the tournaments', error),
@@ -206,14 +200,13 @@ export const tournamentsRoute = new Hono<StaffEnv>()
       const {data, error} = await db
         .from('tournaments')
         .select(
-          `${TOURNAMENT_COLUMNS}, form_field_defs(${FORM_FIELD_DEF_COLUMNS})`,
+          `${TOURNAMENT_COLUMNS}, form_field_defs(${FORM_FIELD_DEF_COLUMNS})` as const,
         )
         .eq('id', c.req.valid('param').id)
         .order('display_order', {
           referencedTable: 'form_field_defs',
           ascending: true,
         })
-        .returns<(TournamentRow & {form_field_defs: FormFieldDefRow[]})[]>()
         .maybeSingle();
       if (error) {
         return c.json(
@@ -241,7 +234,6 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         .from('tournaments')
         .insert(toTournamentRow(c.req.valid('json')))
         .select(TOURNAMENT_COLUMNS)
-        .returns<TournamentRow[]>()
         .single();
       if (error) {
         const {body, status} = tournamentWriteError(
@@ -267,7 +259,6 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         .update(toTournamentRow(input))
         .eq('id', id)
         .select(TOURNAMENT_COLUMNS)
-        .returns<TournamentRow[]>()
         .single();
       if (error) {
         // PGRST116: `.single()` found no matching row to update. Its
@@ -378,9 +369,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
           500,
         );
       }
-      // Cast rather than `.returns()`, for the reason `lib/waitlist.ts`
-      // gives: the client isn't built with generated Database types.
-      const [row] = (data as ResetTournamentEntriesRow[] | null) ?? [];
+      const [row] = data ?? [];
       if (!row) {
         return c.json({error: 'tournament not found'}, 404);
       }

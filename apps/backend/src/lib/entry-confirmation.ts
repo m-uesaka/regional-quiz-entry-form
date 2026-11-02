@@ -80,14 +80,11 @@ export async function confirmEntryByToken(
 
   return {
     ok: true,
+    // Typed as any `entry_status`: the function only ever returns the two a
+    // confirmation can end in, which the generated types can't express.
     entryStatus: data as 'confirmed' | 'waitlisted',
     tournament: await readConfirmedTournament(env, tokenHash),
   };
-}
-
-/** Shape of the token row as selected by `readConfirmedTournament`. */
-interface ConfirmedTournamentRow {
-  entries: {tournaments: {type: TournamentType; regions: {slug: string}}};
 }
 
 /**
@@ -105,7 +102,7 @@ async function readConfirmedTournament(
     .from('email_verification_tokens')
     .select('entries(tournaments(type, regions(slug)))')
     .eq('token_hash', tokenHash)
-    .maybeSingle<ConfirmedTournamentRow>();
+    .maybeSingle();
   if (error || !data) {
     return null;
   }

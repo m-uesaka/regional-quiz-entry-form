@@ -6,17 +6,17 @@ import {
   isEntryErrorCode,
   isWithinEntryPeriod,
   regulationSelectionRefusal,
+  type CustomFieldValues,
   type EntryEditInput,
   type EntryErrorCode,
   type EntryInput,
   type EntrySessionInput,
-  type EntryStatus,
   type RegulationSelectionRefusal,
-  type TournamentType,
 } from '@regional-quiz/shared';
 import {isCommonPassword} from '@regional-quiz/shared/password-policy';
+import type {Tables, TablesInsert} from '../types/database';
 import type {Bindings} from '../types/env';
-import {createDbClient} from './db';
+import {createDbClient, type DbClient} from './db';
 import {sendEntryNoticeEmail, type EntryNoticeReason} from './entry-notice';
 import {sendVerificationEmail} from './entry-verification';
 import type {LibFailure} from './errors';
@@ -50,28 +50,30 @@ type UpdateOwnEntryResult = {ok: true} | LibFailure<400 | 403 | 404>;
 
 type CancelOwnEntryResult = {ok: true} | LibFailure<404>;
 
-interface RegulationRow {
-  id: string;
-  priority_starts_at: string | null;
-  priority_ends_at: string | null;
-  closes_with_priority: boolean;
-}
-
-/** The tournament an entry submission is checked against. */
-export interface EntryTournamentRow {
-  id: string;
-  name: string | null;
-  type: TournamentType;
-  region_id: string;
-  // Null for an uncapped tournament, which can never waitlist anyone.
-  capacity: number | null;
-  entry_opens_at: string;
-  entry_closes_at: string;
-  entries_paused: boolean;
+/**
+ * The tournament an entry submission is checked against. `capacity` is null
+ * for an uncapped tournament, which can never waitlist anyone.
+ */
+export interface EntryTournamentRow extends Pick<
+  Tables<'tournaments'>,
+  | 'id'
+  | 'name'
+  | 'type'
+  | 'region_id'
+  | 'capacity'
+  | 'entry_opens_at'
+  | 'entry_closes_at'
+  | 'entries_paused'
+> {
   // A to-one embed, so PostgREST answers with the region object itself
   // rather than a single-element array (unlike `regulations` below).
-  regions: {name: string};
-  regulations: RegulationRow[];
+  regions: Pick<Tables<'regions'>, 'name'>;
+  regulations: Array<
+    Pick<
+      Tables<'regulations'>,
+      'id' | 'priority_starts_at' | 'priority_ends_at' | 'closes_with_priority'
+    >
+  >;
 }
 
 /**
@@ -137,14 +139,15 @@ const UNIQUE_VIOLATION_SQLSTATE = '23505';
  */
 const NO_ROW_PGRST_CODE = 'PGRST116';
 
-interface ParticipantRow {
-  id: string;
-  region_id: string;
-  password_hash: string;
-  // Null until the owner of the address follows a verification link
-  // (migration 0034, #189).
-  email_verified_at: string | null;
-}
+/**
+ * A participant as `PARTICIPANT_COLUMNS` selects it. `email_verified_at` is
+ * null until the owner of the address follows a verification link (migration
+ * 0034, #189).
+ */
+type ParticipantRow = Pick<
+  Tables<'participants'>,
+  'id' | 'region_id' | 'password_hash' | 'email_verified_at'
+>;
 
 /** What `ParticipantRow` is selected with. */
 const PARTICIPANT_COLUMNS = 'id, region_id, password_hash, email_verified_at';
@@ -157,30 +160,33 @@ const PARTICIPANT_COLUMNS = 'id, region_id, password_hash, email_verified_at';
  * that fails afterwards can put the row back exactly as it was. A column added
  * to that function's `set` list has to be added here and to `rollbackEntry()`.
  */
-interface ExistingEntryRow {
-  id: string;
-  name: string;
-  furigana: string;
-  display_name: string;
+interface ExistingEntryRow extends Pick<
+  Tables<'entries'>,
+  | 'id'
+  | 'name'
+  | 'furigana'
+  | 'display_name'
+  | 'free_text'
+  | 'status'
+  | 'waitlist_position'
+  | 'email_verified_at'
+  | 'cancelled_at'
+> {
   // The row's own regulation selection, as a to-many embed. Restored as a
   // whole on rollback, because the reuse path replaces the set rather than
   // editing it in place.
-  entry_regulations: Array<{regulation_id: string}>;
-  free_text: string | null;
-  // Same value union as `EntryInput['customFieldValues']`: every stored value
-  // originated from that input shape.
-  custom_field_values: Record<string, string | string[]>;
-  status: EntryStatus;
-  waitlist_position: number | null;
-  email_verified_at: string | null;
-  cancelled_at: string | null;
+  entry_regulations: Array<Pick<Tables<'entry_regulations'>, 'regulation_id'>>;
+  // Narrower than the column's generated `Json`: every stored value
+  // originated from an `EntryInput['customFieldValues']`.
+  custom_field_values: CustomFieldValues;
 }
 
 /** The columns of `ExistingEntryRow`, for the snapshot select. */
-const EXISTING_ENTRY_COLUMNS =
-  'id, name, furigana, display_name, entry_regulations(regulation_id), ' +
-  'free_text, custom_field_values, status, waitlist_position, ' +
-  'email_verified_at, cancelled_at';
+const EXISTING_ENTRY_COLUMNS = `
+  id, name, furigana, display_name, entry_regulations(regulation_id),
+  free_text, custom_field_values, status, waitlist_position,
+  email_verified_at, cancelled_at
+`;
 
 /**
  * Replaces an entry's regulation selection with `regulationIds`.
@@ -203,7 +209,7 @@ const EXISTING_ENTRY_COLUMNS =
  * @param regulationIds The regulations the entry claims.
  */
 async function replaceEntryRegulations(
-  db: ReturnType<typeof createDbClient>,
+  db: DbClient,
   entryId: string,
   tournamentId: string,
   regulationIds: readonly string[],
@@ -239,7 +245,7 @@ async function replaceEntryRegulations(
  *     or `null` when it inserted a fresh entry.
  */
 async function rollbackEntry(
-  db: ReturnType<typeof createDbClient>,
+  db: DbClient,
   entryId: string,
   tournamentId: string,
   existingEntry: ExistingEntryRow | null,
@@ -362,14 +368,15 @@ export async function checkEntrySubmission(
   const {data: tournament, error: tournamentError} = await db
     .from('tournaments')
     .select(
-      'id, name, type, region_id, capacity, entry_opens_at, entry_closes_at, ' +
-        'entries_paused, ' +
-        'regions(name), ' +
-        'regulations(id, priority_starts_at, priority_ends_at, ' +
-        'closes_with_priority)',
+      `
+        id, name, type, region_id, capacity, entry_opens_at, entry_closes_at,
+        entries_paused,
+        regions(name),
+        regulations(id, priority_starts_at, priority_ends_at,
+        closes_with_priority)
+      `,
     )
     .eq('id', tournamentId)
-    .returns<EntryTournamentRow[]>()
     .maybeSingle();
   // A failing select is not the same as an unknown tournament: a stale
   // PostgREST schema cache or an outage would otherwise turn every submission
@@ -464,7 +471,6 @@ async function createEntryAfterCheck(
     .from('participants')
     .select(PARTICIPANT_COLUMNS)
     .eq('email', input.email)
-    .returns<ParticipantRow[]>()
     .maybeSingle();
   if (participantError) {
     return {ok: false, status: 500, error: participantError.message};
@@ -545,6 +551,9 @@ async function createEntryAfterCheck(
     if (takeOverError) {
       return {ok: false, status: 500, error: takeOverError.message};
     }
+    // Null, not an array, when the address turned out to be verified -- the
+    // generated types make every function result non-null, so this check
+    // must stay a runtime one.
     if (Array.isArray(withdrawn)) {
       return enterTournament(
         env,
@@ -556,7 +565,7 @@ async function createEntryAfterCheck(
           passwordHash,
           withdrawnTournaments: await withdrawnTournamentNames(
             db,
-            (withdrawn as string[]).filter(id => id !== tournament.id),
+            withdrawn.filter(id => id !== tournament.id),
           ),
         },
       );
@@ -571,7 +580,6 @@ async function createEntryAfterCheck(
       .from('participants')
       .select(PARTICIPANT_COLUMNS)
       .eq('id', existingParticipant.id)
-      .returns<ParticipantRow[]>()
       .single();
     if (rereadError || !verifiedParticipant) {
       return {
@@ -666,7 +674,7 @@ async function isUnverifiedAccountPassword(
  *     reports the withdrawal, without the names (an empty list).
  */
 async function withdrawnTournamentNames(
-  db: ReturnType<typeof createDbClient>,
+  db: DbClient,
   tournamentIds: string[],
 ): Promise<string[] | undefined> {
   if (tournamentIds.length === 0) {
@@ -675,14 +683,7 @@ async function withdrawnTournamentNames(
   const {data, error} = await db
     .from('tournaments')
     .select('name, type, regions(name)')
-    .in('id', tournamentIds)
-    .returns<
-      Array<{
-        name: string | null;
-        type: TournamentType;
-        regions: {name: string};
-      }>
-    >();
+    .in('id', tournamentIds);
   if (error || !data) {
     console.error('failed to look up the withdrawn tournaments', {
       tournamentIds,
@@ -754,8 +755,8 @@ async function enterTournament(
     .select(EXISTING_ENTRY_COLUMNS)
     .eq('participant_id', participantId)
     .eq('tournament_id', tournamentId)
-    .returns<ExistingEntryRow[]>()
-    .maybeSingle();
+    .maybeSingle()
+    .overrideTypes<Pick<ExistingEntryRow, 'custom_field_values'>>();
   if (existingEntryError) {
     return {ok: false, status: 500, error: existingEntryError.message};
   }
@@ -808,7 +809,7 @@ async function enterTournament(
     free_text: input.freeText ?? null,
     custom_field_values: input.customFieldValues,
     status: 'pending_verification',
-  };
+  } satisfies TablesInsert<'entries'>;
 
   const {data: entry, error} = existingEntry
     ? await db
@@ -826,7 +827,10 @@ async function enterTournament(
           p_name: entryValues.name,
           p_furigana: entryValues.furigana,
           p_display_name: entryValues.display_name,
-          p_free_text: entryValues.free_text,
+          // The generated types make every function argument non-null, but
+          // the function takes a null `p_free_text` as-is, as the insert below
+          // does.
+          p_free_text: entryValues.free_text as string,
           p_custom_field_values: entryValues.custom_field_values,
         })
         .select('id')
@@ -964,7 +968,7 @@ async function enterTournament(
  * @param passwordHash The hash this submission set on it.
  */
 async function isStillUnverifiedAccountOf(
-  db: ReturnType<typeof createDbClient>,
+  db: DbClient,
   participantId: string,
   passwordHash: string,
 ): Promise<boolean> {
@@ -972,7 +976,6 @@ async function isStillUnverifiedAccountOf(
     .from('participants')
     .select('password_hash')
     .eq('id', participantId)
-    .returns<Array<{password_hash: string}>>()
     .maybeSingle();
   // A failed read counts as taken over: mailing a link that might verify
   // someone else's password is worse than asking the owner to try again.
@@ -1101,11 +1104,6 @@ async function sendEntryNotice(
   }
 }
 
-/** Shape of the participant lookup in `createEntryForParticipant()`. */
-interface SessionParticipantRow {
-  email: string;
-}
-
 /**
  * Enters a logged-in participant (`POST /tournaments/:tournamentId/entries/
  * session`). The session has already proved who they are, so there is no
@@ -1133,7 +1131,6 @@ export async function createEntryForParticipant(
     .from('participants')
     .select('email')
     .eq('id', participantId)
-    .returns<SessionParticipantRow[]>()
     .maybeSingle();
   if (error) {
     return {ok: false, status: 500, error: error.message};
@@ -1150,17 +1147,6 @@ export async function createEntryForParticipant(
     participant.email,
     input,
   );
-}
-
-/** Shape of the ownership/entry-period lookup in `updateOwnEntry()`. */
-interface OwnEntryRow {
-  id: string;
-  tournament_id: string;
-  status: EntryStatus;
-  tournaments: {
-    entry_opens_at: string;
-    entry_closes_at: string;
-  };
 }
 
 /**
@@ -1188,12 +1174,10 @@ export async function updateOwnEntry(
   const {data: entry, error: lookupError} = await db
     .from('entries')
     .select(
-      'id, tournament_id, status, ' +
-        'tournaments(entry_opens_at, entry_closes_at)',
+      'id, tournament_id, status, tournaments(entry_opens_at, entry_closes_at)',
     )
     .eq('id', entryId)
     .eq('participant_id', participantId)
-    .returns<OwnEntryRow[]>()
     .maybeSingle();
   // A failed lookup must not be reported as a missing entry: that would hide
   // a database/network outage behind a 404.
@@ -1249,12 +1233,6 @@ export async function updateOwnEntry(
   return {ok: true};
 }
 
-/** Shape of the row `cancel_own_entry` returns. */
-interface CancelledEntryRow {
-  previous_status: EntryStatus;
-  entry_tournament_id: string;
-}
-
 /**
  * Cancels one of the participant's own entries
  * (`DELETE /mypage/entries/:entryId`).
@@ -1289,9 +1267,7 @@ export async function cancelOwnEntry(
     return {ok: false, status: 500, error: error.message};
   }
 
-  // `db` isn't constructed with generated Database types (see `./db`), so
-  // the SETOF row shape has to be asserted here — same as in `./waitlist`.
-  const cancelled = (data as CancelledEntryRow[] | null)?.[0];
+  const cancelled = data?.[0];
   if (!cancelled) {
     return {ok: false, status: 404, error: COMMON_ERROR_CODES.ENTRY_NOT_FOUND};
   }

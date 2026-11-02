@@ -25,13 +25,6 @@ const SESSION_COOKIE_OPTIONS = {
   path: '/',
 } as const;
 
-interface ParticipantRow {
-  id: string;
-  password_hash: string;
-  password_changed_at: string;
-  email_verified_at: string | null;
-}
-
 // The period both login limiters count over (`wrangler.toml`), which is
 // also how long a refused caller is asked to wait.
 const LOGIN_LIMIT_PERIOD_SECONDS = 60;
@@ -73,7 +66,6 @@ export const participantAuthRoute = new Hono<Env>()
         .from('participants')
         .select('id, password_hash, password_changed_at, email_verified_at')
         .eq('email', email)
-        .returns<ParticipantRow[]>()
         .maybeSingle();
 
       if (error) {

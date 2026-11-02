@@ -6,11 +6,7 @@ import type {StaffEnv} from '../types/env';
 import {requireStaffForTournament} from '../middleware/staff-auth';
 import {createDbClient} from '../lib/db';
 import {internalError} from '../lib/errors';
-import {
-  rowToTournament,
-  TOURNAMENT_COLUMNS,
-  type TournamentRow,
-} from '../lib/tournaments';
+import {rowToTournament, TOURNAMENT_COLUMNS} from '../lib/tournaments';
 
 const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 
@@ -32,7 +28,6 @@ export const staffEntryPauseRoute = new Hono<StaffEnv>().put(
       .update({entries_paused: c.req.valid('json').paused})
       .eq('id', c.req.valid('param').tournamentId)
       .select(TOURNAMENT_COLUMNS)
-      .returns<TournamentRow[]>()
       .maybeSingle();
     if (error) {
       return c.json(

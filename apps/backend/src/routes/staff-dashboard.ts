@@ -2,27 +2,29 @@ import {Hono} from 'hono';
 import {
   DashboardTournamentSummarySchema,
   type DashboardTournamentSummary,
-  type TournamentType,
 } from '@regional-quiz/shared';
+import type {Database} from '../types/database';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
 import {createDbClient} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {tournamentDisplayName} from '../lib/tournaments';
 
-/** Shape of a `tournament_entry_summary()` row (snake_case). */
-interface TournamentEntrySummaryRow {
-  tournament_id: string;
+/** A `tournament_entry_summary()` row as the generated types describe it. */
+type GeneratedSummaryRow =
+  Database['public']['Functions']['tournament_entry_summary']['Returns'][number];
+
+/**
+ * Shape of a `tournament_entry_summary()` row (snake_case). The generator
+ * types every column a function returns as non-null, but these two carry the
+ * nullable `tournaments.name` and `tournaments.capacity`.
+ */
+interface TournamentEntrySummaryRow extends Omit<
+  GeneratedSummaryRow,
+  'tournament_name' | 'capacity'
+> {
   tournament_name: string | null;
-  tournament_type: TournamentType;
-  region_id: string;
-  region_slug: string;
-  region_name: string;
   capacity: number | null;
-  confirmed_count: number;
-  waitlisted_count: number;
-  pending_verification_count: number;
-  cancelled_count: number;
 }
 
 function rowToSummary(
@@ -69,11 +71,7 @@ export const staffDashboardRoute = new Hono<StaffEnv>().get(
         500,
       );
     }
-    // Same reason as `lib/waitlist.ts`: `db` isn't constructed with
-    // generated `Database` types, so an untyped `.rpc()` result can't be
-    // narrowed with `.returns<T>()` and is asserted here instead. The shape
-    // is re-checked at runtime by `rowToSummary()`'s `.parse()`.
-    const rows = (data as TournamentEntrySummaryRow[] | null) ?? [];
+    const rows: TournamentEntrySummaryRow[] = data ?? [];
     return c.json(rows.map(rowToSummary));
   },
 );
