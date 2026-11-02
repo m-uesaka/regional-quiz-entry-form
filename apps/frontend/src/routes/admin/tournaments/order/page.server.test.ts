@@ -1,6 +1,9 @@
 import {describe, expect, it} from 'vitest';
-import type {Cookies, HttpError} from '@sveltejs/kit';
+import type {HttpError} from '@sveltejs/kit';
 import type {Region, Tournament} from '@regional-quiz/shared';
+import {fakeCookies} from '../../../../test-support/fake-cookies';
+import {fakeFetch} from '../../../../test-support/fake-fetch';
+import {jsonResponse} from '../../../../test-support/json-response';
 import {actions, load} from './+page.server';
 
 const TOKYO: Region = {
@@ -26,15 +29,6 @@ function tournament(id: string, type: Tournament['type']): Tournament {
 const A = '00000000-0000-0000-0000-00000000000a';
 const B = '00000000-0000-0000-0000-00000000000b';
 const C = '00000000-0000-0000-0000-00000000000c';
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {'Content-Type': 'application/json'},
-  });
-}
-
-const fakeCookies = () => ({delete: () => {}}) as unknown as Cookies;
 
 function buildLoadEvent(fetchImpl: typeof fetch): Parameters<typeof load>[0] {
   return {
@@ -74,21 +68,23 @@ function fakePut(
   bodies: unknown[],
   response: () => Response = () => new Response(null, {status: 204}),
 ): typeof fetch {
-  return (async (_input: RequestInfo | URL, init?: RequestInit) => {
-    bodies.push(JSON.parse(String(init?.body)));
-    return response();
-  }) as typeof fetch;
+  return fakeFetch([
+    {
+      method: 'PUT',
+      respond: request => {
+        bodies.push(request.body);
+        return response();
+      },
+    },
+  ]);
 }
 
 describe('admin tournament order +page.server load', () => {
   it('lists the tournaments in the order the API set, with their region', async () => {
-    const fetchImpl = (async (input: RequestInfo | URL) =>
-      String(input instanceof Request ? input.url : input).includes('/regions')
-        ? jsonResponse([TOKYO])
-        : jsonResponse([
-            tournament(B, 'shinjinou'),
-            tournament(A, 'saikyoi'),
-          ])) as typeof fetch;
+    const fetchImpl = fakeFetch([
+      {url: '/regions', body: [TOKYO]},
+      {body: [tournament(B, 'shinjinou'), tournament(A, 'saikyoi')]},
+    ]);
 
     const data = await load(buildLoadEvent(fetchImpl));
 
@@ -99,8 +95,7 @@ describe('admin tournament order +page.server load', () => {
   });
 
   it('reports a failed read as a bad gateway', async () => {
-    const failing = (async () =>
-      jsonResponse({error: 'nope'}, 500)) as unknown as typeof fetch;
+    const failing = fakeFetch([{status: 500, body: {error: 'nope'}}]);
 
     await expect(load(buildLoadEvent(failing))).rejects.toMatchObject({
       status: 502,

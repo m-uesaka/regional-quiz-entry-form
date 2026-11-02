@@ -1,6 +1,11 @@
 import {describe, expect, it} from 'vitest';
-import type {Cookies, HttpError} from '@sveltejs/kit';
+import type {HttpError} from '@sveltejs/kit';
 import type {Region} from '@regional-quiz/shared';
+import {fakeCookies} from '../../../test-support/fake-cookies';
+import {
+  fakeFetch,
+  type RecordedRequest,
+} from '../../../test-support/fake-fetch';
 import {actions, load} from './+page.server';
 
 const TOKYO: Region = {
@@ -10,58 +15,23 @@ const TOKYO: Region = {
   allowsDualEntry: false,
 };
 
-/** One request the action put on the wire. */
-interface ApiCall {
-  method: string;
-  url: string;
-  body: unknown;
-}
-
 /**
- * Builds a fake `fetch` answering the regions API, recording what it was
- * sent.
+ * Builds a fake `fetch` answering the regions API.
  * @param options.status The status to answer a create/update with.
- * @param options.calls Collects the recorded requests.
+ * @param options.calls Collects the requests sent.
  */
-function fakeFetch(options: {
+function fakeApi(options: {
   status?: number;
-  calls?: ApiCall[];
+  calls?: RecordedRequest[];
 }): typeof fetch {
-  return (async (input, init) => {
-    // The RPC client is built on `/`, so it calls `fetch` with a relative
-    // URL and a plain init object rather than with a `Request`.
-    const method = init?.method ?? 'GET';
-    const body =
-      init?.body === undefined
-        ? undefined
-        : (JSON.parse(String(init.body)) as unknown);
-    options.calls?.push({method, url: String(input), body});
-    if (method === 'GET') {
-      return jsonResponse([TOKYO]);
-    }
-    const status = options.status ?? 200;
-    return jsonResponse(status < 400 ? TOKYO : {error: 'nope'}, status);
-  }) as typeof fetch;
-}
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {'Content-Type': 'application/json'},
-  });
-}
-
-/**
- * A stand-in for `event.cookies`, recording the names deleted on it: a
- * session the API refuses is dropped on the way to the login screen.
- * @param deleted Collects the deleted cookie names.
- */
-function fakeCookies(deleted: string[] = []): Cookies {
-  return {
-    delete: (name: string) => {
-      deleted.push(name);
-    },
-  } as unknown as Cookies;
+  const status = options.status ?? 200;
+  return fakeFetch(
+    [
+      {method: 'GET', body: [TOKYO]},
+      {status, body: status < 400 ? TOKYO : {error: 'nope'}},
+    ],
+    options.calls,
+  );
 }
 
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
@@ -98,14 +68,13 @@ function createFormData(overrides: Record<string, string> = {}): FormData {
 
 describe('admin regions +page.server load', () => {
   it('returns the regions the API lists', async () => {
-    await expect(load(buildLoadEvent(fakeFetch({})))).resolves.toEqual({
+    await expect(load(buildLoadEvent(fakeApi({})))).resolves.toEqual({
       regions: [TOKYO],
     });
   });
 
   it('reports a failed read as a bad gateway', async () => {
-    const failing = (async () =>
-      jsonResponse({error: 'boom'}, 500)) as typeof fetch;
+    const failing = fakeFetch([{status: 500, body: {error: 'boom'}}]);
 
     await expect(load(buildLoadEvent(failing))).rejects.toMatchObject({
       status: 502,
@@ -115,9 +84,9 @@ describe('admin regions +page.server load', () => {
 
 describe('admin regions create action', () => {
   it('sends the submitted region and reports the save', async () => {
-    const calls: ApiCall[] = [];
+    const calls: RecordedRequest[] = [];
     const event = buildActionEvent(
-      fakeFetch({status: 201, calls}),
+      fakeApi({status: 201, calls}),
       createFormData({allowsDualEntry: 'on'}),
     );
 
@@ -135,9 +104,9 @@ describe('admin regions create action', () => {
   });
 
   it('defaults an unchecked dual-entry box to false', async () => {
-    const calls: ApiCall[] = [];
+    const calls: RecordedRequest[] = [];
     const event = buildActionEvent(
-      fakeFetch({status: 201, calls}),
+      fakeApi({status: 201, calls}),
       createFormData(),
     );
 
@@ -146,7 +115,7 @@ describe('admin regions create action', () => {
   });
 
   it('the create action reports a duplicate slug on the slug field', async () => {
-    const event = buildActionEvent(fakeFetch({status: 409}), createFormData());
+    const event = buildActionEvent(fakeApi({status: 409}), createFormData());
 
     await expect(actions.create(event)).resolves.toMatchObject({
       status: 409,
@@ -160,9 +129,9 @@ describe('admin regions create action', () => {
   });
 
   it('marks a malformed slug without asking the API', async () => {
-    const calls: ApiCall[] = [];
+    const calls: RecordedRequest[] = [];
     const event = buildActionEvent(
-      fakeFetch({calls}),
+      fakeApi({calls}),
       createFormData({slug: 'Tokyo Region'}),
     );
 
@@ -175,12 +144,12 @@ describe('admin regions create action', () => {
 
 describe('admin regions update action', () => {
   it('patches only the editable fields of the named region', async () => {
-    const calls: ApiCall[] = [];
+    const calls: RecordedRequest[] = [];
     const formData = new FormData();
     formData.set('id', TOKYO.id);
     formData.set('name', '東京都');
     formData.set('allowsDualEntry', 'on');
-    const event = buildActionEvent(fakeFetch({calls}), formData);
+    const event = buildActionEvent(fakeApi({calls}), formData);
 
     await expect(actions.update(event)).resolves.toMatchObject({
       intent: 'update',
@@ -200,7 +169,7 @@ describe('admin regions update action', () => {
     const formData = new FormData();
     formData.set('id', TOKYO.id);
     formData.set('name', '東京都');
-    const event = buildActionEvent(fakeFetch({status: 404}), formData);
+    const event = buildActionEvent(fakeApi({status: 404}), formData);
 
     await expect(actions.update(event)).resolves.toMatchObject({
       status: 404,
