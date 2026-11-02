@@ -116,6 +116,66 @@ describe('DynamicFormField', () => {
     expect(screen.getByRole('checkbox', {name: 'ベーコン'})).not.toBeRequired();
   });
 
+  describe.each([
+    {
+      name: 'a radio group',
+      field: {
+        type: 'radio',
+        key: 'lunch',
+        label: 'お弁当',
+        required: true,
+        options: ['和食', '洋食'],
+      },
+      value: '',
+      role: 'group',
+    },
+    {
+      name: 'a checkbox group',
+      field: {
+        type: 'checkbox',
+        key: 'lunch',
+        label: 'お弁当',
+        required: true,
+        options: ['和食', '洋食'],
+      },
+      value: [],
+      role: 'group',
+    },
+    {
+      name: 'a plain boolean checkbox',
+      field: {type: 'checkbox', key: 'lunch', label: 'お弁当', required: true},
+      value: [],
+      role: 'checkbox',
+    },
+  ] as const)('the message for $name', ({field, value, role}) => {
+    it('is read out with the control', () => {
+      render(DynamicFormField, {
+        props: {
+          field: field as FormFieldDefYaml,
+          value: value as string | string[],
+          error: '「お弁当」は必須です',
+        },
+      });
+
+      const control = screen.getByRole(role, {name: 'お弁当'});
+      expect(control).toHaveAttribute('aria-describedby', 'custom.lunch-error');
+      expect(control).toHaveAccessibleDescription('「お弁当」は必須です');
+    });
+
+    it('is not pointed at while there is none', () => {
+      render(DynamicFormField, {
+        props: {
+          field: field as FormFieldDefYaml,
+          value: value as string | string[],
+        },
+      });
+
+      expect(screen.getByRole(role, {name: 'お弁当'})).not.toHaveAttribute(
+        'aria-describedby',
+      );
+    });
+  });
+
   it('submits a plain boolean checkbox under the field key', async () => {
     const user = userEvent.setup();
     const field: FormFieldDefYaml = {

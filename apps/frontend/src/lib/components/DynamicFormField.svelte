@@ -35,6 +35,11 @@
   // key as it. See `$lib/custom-field-name`.
   const controlName = $derived(customFieldName(field.key));
 
+  // What the option groups and the lone box point `aria-describedby` at, so
+  // their message is read out with them as `TextField`'s is.
+  const errorId = $derived(`${controlName}-error`);
+  const describedBy = $derived(error ? errorId : undefined);
+
   // A `checkbox` field with no `options` is a plain boolean toggle (e.g.
   // "I agree to the rules"). To keep the component's value type consistent
   // (`string | string[]`) across all field types, "checked" is represented
@@ -78,9 +83,8 @@
      rely on, and the wrapping label is what names each option. -->
 {#if isFreeTextFieldType(field.type)}
   <!-- `TextField` takes text, and `value` is typed for every kind of field.
-       An answer can also be missing here: a field `invalidateAll()` brought
-       in after the form was seeded has none, and a `bind:` of `undefined` to
-       a bindable with a fallback throws. -->
+       The caller hands over text for these types (`customFieldValueFor()`);
+       anything else shows as empty rather than as a joined list. -->
   <TextField
     id={controlName}
     name={controlName}
@@ -88,7 +92,7 @@
     required={field.required}
     maxlength={CUSTOM_FIELD_VALUE_MAX_LENGTH}
     {error}
-    bind:value={() => String(value ?? ''), typed => (value = typed)}
+    bind:value={() => (typeof value === 'string' ? value : ''), typed => (value = typed)}
   >
     {#snippet label()}
       <FieldLabelText label={field.label} />
@@ -96,7 +100,7 @@
     {/snippet}
   </TextField>
 {:else if field.type === 'radio'}
-  <fieldset class="flex flex-col gap-2">
+  <fieldset class="flex flex-col gap-2" aria-describedby={describedBy}>
     <legend class="mb-1.5 text-sm/tight font-medium text-foreground">
       <FieldLabelText label={field.label} />
       {#if field.required}<span aria-hidden="true" class="ml-0.5 text-destructive">*</span>{/if}
@@ -114,11 +118,11 @@
         <FieldLabelText label={option} />
       </label>
     {/each}
-    <FieldError {error} />
+    <FieldError {error} id={errorId} />
   </fieldset>
 {:else if field.type === 'checkbox'}
   {#if field.options && field.options.length > 0}
-    <fieldset class="flex flex-col gap-2">
+    <fieldset class="flex flex-col gap-2" aria-describedby={describedBy}>
       <legend class="mb-1.5 text-sm/tight font-medium text-foreground">
         <FieldLabelText label={field.label} />
         {#if field.required}<span aria-hidden="true" class="ml-0.5 text-destructive">*</span>{/if}
@@ -136,7 +140,7 @@
           <FieldLabelText label={option} />
         </label>
       {/each}
-      <FieldError {error} />
+      <FieldError {error} id={errorId} />
     </fieldset>
   {:else}
     <div class="flex flex-col gap-1.5">
@@ -147,11 +151,13 @@
           name={controlName}
           value={booleanCheckboxValue}
           required={field.required}
+          aria-describedby={describedBy}
+          aria-invalid={error ? true : undefined}
           bind:group={value}
         />
         <FieldLabelText label={field.label} />
       </label>
-      <FieldError {error} />
+      <FieldError {error} id={errorId} />
     </div>
   {/if}
 {/if}

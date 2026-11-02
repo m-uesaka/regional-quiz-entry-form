@@ -9,7 +9,8 @@
     type Regulation,
   } from '@regional-quiz/shared';
   import CustomFieldsSection from '$lib/components/CustomFieldsSection.svelte';
-  import EntryProfileFields from '$lib/components/EntryProfileFields.svelte';
+  import EntryFreeTextField from '$lib/components/EntryFreeTextField.svelte';
+  import EntryNameFields from '$lib/components/EntryNameFields.svelte';
   import FieldError from '$lib/components/form/FieldError.svelte';
   import TextField from '$lib/components/form/TextField.svelte';
   import PasswordRequirements from '$lib/components/PasswordRequirements.svelte';
@@ -106,93 +107,87 @@
     };
   }}
 >
-  <!-- Everything between the names and the free text is this form's own, in
-       the order a participant goes through it. -->
-  <EntryProfileFields
-    bind:name
-    bind:furigana
-    bind:displayName
-    bind:freeText
-    {fieldErrors}
-  >
-    {#if loggedIn}
-      <!-- Tells the action this form was rendered for a session, so a session
-           that lapsed while it was open is sent to log in again rather than
-           told about address and password fields it never showed. -->
-      <input type="hidden" name="entryMode" value="session" />
-      <p class="text-sm text-muted-foreground">
-        ログイン中のアカウントでエントリーします。メールアドレスとパスワードの入力は不要です。
-      </p>
-    {:else}
-      <TextField
-        id="email"
-        name="email"
-        label="メールアドレス"
-        type="email"
-        bind:value={email}
-        error={firstFieldError(fieldErrors, 'email')}
-        required
-      />
+  <EntryNameFields bind:name bind:furigana bind:displayName {fieldErrors} />
 
-      <!-- An address that is already registered is still recognised by its
-           password, but a wrong one isn't reported on this page: the
-           submission is answered the same whatever the address, and the
-           reason goes to its owner by mail (#117). Registered participants
-           are pointed at logging in instead, which leaves these fields out. -->
-      <TextField
-        id="password"
-        name="password"
-        label="パスワード"
-        type="password"
-        minlength={PASSWORD_MIN_LENGTH}
-        maxlength={PASSWORD_MAX_LENGTH}
-        autocomplete="new-password"
-        error={firstFieldError(fieldErrors, 'password')}
-        bind:value={password}
-        aria-describedby="password-requirements"
-        required
-      />
-
-      <TextField
-        id="passwordConfirm"
-        name="passwordConfirm"
-        label="パスワード(確認)"
-        type="password"
-        minlength={PASSWORD_MIN_LENGTH}
-        maxlength={PASSWORD_MAX_LENGTH}
-        autocomplete="new-password"
-        error={firstFieldError(fieldErrors, 'passwordConfirm')}
-        bind:value={passwordConfirm}
-        required
-      />
-
-      <!-- Under both fields, so the match is reported next to the second. The
-           rules apply only when the address turns out to be new; a registered
-           participant types the password they already have (#117). -->
-      <div id="password-requirements">
-        <PasswordRequirements
-          {password}
-          confirmation={passwordConfirm}
-          newAccountOnly
-        />
-      </div>
-    {/if}
-
-    <div class="flex flex-col gap-1.5">
-      <RegulationSelector
-        {regulations}
-        {now}
-        bind:value={regulationIds}
-      />
-      <FieldError error={firstFieldError(fieldErrors, 'regulationIds')} />
-    </div>
-
-    <CustomFieldsSection
-      {formFieldDefs}
-      bind:values={customFieldValues}
-      {fieldErrors}
+  {#if loggedIn}
+    <!-- Tells the action this form was rendered for a session, so a session
+         that lapsed while it was open is sent to log in again rather than
+         told about address and password fields it never showed. -->
+    <input type="hidden" name="entryMode" value="session" />
+    <p class="text-sm text-muted-foreground">
+      ログイン中のアカウントでエントリーします。メールアドレスとパスワードの入力は不要です。
+    </p>
+  {:else}
+    <TextField
+      id="email"
+      name="email"
+      label="メールアドレス"
+      type="email"
+      bind:value={email}
+      error={firstFieldError(fieldErrors, 'email')}
+      required
     />
-  </EntryProfileFields>
+
+    <!-- An address that is already registered is still recognised by its
+         password, but a wrong one isn't reported on this page: the
+         submission is answered the same whatever the address, and the
+         reason goes to its owner by mail (#117). Registered participants
+         are pointed at logging in instead, which leaves these fields out. -->
+    <TextField
+      id="password"
+      name="password"
+      label="パスワード"
+      type="password"
+      minlength={PASSWORD_MIN_LENGTH}
+      maxlength={PASSWORD_MAX_LENGTH}
+      autocomplete="new-password"
+      error={firstFieldError(fieldErrors, 'password')}
+      bind:value={password}
+      aria-describedby="password-requirements"
+      required
+    />
+
+    <TextField
+      id="passwordConfirm"
+      name="passwordConfirm"
+      label="パスワード(確認)"
+      type="password"
+      minlength={PASSWORD_MIN_LENGTH}
+      maxlength={PASSWORD_MAX_LENGTH}
+      autocomplete="new-password"
+      error={firstFieldError(fieldErrors, 'passwordConfirm')}
+      bind:value={passwordConfirm}
+      required
+    />
+
+    <!-- Under both fields, so the match is reported next to the second. The
+         rules apply only when the address turns out to be new; a registered
+         participant types the password they already have (#117). -->
+    <div id="password-requirements">
+      <PasswordRequirements
+        {password}
+        confirmation={passwordConfirm}
+        newAccountOnly
+      />
+    </div>
+  {/if}
+
+  <div class="flex flex-col gap-1.5">
+    <RegulationSelector
+      {regulations}
+      {now}
+      bind:value={regulationIds}
+    />
+    <FieldError error={firstFieldError(fieldErrors, 'regulationIds')} />
+  </div>
+
+  <CustomFieldsSection
+    {formFieldDefs}
+    bind:values={customFieldValues}
+    {fieldErrors}
+  />
+
+  <EntryFreeTextField bind:freeText {fieldErrors} />
 
   <!-- The widget drops a hidden `cf-turnstile-response` control into this
        form, which the page's action forwards to the API. Entry registration

@@ -5,7 +5,10 @@ under them. Renders no wrapper of its own, so the fields stay direct children
 of the form's layout.
 
 `values` is bound, and seeded by the form that owns it with
-`initialCustomFieldValues()`. This component holds no state of its own, so
+`initialCustomFieldValues()`. A field with no answer in it -- one
+`invalidateAll()` brought in after the form was seeded -- is given the empty
+answer of its type here (`customFieldValueFor()`), so every control binds to
+a value of its own shape. This component holds no state of its own, so
 nothing here can reset what is being typed when a rejected submission
 re-renders the form. See "A seeded form lives in a child component" in
 `apps/frontend/README.md`.
@@ -19,7 +22,7 @@ re-renders the form. See "A seeded form lives in a child component" in
   import DynamicFormField from '$lib/components/DynamicFormField.svelte';
   import FieldError from '$lib/components/form/FieldError.svelte';
   import {customFieldName} from '$lib/custom-field-name';
-  import {firstFieldError} from '$lib/entry-form';
+  import {customFieldValueFor, firstFieldError} from '$lib/entry-form';
   import type {EntryFieldErrors} from '$lib/types/entry-form';
 
   interface Props {
@@ -40,7 +43,10 @@ re-renders the form. See "A seeded form lives in a child component" in
        files a custom field's message under. -->
   <DynamicFormField
     {field}
-    bind:value={values[field.key]}
+    bind:value={
+      () => customFieldValueFor(field.type, values[field.key]),
+      answer => (values[field.key] = answer)
+    }
     error={firstFieldError(fieldErrors, customFieldName(field.key))}
   />
 {/each}

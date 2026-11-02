@@ -3,7 +3,8 @@
   import {enhance} from '$app/forms';
   import type {MypageEntryDetail} from '@regional-quiz/shared';
   import CustomFieldsSection from '$lib/components/CustomFieldsSection.svelte';
-  import EntryProfileFields from '$lib/components/EntryProfileFields.svelte';
+  import EntryFreeTextField from '$lib/components/EntryFreeTextField.svelte';
+  import EntryNameFields from '$lib/components/EntryNameFields.svelte';
   import {initialCustomFieldValues} from '$lib/entry-form';
   import Button from '$lib/components/ui/atoms/Button.svelte';
   import type {
@@ -46,13 +47,9 @@
 </script>
 
 <form method="POST" class="flex flex-col gap-4" use:enhance>
-  <EntryProfileFields
-    bind:name
-    bind:furigana
-    bind:displayName
-    bind:freeText
-    {fieldErrors}
-  />
+  <EntryNameFields bind:name bind:furigana bind:displayName {fieldErrors} />
+
+  <EntryFreeTextField bind:freeText {fieldErrors} />
 
   <CustomFieldsSection
     formFieldDefs={entry.formFieldDefs}

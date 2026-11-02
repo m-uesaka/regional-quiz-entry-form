@@ -1,6 +1,10 @@
 import {describe, expect, it} from 'vitest';
 import type {FormFieldDef} from '@regional-quiz/shared';
-import {firstFieldError, initialCustomFieldValues} from './entry-form';
+import {
+  customFieldValueFor,
+  firstFieldError,
+  initialCustomFieldValues,
+} from './entry-form';
 
 const BASE_FIELD_DEF = {
   label: '項目',
@@ -74,5 +78,28 @@ describe('initialCustomFieldValues', () => {
     seeded.lunch = '洋食';
 
     expect(answered).toEqual({agree: ['agree']});
+  });
+});
+
+describe('customFieldValueFor', () => {
+  it('gives a missing answer the empty one of its type', () => {
+    expect(customFieldValueFor('checkbox', undefined)).toEqual([]);
+    expect(customFieldValueFor('radio', undefined)).toBe('');
+    expect(customFieldValueFor('textfield', undefined)).toBe('');
+    expect(customFieldValueFor('textarea', undefined)).toBe('');
+  });
+
+  it('keeps an answer of the right shape', () => {
+    expect(customFieldValueFor('checkbox', ['a', 'b'])).toEqual(['a', 'b']);
+    expect(customFieldValueFor('radio', '和食')).toBe('和食');
+    expect(customFieldValueFor('textarea', '備考')).toBe('備考');
+  });
+
+  // A field whose type changed since it was answered.
+  it('fits an answer of the other shape', () => {
+    expect(customFieldValueFor('checkbox', 'チーズ')).toEqual(['チーズ']);
+    expect(customFieldValueFor('checkbox', '')).toEqual([]);
+    expect(customFieldValueFor('textfield', ['a', 'b'])).toBe('');
+    expect(customFieldValueFor('radio', ['a'])).toBe('');
   });
 });

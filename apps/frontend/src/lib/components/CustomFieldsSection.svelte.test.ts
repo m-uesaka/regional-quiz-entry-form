@@ -68,12 +68,14 @@ describe('CustomFieldsSection', () => {
     expect(
       screen.getByRole('textbox', {name: '所属'}),
     ).toHaveAccessibleDescription('所属のエラー');
-    expect(screen.getByText('お弁当のエラー')).toBeInTheDocument();
+    expect(
+      screen.getByRole('group', {name: 'お弁当'}),
+    ).toHaveAccessibleDescription('お弁当のエラー');
     expect(screen.queryByText('氏名のエラー')).toBeNull();
   });
 
   it('shows the message about the answers as a whole under them', () => {
-    const {container} = render(CustomFieldsSection, {
+    render(CustomFieldsSection, {
       props: {
         formFieldDefs: FORM_FIELD_DEFS,
         values: VALUES,
@@ -81,9 +83,11 @@ describe('CustomFieldsSection', () => {
       },
     });
 
-    expect(container.querySelector('p:last-of-type')).toHaveTextContent(
-      '回答が長すぎます',
-    );
+    // After the last field, which is the 所属 text box.
+    const lastField = screen.getByRole('textbox', {name: '所属'});
+    expect(
+      lastField.compareDocumentPosition(screen.getByText('回答が長すぎます')),
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
   it('writes every kind of answer back to the bound values', async () => {
@@ -110,6 +114,40 @@ describe('CustomFieldsSection', () => {
     expect(bound.values).toEqual({
       lunch: '洋食',
       toppings: ['ベーコン'],
+      name: '東京大学',
+    });
+
+    await unmount(component);
+    target.remove();
+  });
+
+  // A field `invalidateAll()` brought in after the form was seeded has no
+  // answer yet; each kind still binds to an answer of its own shape.
+  it('answers fields that have no value yet', async () => {
+    const user = userEvent.setup();
+    const bound = $state<{values: CustomFieldValues}>({values: {}});
+    const target = document.body.appendChild(document.createElement('div'));
+    const component = mount(CustomFieldsSection, {
+      target,
+      props: {
+        formFieldDefs: FORM_FIELD_DEFS,
+        get values() {
+          return bound.values;
+        },
+        set values(answers: CustomFieldValues) {
+          bound.values = answers;
+        },
+      },
+    });
+
+    await user.click(screen.getByRole('radio', {name: '洋食'}));
+    await user.click(screen.getByRole('checkbox', {name: 'チーズ'}));
+    await user.click(screen.getByRole('checkbox', {name: 'ベーコン'}));
+    await user.type(screen.getByRole('textbox', {name: '所属'}), '東京大学');
+
+    expect(bound.values).toEqual({
+      lunch: '洋食',
+      toppings: ['チーズ', 'ベーコン'],
       name: '東京大学',
     });
 
