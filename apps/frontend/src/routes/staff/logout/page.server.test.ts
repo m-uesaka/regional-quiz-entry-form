@@ -1,5 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import type {Cookies, Redirect} from '@sveltejs/kit';
+import {fakeFetch} from '../../../test-support/fake-fetch';
 import {actions, load} from './+page.server';
 
 /** A cookie written back on the response, as `Cookies.set()` took it. */
@@ -38,11 +39,7 @@ function buildEvent(
 
 /** Builds a fake `fetch` answering the logout call with the given status. */
 function fakeLogoutFetch(status: number): typeof fetch {
-  return (async () =>
-    new Response(JSON.stringify({ok: status === 200}), {
-      status,
-      headers: {'Content-Type': 'application/json'},
-    })) as typeof fetch;
+  return fakeFetch([{status, body: {ok: status === 200}}]);
 }
 
 describe('staff logout +page.server load', () => {

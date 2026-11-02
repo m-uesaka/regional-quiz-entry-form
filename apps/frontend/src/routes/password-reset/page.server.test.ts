@@ -1,5 +1,8 @@
 import {describe, expect, it} from 'vitest';
 import type {Cookies, Redirect} from '@sveltejs/kit';
+import {fakeCookieJar} from '../../test-support/fake-cookies';
+import {fakeFetch} from '../../test-support/fake-fetch';
+import {jsonResponse} from '../../test-support/json-response';
 import {actions, load} from './+page.server';
 
 const TOKEN = 'b3f1c0de';
@@ -18,50 +21,25 @@ function emptyLog(): FetchLog {
 }
 
 /** Builds a fake `fetch` answering the reset POST with the given status. */
-function fakeFetch(status = 200, log: FetchLog = emptyLog()): typeof fetch {
-  return (async (input: RequestInfo | URL, init?: RequestInit) => {
-    log.urls.push(String(input));
-    log.bodies.push(JSON.parse(String(init?.body)));
-    log.turnstileTokens.push(
-      new Headers(init?.headers).get('cf-turnstile-response'),
-    );
-    return new Response(status === 200 ? JSON.stringify({ok: true}) : '{}', {
-      status,
-      headers: {'Content-Type': 'application/json'},
-    });
-  }) as typeof fetch;
-}
-
-/**
- * Builds a stand-in for `event.cookies`: a jar the page reads its token
- * from, recording the names deleted on it (which is how a spent token and a
- * refused session are cleared).
- * @param deleted The array every `delete()` call appends its name to.
- * @param jar The cookies the request carries; `set()` writes into it.
- * @param setOptions Records the options each `set()` was called with.
- */
-function fakeCookies(
-  deleted: string[] = [],
-  jar = new Map<string, string>(),
-  setOptions = new Map<string, unknown>(),
-): Cookies {
-  return {
-    get: (name: string) => jar.get(name),
-    set: (name: string, value: string, options: unknown) => {
-      jar.set(name, value);
-      setOptions.set(name, options);
+function fakeApi(status = 200, log: FetchLog = emptyLog()): typeof fetch {
+  return fakeFetch([
+    {
+      respond: ({url, body, headers}) => {
+        log.urls.push(url);
+        log.bodies.push(body);
+        log.turnstileTokens.push(headers.get('cf-turnstile-response'));
+        return status === 200
+          ? jsonResponse({ok: true})
+          : jsonResponse({}, status);
+      },
     },
-    delete: (name: string) => {
-      deleted.push(name);
-      jar.delete(name);
-    },
-  } as unknown as Cookies;
+  ]);
 }
 
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
 function buildLoadEvent(
   url: string,
-  cookies: Cookies = fakeCookies(),
+  cookies: Cookies = fakeCookieJar().cookies,
 ): Parameters<typeof load>[0] {
   return {url: new URL(url), cookies} as Parameters<typeof load>[0];
 }
@@ -78,12 +56,12 @@ function buildActionEvent(
   formData: FormData,
   deleted: string[] = [],
 ): Parameters<typeof actions.default>[0] {
-  const jar = new Map<string, string>();
-  if (url === RESET_URL) jar.set(TOKEN_COOKIE, TOKEN);
+  const initial: Record<string, string> =
+    url === RESET_URL ? {[TOKEN_COOKIE]: TOKEN} : {};
   return {
     url: new URL(url === RESET_URL ? REQUEST_URL : url),
     fetch: fetchImpl,
-    cookies: fakeCookies(deleted, jar),
+    cookies: fakeCookieJar(initial, deleted).cookies,
     request: {formData: async () => formData},
   } as Parameters<typeof actions.default>[0];
 }
@@ -116,12 +94,9 @@ describe('password reset +page.server load', () => {
   // The token is moved out of the URL into an httpOnly cookie on arrival, so
   // it stays out of the history, a later `Referer` and the page (#120).
   it('moves a mailed token into a cookie and redirects to the bare URL', () => {
-    const jar = new Map<string, string>();
-    const setOptions = new Map<string, unknown>();
+    const {cookies, jar, setOptions} = fakeCookieJar();
 
-    expect(() =>
-      load(buildLoadEvent(RESET_URL, fakeCookies([], jar, setOptions))),
-    ).toThrow(
+    expect(() => load(buildLoadEvent(RESET_URL, cookies))).toThrow(
       expect.objectContaining({
         status: 303,
         location: '/password-reset',
@@ -139,9 +114,9 @@ describe('password reset +page.server load', () => {
   // A reload, or a tab the browser restores, comes back without the query:
   // the link is still good, so the form must still be there.
   it('asks for a new password while the cookie holds a token', () => {
-    const jar = new Map([[TOKEN_COOKIE, TOKEN]]);
+    const {cookies} = fakeCookieJar({[TOKEN_COOKIE]: TOKEN});
 
-    expect(load(buildLoadEvent(REQUEST_URL, fakeCookies([], jar)))).toEqual({
+    expect(load(buildLoadEvent(REQUEST_URL, cookies))).toEqual({
       hasToken: true,
     });
   });
@@ -151,10 +126,10 @@ describe('password reset +page.server load', () => {
   });
 
   it('treats an empty token as no token at all', () => {
-    const jar = new Map<string, string>();
+    const {cookies, jar} = fakeCookieJar();
 
     expect(() =>
-      load(buildLoadEvent(`${REQUEST_URL}?token=`, fakeCookies([], jar))),
+      load(buildLoadEvent(`${REQUEST_URL}?token=`, cookies)),
     ).toThrow(expect.objectContaining({status: 303}) as Error);
     expect(jar.has(TOKEN_COOKIE)).toBe(false);
   });
@@ -163,11 +138,7 @@ describe('password reset +page.server load', () => {
 describe('password reset +page.server action, without a token', () => {
   it('asks the API to mail a reset link', async () => {
     const log: FetchLog = emptyLog();
-    const event = buildActionEvent(
-      REQUEST_URL,
-      fakeFetch(200, log),
-      emailForm(),
-    );
+    const event = buildActionEvent(REQUEST_URL, fakeApi(200, log), emailForm());
 
     await expect(actions.default(event)).resolves.toEqual({sent: true});
     expect(log.urls[0]).toContain(
@@ -184,7 +155,7 @@ describe('password reset +page.server action, without a token', () => {
     const log: FetchLog = emptyLog();
     const event = buildActionEvent(
       REQUEST_URL,
-      fakeFetch(400, log),
+      fakeApi(400, log),
       emailForm('sanka@example.com', null),
     );
 
@@ -199,7 +170,7 @@ describe('password reset +page.server action, without a token', () => {
     const log: FetchLog = emptyLog();
     const event = buildActionEvent(
       REQUEST_URL,
-      fakeFetch(400, log),
+      fakeApi(400, log),
       emailForm('sanka@example.com', 'token\r\nX-Injected: 1'),
     );
 
@@ -208,7 +179,7 @@ describe('password reset +page.server action, without a token', () => {
   });
 
   it('reports a refused Turnstile token as something to retry', async () => {
-    const event = buildActionEvent(REQUEST_URL, fakeFetch(400), emailForm());
+    const event = buildActionEvent(REQUEST_URL, fakeApi(400), emailForm());
 
     await expect(actions.default(event)).resolves.toMatchObject({
       status: 400,
@@ -220,7 +191,7 @@ describe('password reset +page.server action, without a token', () => {
   });
 
   it('asks the participant to wait when the API rate limits the request', async () => {
-    const event = buildActionEvent(REQUEST_URL, fakeFetch(429), emailForm());
+    const event = buildActionEvent(REQUEST_URL, fakeApi(429), emailForm());
 
     await expect(actions.default(event)).resolves.toMatchObject({
       status: 429,
@@ -234,7 +205,7 @@ describe('password reset +page.server action, without a token', () => {
     const log: FetchLog = emptyLog();
     const event = buildActionEvent(
       REQUEST_URL,
-      fakeFetch(200, log),
+      fakeApi(200, log),
       emailForm('not-an-email'),
     );
 
@@ -246,7 +217,7 @@ describe('password reset +page.server action, without a token', () => {
     const log: FetchLog = emptyLog();
     const event = buildActionEvent(
       `${REQUEST_URL}?token=`,
-      fakeFetch(200, log),
+      fakeApi(200, log),
       emailForm(),
     );
 
@@ -257,7 +228,7 @@ describe('password reset +page.server action, without a token', () => {
   });
 
   it('fails with 502 when the request cannot be sent', async () => {
-    const event = buildActionEvent(REQUEST_URL, fakeFetch(500), emailForm());
+    const event = buildActionEvent(REQUEST_URL, fakeApi(500), emailForm());
 
     await expect(actions.default(event)).resolves.toMatchObject({status: 502});
   });
@@ -269,7 +240,7 @@ describe('password reset +page.server action, with a token', () => {
     const deleted: string[] = [];
     const event = buildActionEvent(
       RESET_URL,
-      fakeFetch(200, log),
+      fakeApi(200, log),
       passwordForm(),
       deleted,
     );
@@ -292,7 +263,7 @@ describe('password reset +page.server action, with a token', () => {
     const log: FetchLog = emptyLog();
     const event = buildActionEvent(
       RESET_URL,
-      fakeFetch(200, log),
+      fakeApi(200, log),
       passwordForm('newpassword1', 'newpassword2'),
     );
 
@@ -307,7 +278,7 @@ describe('password reset +page.server action, with a token', () => {
     const log: FetchLog = emptyLog();
     const event = buildActionEvent(
       RESET_URL,
-      fakeFetch(200, log),
+      fakeApi(200, log),
       passwordForm('qwertyuiop'),
     );
 
@@ -325,7 +296,7 @@ describe('password reset +page.server action, with a token', () => {
     const log: FetchLog = emptyLog();
     const event = buildActionEvent(
       RESET_URL,
-      fakeFetch(200, log),
+      fakeApi(200, log),
       passwordForm('short'),
     );
 
@@ -337,7 +308,7 @@ describe('password reset +page.server action, with a token', () => {
     const deleted: string[] = [];
     const event = buildActionEvent(
       RESET_URL,
-      fakeFetch(400),
+      fakeApi(400),
       passwordForm(),
       deleted,
     );
@@ -355,7 +326,7 @@ describe('password reset +page.server action, with a token', () => {
   });
 
   it('fails with 502 when the reset request fails', async () => {
-    const event = buildActionEvent(RESET_URL, fakeFetch(500), passwordForm());
+    const event = buildActionEvent(RESET_URL, fakeApi(500), passwordForm());
 
     await expect(actions.default(event)).resolves.toMatchObject({status: 502});
   });

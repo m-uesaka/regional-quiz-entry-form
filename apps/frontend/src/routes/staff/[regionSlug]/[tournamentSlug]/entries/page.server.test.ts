@@ -1,6 +1,17 @@
 import {describe, expect, it} from 'vitest';
-import type {Cookies, HttpError, Redirect} from '@sveltejs/kit';
+import type {HttpError, Redirect} from '@sveltejs/kit';
 import type {Entry, StaffClaims, Tournament} from '@regional-quiz/shared';
+import {fakeCookies} from '../../../../../test-support/fake-cookies';
+import {
+  fakeFetch,
+  type FakeRoute,
+  type RecordedRequest,
+} from '../../../../../test-support/fake-fetch';
+import {jsonResponse} from '../../../../../test-support/json-response';
+import {
+  GENERAL_STAFF,
+  staffLocals,
+} from '../../../../../test-support/staff-locals';
 import {actions, load} from './+page.server';
 
 const TOURNAMENT: Tournament = {
@@ -12,14 +23,6 @@ const TOURNAMENT: Tournament = {
   entryOpensAt: '2020-01-01T00:00:00.000Z',
   entryClosesAt: '2099-01-01T00:00:00.000Z',
   entriesPaused: false,
-};
-
-const GENERAL_STAFF: StaffClaims = {
-  sub: '00000000-0000-0000-0000-000000000003',
-  role: 'general',
-  regionId: null,
-  tournamentType: null,
-  sessionsValidFrom: 1756085025678,
 };
 
 const ENTRIES: Entry[] = [
@@ -43,7 +46,7 @@ const ENTRIES: Entry[] = [
  * Builds a fake `fetch` that dispatches by URL path, mirroring the two
  * backend calls `load` makes (tournament lookup, then staff entries).
  */
-function fakeFetch(options: {
+function fakeApi(options: {
   tournament?: Tournament;
   tournamentOk?: boolean;
   /** The tournament lookup's status, for the refusals `tournamentOk` can't say. */
@@ -53,43 +56,29 @@ function fakeFetch(options: {
   /** Collects the staff entries request URLs. */
   entriesRequests?: URL[];
 }): typeof fetch {
-  return (async input => {
-    const url = typeof input === 'string' ? input : input.toString();
-    if (url.includes(`/staff/tournaments/${TOURNAMENT.id}/entries`)) {
-      const requested = new URL(url, 'http://localhost');
-      options.entriesRequests?.push(requested);
-      const entries = options.entries ?? [];
-      const page = {
-        items: entries,
-        total: entries.length,
-        limit: 100,
-        offset: Number(requested.searchParams.get('offset') ?? 0),
-      };
-      return new Response(JSON.stringify(page), {
-        status: options.entriesStatus ?? 200,
-        headers: {'Content-Type': 'application/json'},
-      });
-    }
-    return new Response(JSON.stringify(options.tournament ?? {}), {
+  return fakeFetch([
+    {
+      url: `/staff/tournaments/${TOURNAMENT.id}/entries`,
+      respond: ({url}) => {
+        const requested = new URL(url, 'http://localhost');
+        options.entriesRequests?.push(requested);
+        const entries = options.entries ?? [];
+        const page = {
+          items: entries,
+          total: entries.length,
+          limit: 100,
+          offset: Number(requested.searchParams.get('offset') ?? 0),
+        };
+        return jsonResponse(page, options.entriesStatus ?? 200);
+      },
+    },
+    {
       status:
         options.tournamentStatus ??
         (options.tournamentOk === false ? 404 : 200),
-      headers: {'Content-Type': 'application/json'},
-    });
-  }) as typeof fetch;
-}
-
-/**
- * A stand-in for `event.cookies`, recording the names deleted on it: a
- * session the API refuses is dropped on the way to the login screen.
- * @param deleted Collects the deleted cookie names.
- */
-function fakeCookies(deleted: string[] = []): Cookies {
-  return {
-    delete: (name: string) => {
-      deleted.push(name);
+      body: options.tournament ?? {},
     },
-  } as unknown as Cookies;
+  ]);
 }
 
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
@@ -104,7 +93,7 @@ function buildEvent(options: {
     params: {regionSlug: 'tokyo', tournamentSlug},
     fetch: options.fetch,
     cookies: fakeCookies(),
-    locals: {staff: options.staff},
+    locals: staffLocals(options.staff),
     url: new URL(
       `http://localhost/staff/tokyo/${tournamentSlug}/entries${options.search ?? ''}`,
     ),
@@ -117,7 +106,7 @@ const LOGIN_REDIRECT =
 describe('staff entries +page.server load', () => {
   it('redirects to the login screen when there is no staff session', async () => {
     const event = buildEvent({
-      fetch: fakeFetch({tournament: TOURNAMENT, entries: ENTRIES}),
+      fetch: fakeApi({tournament: TOURNAMENT, entries: ENTRIES}),
       staff: null,
     });
 
@@ -129,7 +118,7 @@ describe('staff entries +page.server load', () => {
 
   it('redirects to the login screen when the session expired before the API call', async () => {
     const event = buildEvent({
-      fetch: fakeFetch({tournament: TOURNAMENT, entriesStatus: 401}),
+      fetch: fakeApi({tournament: TOURNAMENT, entriesStatus: 401}),
       staff: GENERAL_STAFF,
     });
 
@@ -141,7 +130,7 @@ describe('staff entries +page.server load', () => {
 
   it('returns the first page of entries for authorized staff', async () => {
     const event = buildEvent({
-      fetch: fakeFetch({tournament: TOURNAMENT, entries: ENTRIES}),
+      fetch: fakeApi({tournament: TOURNAMENT, entries: ENTRIES}),
       staff: GENERAL_STAFF,
     });
 
@@ -158,7 +147,7 @@ describe('staff entries +page.server load', () => {
   it('passes the status filter and the offset on to the backend', async () => {
     const entriesRequests: URL[] = [];
     const event = buildEvent({
-      fetch: fakeFetch({
+      fetch: fakeApi({
         tournament: TOURNAMENT,
         entries: ENTRIES,
         entriesRequests,
@@ -178,7 +167,7 @@ describe('staff entries +page.server load', () => {
   it('lists every status when the URL names an unknown one', async () => {
     const entriesRequests: URL[] = [];
     const event = buildEvent({
-      fetch: fakeFetch({
+      fetch: fakeApi({
         tournament: TOURNAMENT,
         entries: ENTRIES,
         entriesRequests,
@@ -193,7 +182,7 @@ describe('staff entries +page.server load', () => {
 
   it('throws 404 when the tournament slug is not a valid tournament type', async () => {
     const event = buildEvent({
-      fetch: fakeFetch({tournament: TOURNAMENT, entries: ENTRIES}),
+      fetch: fakeApi({tournament: TOURNAMENT, entries: ENTRIES}),
       staff: GENERAL_STAFF,
       tournamentSlug: 'nope',
     });
@@ -205,7 +194,7 @@ describe('staff entries +page.server load', () => {
 
   it('throws 404 when the tournament is not found', async () => {
     const event = buildEvent({
-      fetch: fakeFetch({tournamentOk: false}),
+      fetch: fakeApi({tournamentOk: false}),
       staff: GENERAL_STAFF,
     });
 
@@ -216,7 +205,7 @@ describe('staff entries +page.server load', () => {
 
   it('throws 403 when staff are outside their scope', async () => {
     const event = buildEvent({
-      fetch: fakeFetch({tournament: TOURNAMENT, entriesStatus: 403}),
+      fetch: fakeApi({tournament: TOURNAMENT, entriesStatus: 403}),
       staff: GENERAL_STAFF,
     });
 
@@ -227,7 +216,7 @@ describe('staff entries +page.server load', () => {
 
   it('throws 502 when the staff entries request fails', async () => {
     const event = buildEvent({
-      fetch: fakeFetch({tournament: TOURNAMENT, entriesStatus: 500}),
+      fetch: fakeApi({tournament: TOURNAMENT, entriesStatus: 500}),
       staff: GENERAL_STAFF,
     });
 
@@ -241,7 +230,7 @@ describe('staff entries +page.server load', () => {
   // rather than on the entries read behind it.
   it('throws 403 when the tournament read is refused as out of scope', async () => {
     const event = buildEvent({
-      fetch: fakeFetch({tournamentStatus: 403}),
+      fetch: fakeApi({tournamentStatus: 403}),
       staff: GENERAL_STAFF,
     });
 
@@ -255,7 +244,7 @@ describe('staff entries +page.server load', () => {
   // this tournament, so it earns the login screen and not that 403.
   it('redirects to the login screen when the tournament read reports an expired session', async () => {
     const event = buildEvent({
-      fetch: fakeFetch({tournamentStatus: 401}),
+      fetch: fakeApi({tournamentStatus: 401}),
       staff: GENERAL_STAFF,
     });
 
@@ -267,26 +256,21 @@ describe('staff entries +page.server load', () => {
 });
 
 describe('staff entries pause action', () => {
-  /** One request the action sent. */
-  interface Sent {
-    method: string;
-    url: string;
-    body: unknown;
-  }
-
   function pauseFetch(
-    options: {status?: number; sent?: Sent[]} = {},
+    options: {status?: number; sent?: RecordedRequest[]} = {},
   ): typeof fetch {
-    return (async (input, init) => {
-      const url = String(input);
-      const method = init?.method ?? 'GET';
-      const body = JSON.parse(String(init?.body)) as {paused: boolean};
-      options.sent?.push({method, url, body});
-      const status = options.status ?? 200;
-      return status >= 400
-        ? Response.json({error: 'nope'}, {status})
-        : Response.json({...TOURNAMENT, entriesPaused: body.paused});
-    }) as typeof fetch;
+    const status = options.status ?? 200;
+    const answer: FakeRoute =
+      status >= 400
+        ? {status, body: {error: 'nope'}}
+        : {
+            respond: ({body}) =>
+              jsonResponse({
+                ...TOURNAMENT,
+                entriesPaused: (body as {paused: boolean}).paused,
+              }),
+          };
+    return fakeFetch([answer], options.sent);
   }
 
   function buildActionEvent(
@@ -305,14 +289,14 @@ describe('staff entries pause action', () => {
       params: {regionSlug: 'tokyo', tournamentSlug: 'saikyoi'},
       fetch: fetchImpl,
       cookies: fakeCookies(),
-      locals: {staff: GENERAL_STAFF},
+      locals: staffLocals(GENERAL_STAFF),
       url: new URL('http://localhost/staff/tokyo/saikyoi/entries'),
       request: {formData: async () => formData},
     } as Parameters<typeof actions.pause>[0];
   }
 
   it('pauses the tournament the route names', async () => {
-    const sent: Sent[] = [];
+    const sent: RecordedRequest[] = [];
 
     await expect(
       actions.pause(buildActionEvent(pauseFetch({sent}), 'true')),
@@ -327,7 +311,7 @@ describe('staff entries pause action', () => {
   });
 
   it('resumes it', async () => {
-    const sent: Sent[] = [];
+    const sent: RecordedRequest[] = [];
 
     await expect(
       actions.pause(buildActionEvent(pauseFetch({sent}), 'false')),
@@ -336,7 +320,7 @@ describe('staff entries pause action', () => {
   });
 
   it('refuses a post without the state to set, without asking the API', async () => {
-    const sent: Sent[] = [];
+    const sent: RecordedRequest[] = [];
 
     await expect(
       actions.pause(buildActionEvent(pauseFetch({sent}), null)),
@@ -345,7 +329,7 @@ describe('staff entries pause action', () => {
   });
 
   it('refuses a post without a tournament id, without asking the API', async () => {
-    const sent: Sent[] = [];
+    const sent: RecordedRequest[] = [];
 
     await expect(
       actions.pause(buildActionEvent(pauseFetch({sent}), 'true', 'nope')),

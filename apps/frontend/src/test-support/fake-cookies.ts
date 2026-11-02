@@ -30,13 +30,15 @@ export interface FakeCookieJar {
  * Builds a cookie jar standing in for `event.cookies`, for pages that read
  * and write cookies of their own rather than only dropping a session.
  * @param initial The cookies the request carries.
+ * @param deleted Collects the deleted cookie names, for a test that has to
+ *     hand the array in before the jar is built.
  */
 export function fakeCookieJar(
   initial: Record<string, string> = {},
+  deleted: string[] = [],
 ): FakeCookieJar {
   const jar = new Map(Object.entries(initial));
   const setOptions = new Map<string, unknown>();
-  const deleted: string[] = [];
   const cookies = {
     get: (name: string) => jar.get(name),
     set: (name: string, value: string, options: unknown) => {
