@@ -7,7 +7,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./password-policy": "./src/password-policy.ts",
-    "./common-passwords": "./src/common-passwords.ts"
+    "./common-passwords": "./src/common-passwords.ts",
+    "./testing/legacy-general-phase": "./src/testing/legacy-general-phase.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

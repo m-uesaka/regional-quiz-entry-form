@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type {EntryPeriod, Regulation} from '@regional-quiz/shared';
+  import type {Regulation} from '@regional-quiz/shared';
   import {
     activePriorityRegulations,
     regulationSelectionRefusal,
@@ -8,8 +8,6 @@
 
   interface Props {
     regulations: Regulation[];
-    /** The tournament's entry period. */
-    entryPeriod: EntryPeriod;
     /**
      * The chosen regulations' ids. Bound, so checking one writes it back to
      * the caller — see "Form controls are bound, not rendered from an
@@ -20,17 +18,12 @@
     now: Date;
   }
 
-  let {
-    regulations,
-    entryPeriod,
-    value = $bindable(),
-    now,
-  }: Props = $props();
+  let {regulations, value = $bindable(), now}: Props = $props();
 
   // Only what is on offer, in order. `regulations` itself stays the whole
   // list for the checks below, which need the phases that are over.
   const ordered = $derived(
-    selectableRegulations(regulations, now, entryPeriod).sort(
+    selectableRegulations(regulations, now).sort(
       (a, b) => a.displayOrder - b.displayOrder,
     ),
   );
@@ -47,7 +40,7 @@
   // reported instead.
   const priorityIds = $derived(
     new Set(
-      activePriorityRegulations(regulations, now, entryPeriod).map(
+      activePriorityRegulations(regulations, now).map(
         regulation => regulation.id,
       ),
     ),
@@ -58,7 +51,7 @@
     priorityIds.size > 0 && priorityIds.size < ordered.length,
   );
   const needsPriority = $derived(
-    regulationSelectionRefusal(regulations, chosen, now, entryPeriod) ===
+    regulationSelectionRefusal(regulations, chosen, now) ===
       'needs-priority',
   );
 
