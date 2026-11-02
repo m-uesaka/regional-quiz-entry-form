@@ -3,19 +3,18 @@
   import {enhance} from '$app/forms';
   import {invalidateAll} from '$app/navigation';
   import {
-    ENTRY_FREE_TEXT_MAX_LENGTH,
-    ENTRY_NAME_MAX_LENGTH,
     PASSWORD_MAX_LENGTH,
     PASSWORD_MIN_LENGTH,
-    toFormFieldDefYaml,
     type FormFieldDef,
     type Regulation,
   } from '@regional-quiz/shared';
-  import DynamicFormField from '$lib/components/DynamicFormField.svelte';
+  import CustomFieldsSection from '$lib/components/CustomFieldsSection.svelte';
+  import EntryFreeTextField from '$lib/components/EntryFreeTextField.svelte';
+  import EntryNameFields from '$lib/components/EntryNameFields.svelte';
   import FieldError from '$lib/components/form/FieldError.svelte';
   import TextField from '$lib/components/form/TextField.svelte';
   import PasswordRequirements from '$lib/components/PasswordRequirements.svelte';
-  import {customFieldName} from '$lib/custom-field-name';
+  import {firstFieldError, initialCustomFieldValues} from '$lib/entry-form';
   import RegulationSelector from '$lib/components/RegulationSelector.svelte';
   import Turnstile from '$lib/components/Turnstile.svelte';
   import Button from '$lib/components/ui/atoms/Button.svelte';
@@ -52,10 +51,6 @@
     preview = false,
   }: Props = $props();
 
-  // The stored definitions carry API-shaped keys (`fieldKey` / `fieldType`);
-  // `DynamicFormField` renders the shape the form was authored in.
-  const fields = $derived(formFieldDefs.map(toFormFieldDefYaml));
-
   // A rejected submission comes back with what was typed (minus the
   // passwords, which the action deliberately doesn't echo), so the form
   // starts out showing that rather than emptying itself.
@@ -83,28 +78,12 @@
   let email = $state(initial?.email ?? '');
   let freeText = $state(initial?.freeText ?? '');
   let regulationIds = $state<string[]>(initial?.regulationIds ?? []);
-  let customFieldValues = $state(initialCustomFieldValues());
+  let customFieldValues = $state(
+    untrack(() =>
+      initialCustomFieldValues(formFieldDefs, initial?.customFieldValues),
+    ),
+  );
   let turnstile = $state<ReturnType<typeof Turnstile>>();
-
-  function fieldError(field: string): string | undefined {
-    return fieldErrors?.[field]?.[0];
-  }
-
-  /**
-   * The answer every custom field starts out with, keyed by field key.
-   * Every key the form renders is seeded, unanswered ones included, so that
-   * `DynamicFormField` always has a value of the right shape to bind to.
-   */
-  function initialCustomFieldValues(): Record<string, string | string[]> {
-    const answered = initial?.customFieldValues ?? {};
-    return Object.fromEntries(
-      formFieldDefs.map(fieldDef => [
-        fieldDef.fieldKey,
-        answered[fieldDef.fieldKey] ??
-          (fieldDef.fieldType === 'checkbox' ? [] : ''),
-      ]),
-    );
-  }
 </script>
 
 <!-- The `enhance` callback is only here to hand the challenge back: a
@@ -128,35 +107,7 @@
     };
   }}
 >
-  <TextField
-    id="name"
-    name="name"
-    label="氏名"
-    bind:value={name}
-    maxlength={ENTRY_NAME_MAX_LENGTH}
-    error={fieldError('name')}
-    required
-  />
-
-  <TextField
-    id="furigana"
-    name="furigana"
-    label="ふりがな"
-    bind:value={furigana}
-    maxlength={ENTRY_NAME_MAX_LENGTH}
-    error={fieldError('furigana')}
-    required
-  />
-
-  <TextField
-    id="displayName"
-    name="displayName"
-    label="エントリーリスト掲載名"
-    bind:value={displayName}
-    maxlength={ENTRY_NAME_MAX_LENGTH}
-    error={fieldError('displayName')}
-    required
-  />
+  <EntryNameFields bind:name bind:furigana bind:displayName {fieldErrors} />
 
   {#if loggedIn}
     <!-- Tells the action this form was rendered for a session, so a session
@@ -173,7 +124,7 @@
       label="メールアドレス"
       type="email"
       bind:value={email}
-      error={fieldError('email')}
+      error={firstFieldError(fieldErrors, 'email')}
       required
     />
 
@@ -190,7 +141,7 @@
       minlength={PASSWORD_MIN_LENGTH}
       maxlength={PASSWORD_MAX_LENGTH}
       autocomplete="new-password"
-      error={fieldError('password')}
+      error={firstFieldError(fieldErrors, 'password')}
       bind:value={password}
       aria-describedby="password-requirements"
       required
@@ -204,7 +155,7 @@
       minlength={PASSWORD_MIN_LENGTH}
       maxlength={PASSWORD_MAX_LENGTH}
       autocomplete="new-password"
-      error={fieldError('passwordConfirm')}
+      error={firstFieldError(fieldErrors, 'passwordConfirm')}
       bind:value={passwordConfirm}
       required
     />
@@ -227,31 +178,16 @@
       {now}
       bind:value={regulationIds}
     />
-    <FieldError error={fieldError('regulationIds')} />
+    <FieldError error={firstFieldError(fieldErrors, 'regulationIds')} />
   </div>
 
-  {#each fields as field (field.key)}
-    <!-- Keyed by the control's namespaced name, the same key the action
-         files a custom field's message under. -->
-    <DynamicFormField
-      {field}
-      bind:value={customFieldValues[field.key]}
-      error={fieldError(customFieldName(field.key))}
-    />
-  {/each}
-  <!-- Every answer within its own bound can still add up past the combined
-       one; that has no single control to point at. -->
-  <FieldError error={fieldError('customFieldValues')} />
-
-  <TextField
-    id="freeText"
-    name="freeText"
-    label="自由記述"
-    multiline
-    bind:value={freeText}
-    maxlength={ENTRY_FREE_TEXT_MAX_LENGTH}
-    error={fieldError('freeText')}
+  <CustomFieldsSection
+    {formFieldDefs}
+    bind:values={customFieldValues}
+    {fieldErrors}
   />
+
+  <EntryFreeTextField bind:freeText {fieldErrors} />
 
   <!-- The widget drops a hidden `cf-turnstile-response` control into this
        form, which the page's action forwards to the API. Entry registration

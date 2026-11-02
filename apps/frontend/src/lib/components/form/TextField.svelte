@@ -7,12 +7,22 @@ else (`type`, `maxlength`, `required`, ...) goes straight to the control; set
 it: on the `<textarea>`, but on the wrapper around an `<input>`, which takes
 `inputClass` instead.
 
+`label` is usually text. Where a label needs markup of its own, pass it as a
+snippet instead, which `<Label>` renders as it is:
+
+```svelte
+<TextField {id} {name}>
+  {#snippet label()}<FieldLabelText label={field.label} />{/snippet}
+</TextField>
+```
+
 `value` stays the caller's: `bind:value` to `$state` it seeded, or pass a
 starting value. Either way the control underneath is bound, which is what
 keeps what a visitor typed before hydration — see "Form controls are bound,
 not rendered from an expression" in `apps/frontend/README.md`.
 -->
 <script lang="ts">
+  import type {Snippet} from 'svelte';
   import FieldError from '$lib/components/form/FieldError.svelte';
   import Input, {type InputProps} from '$lib/components/ui/atoms/Input.svelte';
   import Label from '$lib/components/ui/atoms/Label.svelte';
@@ -24,7 +34,7 @@ not rendered from an expression" in `apps/frontend/README.md`.
     /** The control's `id`, which the label's `for` and the message's follow. */
     id: string;
     name: string;
-    label: string;
+    label: string | Snippet;
     /** The message; left out while nothing has been rejected. */
     error?: string;
     /** See `FieldError`. */
@@ -80,7 +90,9 @@ not rendered from an expression" in `apps/frontend/README.md`.
 </script>
 
 <div class="flex flex-col gap-1.5">
-  <Label for={id}>{label}</Label>
+  <Label for={id}>
+    {#if typeof label === 'string'}{label}{:else}{@render label()}{/if}
+  </Label>
   {#if multiline}
     <!-- `multiline` is what picks the union's member, but TypeScript can't
          carry that over to a rest element. -->
