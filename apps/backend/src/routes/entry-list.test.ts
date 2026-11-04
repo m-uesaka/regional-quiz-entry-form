@@ -1,6 +1,5 @@
 import {afterAll, afterEach, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
-import {hashPassword} from '../lib/password';
 import {app} from '../index';
 import {testBindings} from '../test-support/bindings';
 import {
@@ -14,6 +13,13 @@ import {
   SUPABASE_SECRET_KEY,
   SUPABASE_URL,
 } from '../test-support/db';
+import {
+  createEntryRow,
+  createTournamentAndRegulation,
+  deleteTestRegionRows,
+  type EntryRowStatus,
+  type TournamentFixture,
+} from '../test-support/db-fixtures';
 
 const env = testBindings({
   SUPABASE_URL,
@@ -432,38 +438,13 @@ describe.skipIf(!(await isDbReachable()))(
     const testRegionSlug = 'entry-list-route-test-region';
     const testEmailDomain = 'entry-list-route-test.example.com';
 
-    async function createTournamentAndRegulation(
-      suffix: string,
-    ): Promise<{tournamentId: string; regulationId: string}> {
-      const [region] = await sql`
-        insert into regions (slug, name)
-        values (${testRegionSlug + '-' + suffix}, 'テスト地域')
-        returning id
-      `;
-      const [tournament] = await sql`
-        insert into tournaments (
-          region_id, type, name, capacity, entry_opens_at, entry_closes_at
-        ) values (
-          ${region.id}, 'saikyoi', 'テスト大会', null,
-          '2020-01-01T00:00:00Z', '2099-01-01T00:00:00Z'
-        )
-        returning id
-      `;
-      const [regulation] = await sql`
-        insert into regulations (tournament_id, label)
-        values (${tournament.id}, 'テストレギュレーション')
-        returning id
-      `;
-      return {
-        tournamentId: tournament.id as string,
-        regulationId: regulation.id as string,
-      };
+    async function createFixture(suffix: string): Promise<TournamentFixture> {
+      return createTournamentAndRegulation(sql, `${testRegionSlug}-${suffix}`);
     }
 
     async function createEntry(
-      tournamentId: string,
-      regulationId: string,
-      status: 'pending_verification' | 'confirmed' | 'waitlisted' | 'cancelled',
+      fixture: TournamentFixture,
+      status: EntryRowStatus,
       waitlistPosition: number | null,
       // Every entry that got past verification has one; only a pending
       // entry, or one that lapsed unverified, does not.
@@ -472,59 +453,24 @@ describe.skipIf(!(await isDbReachable()))(
         : new Date(),
       displayName = '太郎',
     ): Promise<void> {
-      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
-      const [region] = await sql`
-        select region_id from tournaments where id = ${tournamentId}
-      `;
-      const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${region.region_id}, ${email}, ${await hashPassword('quiz-entry-pass1')})
-        returning id
-      `;
-      const [entry] = await sql`
-        insert into entries (
-          participant_id, tournament_id, name, furigana, display_name,
-          free_text, status, waitlist_position, email_verified_at
-        ) values (
-          ${participant.id}, ${tournamentId}, '山田太郎', 'ヤマダタロウ',
-          ${displayName}, '自由記述', ${status}, ${waitlistPosition},
-          ${emailVerifiedAt}
-        )
-        returning id
-      `;
-      await sql`
-        insert into entry_regulations (entry_id, regulation_id, tournament_id)
-        values (${entry.id}, ${regulationId}, ${tournamentId})
-      `;
+      await createEntryRow(sql, fixture, testEmailDomain, {
+        status,
+        waitlistPosition,
+        emailVerifiedAt,
+        displayName,
+        // Something for the list to leave out.
+        freeText: '自由記述',
+      });
     }
 
     afterAll(async () => {
-      await sql`delete from entries where tournament_id in (
-        select id from tournaments where region_id in (
-          select id from regions where slug like ${testRegionSlug + '%'}
-        )
-      )`;
-      await sql`delete from participants where email like ${'%@' + testEmailDomain}`;
-      await sql`delete from regulations where tournament_id in (
-        select id from tournaments where region_id in (
-          select id from regions where slug like ${testRegionSlug + '%'}
-        )
-      )`;
-      await sql`delete from tournaments where region_id in (
-        select id from regions where slug like ${testRegionSlug + '%'}
-      )`;
-      await sql`delete from regions where slug like ${testRegionSlug + '%'}`;
+      await deleteTestRegionRows(sql, testRegionSlug, testEmailDomain);
       await sql.close();
     });
 
     it('omits personal fields from the response', async () => {
-      const fixture = await createTournamentAndRegulation('personal-fields');
-      await createEntry(
-        fixture.tournamentId,
-        fixture.regulationId,
-        'confirmed',
-        null,
-      );
+      const fixture = await createFixture('personal-fields');
+      await createEntry(fixture, 'confirmed', null);
 
       const res = await app.request(
         `/api/tournaments/${fixture.tournamentId}/entry-list`,
@@ -542,13 +488,8 @@ describe.skipIf(!(await isDbReachable()))(
     });
 
     it('masks cancelled entries as "キャンセル"', async () => {
-      const fixture = await createTournamentAndRegulation('cancelled');
-      await createEntry(
-        fixture.tournamentId,
-        fixture.regulationId,
-        'cancelled',
-        null,
-      );
+      const fixture = await createFixture('cancelled');
+      await createEntry(fixture, 'cancelled', null);
 
       const res = await app.request(
         `/api/tournaments/${fixture.tournamentId}/entry-list`,
@@ -564,13 +505,8 @@ describe.skipIf(!(await isDbReachable()))(
     });
 
     it('excludes pending_verification entries', async () => {
-      const fixture = await createTournamentAndRegulation('pending');
-      await createEntry(
-        fixture.tournamentId,
-        fixture.regulationId,
-        'pending_verification',
-        null,
-      );
+      const fixture = await createFixture('pending');
+      await createEntry(fixture, 'pending_verification', null);
 
       const res = await app.request(
         `/api/tournaments/${fixture.tournamentId}/entry-list`,
@@ -584,19 +520,17 @@ describe.skipIf(!(await isDbReachable()))(
     });
 
     it('lists entries in the order they were confirmed, not sent', async () => {
-      const fixture = await createTournamentAndRegulation('confirmed-order');
+      const fixture = await createFixture('confirmed-order');
       // Sent first, but its link was followed last.
       await createEntry(
-        fixture.tournamentId,
-        fixture.regulationId,
+        fixture,
         'confirmed',
         null,
         new Date('2026-11-01T00:00:10Z'),
         '後から確定',
       );
       await createEntry(
-        fixture.tournamentId,
-        fixture.regulationId,
+        fixture,
         'confirmed',
         null,
         new Date('2026-11-01T00:00:05Z'),
@@ -621,14 +555,8 @@ describe.skipIf(!(await isDbReachable()))(
     });
 
     it('leaves out an entry that lapsed without ever being confirmed', async () => {
-      const fixture = await createTournamentAndRegulation('lapsed');
-      await createEntry(
-        fixture.tournamentId,
-        fixture.regulationId,
-        'cancelled',
-        null,
-        null,
-      );
+      const fixture = await createFixture('lapsed');
+      await createEntry(fixture, 'cancelled', null, null);
 
       const res = await app.request(
         `/api/tournaments/${fixture.tournamentId}/entry-list`,
