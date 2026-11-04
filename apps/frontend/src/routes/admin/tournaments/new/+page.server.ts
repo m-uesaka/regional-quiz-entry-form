@@ -49,12 +49,13 @@ export const actions = {
       if (isUnauthorized(res)) {
         redirectToStaffLogin(cookies, url);
       }
-      // 400 is a constraint the database refused — a region that no longer
-      // exists, or a second tournament of the same type in it — which the
-      // API words in Japanese itself, so it is shown rather than replaced.
-      if (res.status === 400) {
+      // A constraint the database refused -- 400 for a region that doesn't
+      // exist, 409 for a second tournament of the same type in it (#199) --
+      // which the API words in Japanese itself, so it is shown rather than
+      // replaced.
+      if (res.status === 400 || res.status === 409) {
         return createFailure(
-          400,
+          res.status,
           values,
           await readErrorMessage(res, INVALID_INPUT_MESSAGE),
         );

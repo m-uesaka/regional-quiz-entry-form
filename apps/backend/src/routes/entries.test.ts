@@ -13,6 +13,11 @@ import {
   turnstileAwareFetch,
 } from '../test-support/bindings';
 import {TURNSTILE_TOKEN_HEADER} from '../middleware/turnstile';
+import {
+  NO_ROW_PGRST_CODE,
+  PARTICIPANT_REGION_SQLSTATE,
+  REGION_DUAL_ENTRY_SQLSTATE,
+} from '../lib/pg-errors';
 
 // These requests are rejected by `zValidator()` or by the challenge in front
 // of it before any database call, so they run unconditionally (including
@@ -361,7 +366,7 @@ function mockSupabase(options: {
         );
         if (options.reentryMatchesNoRow) {
           return Response.json(
-            {code: 'PGRST116', message: 'no rows'},
+            {code: NO_ROW_PGRST_CODE, message: 'no rows'},
             {status: 406},
           );
         }
@@ -1035,7 +1040,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     it('mails the owner and leaves nothing else behind', async () => {
       const recorded = mockSupabase({
         participant: await registeredParticipant(),
-        entryWriteErrorCode: 'P0005',
+        entryWriteErrorCode: REGION_DUAL_ENTRY_SQLSTATE,
         cancelledEntry,
       });
 
@@ -1224,8 +1229,11 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
     });
 
     it.each([
-      ['P0005', 'already entered another tournament in this region'],
-      ['P0008', 'concurrent submission'],
+      [
+        REGION_DUAL_ENTRY_SQLSTATE,
+        'already entered another tournament in this region',
+      ],
+      [PARTICIPANT_REGION_SQLSTATE, 'concurrent submission'],
     ])(
       'answers %s from the trigger like a first entry',
       async (code, error) => {
@@ -1269,7 +1277,7 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
   it('answers a concurrent move of the region as a concurrent submission', async () => {
     mockSupabase({
       participant: await registeredParticipant(),
-      entryWriteErrorCode: 'P0008',
+      entryWriteErrorCode: PARTICIPANT_REGION_SQLSTATE,
     });
 
     const res = await postWithContext(
@@ -1291,7 +1299,7 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
     it('answers 409 and mails nothing', async () => {
       const recorded = mockSupabase({
         participant: await registeredParticipant(),
-        entryWriteErrorCode: 'P0005',
+        entryWriteErrorCode: REGION_DUAL_ENTRY_SQLSTATE,
         cancelledEntry,
       });
 

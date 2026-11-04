@@ -22,6 +22,12 @@ import {
   staffSessionAwareFetch,
   TEST_SESSIONS_VALID_FROM_MS,
 } from '../test-support/staff-session';
+import {
+  ENTRY_PERIOD_OPEN_SQLSTATE,
+  FOREIGN_KEY_VIOLATION_SQLSTATE,
+  TOURNAMENT_IDS_MISMATCH_SQLSTATE,
+  UNIQUE_VIOLATION_SQLSTATE,
+} from '../lib/pg-errors';
 import {DB_URL, isDbReachable} from '../test-support/db';
 
 // Every staff guard checks the session against
@@ -225,7 +231,7 @@ describe('tournaments routes (database errors)', () => {
 
   it('POST /tournaments does not leak the raw database message on a constraint violation', async () => {
     stubPostgrestError(409, {
-      code: '23505',
+      code: UNIQUE_VIOLATION_SQLSTATE,
       message:
         'duplicate key value violates unique constraint "tournaments_region_id_type_key"',
       details: 'Key (region_id, type)=(…, saikyoi) already exists.',
@@ -235,7 +241,8 @@ describe('tournaments routes (database errors)', () => {
     const res = await request('POST');
     const text = await res.text();
 
-    expect(res.status).toBe(400);
+    // A unique violation is a 409 on every route (#199).
+    expect(res.status).toBe(409);
     expect(JSON.parse(text)).toEqual({
       error: 'この地域には同じ種別の大会がすでにあります',
     });
@@ -244,7 +251,7 @@ describe('tournaments routes (database errors)', () => {
 
   it('PATCH /tournaments/:id reports a region that does not exist in Japanese', async () => {
     stubPostgrestError(409, {
-      code: '23503',
+      code: FOREIGN_KEY_VIOLATION_SQLSTATE,
       message:
         'insert or update on table "tournaments" violates foreign key constraint "tournaments_region_id_fkey"',
       details: null,
@@ -741,7 +748,7 @@ describe('PUT /tournaments/order (mocked Supabase)', () => {
     stubRpc(() =>
       Response.json(
         {
-          code: 'P0003',
+          code: TOURNAMENT_IDS_MISMATCH_SQLSTATE,
           message: 'the tournament ids do not match the tournaments',
           details: null,
           hint: null,
@@ -859,7 +866,7 @@ describe('POST /tournaments/:id/reset (mocked Supabase)', () => {
     stubRpc(() =>
       Response.json(
         {
-          code: 'P0007',
+          code: ENTRY_PERIOD_OPEN_SQLSTATE,
           message: 'the entry period of the tournament is open',
           details: null,
           hint: null,
@@ -1079,6 +1086,18 @@ describe.skipIf(!dbReachable)(
       expect(res.status).toBe(400);
       expect((await res.json()) as unknown).toEqual({
         error: '指定された地域が存在しません',
+      });
+    });
+
+    it('refuses a second tournament of the same type in a region with 409', async () => {
+      const regionId = await createTestRegion('duplicate-type');
+      const first = await postTournament(regionId, {});
+      const second = await postTournament(regionId, {});
+
+      expect(first.status).toBe(201);
+      expect(second.status).toBe(409);
+      expect((await second.json()) as unknown).toEqual({
+        error: 'この地域には同じ種別の大会がすでにあります',
       });
     });
 
