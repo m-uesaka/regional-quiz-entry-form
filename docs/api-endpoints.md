@@ -209,7 +209,7 @@ Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts
 
 この対応は `PgErrorTable` の型で固定しています。表のこれらのコードに別のステータスを書くとコンパイルエラーになります(`23503` だけは文によって `400` か `409` のどちらか)。
 
-参加者のエントリー送信(`apps/backend/src/lib/entries.ts`)は `mapPgError()` を使わず、同時操作による競合を参加者が対処できる 409 として返すため、この表とは次の点で異なります。
+参加者のエントリー送信(`apps/backend/src/lib/entry-submission.ts`)は `mapPgError()` を使わず、同時操作による競合を参加者が対処できる 409 として返すため、この表とは次の点で異なります。
 
 - 再エントリー時に `.single()` が `PGRST116` を返した場合(取り消し済みの行を同時の送信が先に取得・削除した)は、`404` ではなく `409` の `concurrent submission` を返します
 - エントリーの保存後にレギュレーションの選択を書き込む際の `23503` は、同時の `sync_regulations()` によるレギュレーションの削除を意味するため、`400` ではなく `409` の `regulation no longer available` を返します(エントリーはロールバックします)
@@ -587,7 +587,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 
 ### `POST /api/tournaments/:tournamentId/entries`
 
-未ログインでのエントリー登録。処理の本体は `apps/backend/src/lib/entries.ts` の `checkEntrySubmission()` と `createEntryUnauthenticated()` です。
+未ログインでのエントリー登録。処理の本体は `apps/backend/src/lib/entry-submission.ts` の `checkEntrySubmission()` と `createEntryUnauthenticated()` です。
 
 **応答はメールアドレスの状態によらず同じです**(#117)。「登録済みのアドレスか」「どの地域で登録済みか」が応答から読めると、この API がアドレスの登録有無を調べる手段になってしまうためです(ログインとパスワード再設定要求は既に同じ対策をしています)。そこで:
 
@@ -1206,7 +1206,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 ### `PATCH /api/mypage/entries/:entryId`
 
-参加者自身による編集。処理の本体は `lib/entries.ts` の `updateOwnEntry()`。
+参加者自身による編集。処理の本体は `lib/own-entries.ts` の `updateOwnEntry()`。
 
 - リクエスト: `EntryEditInputSchema` — `{name, furigana, displayName, freeText?, customFieldValues}`
 - `200`: `{"ok": true}`
@@ -1225,7 +1225,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 ### `DELETE /api/mypage/entries/:entryId`
 
-参加者自身によるキャンセル。処理の本体は `lib/entries.ts` の `cancelOwnEntry()` で、DB 関数 `cancel_own_entry()` を呼びます。
+参加者自身によるキャンセル。処理の本体は `lib/own-entries.ts` の `cancelOwnEntry()` で、DB 関数 `cancel_own_entry()` を呼びます。
 
 - `200`: `{"ok": true}`
 - `404`: `{"error": "entry not found"}`

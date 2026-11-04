@@ -10,7 +10,7 @@ import {
   checkEntrySubmission,
   createEntryForParticipant,
   createEntryUnauthenticated,
-} from '../lib/entries';
+} from '../lib/entry-submission';
 import {respondFailure} from '../lib/errors';
 import {requireParticipant} from '../middleware/participant-auth';
 import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
