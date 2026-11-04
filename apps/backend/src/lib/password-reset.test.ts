@@ -4,17 +4,12 @@ import {confirmPasswordReset, requestPasswordReset} from './password-reset';
 import {hashPassword, verifyPassword} from './password';
 import {generateToken, hashToken} from './token';
 import {testBindings} from '../test-support/bindings';
-import {DB_URL, isDbReachable} from '../test-support/db';
-
-// Local Supabase stack (`supabase start`), same convention as
-// `lib/db-schema.test.ts`. Skipped automatically when it isn't
-// reachable locally; see `test-support/db.ts`.
-const SUPABASE_URL = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
-// Publicly documented local-dev demo key for Supabase CLI's default stack,
-// same as `lib/entries.test.ts` — not a real credential.
-const SUPABASE_SECRET_KEY =
-  process.env.SUPABASE_SECRET_KEY ??
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
+import {
+  DB_URL,
+  isDbReachable,
+  SUPABASE_SECRET_KEY,
+  SUPABASE_URL,
+} from '../test-support/db';
 
 const env = testBindings({
   SUPABASE_URL,

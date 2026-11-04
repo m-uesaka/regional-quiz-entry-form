@@ -11,7 +11,12 @@ import {
   TournamentIndexError,
 } from './tournament-bulk-import';
 import {IMPORT_ACTION_STALE_SQLSTATE} from './pg-errors';
-import {DB_URL, isDbReachable} from '../test-support/db';
+import {
+  DB_URL,
+  isDbReachable,
+  SUPABASE_SECRET_KEY,
+  SUPABASE_URL,
+} from '../test-support/db';
 
 // The 大会一覧 sheet's header, as the sheet staff use has it.
 const HEADER = [
@@ -143,16 +148,6 @@ describe('parseCapacity', () => {
     }
   });
 });
-
-// Local Supabase stack (`supabase start`), same convention as the other
-// integration suites. Skipped automatically when it isn't reachable locally;
-// see `test-support/db.ts`.
-const SUPABASE_URL = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
-// Publicly documented local-dev demo key for Supabase CLI's default stack —
-// not a real credential, safe to commit.
-const SUPABASE_SECRET_KEY =
-  process.env.SUPABASE_SECRET_KEY ??
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
 
 const env = testBindings({
   SUPABASE_URL,

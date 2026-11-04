@@ -9,6 +9,29 @@ export const DB_URL =
   'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
 
 /**
+ * The local Supabase API the integration suites point `SUPABASE_URL` at.
+ * Overridable via `SUPABASE_URL`.
+ */
+export const SUPABASE_URL =
+  process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
+
+/**
+ * The service role key for that API. The default is the publicly documented
+ * demo key the Supabase CLI issues for its default local stack (signed with
+ * the fixed `super-secret-jwt-token-with-at-least-32-characters-long`
+ * secret) -- not a real credential, safe to commit. Overridable via
+ * `SUPABASE_SECRET_KEY` for a CLI that issues another.
+ *
+ * `apps/e2e/support/env.ts` keeps its own copy: Playwright runs it on Node,
+ * and this module imports `bun`.
+ */
+export const SUPABASE_SECRET_KEY =
+  process.env.SUPABASE_SECRET_KEY ??
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.' +
+    'eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.' +
+    'EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
+
+/**
  * Decides whether a test file's integration suites run, for
  * `describe.skipIf(!(await isDbReachable()))`.
  *
