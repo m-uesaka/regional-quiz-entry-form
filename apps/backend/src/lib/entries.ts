@@ -25,6 +25,13 @@ import {sendVerificationEmail} from './entry-verification';
 import type {LibFailure} from './errors';
 import {validateCustomFieldValues} from './form-field-defs';
 import {hashPassword, verifyPassword} from './password';
+import {
+  FOREIGN_KEY_VIOLATION_SQLSTATE,
+  NO_ROW_PGRST_CODE,
+  PARTICIPANT_REGION_SQLSTATE,
+  REGION_DUAL_ENTRY_SQLSTATE,
+  UNIQUE_VIOLATION_SQLSTATE,
+} from './pg-errors';
 import {tournamentDisplayName} from './tournaments';
 import {verifyAccountPassword} from './password-rehash';
 import {promoteWaitlistedEntries} from './waitlist';
@@ -98,49 +105,6 @@ const REGULATION_REFUSALS: Record<
     error: ENTRY_ERROR_CODES.REGULATION_NO_LONGER_AVAILABLE,
   },
 };
-
-/**
- * The SQLSTATE `check_entry_seat()` (migration 0041) raises for a second seat
- * in a region that allows only one. That trigger is the only place the rule of
- * `regions.allows_dual_entry` lives: it decides under the participant's row
- * lock, so nothing checked ahead of the write could add to it, and a copy here
- * could only drift from it.
- */
-const REGION_DUAL_ENTRY_SQLSTATE = 'P0005';
-
-/**
- * The SQLSTATE `check_entry_seat()` (migration 0041) raises for a seat outside
- * the participant's region: a concurrent submission moved the participant to
- * another region after this one last looked. Nothing need stand in the other
- * region, so this is answered as `CONCURRENT_SUBMISSION` rather than as taking
- * part there.
- */
-const PARTICIPANT_REGION_SQLSTATE = 'P0008';
-
-/**
- * Postgres' own `foreign_key_violation`, which is what a regulation dropped
- * by a concurrent `sync_regulations()` makes the `entry_regulations` write
- * raise. It is the only failure of that write the participant can act on,
- * so it alone earns `REGULATION_NO_LONGER_AVAILABLE`; anything else (a
- * network blip, Supabase being down) is a server fault, and telling the
- * participant their regulations changed would send them to reload a page
- * that will fail again in exactly the same way.
- */
-const FOREIGN_KEY_VIOLATION_SQLSTATE = '23503';
-
-/**
- * Postgres' own `unique_violation`: a concurrent submission inserted the
- * same participant (`participants.email`) or the same entry
- * (`entries (participant_id, tournament_id)`) first.
- */
-const UNIQUE_VIOLATION_SQLSTATE = '23505';
-
-/**
- * PostgREST's code for a `.single()` that matched no row. On a re-entry it
- * means the cancelled row is gone: a concurrent re-entry took it, or a
- * takeover deleted it.
- */
-const NO_ROW_PGRST_CODE = 'PGRST116';
 
 /**
  * A participant as `PARTICIPANT_COLUMNS` selects it. `email_verified_at` is
@@ -518,6 +482,7 @@ async function createEntryAfterCheck(
         })
         .select('id')
         .single();
+      // A concurrent submission inserted the same address first.
       if (error?.code === UNIQUE_VIOLATION_SQLSTATE) {
         return {
           ok: false,
@@ -831,6 +796,10 @@ async function enterTournament(
         .select('id')
         .single()
     : await db.from('entries').insert(entryValues).select('id').single();
+  // `check_entry_seat()` is the only place the rule of
+  // `regions.allows_dual_entry` lives: it decides under the participant's row
+  // lock, so nothing checked ahead of the write could add to it, and a copy
+  // here could only drift from it.
   if (error?.code === REGION_DUAL_ENTRY_SQLSTATE) {
     // The statement or function was rolled back, so nothing was written: the
     // row stays the cancellation it was, with its tokens, and there is
@@ -841,6 +810,11 @@ async function enterTournament(
       error: ENTRY_ERROR_CODES.ALREADY_ENTERED_ANOTHER_TOURNAMENT,
     };
   }
+  // A concurrent submission got there first: it moved the participant to
+  // another region after this one last looked (nothing need stand in the
+  // other region, so this isn't answered as taking part there), inserted
+  // the same entry, or -- on a re-entry -- took or deleted the cancelled
+  // row `.single()` was looking for.
   if (
     error?.code === PARTICIPANT_REGION_SQLSTATE ||
     error?.code === UNIQUE_VIOLATION_SQLSTATE ||
@@ -883,6 +857,11 @@ async function enterTournament(
       error: regulationsError.message,
     });
     await rollbackEntry(db, entry.id, tournamentId, existingEntry);
+    // A regulation dropped by a concurrent `sync_regulations()` is the only
+    // failure of that write the participant can act on, so it alone earns
+    // `REGULATION_NO_LONGER_AVAILABLE`. Anything else is a server fault, and
+    // telling the participant their regulations changed would send them to
+    // reload a page that will fail again in exactly the same way.
     return regulationsError.code === FOREIGN_KEY_VIOLATION_SQLSTATE
       ? {
           ok: false,

@@ -8,6 +8,7 @@ import {
   closedEntryPeriodTournament,
   tournamentAwareFetch,
 } from '../test-support/tournaments';
+import {RANGE_NOT_SATISFIABLE_PGRST_CODE} from '../lib/pg-errors';
 import {DB_URL, isDbReachable} from '../test-support/db';
 
 // Local Supabase stack (`supabase start`), same convention as
@@ -331,7 +332,10 @@ describe('GET /tournaments/:tournamentId/entry-list (mocked Supabase)', () => {
       if (Number(url.searchParams.get('offset')) >= rows.length) {
         return Promise.resolve(
           Response.json(
-            {code: 'PGRST103', message: 'Requested range not satisfiable'},
+            {
+              code: RANGE_NOT_SATISFIABLE_PGRST_CODE,
+              message: 'Requested range not satisfiable',
+            },
             {status: 416},
           ),
         );

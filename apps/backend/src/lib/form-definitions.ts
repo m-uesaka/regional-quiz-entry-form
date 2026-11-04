@@ -5,10 +5,8 @@ import {
 } from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient, type TablesInsert} from './db';
-import {
-  TOURNAMENT_NOT_FOUND_SQLSTATE,
-  TournamentNotFoundError,
-} from './tournament-errors';
+import {TOURNAMENT_NOT_FOUND_SQLSTATE} from './pg-errors';
+import {TournamentNotFoundError} from './tournament-errors';
 
 // Re-exported so callers of `syncFormFieldDefs()` can catch it without
 // having to know it's shared with the regulation sync.

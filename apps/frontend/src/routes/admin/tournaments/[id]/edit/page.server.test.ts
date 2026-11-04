@@ -290,6 +290,24 @@ describe('admin tournament update action', () => {
       },
     });
   });
+
+  it('surfaces a duplicate tournament, which the API answers with 409', async () => {
+    const event = buildActionEvent(
+      fakeFetch({
+        status: 409,
+        error: 'この地域には同じ種別の大会がすでにあります',
+      }),
+      updateFormData({name: '書きかけの大会名'}),
+    );
+
+    await expect(actions.update(event)).resolves.toMatchObject({
+      status: 409,
+      data: {
+        error: 'この地域には同じ種別の大会がすでにあります',
+        values: {name: '書きかけの大会名'},
+      },
+    });
+  });
 });
 
 describe('admin tournament delete action', () => {

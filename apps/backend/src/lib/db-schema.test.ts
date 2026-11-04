@@ -1,6 +1,11 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'bun:test';
 import {SQL, type ReservedSQL} from 'bun';
 import {readFileSync} from 'node:fs';
+import {
+  PARTICIPANT_REGION_SQLSTATE,
+  REGION_DUAL_ENTRY_SQLSTATE,
+  STAFF_ACCOUNT_DISABLED_SQLSTATE,
+} from '../lib/pg-errors';
 import {DB_URL, isDbReachable} from '../test-support/db';
 
 // Probed once for the whole file rather than per `describe`, so a run without
@@ -317,7 +322,7 @@ describe.skipIf(!dbReachable)(
       await sql`delete from participants where id = ${participantId}`;
       await sql`delete from regions where id = ${otherRegion.id}`;
 
-      expect(code).toBe('P0008');
+      expect(code).toBe(PARTICIPANT_REGION_SQLSTATE);
     });
 
     it('resets a re-entered row to what a fresh entry would be', async () => {
@@ -379,7 +384,7 @@ describe.skipIf(!dbReachable)(
 
       const code = await refusalOf(reenter(sql, cancelled.id, participantId));
 
-      expect(code).toBe('P0005');
+      expect(code).toBe(REGION_DUAL_ENTRY_SQLSTATE);
       expect(await tokenIdsOf(cancelled.id)).toEqual([used]);
       await sql`
         delete from email_verification_tokens where entry_id = ${cancelled.id}
@@ -455,8 +460,8 @@ describe.skipIf(!dbReachable)(
       await sql`delete from participants where id = ${participantId}`;
       await sql`delete from regions where id = ${otherRegion.id}`;
 
-      expect(dualEntry).toBe('P0005');
-      expect(otherRegionEntry).toBe('P0008');
+      expect(dualEntry).toBe(REGION_DUAL_ENTRY_SQLSTATE);
+      expect(otherRegionEntry).toBe(PARTICIPANT_REGION_SQLSTATE);
     });
 
     // Migrations run before the Worker is deployed, so the Worker of the
@@ -482,7 +487,7 @@ describe.skipIf(!dbReachable)(
       const code = await refusalOf(directly(second.id));
 
       expect(reentered.id).toBe(first.id);
-      expect(code).toBe('P0005');
+      expect(code).toBe(REGION_DUAL_ENTRY_SQLSTATE);
       const [row] = await sql`
         select count(*)::int as live from entries
         where participant_id = ${participantId} and status <> 'cancelled'
@@ -662,7 +667,7 @@ describe.skipIf(!dbReachable)(
         raised = error as {errno?: string; message?: string};
       }
 
-      expect(raised?.errno).toBe('P0005');
+      expect(raised?.errno).toBe(REGION_DUAL_ENTRY_SQLSTATE);
       expect(raised?.message).toBe(
         'already entered another tournament in this region',
       );
@@ -713,7 +718,7 @@ describe.skipIf(!dbReachable)(
       `;
       await sql`delete from regions where id = ${otherRegion.id}`;
 
-      expect(code).toBe('P0008');
+      expect(code).toBe(PARTICIPANT_REGION_SQLSTATE);
     });
 
     it('moves a participant only while nothing holds their old region', async () => {
@@ -814,7 +819,9 @@ describe.skipIf(!dbReachable)(
       await sql`delete from regions where id = ${otherRegion.id}`;
 
       expect(Math.max(...crossRegionCounts)).toBe(1);
-      expect([...refusals].filter(code => code !== 'P0008')).toEqual([]);
+      expect(
+        [...refusals].filter(code => code !== PARTICIPANT_REGION_SQLSTATE),
+      ).toEqual([]);
     });
 
     it('does not count a cancelled entry as occupying the region', async () => {
@@ -1561,7 +1568,7 @@ describe.skipIf(!dbReachable)(
         code = (e as {errno?: string}).errno;
       }
 
-      expect(code).toBe('P0005');
+      expect(code).toBe(STAFF_ACCOUNT_DISABLED_SQLSTATE);
       expect(await tokenHashes(accountId)).toEqual([]);
     });
   },

@@ -22,56 +22,42 @@ import {
 import {createDbClient, type TablesInsert, type TablesUpdate} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {FORM_FIELD_DEF_COLUMNS, toFormFieldDef} from '../lib/form-field-defs';
+import {
+  duplicate,
+  ENTRY_PERIOD_OPEN_SQLSTATE,
+  FOREIGN_KEY_VIOLATION_SQLSTATE,
+  mapPgError,
+  missingReference,
+  NO_ROW_PGRST_CODE,
+  noRow,
+  type PgErrorTable,
+  stillReferenced,
+  TOURNAMENT_IDS_MISMATCH_SQLSTATE,
+  UNIQUE_VIOLATION_SQLSTATE,
+} from '../lib/pg-errors';
 import {rowToTournament, TOURNAMENT_COLUMNS} from '../lib/tournaments';
 import {promoteWaitlistedEntries} from '../lib/waitlist';
 
 const TournamentIdParamSchema = z.object({id: z.string().uuid()});
 
 /**
- * Raised by `reorder_tournaments()` (0032) when the ids it is given aren't
- * exactly the tournaments there are.
- */
-const TOURNAMENT_IDS_MISMATCH_SQLSTATE = 'P0003';
-
-/**
- * The constraint violations a tournament write can run into that the staff
- * UI can act on, keyed by SQLSTATE, each with the Japanese message shown
- * above the form.
+ * The constraint violations a tournament insert or update can run into that
+ * the staff UI can act on, each with the Japanese message shown above the
+ * form.
  *
  * Postgres's own messages name tables, columns and constraints, so they are
  * never passed through (#122): a violation listed here is answered with its
  * own wording, and anything else is an internal error.
  */
-const TOURNAMENT_CONSTRAINT_MESSAGES: Readonly<Record<string, string>> = {
-  // unique_violation: `unique (region_id, type)`.
-  '23505': 'この地域には同じ種別の大会がすでにあります',
-  // foreign_key_violation: `region_id` names no region.
-  '23503': '指定された地域が存在しません',
-};
-
-/**
- * The response body and status for a failed tournament insert or update.
- * @param context What was being attempted, for the log line.
- * @param error The error supabase-js returned.
- */
-function tournamentWriteError(
-  context: string,
-  error: {code?: string},
-): {body: {error: string}; status: 400 | 500} {
-  const message =
-    error.code === undefined
-      ? undefined
-      : TOURNAMENT_CONSTRAINT_MESSAGES[error.code];
-  if (message !== undefined) {
-    return {body: {error: message}, status: 400};
-  }
-  return {body: internalError(context, error), status: 500};
-}
-/**
- * Raised by `reset_tournament_entries()` (0038) when the tournament's entry
- * period is open, so nothing was deleted.
- */
-const ENTRY_PERIOD_OPEN_SQLSTATE = 'P0007';
+const TOURNAMENT_WRITE_ERRORS = {
+  // `unique (region_id, type)`.
+  [UNIQUE_VIOLATION_SQLSTATE]: duplicate(
+    'この地域には同じ種別の大会がすでにあります',
+  ),
+  // `region_id` names no region.
+  [FOREIGN_KEY_VIOLATION_SQLSTATE]:
+    missingReference('指定された地域が存在しません'),
+} as const satisfies PgErrorTable<400 | 409>;
 
 /** What a tournament delete answers when entries still point at it. */
 const TOURNAMENT_HAS_ENTRIES_MESSAGE = 'エントリーがある大会は削除できません';
@@ -180,19 +166,18 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         p_tournament_ids: c.req.valid('json').tournamentIds,
       });
       if (error) {
-        if (error.code === TOURNAMENT_IDS_MISMATCH_SQLSTATE) {
-          return c.json(
-            {
+        const {body, status} = mapPgError(
+          error,
+          {
+            [TOURNAMENT_IDS_MISMATCH_SQLSTATE]: {
+              status: 409,
               error:
                 '並べ替えの間に大会が追加または削除されました。ページを読み込み直してから、もう一度並べ替えてください',
             },
-            409,
-          );
-        }
-        return c.json(
-          internalError('failed to reorder the tournaments', error),
-          500,
+          },
+          'failed to reorder the tournaments',
         );
+        return c.json(body, status);
       }
       return c.body(null, 204);
     },
@@ -252,9 +237,10 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         .select(TOURNAMENT_COLUMNS)
         .single();
       if (error) {
-        const {body, status} = tournamentWriteError(
-          'failed to create the tournament',
+        const {body, status} = mapPgError(
           error,
+          TOURNAMENT_WRITE_ERRORS,
+          'failed to create the tournament',
         );
         return c.json(body, status);
       }
@@ -277,15 +263,16 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         .select(TOURNAMENT_COLUMNS)
         .single();
       if (error) {
-        // PGRST116: `.single()` found no matching row to update. Its
-        // message is about the query shape, so it's replaced with the same
-        // wording the reads above use for a missing tournament.
-        if (error.code === 'PGRST116') {
-          return c.json({error: 'tournament not found'}, 404);
-        }
-        const {body, status} = tournamentWriteError(
-          'failed to update the tournament',
+        // `.single()` found no matching row to update. Its message is about
+        // the query shape, so it's replaced with the same wording the reads
+        // above use for a missing tournament.
+        const {body, status} = mapPgError(
           error,
+          {
+            ...TOURNAMENT_WRITE_ERRORS,
+            [NO_ROW_PGRST_CODE]: noRow('tournament not found'),
+          },
+          'failed to update the tournament',
         );
         return c.json(body, status);
       }
@@ -334,14 +321,17 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         .eq('id', c.req.valid('param').id)
         .select('id');
       if (error) {
-        // foreign_key_violation: `entries.tournament_id` still points here.
-        if (error.code === '23503') {
-          return c.json({error: TOURNAMENT_HAS_ENTRIES_MESSAGE}, 409);
-        }
-        return c.json(
-          internalError('failed to delete the tournament', error),
-          500,
+        const {body, status} = mapPgError(
+          error,
+          {
+            // `entries.tournament_id` still points here.
+            [FOREIGN_KEY_VIOLATION_SQLSTATE]: stillReferenced(
+              TOURNAMENT_HAS_ENTRIES_MESSAGE,
+            ),
+          },
+          'failed to delete the tournament',
         );
+        return c.json(body, status);
       }
       if (data.length === 0) {
         return c.json({error: 'tournament not found'}, 404);
@@ -374,16 +364,17 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         },
       );
       if (error) {
-        if (error.code === ENTRY_PERIOD_OPEN_SQLSTATE) {
-          return c.json(
-            {error: 'エントリー期間中の大会はリセットできません'},
-            409,
-          );
-        }
-        return c.json(
-          internalError('failed to reset the tournament entries', error),
-          500,
+        const {body, status} = mapPgError(
+          error,
+          {
+            [ENTRY_PERIOD_OPEN_SQLSTATE]: {
+              status: 409,
+              error: 'エントリー期間中の大会はリセットできません',
+            },
+          },
+          'failed to reset the tournament entries',
         );
+        return c.json(body, status);
       }
       const [row] = data ?? [];
       if (!row) {
