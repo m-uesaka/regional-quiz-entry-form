@@ -56,12 +56,19 @@ const SELECTION = {
 function fakeApi(
   options: {status?: number; body?: unknown; calls?: RecordedRequest[]} = {},
 ): typeof fetch {
+  const answer = {
+    status: options.status ?? 200,
+    body: options.body ?? {results: [CREATED]},
+  };
+  // The preview and the registration answer alike.
   return fakeFetch(
     [
       {
-        status: options.status ?? 200,
-        body: options.body ?? {results: [CREATED]},
+        method: 'POST',
+        url: '/api/sheet-import/tournaments/preview',
+        ...answer,
       },
+      {method: 'POST', url: /^\/api\/sheet-import\/tournaments$/, ...answer},
     ],
     options.calls,
   );

@@ -66,9 +66,10 @@ function fakeApi(
 ): typeof fetch {
   const tournaments = options.tournaments ?? [TOURNAMENT];
   const reads: FakeRoute[] = [
-    {method: 'GET', url: '/regions', body: [TOKYO]},
+    {method: 'GET', url: /^\/api\/regions$/, body: [TOKYO]},
     {
       method: 'GET',
+      url: /^\/api\/tournaments\/[^/]+$/,
       respond: ({url}) => {
         const tournament = tournaments.find(
           t => url === `/api/tournaments/${t.id}`,
@@ -91,12 +92,21 @@ function fakeApi(
 
 /** How `fakeApi` answers a PATCH, POST or DELETE with the given status. */
 function writeRoutes(status: number, error = 'nope'): FakeRoute[] {
-  if (status === 204) return [{status}];
-  if (status >= 400) return [{status, body: {error}}];
+  /** The answer to a write that, succeeding with a body, sends `body`. */
+  function answer(body: unknown): {status: number; body?: unknown} {
+    if (status === 204) return {status};
+    if (status >= 400) return {status, body: {error}};
+    return {status, body};
+  }
+  const path = `/api/tournaments/${TOURNAMENT.id}`;
   return [
-    {method: 'PATCH', status, body: {...TOURNAMENT, promotion: PROMOTION}},
-    {url: /\/reset$/, status, body: RESET_RESPONSE},
-    {status, body: TOURNAMENT},
+    {
+      method: 'PATCH',
+      url: path,
+      ...answer({...TOURNAMENT, promotion: PROMOTION}),
+    },
+    {method: 'POST', url: `${path}/reset`, ...answer(RESET_RESPONSE)},
+    {method: 'DELETE', url: path, ...answer(TOURNAMENT)},
   ];
 }
 
@@ -179,7 +189,15 @@ describe('admin tournament edit +page.server load', () => {
   });
 
   it('does not mistake another refusal of the API for a missing tournament', async () => {
-    const failing = fakeFetch([{status: 400, body: {error: 'nope'}}]);
+    const failing = fakeFetch([
+      {method: 'GET', url: '/api/regions', body: [TOKYO]},
+      {
+        method: 'GET',
+        url: `/api/tournaments/${TOURNAMENT.id}`,
+        status: 400,
+        body: {error: 'nope'},
+      },
+    ]);
 
     await expect(load(buildLoadEvent(failing))).rejects.toMatchObject({
       status: 502,

@@ -2,7 +2,7 @@ import {describe, expect, it} from 'vitest';
 import type {Cookies, HttpError, Redirect} from '@sveltejs/kit';
 import type {MypageEntry} from '@regional-quiz/shared';
 import {fakeCookies} from '../../test-support/fake-cookies';
-import {fakeFetch} from '../../test-support/fake-fetch';
+import {fakeFetch, type RecordedRequest} from '../../test-support/fake-fetch';
 import {
   fakePlatform,
   TOKYO_SAIKYOI_LIST_KEY,
@@ -32,7 +32,12 @@ function fakeApi(options: {
   status?: number;
 }): typeof fetch {
   return fakeFetch([
-    {status: options.status ?? 200, body: options.entries ?? []},
+    {
+      method: 'GET',
+      url: /^\/api\/mypage\/entries$/,
+      status: options.status ?? 200,
+      body: options.entries ?? [],
+    },
   ]);
 }
 
@@ -79,9 +84,26 @@ function buildCancelEvent(
   } as Parameters<typeof actions.cancel>[0];
 }
 
-/** Builds a fake `fetch` answering the DELETE with the given status. */
-function fakeDeleteFetch(status: number): typeof fetch {
-  return fakeFetch([{status, body: status === 200 ? {ok: true} : {}}]);
+/**
+ * Builds a fake `fetch` answering the DELETE of `ENTRY_ID` with the given
+ * status.
+ * @param requests Collects the requests sent.
+ */
+function fakeDeleteFetch(
+  status: number,
+  requests?: RecordedRequest[],
+): typeof fetch {
+  return fakeFetch(
+    [
+      {
+        method: 'DELETE',
+        url: `/api/mypage/entries/${ENTRY_ID}`,
+        status,
+        body: status === 200 ? {ok: true} : {},
+      },
+    ],
+    requests,
+  );
 }
 
 describe('mypage +page.server load', () => {
@@ -160,35 +182,29 @@ describe('mypage +page.server cancel action', () => {
   });
 
   it('cancels the entry the form names', async () => {
-    let requested: {url: string; method?: string} | undefined;
-    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      requested = {url: String(input), method: init?.method};
-      return new Response(JSON.stringify({ok: true}), {
-        status: 200,
-        headers: {'Content-Type': 'application/json'},
-      });
-    }) as typeof fetch;
+    const requests: RecordedRequest[] = [];
 
     await expect(
-      actions.cancel(buildCancelEvent(fetchImpl)),
+      actions.cancel(buildCancelEvent(fakeDeleteFetch(200, requests))),
     ).resolves.toBeUndefined();
-    expect(requested?.method).toBe('DELETE');
-    expect(requested?.url).toContain(`/api/mypage/entries/${ENTRY_ID}`);
+    expect(requests).toEqual([
+      {
+        method: 'DELETE',
+        url: `/api/mypage/entries/${ENTRY_ID}`,
+        body: undefined,
+      },
+    ]);
   });
 
   it('fails with 400 without calling the API when the entry id is malformed', async () => {
-    let called = false;
-    const fetchImpl = (async () => {
-      called = true;
-      return new Response('{}', {status: 200});
-    }) as typeof fetch;
+    const requests: RecordedRequest[] = [];
 
     const result = await actions.cancel(
-      buildCancelEvent(fetchImpl, 'not-a-uuid'),
+      buildCancelEvent(fakeFetch([], requests), 'not-a-uuid'),
     );
 
     expect(result).toMatchObject({status: 400});
-    expect(called).toBe(false);
+    expect(requests).toEqual([]);
   });
 
   it('redirects to the login page when not logged in', async () => {
@@ -238,6 +254,27 @@ function fakeLogoutCookies(set: SetCookie[], deleted: string[]): Cookies {
   } as unknown as Cookies;
 }
 
+/**
+ * Builds a fake `fetch` answering the logout POST with the given status.
+ * @param requests Collects the requests sent.
+ */
+function fakeLogoutFetch(
+  status: number,
+  requests?: RecordedRequest[],
+): typeof fetch {
+  return fakeFetch(
+    [
+      {
+        method: 'POST',
+        url: '/api/auth/participant/logout',
+        status,
+        body: status === 200 ? {ok: true} : {},
+      },
+    ],
+    requests,
+  );
+}
+
 /** Builds the partial `RequestEvent` the `logout` action needs. */
 function buildLogoutEvent(
   fetchImpl: typeof fetch,
@@ -253,27 +290,22 @@ function buildLogoutEvent(
 
 describe('mypage +page.server logout action', () => {
   it('asks the API to end the session, then redirects to the login page', async () => {
-    let requested: {url: string; method?: string} | undefined;
-    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      requested = {url: String(input), method: init?.method};
-      return new Response(JSON.stringify({ok: true}), {
-        status: 200,
-        headers: {'Content-Type': 'application/json'},
-      });
-    }) as typeof fetch;
-
+    const requests: RecordedRequest[] = [];
     const set: SetCookie[] = [];
     const deleted: string[] = [];
 
     await expect(
-      actions.logout(buildLogoutEvent(fetchImpl, set, deleted)),
+      actions.logout(
+        buildLogoutEvent(fakeLogoutFetch(200, requests), set, deleted),
+      ),
     ).rejects.toMatchObject({
       status: 303,
       location: '/mypage/login',
     } satisfies Partial<Redirect>);
 
-    expect(requested?.method).toBe('POST');
-    expect(requested?.url).toContain('/api/auth/participant/logout');
+    expect(requests).toEqual([
+      {method: 'POST', url: '/api/auth/participant/logout', body: undefined},
+    ]);
     // The deletion `Set-Cookie` the API answers with is carried into the
     // cookie jar by `handleFetch`, not by the action -- so a successful
     // logout touches no cookie here. `forwardBackendCookies` in
@@ -288,9 +320,15 @@ describe('mypage +page.server logout action', () => {
     // `handleFetch` throws outright on an unset or malformed `BACKEND_URL`,
     // and an unreachable Worker rejects the fetch. Neither answers with a
     // status to branch on.
-    const rejecting = (async () => {
-      throw new Error('BACKEND_URL is not set');
-    }) as typeof fetch;
+    const rejecting = fakeFetch([
+      {
+        method: 'POST',
+        url: '/api/auth/participant/logout',
+        respond: () => {
+          throw new Error('BACKEND_URL is not set');
+        },
+      },
+    ]);
 
     await expect(
       actions.logout(buildLogoutEvent(rejecting, set, deleted)),
@@ -308,7 +346,7 @@ describe('mypage +page.server logout action', () => {
     const deleted: string[] = [];
 
     await expect(
-      actions.logout(buildLogoutEvent(fakeDeleteFetch(502), set, deleted)),
+      actions.logout(buildLogoutEvent(fakeLogoutFetch(502), set, deleted)),
     ).rejects.toMatchObject({
       status: 303,
       location: '/mypage/login',

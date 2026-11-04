@@ -5,7 +5,10 @@ import type {
   StaffClaims,
 } from '@regional-quiz/shared';
 import {fakeCookies} from '../../../test-support/fake-cookies';
-import {fakeFetch} from '../../../test-support/fake-fetch';
+import {
+  fakeFetch,
+  type RecordedRequest,
+} from '../../../test-support/fake-fetch';
 import {
   GENERAL_STAFF,
   REGIONAL_STAFF,
@@ -31,7 +34,9 @@ const SUMMARIES: DashboardTournamentSummary[] = [
 
 /** Builds a fake `fetch` answering the dashboard API as given. */
 function fakeApi(status = 200, body: unknown = SUMMARIES): typeof fetch {
-  return fakeFetch([{status, body}]);
+  return fakeFetch([
+    {method: 'GET', url: '/api/staff/dashboard', status, body},
+  ]);
 }
 
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
@@ -59,19 +64,16 @@ describe('staff dashboard +page.server load', () => {
   });
 
   it('throws 403 for regional staff without calling the API', async () => {
-    let called = false;
+    const requests: RecordedRequest[] = [];
     const event = buildEvent({
-      fetch: (async () => {
-        called = true;
-        return new Response('[]');
-      }) as typeof fetch,
+      fetch: fakeFetch([], requests),
       staff: REGIONAL_STAFF,
     });
 
     await expect(load(event)).rejects.toMatchObject({
       status: 403,
     } satisfies Partial<HttpError>);
-    expect(called).toBe(false);
+    expect(requests).toEqual([]);
   });
 
   it('returns every region summary for general staff', async () => {

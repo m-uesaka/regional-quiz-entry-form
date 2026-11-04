@@ -25,10 +25,12 @@ function fakeApi(options: {
   calls?: RecordedRequest[];
 }): typeof fetch {
   const status = options.status ?? 200;
+  const body = status < 400 ? TOKYO : {error: 'nope'};
   return fakeFetch(
     [
-      {method: 'GET', body: [TOKYO]},
-      {status, body: status < 400 ? TOKYO : {error: 'nope'}},
+      {method: 'GET', url: /^\/api\/regions$/, body: [TOKYO]},
+      {method: 'POST', url: /^\/api\/regions$/, status, body},
+      {method: 'PATCH', url: `/api/regions/${TOKYO.id}`, status, body},
     ],
     options.calls,
   );
@@ -74,7 +76,9 @@ describe('admin regions +page.server load', () => {
   });
 
   it('reports a failed read as a bad gateway', async () => {
-    const failing = fakeFetch([{status: 500, body: {error: 'boom'}}]);
+    const failing = fakeFetch([
+      {method: 'GET', url: '/api/regions', status: 500, body: {error: 'boom'}},
+    ]);
 
     await expect(load(buildLoadEvent(failing))).rejects.toMatchObject({
       status: 502,

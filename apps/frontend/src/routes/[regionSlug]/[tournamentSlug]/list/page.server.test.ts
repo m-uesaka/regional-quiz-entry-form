@@ -2,12 +2,15 @@ import {describe, expect, it} from 'vitest';
 import type {HttpError} from '@sveltejs/kit';
 import type {EntryListItem} from '@regional-quiz/shared';
 import {dropCachedEntryList} from '$lib/server/entry-list-cache';
-import {fakeFetch} from '../../../../test-support/fake-fetch';
-import {jsonResponse} from '../../../../test-support/json-response';
+import {
+  fakeFetch,
+  type RecordedRequest,
+} from '../../../../test-support/fake-fetch';
 import {
   fakePlatform,
   TOKYO_SAIKYOI_LIST_KEY,
 } from '../../../../test-support/fake-platform';
+import {pagedRoute} from '../../../../test-support/paged-route';
 import {load} from './+page.server';
 
 const ENTRIES: EntryListItem[] = [
@@ -36,26 +39,27 @@ function fakeApi(options: {
   entries?: EntryListItem[];
   total?: number;
   status?: number;
-  /** Collects every requested URL. */
-  requests?: URL[];
+  /** Collects every request sent. */
+  requests?: RecordedRequest[];
 }): typeof fetch {
-  return fakeFetch([
-    {
-      url: '/tokyo/saikyoi/entry-list',
-      respond: ({url}) => {
-        const requested = new URL(url, 'http://localhost');
-        options.requests?.push(requested);
-        const entries = options.entries ?? [];
-        const page = {
-          items: entries,
-          total: options.total ?? entries.length,
-          limit: 100,
-          offset: Number(requested.searchParams.get('offset') ?? 0),
-        };
-        return jsonResponse(page, options.status ?? 200);
-      },
-    },
-  ]);
+  return fakeFetch(
+    [
+      pagedRoute(
+        '/api/tournaments/tokyo/saikyoi/entry-list',
+        options.entries ?? [],
+        {
+          total: options.total,
+          status: options.status,
+        },
+      ),
+    ],
+    options.requests,
+  );
+}
+
+/** The query a recorded request was sent with. */
+function queryOf(request: RecordedRequest): URLSearchParams {
+  return new URL(request.url, 'http://localhost').searchParams;
 }
 
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
@@ -89,7 +93,7 @@ describe('list +page.server load', () => {
   });
 
   it('asks for the page the URL names and passes the total on', async () => {
-    const requests: URL[] = [];
+    const requests: RecordedRequest[] = [];
     const event = buildEvent({
       fetch: fakeApi({entries: ENTRIES, total: 250, requests}),
       search: '?offset=200',
@@ -99,11 +103,11 @@ describe('list +page.server load', () => {
       total: 250,
       offset: 200,
     });
-    expect(requests[0].searchParams.get('offset')).toBe('200');
+    expect(queryOf(requests[0]).get('offset')).toBe('200');
   });
 
   it('asks for the first page when the URL offset is invalid', async () => {
-    const requests: URL[] = [];
+    const requests: RecordedRequest[] = [];
     const event = buildEvent({
       fetch: fakeApi({entries: ENTRIES, requests}),
       search: '?offset=-5',
@@ -111,7 +115,7 @@ describe('list +page.server load', () => {
 
     await load(event);
 
-    expect(requests[0].searchParams.get('offset')).toBe('0');
+    expect(queryOf(requests[0]).get('offset')).toBe('0');
   });
 
   it('throws 404 when the tournament slug is not a valid tournament type', async () => {
@@ -198,7 +202,7 @@ describe('list +page.server load', () => {
       await load(buildEvent({fetch: fakeApi({entries: ENTRIES}), platform}));
       await settled();
 
-      const requests: URL[] = [];
+      const requests: RecordedRequest[] = [];
       await load(
         buildEvent({
           fetch: fakeApi({entries: ENTRIES, total: 250, requests}),
@@ -258,7 +262,7 @@ describe('list +page.server load', () => {
         regionSlug: 'tokyo',
         type: 'saikyoi',
       });
-      const requests: URL[] = [];
+      const requests: RecordedRequest[] = [];
       await load(
         buildEvent({fetch: fakeApi({entries: ENTRIES, requests}), platform}),
       );

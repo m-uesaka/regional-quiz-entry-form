@@ -71,6 +71,7 @@ function fakePut(
   return fakeFetch([
     {
       method: 'PUT',
+      url: '/api/tournaments/order',
       respond: request => {
         bodies.push(request.body);
         return response();
@@ -82,8 +83,12 @@ function fakePut(
 describe('admin tournament order +page.server load', () => {
   it('lists the tournaments in the order the API set, with their region', async () => {
     const fetchImpl = fakeFetch([
-      {url: '/regions', body: [TOKYO]},
-      {body: [tournament(B, 'shinjinou'), tournament(A, 'saikyoi')]},
+      {method: 'GET', url: /^\/api\/regions$/, body: [TOKYO]},
+      {
+        method: 'GET',
+        url: /^\/api\/tournaments$/,
+        body: [tournament(B, 'shinjinou'), tournament(A, 'saikyoi')],
+      },
     ]);
 
     const data = await load(buildLoadEvent(fetchImpl));
@@ -95,7 +100,15 @@ describe('admin tournament order +page.server load', () => {
   });
 
   it('reports a failed read as a bad gateway', async () => {
-    const failing = fakeFetch([{status: 500, body: {error: 'nope'}}]);
+    const failing = fakeFetch([
+      {method: 'GET', url: '/api/regions', body: [TOKYO]},
+      {
+        method: 'GET',
+        url: /^\/api\/tournaments$/,
+        status: 500,
+        body: {error: 'nope'},
+      },
+    ]);
 
     await expect(load(buildLoadEvent(failing))).rejects.toMatchObject({
       status: 502,

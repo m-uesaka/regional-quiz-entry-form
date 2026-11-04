@@ -1,8 +1,10 @@
 import {describe, expect, it} from 'vitest';
 import type {Cookies, Redirect} from '@sveltejs/kit';
-import {fakeCookieJar} from '../../test-support/fake-cookies';
-import {fakeFetch} from '../../test-support/fake-fetch';
-import {jsonResponse} from '../../test-support/json-response';
+import {
+  fakeCookieJar,
+  type FakeCookieJar,
+} from '../../test-support/fake-cookies';
+import {fakeFetch, type FakeRequest} from '../../test-support/fake-fetch';
 import {actions, load} from './+page.server';
 
 const TOKEN = 'b3f1c0de';
@@ -10,30 +12,28 @@ const RESET_URL = `http://localhost/password-reset?token=${TOKEN}`;
 const REQUEST_URL = 'http://localhost/password-reset';
 const TOKEN_COOKIE = 'password_reset_token';
 
-interface FetchLog {
-  urls: string[];
-  bodies: unknown[];
-  turnstileTokens: Array<string | null>;
+const REQUEST_PATH = '/api/auth/participant/password-reset/request';
+const CONFIRM_PATH = '/api/auth/participant/password-reset/confirm';
+
+/**
+ * Builds a fake `fetch` answering either reset POST with the given status.
+ * @param requests Collects the requests sent, headers included.
+ */
+function fakeApi(status = 200, requests?: FakeRequest[]): typeof fetch {
+  const body = status === 200 ? {ok: true} : {};
+  return fakeFetch(
+    [
+      {method: 'POST', url: REQUEST_PATH, status, body},
+      {method: 'POST', url: CONFIRM_PATH, status, body},
+    ],
+    undefined,
+    requests,
+  );
 }
 
-function emptyLog(): FetchLog {
-  return {urls: [], bodies: [], turnstileTokens: []};
-}
-
-/** Builds a fake `fetch` answering the reset POST with the given status. */
-function fakeApi(status = 200, log: FetchLog = emptyLog()): typeof fetch {
-  return fakeFetch([
-    {
-      respond: ({url, body, headers}) => {
-        log.urls.push(url);
-        log.bodies.push(body);
-        log.turnstileTokens.push(headers.get('cf-turnstile-response'));
-        return status === 200
-          ? jsonResponse({ok: true})
-          : jsonResponse({}, status);
-      },
-    },
-  ]);
+/** The Turnstile token each request carried in its header. */
+function turnstileTokens(requests: FakeRequest[]): Array<string | null> {
+  return requests.map(r => r.headers.get('cf-turnstile-response'));
 }
 
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
@@ -45,23 +45,27 @@ function buildLoadEvent(
 }
 
 /**
- * Builds the partial `RequestEvent` the form action needs. `RESET_URL`
- * stands for "the page was opened from the mailed link": the action then
- * finds `TOKEN` in the cookie `load` moved it into, and posts to the bare
- * URL.
+ * The cookies a request to `url` carries: `RESET_URL` stands for "the page
+ * was opened from the mailed link", so `load` has moved `TOKEN` into one.
+ */
+function cookieJarFor(url: string): FakeCookieJar {
+  return fakeCookieJar(url === RESET_URL ? {[TOKEN_COOKIE]: TOKEN} : {});
+}
+
+/**
+ * Builds the partial `RequestEvent` the form action needs. For `RESET_URL`
+ * the action finds `TOKEN` in the cookie and posts to the bare URL.
  */
 function buildActionEvent(
   url: string,
   fetchImpl: typeof fetch,
   formData: FormData,
-  deleted: string[] = [],
+  jar: FakeCookieJar = cookieJarFor(url),
 ): Parameters<typeof actions.default>[0] {
-  const initial: Record<string, string> =
-    url === RESET_URL ? {[TOKEN_COOKIE]: TOKEN} : {};
   return {
     url: new URL(url === RESET_URL ? REQUEST_URL : url),
     fetch: fetchImpl,
-    cookies: fakeCookieJar(initial, deleted).cookies,
+    cookies: jar.cookies,
     request: {formData: async () => formData},
   } as Parameters<typeof actions.default>[0];
 }
@@ -137,45 +141,48 @@ describe('password reset +page.server load', () => {
 
 describe('password reset +page.server action, without a token', () => {
   it('asks the API to mail a reset link', async () => {
-    const log: FetchLog = emptyLog();
-    const event = buildActionEvent(REQUEST_URL, fakeApi(200, log), emailForm());
+    const requests: FakeRequest[] = [];
+    const event = buildActionEvent(
+      REQUEST_URL,
+      fakeApi(200, requests),
+      emailForm(),
+    );
 
     await expect(actions.default(event)).resolves.toEqual({sent: true});
-    expect(log.urls[0]).toContain(
-      '/api/auth/participant/password-reset/request',
-    );
-    expect(log.bodies).toEqual([{email: 'sanka@example.com'}]);
-    expect(log.turnstileTokens).toEqual(['a-turnstile-token']);
+    expect(requests.map(r => [r.url, r.body])).toEqual([
+      [REQUEST_PATH, {email: 'sanka@example.com'}],
+    ]);
+    expect(turnstileTokens(requests)).toEqual(['a-turnstile-token']);
   });
 
   it('sends an empty token when the widget produced none', async () => {
     // What a submission with the widget unsolved (or never loaded) looks
     // like. The API is what refuses it -- the page does not decide that on
     // its own, so a broken widget cannot be talked past from the client.
-    const log: FetchLog = emptyLog();
+    const requests: FakeRequest[] = [];
     const event = buildActionEvent(
       REQUEST_URL,
-      fakeApi(400, log),
+      fakeApi(400, requests),
       emailForm('sanka@example.com', null),
     );
 
     await expect(actions.default(event)).resolves.toMatchObject({status: 400});
-    expect(log.turnstileTokens).toEqual(['']);
+    expect(turnstileTokens(requests)).toEqual(['']);
   });
 
   it('drops a token that could not travel in a header', async () => {
     // A direct POST to this action, rather than anything the widget wrote:
     // forwarded as it stands, `new Request()` throws on the newline and the
     // caller gets a 500 error page instead of the challenge's 400.
-    const log: FetchLog = emptyLog();
+    const requests: FakeRequest[] = [];
     const event = buildActionEvent(
       REQUEST_URL,
-      fakeApi(400, log),
+      fakeApi(400, requests),
       emailForm('sanka@example.com', 'token\r\nX-Injected: 1'),
     );
 
     await expect(actions.default(event)).resolves.toMatchObject({status: 400});
-    expect(log.turnstileTokens).toEqual(['']);
+    expect(turnstileTokens(requests)).toEqual(['']);
   });
 
   it('reports a refused Turnstile token as something to retry', async () => {
@@ -202,29 +209,27 @@ describe('password reset +page.server action, without a token', () => {
   });
 
   it('fails with 400 without calling the API when the email is malformed', async () => {
-    const log: FetchLog = emptyLog();
+    const requests: FakeRequest[] = [];
     const event = buildActionEvent(
       REQUEST_URL,
-      fakeApi(200, log),
+      fakeApi(200, requests),
       emailForm('not-an-email'),
     );
 
     await expect(actions.default(event)).resolves.toMatchObject({status: 400});
-    expect(log.urls).toEqual([]);
+    expect(requests).toEqual([]);
   });
 
   it('is what an empty token falls back to', async () => {
-    const log: FetchLog = emptyLog();
+    const requests: FakeRequest[] = [];
     const event = buildActionEvent(
       `${REQUEST_URL}?token=`,
-      fakeApi(200, log),
+      fakeApi(200, requests),
       emailForm(),
     );
 
     await expect(actions.default(event)).resolves.toEqual({sent: true});
-    expect(log.urls[0]).toContain(
-      '/api/auth/participant/password-reset/request',
-    );
+    expect(requests.map(r => r.url)).toEqual([REQUEST_PATH]);
   });
 
   it('fails with 502 when the request cannot be sent', async () => {
@@ -236,13 +241,13 @@ describe('password reset +page.server action, without a token', () => {
 
 describe('password reset +page.server action, with a token', () => {
   it('confirms the reset and sends the participant back to the login page', async () => {
-    const log: FetchLog = emptyLog();
-    const deleted: string[] = [];
+    const requests: FakeRequest[] = [];
+    const jar = cookieJarFor(RESET_URL);
     const event = buildActionEvent(
       RESET_URL,
-      fakeApi(200, log),
+      fakeApi(200, requests),
       passwordForm(),
-      deleted,
+      jar,
     );
 
     await expect(actions.default(event)).rejects.toMatchObject({
@@ -252,18 +257,17 @@ describe('password reset +page.server action, with a token', () => {
     // The reset cut this browser's own session too, so the cookie has to go
     // or the login page would bounce the participant on to `/mypage`. The
     // spent token goes with it.
-    expect(deleted).toEqual(['participant_session', TOKEN_COOKIE]);
-    expect(log.urls[0]).toContain(
-      '/api/auth/participant/password-reset/confirm',
-    );
-    expect(log.bodies).toEqual([{token: TOKEN, newPassword: 'newpassword1'}]);
+    expect(jar.deleted).toEqual(['participant_session', TOKEN_COOKIE]);
+    expect(requests.map(r => [r.url, r.body])).toEqual([
+      [CONFIRM_PATH, {token: TOKEN, newPassword: 'newpassword1'}],
+    ]);
   });
 
   it('fails with 400 without calling the API when the two passwords differ', async () => {
-    const log: FetchLog = emptyLog();
+    const requests: FakeRequest[] = [];
     const event = buildActionEvent(
       RESET_URL,
-      fakeApi(200, log),
+      fakeApi(200, requests),
       passwordForm('newpassword1', 'newpassword2'),
     );
 
@@ -271,14 +275,14 @@ describe('password reset +page.server action, with a token', () => {
       status: 400,
       data: {error: 'パスワードが一致しません'},
     });
-    expect(log.urls).toEqual([]);
+    expect(requests).toEqual([]);
   });
 
   it('names the rule a too-common password broke, without calling the API', async () => {
-    const log: FetchLog = emptyLog();
+    const requests: FakeRequest[] = [];
     const event = buildActionEvent(
       RESET_URL,
-      fakeApi(200, log),
+      fakeApi(200, requests),
       passwordForm('qwertyuiop'),
     );
 
@@ -289,28 +293,28 @@ describe('password reset +page.server action, with a token', () => {
           'よく使われているパスワードのため使用できません。別のパスワードを入力してください',
       },
     });
-    expect(log.urls).toEqual([]);
+    expect(requests).toEqual([]);
   });
 
   it('fails with 400 without calling the API when the password is too short', async () => {
-    const log: FetchLog = emptyLog();
+    const requests: FakeRequest[] = [];
     const event = buildActionEvent(
       RESET_URL,
-      fakeApi(200, log),
+      fakeApi(200, requests),
       passwordForm('short'),
     );
 
     await expect(actions.default(event)).resolves.toMatchObject({status: 400});
-    expect(log.urls).toEqual([]);
+    expect(requests).toEqual([]);
   });
 
   it('tells the participant to start over and drops the token when the link is no longer usable', async () => {
-    const deleted: string[] = [];
+    const jar = cookieJarFor(RESET_URL);
     const event = buildActionEvent(
       RESET_URL,
       fakeApi(400),
       passwordForm(),
-      deleted,
+      jar,
     );
 
     await expect(actions.default(event)).resolves.toMatchObject({
@@ -322,7 +326,7 @@ describe('password reset +page.server action, with a token', () => {
       },
     });
     // So the page offers the "mail me a link" form again.
-    expect(deleted).toEqual([TOKEN_COOKIE]);
+    expect(jar.deleted).toEqual([TOKEN_COOKIE]);
   });
 
   it('fails with 502 when the reset request fails', async () => {

@@ -19,7 +19,14 @@ function fakeApi(options: {
   requests?: RecordedRequest[];
 }): typeof fetch {
   return fakeFetch(
-    [{status: options.status ?? 200, body: options.body ?? {}}],
+    [
+      {
+        method: 'POST',
+        url: '/api/entries/verify',
+        status: options.status ?? 200,
+        body: options.body ?? {},
+      },
+    ],
     options.requests,
   );
 }

@@ -38,19 +38,25 @@ const ACCOUNT: StaffAccount = {
 function fakeApi(
   options: {status?: number; error?: string; calls?: RecordedRequest[]} = {},
 ): typeof fetch {
-  const reads: FakeRoute[] = [
-    {method: 'GET', url: '/regions', body: [TOKYO]},
-    {method: 'GET', body: [ACCOUNT]},
-  ];
   const status = options.status ?? 200;
-  const writes: FakeRoute[] =
-    status >= 400
-      ? [{status, body: {error: options.error ?? 'nope'}}]
-      : [
-          {url: /\/accounts$/, status, body: ACCOUNT},
-          {status, body: {ok: true}},
-        ];
-  return fakeFetch([...reads, ...writes], options.calls);
+  const refusal = {error: options.error ?? 'nope'};
+  const routes: FakeRoute[] = [
+    {method: 'GET', url: /^\/api\/regions$/, body: [TOKYO]},
+    {method: 'GET', url: /^\/api\/staff\/accounts$/, body: [ACCOUNT]},
+    {
+      method: 'POST',
+      url: /^\/api\/staff\/accounts$/,
+      status,
+      body: status >= 400 ? refusal : ACCOUNT,
+    },
+    {
+      method: 'POST',
+      url: /^\/api\/staff\/accounts\/[^/]+\/(password-reset|revoke-sessions|disable|enable)$/,
+      status,
+      body: status >= 400 ? refusal : {ok: true},
+    },
+  ];
+  return fakeFetch(routes, options.calls);
 }
 
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
@@ -101,7 +107,16 @@ describe('admin staff +page.server load', () => {
   });
 
   it('reports a failed read as a bad gateway', async () => {
-    const failing = fakeFetch([{status: 500, body: {error: 'boom'}}]);
+    // Both reads go out together; either failing fails the page.
+    const failing = fakeFetch([
+      {method: 'GET', url: '/api/regions', body: [TOKYO]},
+      {
+        method: 'GET',
+        url: '/api/staff/accounts',
+        status: 500,
+        body: {error: 'boom'},
+      },
+    ]);
 
     await expect(load(buildLoadEvent(failing))).rejects.toMatchObject({
       status: 502,

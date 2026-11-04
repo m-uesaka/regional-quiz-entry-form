@@ -71,9 +71,11 @@ function fakeApi(
 ): typeof fetch {
   const putStatus = options.putStatus ?? 200;
   const regulationsStatus = options.regulationsStatus ?? 200;
+  const regulationsPath = `/api/tournaments/${TOURNAMENT_ID}/regulations`;
   return fakeFetch([
     {
       method: 'PUT',
+      url: regulationsPath,
       respond: ({body}) => {
         // The fake only answers the save action, whose body is always this
         // shape; the tests read it back as plain records.
@@ -85,7 +87,8 @@ function fakeApi(
       },
     },
     {
-      url: /\/sheet-import\/regulations\/preview$/,
+      method: 'POST',
+      url: '/api/sheet-import/regulations/preview',
       respond: ({body}) => {
         log.previewBodies?.push(body as Record<string, unknown>);
         return jsonResponse(
@@ -95,14 +98,19 @@ function fakeApi(
       },
     },
     {
-      url: /\/regulations$/,
+      method: 'GET',
+      url: regulationsPath,
       status: regulationsStatus,
       body:
         regulationsStatus < 400
           ? (options.stored ?? [GENERAL, STUDENT])
           : {error: 'tournament not found'},
     },
-    {body: options.tournaments ?? [TOURNAMENT]},
+    {
+      method: 'GET',
+      url: /^\/api\/tournaments$/,
+      body: options.tournaments ?? [TOURNAMENT],
+    },
   ]);
 }
 
@@ -182,7 +190,14 @@ describe('admin regulations +page.server load', () => {
   });
 
   it('reports a failed read as a bad gateway', async () => {
-    const failing = fakeFetch([{status: 500, body: {error: 'boom'}}]);
+    const failing = fakeFetch([
+      {
+        method: 'GET',
+        url: /^\/api\/tournaments(\/[^/]+\/regulations)?$/,
+        status: 500,
+        body: {error: 'boom'},
+      },
+    ]);
 
     await expect(load(buildLoadEvent(failing))).rejects.toMatchObject({
       status: 502,

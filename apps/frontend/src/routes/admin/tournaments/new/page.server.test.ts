@@ -38,10 +38,13 @@ function fakeApi(
   const status = options.status ?? 201;
   return fakeFetch(
     [
-      {method: 'GET', body: [TOKYO]},
-      status >= 400
-        ? {status, body: {error: options.error ?? 'nope'}}
-        : {status, body: CREATED},
+      {method: 'GET', url: '/api/regions', body: [TOKYO]},
+      {
+        method: 'POST',
+        url: /^\/api\/tournaments$/,
+        status,
+        body: status >= 400 ? {error: options.error ?? 'nope'} : CREATED,
+      },
     ],
     options.calls,
   );
@@ -89,7 +92,9 @@ describe('admin tournament create +page.server load', () => {
   });
 
   it('reports a failed read as a bad gateway', async () => {
-    const failing = fakeFetch([{status: 500, body: {error: 'boom'}}]);
+    const failing = fakeFetch([
+      {method: 'GET', url: '/api/regions', status: 500, body: {error: 'boom'}},
+    ]);
 
     await expect(load(buildLoadEvent(failing))).rejects.toMatchObject({
       status: 502,

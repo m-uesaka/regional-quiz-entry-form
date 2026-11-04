@@ -78,9 +78,11 @@ function fakeApi(
   } = {},
   log: FetchLog = {patchBodies: []},
 ): typeof fetch {
+  const entryPath = `/api/mypage/entries/${ENTRY.id}`;
   return fakeFetch([
     {
       method: 'PATCH',
+      url: entryPath,
       respond: ({body}) => {
         log.patchBodies.push(body);
         return jsonResponse(
@@ -91,7 +93,12 @@ function fakeApi(
         );
       },
     },
-    {status: options.detailStatus ?? 200, body: options.entry ?? ENTRY},
+    {
+      method: 'GET',
+      url: entryPath,
+      status: options.detailStatus ?? 200,
+      body: options.entry ?? ENTRY,
+    },
   ]);
 }
 

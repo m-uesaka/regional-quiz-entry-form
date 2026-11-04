@@ -1,8 +1,11 @@
 import {describe, expect, it} from 'vitest';
 import type {Cookies, Redirect} from '@sveltejs/kit';
 import {fakeCookieJar} from '../../../test-support/fake-cookies';
-import {fakeFetch} from '../../../test-support/fake-fetch';
-import {jsonResponse} from '../../../test-support/json-response';
+import {
+  fakeFetch,
+  type FakeRequest,
+  type RecordedRequest,
+} from '../../../test-support/fake-fetch';
 import {actions, load} from './+page.server';
 
 const TOKEN = 'c0ffee01';
@@ -10,29 +13,28 @@ const RESET_URL = `http://localhost/staff/password-reset?token=${TOKEN}`;
 const NO_TOKEN_URL = 'http://localhost/staff/password-reset';
 const TOKEN_COOKIE = 'staff_password_reset_token';
 
-interface FetchLog {
-  urls: string[];
-  bodies: unknown[];
-  turnstileTokens?: Array<string | null>;
-}
+const REQUEST_PATH = '/api/auth/staff/password-reset/request';
+const CONFIRM_PATH = '/api/auth/staff/password-reset/confirm';
 
-/** Builds a fake `fetch` answering the confirm POST with the given status. */
+/**
+ * Builds a fake `fetch` answering either reset POST with the given status.
+ * @param requests Collects the requests sent.
+ * @param requestsWithHeaders Collects the requests sent, headers included.
+ */
 function fakeApi(
   status = 200,
-  log: FetchLog = {urls: [], bodies: []},
+  requests?: RecordedRequest[],
+  requestsWithHeaders?: FakeRequest[],
 ): typeof fetch {
-  return fakeFetch([
-    {
-      respond: ({url, body, headers}) => {
-        log.urls.push(url);
-        log.bodies.push(body);
-        log.turnstileTokens?.push(headers.get('cf-turnstile-response'));
-        return status === 200
-          ? jsonResponse({ok: true})
-          : jsonResponse({}, status);
-      },
-    },
-  ]);
+  const body = status === 200 ? {ok: true} : {};
+  return fakeFetch(
+    [
+      {method: 'POST', url: REQUEST_PATH, status, body},
+      {method: 'POST', url: CONFIRM_PATH, status, body},
+    ],
+    requests,
+    requestsWithHeaders,
+  );
 }
 
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
@@ -137,20 +139,27 @@ describe('staff password reset +page.server load', () => {
 
 describe('staff password reset +page.server action', () => {
   it('sets the password and sends the staff member to the login screen', async () => {
-    const log: FetchLog = {urls: [], bodies: []};
+    const requests: RecordedRequest[] = [];
     const {cookies, jar} = fakeCookieJar({
       [TOKEN_COOKIE]: TOKEN,
       staff_session: 'someone-elses-session',
     });
-    const event = buildActionEvent(fakeApi(200, log), passwordForm(), cookies);
+    const event = buildActionEvent(
+      fakeApi(200, requests),
+      passwordForm(),
+      cookies,
+    );
 
     await expect(actions.default(event)).rejects.toMatchObject({
       status: 303,
       location: '/staff/login?reset=done',
     } satisfies Partial<Redirect>);
-    expect(log.urls[0]).toContain('/api/auth/staff/password-reset/confirm');
-    expect(log.bodies).toEqual([
-      {token: TOKEN, newPassword: 'newstaffpassword1'},
+    expect(requests).toEqual([
+      {
+        method: 'POST',
+        url: CONFIRM_PATH,
+        body: {token: TOKEN, newPassword: 'newstaffpassword1'},
+      },
     ]);
     // The spent token goes. The browser's staff cookie may belong to another
     // account than the one just reset (the link opened in someone else's
@@ -160,33 +169,34 @@ describe('staff password reset +page.server action', () => {
   });
 
   it('asks the API to mail a reset link when there is no token', async () => {
-    const log: FetchLog = {urls: [], bodies: [], turnstileTokens: []};
+    const requests: FakeRequest[] = [];
     const event = buildActionEvent(
-      fakeApi(200, log),
+      fakeApi(200, undefined, requests),
       requestForm('Staff@Example.com', 'general'),
       fakeCookieJar().cookies,
     );
 
     await expect(actions.default(event)).resolves.toEqual({sent: true});
-    expect(log.urls[0]).toContain('/api/auth/staff/password-reset/request');
-    expect(log.bodies).toEqual([
-      {email: 'staff@example.com', scope: 'general'},
+    expect(requests.map(r => [r.url, r.body])).toEqual([
+      [REQUEST_PATH, {email: 'staff@example.com', scope: 'general'}],
     ]);
-    expect(log.turnstileTokens).toEqual(['a-turnstile-token']);
+    expect(requests[0].headers.get('cf-turnstile-response')).toBe(
+      'a-turnstile-token',
+    );
   });
 
   it('sends the request form to the request API even with a stale token cookie', async () => {
-    const log: FetchLog = {urls: [], bodies: []};
-    const event = buildActionEvent(fakeApi(200, log), requestForm());
+    const requests: RecordedRequest[] = [];
+    const event = buildActionEvent(fakeApi(200, requests), requestForm());
 
     await expect(actions.default(event)).resolves.toEqual({sent: true});
-    expect(log.urls[0]).toContain('/api/auth/staff/password-reset/request');
+    expect(requests.map(r => r.url)).toEqual([REQUEST_PATH]);
   });
 
   it('refuses the password form without calling the API when there is no token', async () => {
-    const log: FetchLog = {urls: [], bodies: []};
+    const requests: RecordedRequest[] = [];
     const event = buildActionEvent(
-      fakeApi(200, log),
+      fakeApi(200, requests),
       passwordForm(),
       fakeCookieJar().cookies,
     );
@@ -195,19 +205,19 @@ describe('staff password reset +page.server action', () => {
       status: 400,
       data: {tokenRejected: true},
     });
-    expect(log.urls).toEqual([]);
+    expect(requests).toEqual([]);
   });
 
   it('fails with 400 without calling the API when the scope is missing', async () => {
-    const log: FetchLog = {urls: [], bodies: []};
+    const requests: RecordedRequest[] = [];
     const event = buildActionEvent(
-      fakeApi(200, log),
+      fakeApi(200, requests),
       requestForm('staff@example.com', ''),
       fakeCookieJar().cookies,
     );
 
     await expect(actions.default(event)).resolves.toMatchObject({status: 400});
-    expect(log.urls).toEqual([]);
+    expect(requests).toEqual([]);
   });
 
   it('asks the staff member to wait when the API rate limits the request', async () => {
@@ -249,9 +259,9 @@ describe('staff password reset +page.server action', () => {
   });
 
   it('fails with 400 without calling the API when the two passwords differ', async () => {
-    const log: FetchLog = {urls: [], bodies: []};
+    const requests: RecordedRequest[] = [];
     const event = buildActionEvent(
-      fakeApi(200, log),
+      fakeApi(200, requests),
       passwordForm('newstaffpassword1', 'newstaffpassword2'),
     );
 
@@ -259,13 +269,13 @@ describe('staff password reset +page.server action', () => {
       status: 400,
       data: {error: 'パスワードが一致しません'},
     });
-    expect(log.urls).toEqual([]);
+    expect(requests).toEqual([]);
   });
 
   it('names the rule a too-common password broke, without calling the API', async () => {
-    const log: FetchLog = {urls: [], bodies: []};
+    const requests: RecordedRequest[] = [];
     const event = buildActionEvent(
-      fakeApi(200, log),
+      fakeApi(200, requests),
       passwordForm('qwertyuiop'),
     );
 
@@ -276,15 +286,18 @@ describe('staff password reset +page.server action', () => {
           'よく使われているパスワードのため使用できません。別のパスワードを入力してください',
       },
     });
-    expect(log.urls).toEqual([]);
+    expect(requests).toEqual([]);
   });
 
   it('fails with 400 without calling the API when the password is too short', async () => {
-    const log: FetchLog = {urls: [], bodies: []};
-    const event = buildActionEvent(fakeApi(200, log), passwordForm('short'));
+    const requests: RecordedRequest[] = [];
+    const event = buildActionEvent(
+      fakeApi(200, requests),
+      passwordForm('short'),
+    );
 
     await expect(actions.default(event)).resolves.toMatchObject({status: 400});
-    expect(log.urls).toEqual([]);
+    expect(requests).toEqual([]);
   });
 
   it('points at a new request and drops the token when the link is no longer usable', async () => {

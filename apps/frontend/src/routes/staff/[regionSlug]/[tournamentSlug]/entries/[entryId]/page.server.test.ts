@@ -54,11 +54,14 @@ function fakeApi(options: {
 }): typeof fetch {
   return fakeFetch([
     {
-      url: '/staff/entries/',
+      method: 'GET',
+      url: `/api/staff/entries/${ENTRY.id}`,
       status: options.entryStatus ?? 200,
       body: options.entry ?? {},
     },
     {
+      method: 'GET',
+      url: /^\/api\/tournaments\/tokyo\/saikyoi$/,
       status:
         options.tournamentStatus ??
         (options.tournamentOk === false ? 404 : 200),

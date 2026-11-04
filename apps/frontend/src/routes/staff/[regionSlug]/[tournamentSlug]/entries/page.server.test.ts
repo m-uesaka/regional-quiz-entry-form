@@ -8,6 +8,7 @@ import {
   type RecordedRequest,
 } from '../../../../../test-support/fake-fetch';
 import {jsonResponse} from '../../../../../test-support/json-response';
+import {pagedRoute} from '../../../../../test-support/paged-route';
 import {
   GENERAL_STAFF,
   staffLocals,
@@ -53,32 +54,33 @@ function fakeApi(options: {
   tournamentStatus?: number;
   entries?: Entry[];
   entriesStatus?: number;
-  /** Collects the staff entries request URLs. */
-  entriesRequests?: URL[];
+  /** Collects every request sent, the tournament lookup included. */
+  requests?: RecordedRequest[];
 }): typeof fetch {
-  return fakeFetch([
-    {
-      url: `/staff/tournaments/${TOURNAMENT.id}/entries`,
-      respond: ({url}) => {
-        const requested = new URL(url, 'http://localhost');
-        options.entriesRequests?.push(requested);
-        const entries = options.entries ?? [];
-        const page = {
-          items: entries,
-          total: entries.length,
-          limit: 100,
-          offset: Number(requested.searchParams.get('offset') ?? 0),
-        };
-        return jsonResponse(page, options.entriesStatus ?? 200);
+  return fakeFetch(
+    [
+      pagedRoute(
+        `/api/staff/tournaments/${TOURNAMENT.id}/entries`,
+        options.entries ?? [],
+        {status: options.entriesStatus},
+      ),
+      {
+        method: 'GET',
+        url: /^\/api\/tournaments\/tokyo\/saikyoi$/,
+        status:
+          options.tournamentStatus ??
+          (options.tournamentOk === false ? 404 : 200),
+        body: options.tournament ?? {},
       },
-    },
-    {
-      status:
-        options.tournamentStatus ??
-        (options.tournamentOk === false ? 404 : 200),
-      body: options.tournament ?? {},
-    },
-  ]);
+    ],
+    options.requests,
+  );
+}
+
+/** The query of the staff entries request among `requests`. */
+function entriesQuery(requests: RecordedRequest[]): URLSearchParams {
+  const request = requests.find(r => r.url.includes('/entries'));
+  return new URL(request?.url ?? '', 'http://localhost').searchParams;
 }
 
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
@@ -145,12 +147,12 @@ describe('staff entries +page.server load', () => {
   });
 
   it('passes the status filter and the offset on to the backend', async () => {
-    const entriesRequests: URL[] = [];
+    const requests: RecordedRequest[] = [];
     const event = buildEvent({
       fetch: fakeApi({
         tournament: TOURNAMENT,
         entries: ENTRIES,
-        entriesRequests,
+        requests,
       }),
       staff: GENERAL_STAFF,
       search: '?status=waitlisted&offset=100',
@@ -160,24 +162,24 @@ describe('staff entries +page.server load', () => {
       status: 'waitlisted',
       offset: 100,
     });
-    expect(entriesRequests[0].searchParams.get('status')).toBe('waitlisted');
-    expect(entriesRequests[0].searchParams.get('offset')).toBe('100');
+    expect(entriesQuery(requests).get('status')).toBe('waitlisted');
+    expect(entriesQuery(requests).get('offset')).toBe('100');
   });
 
   it('lists every status when the URL names an unknown one', async () => {
-    const entriesRequests: URL[] = [];
+    const requests: RecordedRequest[] = [];
     const event = buildEvent({
       fetch: fakeApi({
         tournament: TOURNAMENT,
         entries: ENTRIES,
-        entriesRequests,
+        requests,
       }),
       staff: GENERAL_STAFF,
       search: '?status=nope',
     });
 
     await expect(load(event)).resolves.toMatchObject({status: null});
-    expect(entriesRequests[0].searchParams.has('status')).toBe(false);
+    expect(entriesQuery(requests).has('status')).toBe(false);
   });
 
   it('throws 404 when the tournament slug is not a valid tournament type', async () => {
@@ -260,10 +262,15 @@ describe('staff entries pause action', () => {
     options: {status?: number; sent?: RecordedRequest[]} = {},
   ): typeof fetch {
     const status = options.status ?? 200;
+    const match = {
+      method: 'PUT',
+      url: `/api/staff/tournaments/${TOURNAMENT.id}/entry-pause`,
+    };
     const answer: FakeRoute =
       status >= 400
-        ? {status, body: {error: 'nope'}}
+        ? {...match, status, body: {error: 'nope'}}
         : {
+            ...match,
             respond: ({body}) =>
               jsonResponse({
                 ...TOURNAMENT,

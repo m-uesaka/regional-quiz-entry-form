@@ -6,7 +6,9 @@ import {loadPortalRegions} from './portal-regions';
 
 /** Builds a fake `fetch` answering the portal API as given. */
 function fakeApi(status: number, body: unknown): typeof fetch {
-  return fakeFetch([{status, body}]);
+  return fakeFetch([
+    {method: 'GET', url: '/api/portal/tournaments', status, body},
+  ]);
 }
 
 const TOURNAMENT: PortalTournament = {

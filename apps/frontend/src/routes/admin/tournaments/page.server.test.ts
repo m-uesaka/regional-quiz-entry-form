@@ -59,8 +59,8 @@ function buildLoadEvent(
 }
 
 const api = fakeFetch([
-  {url: '/regions', body: [TOKYO, AICHI]},
-  {body: TOURNAMENTS},
+  {method: 'GET', url: /^\/api\/regions$/, body: [TOKYO, AICHI]},
+  {method: 'GET', url: /^\/api\/tournaments$/, body: TOURNAMENTS},
 ]);
 
 describe('admin tournament list +page.server load', () => {
@@ -80,7 +80,15 @@ describe('admin tournament list +page.server load', () => {
   });
 
   it('reports a failed read as a bad gateway', async () => {
-    const failing = fakeFetch([{status: 500, body: {error: 'nope'}}]);
+    const failing = fakeFetch([
+      {method: 'GET', url: '/api/regions', body: [TOKYO, AICHI]},
+      {
+        method: 'GET',
+        url: '/api/tournaments',
+        status: 500,
+        body: {error: 'nope'},
+      },
+    ]);
 
     await expect(load(buildLoadEvent(failing))).rejects.toMatchObject({
       status: 502,
