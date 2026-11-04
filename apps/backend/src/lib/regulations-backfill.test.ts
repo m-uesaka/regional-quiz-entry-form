@@ -5,6 +5,7 @@ import {
   legacyDroppedIds,
   legacyGrid,
 } from '@regional-quiz/shared/testing/legacy-general-phase';
+import {NO_LASTING_REGULATION_SQLSTATE} from './pg-errors';
 import {DB_URL, isDbReachable} from '../test-support/db';
 
 const MIGRATION_URL = new URL(
@@ -249,7 +250,7 @@ describe.skipIf(!(await isDbReachable()))(
 
         await expect(
           sync([{id, label: '優先', ...WINDOW, closesWithPriority: true}]),
-        ).rejects.toMatchObject({errno: 'P0009'});
+        ).rejects.toMatchObject({errno: NO_LASTING_REGULATION_SQLSTATE});
       });
 
       // The schema only sees what is sent; an omitted key keeps a stored
@@ -263,7 +264,7 @@ describe.skipIf(!(await isDbReachable()))(
         await expect(
           sync([{id, label: '優先', ...WINDOW}]),
         ).rejects.toMatchObject({
-          errno: 'P0009',
+          errno: NO_LASTING_REGULATION_SQLSTATE,
         });
         expect((await stored()).map(r => r.label)).toEqual(['優先', '一般']);
       });

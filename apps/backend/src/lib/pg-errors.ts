@@ -131,13 +131,22 @@ export interface PgErrorAnswer<S extends ClientFailureStatus> {
 }
 
 /**
- * The failures a route can name, keyed by the code they carry. Build the
- * entries for Postgres' own codes with the functions below, so that one kind
- * of violation is answered with one status on every route.
+ * The failures a route can name, keyed by the code they carry.
+ *
+ * One kind of violation is answered with one status on every route, and the
+ * type holds the entries for Postgres' and PostgREST's own codes to it: an
+ * entry for one of them with any other status does not compile. Build those
+ * entries with the functions below. A foreign key violation can be either
+ * of two answers, depending on the statement (see
+ * `FOREIGN_KEY_VIOLATION_SQLSTATE`).
  * @template S The statuses the route answers them with.
  */
 export type PgErrorTable<S extends ClientFailureStatus> = Readonly<
-  Record<string, PgErrorAnswer<S>>
+  Record<string, PgErrorAnswer<S>> & {
+    [UNIQUE_VIOLATION_SQLSTATE]?: PgErrorAnswer<409>;
+    [FOREIGN_KEY_VIOLATION_SQLSTATE]?: PgErrorAnswer<400 | 409>;
+    [NO_ROW_PGRST_CODE]?: PgErrorAnswer<404>;
+  }
 >;
 
 /**

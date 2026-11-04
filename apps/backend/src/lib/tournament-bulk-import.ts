@@ -36,8 +36,8 @@ import type {Bindings} from '../types/env';
 import {createDbClient, type DbClient} from './db';
 import {formFieldDefSyncRows} from './form-definitions';
 import {JST_OFFSET_MS} from './jst';
-import {regulationSyncFailure} from './regulations';
 import {IMPORT_ACTION_STALE_SQLSTATE} from './pg-errors';
+import {regulationSyncFailure} from './regulations';
 import {classifySheetImportError} from './sheet-import-errors';
 import {
   DuplicateOptionError,

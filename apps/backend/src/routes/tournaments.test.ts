@@ -22,6 +22,12 @@ import {
   staffSessionAwareFetch,
   TEST_SESSIONS_VALID_FROM_MS,
 } from '../test-support/staff-session';
+import {
+  ENTRY_PERIOD_OPEN_SQLSTATE,
+  FOREIGN_KEY_VIOLATION_SQLSTATE,
+  TOURNAMENT_IDS_MISMATCH_SQLSTATE,
+  UNIQUE_VIOLATION_SQLSTATE,
+} from '../lib/pg-errors';
 import {DB_URL, isDbReachable} from '../test-support/db';
 
 // Every staff guard checks the session against
@@ -225,7 +231,7 @@ describe('tournaments routes (database errors)', () => {
 
   it('POST /tournaments does not leak the raw database message on a constraint violation', async () => {
     stubPostgrestError(409, {
-      code: '23505',
+      code: UNIQUE_VIOLATION_SQLSTATE,
       message:
         'duplicate key value violates unique constraint "tournaments_region_id_type_key"',
       details: 'Key (region_id, type)=(…, saikyoi) already exists.',
@@ -245,7 +251,7 @@ describe('tournaments routes (database errors)', () => {
 
   it('PATCH /tournaments/:id reports a region that does not exist in Japanese', async () => {
     stubPostgrestError(409, {
-      code: '23503',
+      code: FOREIGN_KEY_VIOLATION_SQLSTATE,
       message:
         'insert or update on table "tournaments" violates foreign key constraint "tournaments_region_id_fkey"',
       details: null,
@@ -742,7 +748,7 @@ describe('PUT /tournaments/order (mocked Supabase)', () => {
     stubRpc(() =>
       Response.json(
         {
-          code: 'P0003',
+          code: TOURNAMENT_IDS_MISMATCH_SQLSTATE,
           message: 'the tournament ids do not match the tournaments',
           details: null,
           hint: null,
@@ -860,7 +866,7 @@ describe('POST /tournaments/:id/reset (mocked Supabase)', () => {
     stubRpc(() =>
       Response.json(
         {
-          code: 'P0007',
+          code: ENTRY_PERIOD_OPEN_SQLSTATE,
           message: 'the entry period of the tournament is open',
           details: null,
           hint: null,

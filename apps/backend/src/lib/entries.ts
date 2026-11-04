@@ -23,6 +23,8 @@ import {
 import {sendEntryNoticeEmail, type EntryNoticeReason} from './entry-notice';
 import {sendVerificationEmail} from './entry-verification';
 import type {LibFailure} from './errors';
+import {validateCustomFieldValues} from './form-field-defs';
+import {hashPassword, verifyPassword} from './password';
 import {
   FOREIGN_KEY_VIOLATION_SQLSTATE,
   NO_ROW_PGRST_CODE,
@@ -30,8 +32,6 @@ import {
   REGION_DUAL_ENTRY_SQLSTATE,
   UNIQUE_VIOLATION_SQLSTATE,
 } from './pg-errors';
-import {validateCustomFieldValues} from './form-field-defs';
-import {hashPassword, verifyPassword} from './password';
 import {tournamentDisplayName} from './tournaments';
 import {verifyAccountPassword} from './password-rehash';
 import {promoteWaitlistedEntries} from './waitlist';

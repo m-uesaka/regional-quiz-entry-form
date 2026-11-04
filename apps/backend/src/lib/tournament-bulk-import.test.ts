@@ -11,6 +11,7 @@ import {
   previewTournamentImport,
   TournamentIndexError,
 } from './tournament-bulk-import';
+import {IMPORT_ACTION_STALE_SQLSTATE} from './pg-errors';
 import {DB_URL, isDbReachable} from '../test-support/db';
 
 // The 大会一覧 sheet's header, as the sheet staff use has it.
@@ -623,10 +624,10 @@ describe.skipIf(!(await isDbReachable()))(
       `;
 
       await expect(call('saikyoi', false)).rejects.toMatchObject({
-        errno: 'P0006',
+        errno: IMPORT_ACTION_STALE_SQLSTATE,
       });
       await expect(call('shinjinou', true)).rejects.toMatchObject({
-        errno: 'P0006',
+        errno: IMPORT_ACTION_STALE_SQLSTATE,
       });
       const after = await tournamentOf(regionA, 'saikyoi');
       expect(after?.capacity).toBe(existing?.capacity ?? null);

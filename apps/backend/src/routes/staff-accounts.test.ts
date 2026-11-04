@@ -21,6 +21,11 @@ import {
   TEST_SESSIONS_VALID_FROM,
   TEST_SESSIONS_VALID_FROM_MS,
 } from '../test-support/staff-session';
+import {
+  LAST_GENERAL_STAFF_SQLSTATE,
+  STAFF_ACCOUNT_DISABLED_SQLSTATE,
+  STAFF_ACCOUNT_NOT_FOUND_SQLSTATE,
+} from '../lib/pg-errors';
 import {DB_URL, isDbReachable} from '../test-support/db';
 
 // Every staff guard checks the session against
@@ -440,7 +445,10 @@ describe('POST /staff/accounts/:id/disable (mocked Supabase)', () => {
   it('answers 409 when no general staff account would be left', async () => {
     fakeDisableRpc({
       status: 400,
-      body: {code: 'P0004', message: 'cannot disable the last general'},
+      body: {
+        code: LAST_GENERAL_STAFF_SQLSTATE,
+        message: 'cannot disable the last general',
+      },
     });
 
     const res = await disableAccount(
@@ -457,7 +465,10 @@ describe('POST /staff/accounts/:id/disable (mocked Supabase)', () => {
   it('answers 404 for an account that does not exist', async () => {
     fakeDisableRpc({
       status: 400,
-      body: {code: 'P0002', message: 'staff account not found'},
+      body: {
+        code: STAFF_ACCOUNT_NOT_FOUND_SQLSTATE,
+        message: 'staff account not found',
+      },
     });
 
     const res = await disableAccount(
@@ -535,7 +546,10 @@ describe('POST /staff/accounts/:id/enable (mocked Supabase)', () => {
   it('returns 404 for an account that does not exist', async () => {
     fakeDisableRpc({
       status: 400,
-      body: {code: 'P0002', message: 'staff account not found'},
+      body: {
+        code: STAFF_ACCOUNT_NOT_FOUND_SQLSTATE,
+        message: 'staff account not found',
+      },
     });
 
     const res = await enableAccount(TARGET_STAFF_ID);
@@ -1302,7 +1316,7 @@ describe.skipIf(!(await isDbReachable()))(
         errno = (e as {errno?: unknown}).errno;
       }
 
-      expect(errno).toBe('P0005');
+      expect(errno).toBe(STAFF_ACCOUNT_DISABLED_SQLSTATE);
       const tokens = await sql`
         select 1 from staff_password_reset_tokens
         where staff_account_id = ${created.id}
@@ -1337,7 +1351,9 @@ describe.skipIf(!(await isDbReachable()))(
         for (const result of results) {
           if (result.status === 'rejected') {
             // Only the "last general" refusal is acceptable, never 40P01.
-            expect(result.reason).toMatchObject({errno: 'P0004'});
+            expect(result.reason).toMatchObject({
+              errno: LAST_GENERAL_STAFF_SQLSTATE,
+            });
           }
         }
         expect(results.some(r => r.status === 'fulfilled')).toBe(true);

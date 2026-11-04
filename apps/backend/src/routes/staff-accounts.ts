@@ -9,19 +9,32 @@ import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
 import {createDbClient, type Tables} from '../lib/db';
 import {internalError} from '../lib/errors';
+import {isPasswordHashUsable, UNUSABLE_PASSWORD_HASH} from '../lib/password';
 import {
   duplicate,
   FOREIGN_KEY_VIOLATION_SQLSTATE,
   LAST_GENERAL_STAFF_SQLSTATE,
   mapPgError,
   missingReference,
+  type PgErrorTable,
   STAFF_ACCOUNT_NOT_FOUND_SQLSTATE,
   UNIQUE_VIOLATION_SQLSTATE,
 } from '../lib/pg-errors';
-import {isPasswordHashUsable, UNUSABLE_PASSWORD_HASH} from '../lib/password';
 import {sendStaffPasswordLink} from '../lib/staff-password-reset';
 
 const StaffAccountIdParamSchema = z.object({id: z.string().uuid()});
+
+/**
+ * What disabling or enabling answers when `disable_staff_account()` /
+ * `enable_staff_account()` find no account with the id. The frontend matches
+ * the message.
+ */
+const STAFF_ACCOUNT_NOT_FOUND_ERRORS = {
+  [STAFF_ACCOUNT_NOT_FOUND_SQLSTATE]: {
+    status: 404,
+    error: 'staff account not found',
+  },
+} as const satisfies PgErrorTable<404>;
 
 const STAFF_ACCOUNT_COLUMNS = `
   id, email, password_hash, role, region_id, tournament_type,
@@ -285,10 +298,7 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
         const {body, status} = mapPgError(
           error,
           {
-            [STAFF_ACCOUNT_NOT_FOUND_SQLSTATE]: {
-              status: 404,
-              error: 'staff account not found',
-            },
+            ...STAFF_ACCOUNT_NOT_FOUND_ERRORS,
             [LAST_GENERAL_STAFF_SQLSTATE]: {
               status: 409,
               error: 'cannot disable the last general staff account',
@@ -325,10 +335,7 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
         const {body, status} = mapPgError(
           error,
           {
-            [STAFF_ACCOUNT_NOT_FOUND_SQLSTATE]: {
-              status: 404,
-              error: 'staff account not found',
-            },
+            ...STAFF_ACCOUNT_NOT_FOUND_ERRORS,
           },
           'failed to enable the staff account',
         );

@@ -21,6 +21,7 @@ import {
 } from '../middleware/entry-period';
 import {createDbClient, type TablesInsert, type TablesUpdate} from '../lib/db';
 import {internalError} from '../lib/errors';
+import {FORM_FIELD_DEF_COLUMNS, toFormFieldDef} from '../lib/form-field-defs';
 import {
   duplicate,
   ENTRY_PERIOD_OPEN_SQLSTATE,
@@ -29,11 +30,11 @@ import {
   missingReference,
   NO_ROW_PGRST_CODE,
   noRow,
+  type PgErrorTable,
   stillReferenced,
   TOURNAMENT_IDS_MISMATCH_SQLSTATE,
   UNIQUE_VIOLATION_SQLSTATE,
 } from '../lib/pg-errors';
-import {FORM_FIELD_DEF_COLUMNS, toFormFieldDef} from '../lib/form-field-defs';
 import {rowToTournament, TOURNAMENT_COLUMNS} from '../lib/tournaments';
 import {promoteWaitlistedEntries} from '../lib/waitlist';
 
@@ -56,7 +57,7 @@ const TOURNAMENT_WRITE_ERRORS = {
   // `region_id` names no region.
   [FOREIGN_KEY_VIOLATION_SQLSTATE]:
     missingReference('指定された地域が存在しません'),
-};
+} as const satisfies PgErrorTable<400 | 409>;
 
 /** What a tournament delete answers when entries still point at it. */
 const TOURNAMENT_HAS_ENTRIES_MESSAGE = 'エントリーがある大会は削除できません';
