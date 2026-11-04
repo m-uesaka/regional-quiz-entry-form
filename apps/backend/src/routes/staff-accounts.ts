@@ -1,6 +1,5 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {z} from 'zod';
 import {
   StaffAccountCreateInputSchema,
   type StaffAccount,
@@ -21,8 +20,7 @@ import {
   UNIQUE_VIOLATION_SQLSTATE,
 } from '../lib/pg-errors';
 import {sendStaffPasswordLink} from '../lib/staff-password-reset';
-
-const StaffAccountIdParamSchema = z.object({id: z.string().uuid()});
+import {IdParamSchema} from './params';
 
 /**
  * What disabling or enabling answers when `disable_staff_account()` /
@@ -173,7 +171,7 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
   .post(
     '/accounts/:id/password-reset',
     requireGeneralStaff(),
-    zValidator('param', StaffAccountIdParamSchema),
+    zValidator('param', IdParamSchema),
     async c => {
       const db = createDbClient(c.env);
       // The address is read from the row rather than taken from the request:
@@ -238,7 +236,7 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
   .post(
     '/accounts/:id/revoke-sessions',
     requireGeneralStaff(),
-    zValidator('param', StaffAccountIdParamSchema),
+    zValidator('param', IdParamSchema),
     async c => {
       const db = createDbClient(c.env);
       // The new value comes from the Worker's clock rather than Postgres'
@@ -282,7 +280,7 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
   .post(
     '/accounts/:id/disable',
     requireGeneralStaff(),
-    zValidator('param', StaffAccountIdParamSchema),
+    zValidator('param', IdParamSchema),
     async c => {
       // Lowercased before comparing: the param schema and Postgres both
       // accept a UUID in either case, while the claim is always lowercase,
@@ -326,7 +324,7 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
   .post(
     '/accounts/:id/enable',
     requireGeneralStaff(),
-    zValidator('param', StaffAccountIdParamSchema),
+    zValidator('param', IdParamSchema),
     async c => {
       const {error} = await createDbClient(c.env).rpc('enable_staff_account', {
         p_staff_account_id: c.req.valid('param').id,

@@ -1,12 +1,10 @@
 import {Hono} from 'hono';
 import type {Context} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {z} from 'zod';
 import {
   EntryListItemSchema,
   PageQuerySchema,
   TournamentEntryCountsSchema,
-  TournamentTypeSchema,
   type EntryListItem,
   type PageQuery,
 } from '@regional-quiz/shared';
@@ -19,12 +17,7 @@ import {
   tournamentLookupFailure,
   type TournamentRow,
 } from '../lib/tournaments';
-
-const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
-const TournamentBySlugParamSchema = z.object({
-  regionSlug: z.string(),
-  tournamentSlug: TournamentTypeSchema,
-});
+import {TournamentIdParamSchema, TournamentBySlugParamSchema} from './params';
 
 /**
  * Shape of an `entries` row as selected below (snake_case). The select's

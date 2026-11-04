@@ -26,8 +26,8 @@ import {
   tournamentDisplayName,
   tournamentLookupFailure,
 } from '../lib/tournaments';
+import {TournamentIdParamSchema} from './params';
 
-const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 const MailJobParamSchema = TournamentIdParamSchema.extend({
   jobId: z.string().uuid(),
 });

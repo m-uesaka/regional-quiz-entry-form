@@ -1,13 +1,11 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {z} from 'zod';
 import {
   TournamentCreateInputSchema,
   TournamentOrderInputSchema,
   TournamentResetInputSchema,
   type TournamentCreateInput,
   type TournamentResetResponse,
-  TournamentTypeSchema,
   TournamentUpdateInputSchema,
   type TournamentUpdateInput,
   type TournamentUpdateResponse,
@@ -37,8 +35,7 @@ import {
 } from '../lib/pg-errors';
 import {rowToTournament, TOURNAMENT_COLUMNS} from '../lib/tournaments';
 import {promoteWaitlistedEntries} from '../lib/waitlist';
-
-const TournamentIdParamSchema = z.object({id: z.string().uuid()});
+import {IdParamSchema, TournamentBySlugParamSchema} from './params';
 
 /**
  * The constraint violations a tournament insert or update can run into that
@@ -61,11 +58,6 @@ const TOURNAMENT_WRITE_ERRORS = {
 
 /** What a tournament delete answers when entries still point at it. */
 const TOURNAMENT_HAS_ENTRIES_MESSAGE = 'エントリーがある大会は削除できません';
-
-const TournamentBySlugParamSchema = z.object({
-  regionSlug: z.string(),
-  tournamentSlug: TournamentTypeSchema,
-});
 
 /**
  * How a tournament name the client sent is stored: blank is stored as null,
@@ -195,7 +187,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
   .get(
     '/:id',
     requireGeneralStaff(),
-    zValidator('param', TournamentIdParamSchema),
+    zValidator('param', IdParamSchema),
     async c => {
       const db = createDbClient(c.env);
       const {data, error} = await db
@@ -250,7 +242,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
   .patch(
     '/:id',
     requireGeneralStaff(),
-    zValidator('param', TournamentIdParamSchema),
+    zValidator('param', IdParamSchema),
     zValidator('json', TournamentUpdateInputSchema),
     async c => {
       const db = createDbClient(c.env);
@@ -312,7 +304,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
   .delete(
     '/:id',
     requireGeneralStaff(),
-    zValidator('param', TournamentIdParamSchema),
+    zValidator('param', IdParamSchema),
     async c => {
       const db = createDbClient(c.env);
       const {data, error} = await db
@@ -353,7 +345,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
   .post(
     '/:id/reset',
     requireGeneralStaff(),
-    zValidator('param', TournamentIdParamSchema),
+    zValidator('param', IdParamSchema),
     zValidator('json', TournamentResetInputSchema),
     async c => {
       const {data, error} = await createDbClient(c.env).rpc(

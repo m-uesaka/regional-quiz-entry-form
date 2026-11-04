@@ -1,6 +1,5 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {z} from 'zod';
 import {
   COMMON_ERROR_CODES,
   ENTRY_STATUS_LABELS,
@@ -30,9 +29,7 @@ import {
   type AllRowsResult,
 } from '../lib/paged-select';
 import {internalError} from '../lib/errors';
-
-const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
-const EntryIdParamSchema = z.object({entryId: z.string().uuid()});
+import {TournamentIdParamSchema, EntryIdParamSchema} from './params';
 
 // An entry may claim several regulations, so they come through the
 // `entry_regulations` join table rather than off the entry itself.
