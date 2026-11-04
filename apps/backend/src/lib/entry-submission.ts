@@ -674,8 +674,9 @@ async function withdrawnTournamentNames(
  * link.
  *
  * Each of those steps is a stage function below, run in that order, and the
- * first one to refuse ends the submission. A stage that fails after the
- * entry was written rolls it back itself (`rollbackEntry()`).
+ * first one to refuse ends the submission. A stage only reports its
+ * failure: when one after the write fails, this function rolls the entry
+ * back (`rollbackEntry()`), once, for all of them.
  * @param env The Worker bindings.
  * @param tournament The checked tournament.
  * @param participantId The participant being entered.
@@ -743,46 +744,103 @@ async function enterTournament(
   }
   const {entryId} = written;
 
+  const completed = await completeWrittenEntry(
+    env,
+    db,
+    entryId,
+    participantId,
+    email,
+    tournament,
+    input,
+    unverifiedAccount,
+  );
+  if (!completed.ok) {
+    // Rolled back here, and only here, for every stage after the write: a
+    // refused submission must not leave behind an entry that would block
+    // its own retry (see `rollbackEntry()`).
+    await rollbackEntry(db, entryId, tournamentId, existingEntry);
+    return completed;
+  }
+  return {ok: true, entry: {id: entryId}};
+}
+
+/**
+ * The stages of `enterTournament()` that run over the entry `writeEntry()`
+ * wrote: stores its regulations, checks that a later submission hasn't
+ * taken the unverified account over meanwhile, and mails the verification
+ * link. The first one to refuse ends the run; rolling the entry back is
+ * left to the caller.
+ * @param env The Worker bindings.
+ * @param db The Supabase client to write with.
+ * @param entryId The entry `writeEntry()` wrote.
+ * @param participantId The participant being entered.
+ * @param email The participant's address, where the link is sent.
+ * @param tournament The checked tournament.
+ * @param input The entry itself.
+ * @param unverifiedAccount As for `enterTournament()`.
+ */
+async function completeWrittenEntry(
+  env: Bindings,
+  db: DbClient,
+  entryId: string,
+  participantId: string,
+  email: string,
+  tournament: EntryTournamentRow,
+  input: EntrySessionInput,
+  unverifiedAccount:
+    {passwordHash: string; withdrawnTournaments?: string[]} | undefined,
+): Promise<{ok: true} | LibFailure<409>> {
   const stored = await storeEntryRegulations(
     db,
     entryId,
-    tournamentId,
+    tournament.id,
     input.regulationIds,
-    existingEntry,
   );
   if (!stored.ok) {
     return stored;
   }
 
-  if (
-    unverifiedAccount &&
-    !(await isStillUnverifiedAccountOf(
+  if (unverifiedAccount) {
+    const current = await ensureStillUnverifiedAccountOf(
       db,
       participantId,
       unverifiedAccount.passwordHash,
-    ))
-  ) {
-    await rollbackEntry(db, entryId, tournamentId, existingEntry);
+    );
+    if (!current.ok) {
+      return current;
+    }
+  }
+
+  return mailVerificationLink(
+    env,
+    entryId,
+    email,
+    tournament,
+    unverifiedAccount?.withdrawnTournaments,
+  );
+}
+
+/**
+ * The stage of `enterTournament()` that refuses the submission when a later
+ * one has taken the unverified account over since (see
+ * `isStillUnverifiedAccountOf()`).
+ * @param db The Supabase client to read with.
+ * @param participantId The account the entry was written for.
+ * @param passwordHash The hash this submission set on it.
+ */
+async function ensureStillUnverifiedAccountOf(
+  db: DbClient,
+  participantId: string,
+  passwordHash: string,
+): Promise<{ok: true} | LibFailure<409>> {
+  if (!(await isStillUnverifiedAccountOf(db, participantId, passwordHash))) {
     return {
       ok: false,
       status: 409,
       error: ENTRY_ERROR_CODES.SUPERSEDED_BY_LATER_SUBMISSION,
     };
   }
-
-  const mailed = await mailVerificationLink(
-    env,
-    db,
-    entryId,
-    email,
-    tournament,
-    existingEntry,
-    unverifiedAccount?.withdrawnTournaments,
-  );
-  if (!mailed.ok) {
-    return mailed;
-  }
-  return {ok: true, entry: {id: entryId}};
+  return {ok: true};
 }
 
 /**
@@ -990,20 +1048,17 @@ async function writeEntry(
 
 /**
  * The stage of `enterTournament()` that writes the regulations the new entry
- * claims, rolling the entry back when that fails.
+ * claims.
  * @param db The Supabase client to write with.
  * @param entryId The entry `writeEntry()` wrote.
  * @param tournamentId The entry's tournament.
  * @param regulationIds The regulations the entry claims.
- * @param existingEntry The cancelled entry the write reused, or `null`, for
- *     `rollbackEntry()`.
  */
 async function storeEntryRegulations(
   db: DbClient,
   entryId: string,
   tournamentId: string,
   regulationIds: readonly string[],
-  existingEntry: ExistingEntryRow | null,
 ): Promise<{ok: true} | LibFailure<409>> {
   // The selection is written after the entry because it references it. The
   // composite foreign keys behind `entry_regulations` are what refuse a
@@ -1024,7 +1079,6 @@ async function storeEntryRegulations(
       code: regulationsError.code,
       error: regulationsError.message,
     });
-    await rollbackEntry(db, entryId, tournamentId, existingEntry);
     // A regulation dropped by a concurrent `sync_regulations()` is the only
     // failure of that write the participant can act on, so it alone earns
     // `REGULATION_NO_LONGER_AVAILABLE`. Anything else is a server fault, and
@@ -1043,24 +1097,19 @@ async function storeEntryRegulations(
 
 /**
  * The last stage of `enterTournament()`: mails the verification link of the
- * entry just written, rolling the entry back when the mail can't be sent.
+ * entry just written.
  * @param env The Worker bindings.
- * @param db The Supabase client to roll back with.
  * @param entryId The entry `writeEntry()` wrote.
  * @param email The participant's address, where the link is sent.
  * @param tournament The checked tournament.
- * @param existingEntry The cancelled entry the write reused, or `null`, for
- *     `rollbackEntry()`.
  * @param withdrawnTournaments The tournaments whose pending entries a
  *     takeover withdrew (see `withdrawnTournamentNames()`), if any.
  */
 async function mailVerificationLink(
   env: Bindings,
-  db: DbClient,
   entryId: string,
   email: string,
   tournament: EntryTournamentRow,
-  existingEntry: ExistingEntryRow | null,
   withdrawnTournaments: string[] | undefined,
 ): Promise<{ok: true} | InternalFailure> {
   try {
@@ -1077,10 +1126,9 @@ async function mailVerificationLink(
       withdrawnTournaments,
     );
   } catch (mailError) {
-    // Rolled back because the participant never received a usable
-    // verification link, so the entry they can't confirm must not stand in
-    // the way of them trying again.
-    await rollbackEntry(db, entryId, tournament.id, existingEntry);
+    // Failing here is what gets the entry rolled back: the participant never
+    // received a usable verification link, so the entry they can't confirm
+    // must not stand in the way of them trying again.
     const message =
       mailError instanceof Error ? mailError.message : 'unknown error';
     return {
