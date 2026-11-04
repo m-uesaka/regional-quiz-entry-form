@@ -11,6 +11,17 @@ import {
   SheetFetchError,
 } from './google-sheets';
 
+/**
+ * A mistake on the regulation tab, worded for staff and naming the sheet row
+ * it is on where there is one.
+ */
+export class RegulationSheetError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RegulationSheetError';
+  }
+}
+
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 // A Sheets date serial counts days from 1899-12-30; this is the serial of
@@ -123,10 +134,12 @@ export function sheetValuesToRegulations(
     }
     const label = cellText(labelCell);
     if (label === '') {
-      throw new Error(`${rowNumber}行目: レギュレーション名が空です`);
+      throw new RegulationSheetError(
+        `${rowNumber}行目: レギュレーション名が空です`,
+      );
     }
     if (seenLabels.has(label)) {
-      throw new Error(
+      throw new RegulationSheetError(
         `${rowNumber}行目: レギュレーション名が重複しています: ${label}`,
       );
     }
@@ -149,7 +162,7 @@ export function sheetValuesToRegulations(
   });
 
   if (regulations.length === 0) {
-    throw new Error(
+    throw new RegulationSheetError(
       `「${REGULATION_SHEET_NAME}」シートにレギュレーションが1件もありません`,
     );
   }
@@ -163,7 +176,9 @@ export function sheetValuesToRegulations(
       typeof index === 'number' && rowNumbers[index] !== undefined
         ? `${rowNumbers[index]}行目: `
         : '';
-    throw new Error(`${prefix}${issue?.message ?? '内容を確認してください'}`);
+    throw new RegulationSheetError(
+      `${prefix}${issue?.message ?? '内容を確認してください'}`,
+    );
   }
   return parsed.data.regulations;
 }
@@ -187,7 +202,7 @@ function parseAfterPriorityCell(
       ? AFTER_PRIORITY_CELLS.get(cell.trim())
       : undefined;
   if (closes === undefined) {
-    throw new Error(
+    throw new RegulationSheetError(
       `${rowNumber}行目: 優先期間後の扱いは「外す」か「残す」で指定してください: ` +
         String(cell),
     );
@@ -218,7 +233,7 @@ function parseSheetDatetime(
         ? textToWallClockMs(cell.trim())
         : undefined;
   if (wallClockMs === undefined) {
-    throw new Error(
+    throw new RegulationSheetError(
       `${rowNumber}行目: ${columnLabel}を日時として読み取れません: ` +
         `${String(cell)}(例: 2026-08-01 10:00)`,
     );

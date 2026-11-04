@@ -82,11 +82,14 @@ interface SpreadsheetGridResponse {
 
 /** An entry-form spreadsheet's two tabs, as `fetchEntrySheet()` reads them. */
 export interface EntrySheetValues {
-  /** The form-definition rows, every cell as the sheet displays it. */
-  formValues: string[][];
+  /**
+   * The form-definition rows, every cell as the sheet displays it, or
+   * `undefined` for a cell with nothing displayed.
+   */
+  formValues: Array<Array<string | undefined>>;
   /**
    * The regulation rows, every cell unformatted (a date-time as its serial
-   * number), as `sheetValuesToRegulations()` reads them.
+   * number).
    */
   regulationValues: unknown[][];
 }
@@ -99,11 +102,11 @@ export interface EntrySheetValues {
  *
  * The two tabs want different renderings, which is why this goes through
  * `spreadsheets.get` rather than `values:batchGet` (whose render option
- * applies to every range): the form tab is read as displayed, exactly as
- * `fetchSheetRows()` reads it -- an option typed as `10%` or `1,000` must
- * stay that text -- while the regulation tab is read unformatted, as
- * `fetchRegulationSheetValues()` reads it, so a date-time cell arrives as a
- * serial whatever its display format. The grid carries both per cell.
+ * applies to every range): the form tab is read as displayed -- an option
+ * typed as `10%` or `1,000` must stay that text -- while the regulation tab
+ * is read unformatted, so a date-time cell arrives as a serial whatever its
+ * display format. The grid carries both per cell, and each tab comes back
+ * as the single-tab reads of the same range would return it.
  *
  * Same authentication and failure modes as `fetchSheetValues()`; a missing
  * regulation tab fails the whole request with a 400.
@@ -139,17 +142,17 @@ export async function fetchEntrySheet(
   );
   const formSheet =
     sheets.find(sheet => sheet !== regulationSheet) ?? regulationSheet;
-  const rowsOf = (
+  const rowsOf = <T>(
     sheet: (typeof sheets)[number] | undefined,
-    read: (cell: GridCell) => unknown,
-  ) =>
+    read: (cell: GridCell) => T,
+  ): T[][] =>
     trimTrailingBlankRows(
       (sheet?.data?.[0]?.rowData ?? []).map(row =>
         (row.values ?? []).map(read),
       ),
     );
   return {
-    formValues: rowsOf(formSheet, cell => cell.formattedValue) as string[][],
+    formValues: rowsOf(formSheet, cell => cell.formattedValue),
     regulationValues: rowsOf(regulationSheet, cell => {
       const value = cell.effectiveValue;
       return value?.numberValue ?? value?.stringValue ?? value?.boolValue;
@@ -203,7 +206,7 @@ async function fetchSheets(url: string): Promise<Response> {
  * a grid, which `values.get` leaves out but a `spreadsheets.get` grid may
  * carry, so both read the same.
  */
-function trimTrailingBlankRows(rows: unknown[][]): unknown[][] {
+function trimTrailingBlankRows<T>(rows: T[][]): T[][] {
   const trimmed = rows.map(row => {
     let end = row.length;
     while (end > 0 && (row[end - 1] === undefined || row[end - 1] === '')) {

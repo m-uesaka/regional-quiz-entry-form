@@ -294,7 +294,7 @@ describe('sheet-import routes', () => {
           ['notes', '備考', '自由記述', '任意'],
           ['notes', '備考2', '自由記述', '任意'],
         ],
-        'フォーム定義: A列(key)「notes」が複数の行で使われています',
+        'フォーム定義 2行目と3行目: A列(key)「notes」が複数の行で使われています',
       ],
     ];
     const cookie = await generalStaffCookie();

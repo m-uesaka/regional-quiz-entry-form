@@ -47,7 +47,10 @@ import {
   formRowsToFields,
   sheetValuesToRows,
 } from './sheet-to-form-definition';
-import {sheetValuesToRegulations} from './sheet-to-regulations';
+import {
+  RegulationSheetError,
+  sheetValuesToRegulations,
+} from './sheet-to-regulations';
 import {promoteWaitlistedEntries} from './waitlist';
 
 /** The headers of the 大会一覧 sheet's columns this reads. */
@@ -607,8 +610,13 @@ async function prepareRow(
     if (e instanceof SheetFetchError && e.status === 400) {
       return `入力シートを読み取れません。スプレッドシートIDと、「${REGULATION_SHEET_NAME}」シートがあるかを確認してください`;
     }
-    // The regulation tab's own errors already name the row in Japanese.
-    return `レギュレーション: ${classifySheetImportError(e).error}`;
+    // The regulation tab's own errors already name the row in Japanese;
+    // only they get the tab's name, so a failure reading the spreadsheet is
+    // not presented as a problem with that tab.
+    if (e instanceof RegulationSheetError) {
+      return `レギュレーション: ${e.message}`;
+    }
+    return classifySheetImportError(e).error;
   }
 }
 

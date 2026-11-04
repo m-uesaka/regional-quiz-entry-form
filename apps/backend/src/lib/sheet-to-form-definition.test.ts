@@ -278,7 +278,21 @@ describe('formRowsToFields', () => {
           ['notes', '備考', '自由記述'],
           ['notes', '備考2', '自由記述'],
         ],
-        'フォーム定義: A列(key)「notes」が複数の行で使われています',
+        'フォーム定義 2行目と3行目: A列(key)「notes」が複数の行で使われています',
+      ],
+      [[['', '備考', '自由記述']], 'フォーム定義 2行目: A列(key)が空です'],
+      [
+        [[undefined, '備考', '自由記述']],
+        'フォーム定義 2行目: A列(key)が空です',
+      ],
+      // A name `Object.prototype` holds is still an unknown label.
+      [
+        [['notes', '備考', 'constructor']],
+        'フォーム定義 2行目: C列(type)「constructor」はチェックボックス・ラジオボタン・自由記述・自由記述（一行）のいずれでもありません',
+      ],
+      [
+        [['notes', '備考', '  ']],
+        'フォーム定義 2行目: C列(type)が空です。途中に空行がある場合は行を詰めてください',
       ],
     ];
     for (const [values, message] of cases) {
@@ -286,6 +300,14 @@ describe('formRowsToFields', () => {
       expect(() => formRowsToFields(rows)).toThrow(FormSheetError);
       expect(() => formRowsToFields(rows)).toThrow(message);
     }
+  });
+
+  it('matches the type and required cells despite stray spaces', () => {
+    const [field] = formRowsToFields(
+      sheetValuesToRows([['notes', '備考', ' 自由記述 ', ' 必須']]),
+    );
+
+    expect(field).toMatchObject({type: 'textarea', required: true});
   });
 
   it('keeps an empty label, which the schema takes', () => {

@@ -74,8 +74,9 @@ export async function fetchSheetRows(
  * `formValues` of `fetchEntrySheet()` (#168).
  *
  * Unlike `cellText()`, a cell is neither trimmed nor turned into `''` when
- * absent: the schema refuses a missing label but takes an empty one, and the
- * type and required columns are matched exactly.
+ * absent: the schema refuses a missing label but takes an empty one, and a
+ * label is stored as typed. (The type and required cells, which are only
+ * matched, are trimmed where they are read.)
  * @param values The cells the API returned.
  */
 export function sheetValuesToRows(values: unknown[][]): SheetRow[] {
@@ -128,10 +129,14 @@ export function formRowsToFields(rows: SheetRow[]): FormFieldDefYaml[] {
     sheetRowToField(row, `フォーム定義 ${index + 2}行目`),
   );
   const keys = fields.map(field => field.key);
-  const duplicate = keys.find((key, index) => keys.indexOf(key) !== index);
-  if (duplicate !== undefined) {
+  const repeated = keys.findIndex((key, index) => keys.indexOf(key) !== index);
+  if (repeated !== -1) {
+    const key = keys[repeated];
+    const rowNumbers = keys.flatMap((other, index) =>
+      other === key ? [`${index + 2}行目`] : [],
+    );
     throw new FormSheetError(
-      `フォーム定義: A列(key)「${duplicate}」が複数の行で使われています`,
+      `フォーム定義 ${rowNumbers.join('と')}: A列(key)「${key}」が複数の行で使われています`,
     );
   }
   return fields;
@@ -144,28 +149,41 @@ export function formRowsToFields(rows: SheetRow[]): FormFieldDefYaml[] {
  * @throws {FormSheetError} If the row is wrong.
  */
 function sheetRowToField(row: SheetRow, at: string): FormFieldDefYaml {
-  const type = row.type === undefined ? undefined : TYPE_LABELS[row.type];
+  // The type and required cells are matched against the dropdown labels and
+  // never stored, so stray spaces around a label don't stand in the way.
+  const typeLabel = row.type?.trim() ?? '';
+  if (typeLabel === '') {
+    throw new FormSheetError(
+      `${at}: C列(type)が空です。途中に空行がある場合は行を詰めてください`,
+    );
+  }
+  // An own-property lookup, so a cell such as `constructor` is an unknown
+  // label rather than whatever `Object.prototype` holds under that name.
+  const type = Object.hasOwn(TYPE_LABELS, typeLabel)
+    ? TYPE_LABELS[typeLabel]
+    : undefined;
   if (type === undefined) {
     throw new FormSheetError(
-      row.type === undefined || row.type === ''
-        ? `${at}: C列(type)が空です。途中に空行がある場合は行を詰めてください`
-        : `${at}: C列(type)「${row.type}」は${Object.keys(TYPE_LABELS).join('・')}のいずれでもありません`,
+      `${at}: C列(type)「${typeLabel}」は${Object.keys(TYPE_LABELS).join('・')}のいずれでもありません`,
     );
+  }
+  if (row.key === undefined || row.key.trim() === '') {
+    throw new FormSheetError(`${at}: A列(key)が空です`);
   }
   const parsed = FormFieldDefYamlSchema.safeParse({
     key: row.key,
     label: row.label,
     type,
-    required: row.required === '必須',
+    required: row.required?.trim() === '必須',
     options: row.options ? parseOptions(row.options, at) : undefined,
   });
   if (parsed.success) {
     return parsed.data;
   }
-  const column = String(parsed.error.issues[0]?.path[0] ?? '');
+  const column = parsed.error.issues[0]?.path[0];
   if (column === 'key') {
     throw new FormSheetError(
-      `${at}: A列(key)「${row.key ?? ''}」は小文字の英字で始まり、小文字の英数字と _ だけにしてください`,
+      `${at}: A列(key)「${row.key}」は小文字の英字で始まり、小文字の英数字と _ だけにしてください`,
     );
   }
   if (column === 'options') {
@@ -173,8 +191,16 @@ function sheetRowToField(row: SheetRow, at: string): FormFieldDefYaml {
       `${at}: ラジオボタンには E列(options)に選択肢が1つ以上必要です`,
     );
   }
+  const columnName =
+    typeof column === 'string' && Object.hasOwn(FORM_COLUMN_NAMES, column)
+      ? FORM_COLUMN_NAMES[column]
+      : undefined;
+  // An issue that names no column (a check across the whole row) is reported
+  // against the row.
   throw new FormSheetError(
-    `${at}: ${FORM_COLUMN_NAMES[column] ?? column}の値が正しくありません`,
+    columnName === undefined
+      ? `${at}: 行の内容が正しくありません`
+      : `${at}: ${columnName}の値が正しくありません`,
   );
 }
 
