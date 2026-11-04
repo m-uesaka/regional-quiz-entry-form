@@ -1,6 +1,10 @@
 import {describe, expect, it} from 'vitest';
 import type {Cookies, Redirect} from '@sveltejs/kit';
 import type {StaffLoginResponse} from '@regional-quiz/shared';
+import {
+  fakeFetch,
+  type RecordedRequest,
+} from '../../../test-support/fake-fetch';
 import {actions, load} from './+page.server';
 
 const REGIONAL: StaffLoginResponse = {
@@ -37,21 +41,36 @@ function recordingCookies(): {cookies: Cookies; set: RecordedCookie[]} {
   return {cookies, set};
 }
 
-/** Builds a fake `fetch` answering the login request as given. */
-function fakeFetch(options: {
-  status?: number;
-  body?: unknown;
-  setCookie?: string | null;
-}): typeof fetch {
-  return (async () => {
-    const headers = new Headers({'Content-Type': 'application/json'});
-    const setCookie = options.setCookie ?? SESSION_COOKIE_HEADER;
-    if (setCookie) headers.append('set-cookie', setCookie);
-    return new Response(JSON.stringify(options.body ?? REGIONAL), {
-      status: options.status ?? 200,
-      headers,
-    });
-  }) as typeof fetch;
+/**
+ * Builds a fake `fetch` answering the login request as given.
+ * @param options.requests Collects the requests sent.
+ */
+function fakeLoginFetch(
+  options: {
+    status?: number;
+    body?: unknown;
+    setCookie?: string | null;
+    requests?: RecordedRequest[];
+  } = {},
+): typeof fetch {
+  return fakeFetch(
+    [
+      {
+        method: 'POST',
+        url: '/api/auth/staff/login',
+        respond: () => {
+          const headers = new Headers({'Content-Type': 'application/json'});
+          const setCookie = options.setCookie ?? SESSION_COOKIE_HEADER;
+          if (setCookie) headers.append('set-cookie', setCookie);
+          return new Response(JSON.stringify(options.body ?? REGIONAL), {
+            status: options.status ?? 200,
+            headers,
+          });
+        },
+      },
+    ],
+    options.requests,
+  );
 }
 
 /** Builds the partial `RequestEvent` the login action needs. */
@@ -73,7 +92,7 @@ function buildEvent(options: {
     url.searchParams.set('redirectTo', options.redirectTo);
 
   return {
-    fetch: options.fetch ?? fakeFetch({}),
+    fetch: options.fetch ?? fakeLoginFetch(),
     cookies: options.cookies ?? recordingCookies().cookies,
     url,
     request: new Request(url, {method: 'POST', body}),
@@ -99,7 +118,7 @@ describe('staff login action', () => {
   it('sends general staff to the cross-region dashboard', async () => {
     const event = buildEvent({
       ...CREDENTIALS,
-      fetch: fakeFetch({body: GENERAL}),
+      fetch: fakeLoginFetch({body: GENERAL}),
     });
 
     await expect(actions.default(event)).rejects.toMatchObject({
@@ -111,7 +130,7 @@ describe('staff login action', () => {
   it('sends them back to the page they were aiming at', async () => {
     const event = buildEvent({
       ...CREDENTIALS,
-      fetch: fakeFetch({body: GENERAL}),
+      fetch: fakeLoginFetch({body: GENERAL}),
       redirectTo: '/staff/tokyo/shinjinou/entries',
     });
 
@@ -136,7 +155,10 @@ describe('staff login action', () => {
   it('reports a rejected login without saying which field was wrong', async () => {
     const event = buildEvent({
       ...CREDENTIALS,
-      fetch: fakeFetch({status: 401, body: {error: 'invalid credentials'}}),
+      fetch: fakeLoginFetch({
+        status: 401,
+        body: {error: 'invalid credentials'},
+      }),
     });
 
     const result = await actions.default(event);
@@ -156,7 +178,7 @@ describe('staff login action', () => {
     // credentials" would be both wrong and unhelpful.
     const event = buildEvent({
       ...CREDENTIALS,
-      fetch: fakeFetch({status: 429, body: {error: 'too many requests'}}),
+      fetch: fakeLoginFetch({status: 429, body: {error: 'too many requests'}}),
     });
 
     const result = await actions.default(event);
@@ -178,7 +200,10 @@ describe('staff login action', () => {
       buildEvent({
         ...CREDENTIALS,
         cookies,
-        fetch: fakeFetch({status: 401, body: {error: 'invalid credentials'}}),
+        fetch: fakeLoginFetch({
+          status: 401,
+          body: {error: 'invalid credentials'},
+        }),
       }),
     );
 
@@ -187,36 +212,32 @@ describe('staff login action', () => {
 
   // #166: the address alone no longer names one account.
   it('sends the chosen 区分 along with the address', async () => {
-    let sent: unknown;
+    const requests: RecordedRequest[] = [];
     const event = buildEvent({
       ...CREDENTIALS,
       email: 'Staff@Example.com',
       scope: 'shinjinou',
-      fetch: (async (_input: RequestInfo | URL, init?: RequestInit) => {
-        sent = JSON.parse(String(init?.body));
-        return Response.json(REGIONAL);
-      }) as typeof fetch,
+      fetch: fakeLoginFetch({requests}),
     });
 
     await expect(actions.default(event)).rejects.toMatchObject({status: 303});
     // Lowercased by the shared schema on the way out (#133).
-    expect(sent).toEqual({
-      email: 'staff@example.com',
-      scope: 'shinjinou',
-      password: CREDENTIALS.password,
-    });
+    expect(requests.map(r => r.body)).toEqual([
+      {
+        email: 'staff@example.com',
+        scope: 'shinjinou',
+        password: CREDENTIALS.password,
+      },
+    ]);
   });
 
   it('refuses a login with no 区分 chosen without calling the API', async () => {
-    let called = false;
+    const requests: RecordedRequest[] = [];
     const event = buildEvent({
       email: CREDENTIALS.email,
       scope: '',
       password: CREDENTIALS.password,
-      fetch: (async () => {
-        called = true;
-        return new Response('{}');
-      }) as typeof fetch,
+      fetch: fakeFetch([], requests),
     });
 
     const result = await actions.default(event);
@@ -225,30 +246,30 @@ describe('staff login action', () => {
       status: 400,
       data: {email: CREDENTIALS.email, scope: ''},
     });
-    expect(called).toBe(false);
+    expect(requests).toEqual([]);
   });
 
   it('rejects an empty form without calling the API', async () => {
-    let called = false;
+    const requests: RecordedRequest[] = [];
     const event = buildEvent({
       email: '',
       password: '',
-      fetch: (async () => {
-        called = true;
-        return new Response('{}');
-      }) as typeof fetch,
+      fetch: fakeFetch([], requests),
     });
 
     const result = await actions.default(event);
 
     expect(result).toMatchObject({status: 400});
-    expect(called).toBe(false);
+    expect(requests).toEqual([]);
   });
 
   it('reports a backend failure as a retryable error', async () => {
     const event = buildEvent({
       ...CREDENTIALS,
-      fetch: fakeFetch({status: 500, body: {error: 'internal server error'}}),
+      fetch: fakeLoginFetch({
+        status: 500,
+        body: {error: 'internal server error'},
+      }),
     });
 
     const result = await actions.default(event);
@@ -259,7 +280,7 @@ describe('staff login action', () => {
   it('says so when the account has no screen to land on', async () => {
     const event = buildEvent({
       ...CREDENTIALS,
-      fetch: fakeFetch({
+      fetch: fakeLoginFetch({
         body: {...REGIONAL, regionSlug: null, tournamentType: null},
       }),
     });

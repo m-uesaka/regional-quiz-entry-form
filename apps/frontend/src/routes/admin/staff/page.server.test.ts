@@ -1,6 +1,13 @@
 import {describe, expect, it} from 'vitest';
-import type {Cookies, HttpError, Redirect} from '@sveltejs/kit';
+import type {HttpError, Redirect} from '@sveltejs/kit';
 import type {Region, StaffAccount} from '@regional-quiz/shared';
+import {fakeCookies} from '../../../test-support/fake-cookies';
+import {
+  fakeFetch,
+  type FakeRoute,
+  type RecordedRequest,
+} from '../../../test-support/fake-fetch';
+import {GENERAL_STAFF, staffLocals} from '../../../test-support/staff-locals';
 import {actions, load} from './+page.server';
 
 const TOKYO: Region = {
@@ -22,62 +29,34 @@ const ACCOUNT: StaffAccount = {
   disabledAt: null,
 };
 
-/** One request an action put on the wire. */
-interface ApiCall {
-  method: string;
-  url: string;
-  body: unknown;
-}
-
 /**
  * Builds a fake `fetch` answering both the accounts and the regions API.
  * @param options.status The status to answer a POST with.
  * @param options.error The `{error}` message to answer a refusal with.
- * @param options.calls Collects the recorded requests.
+ * @param options.calls Collects the requests sent.
  */
-function fakeFetch(
-  options: {status?: number; error?: string; calls?: ApiCall[]} = {},
+function fakeApi(
+  options: {status?: number; error?: string; calls?: RecordedRequest[]} = {},
 ): typeof fetch {
-  return (async (input, init) => {
-    const url = String(input);
-    const method = init?.method ?? 'GET';
-    const body =
-      init?.body === undefined
-        ? undefined
-        : (JSON.parse(String(init.body)) as unknown);
-    options.calls?.push({method, url, body});
-    if (method === 'GET') {
-      return jsonResponse(url.includes('/regions') ? [TOKYO] : [ACCOUNT]);
-    }
-    const status = options.status ?? 200;
-    if (status >= 400) {
-      return jsonResponse({error: options.error ?? 'nope'}, status);
-    }
-    return jsonResponse(
-      url.endsWith('/accounts') ? ACCOUNT : {ok: true},
+  const status = options.status ?? 200;
+  const refusal = {error: options.error ?? 'nope'};
+  const routes: FakeRoute[] = [
+    {method: 'GET', url: /^\/api\/regions$/, body: [TOKYO]},
+    {method: 'GET', url: /^\/api\/staff\/accounts$/, body: [ACCOUNT]},
+    {
+      method: 'POST',
+      url: /^\/api\/staff\/accounts$/,
       status,
-    );
-  }) as typeof fetch;
-}
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {'Content-Type': 'application/json'},
-  });
-}
-
-/**
- * A stand-in for `event.cookies`, recording the names deleted on it: a
- * session the API refuses is dropped on the way to the login screen.
- * @param deleted Collects the deleted cookie names.
- */
-function fakeCookies(deleted: string[] = []): Cookies {
-  return {
-    delete: (name: string) => {
-      deleted.push(name);
+      body: status >= 400 ? refusal : ACCOUNT,
     },
-  } as unknown as Cookies;
+    {
+      method: 'POST',
+      url: /^\/api\/staff\/accounts\/[^/]+\/(password-reset|revoke-sessions|disable|enable)$/,
+      status,
+      body: status >= 400 ? refusal : {ok: true},
+    },
+  ];
+  return fakeFetch(routes, options.calls);
 }
 
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
@@ -101,15 +80,7 @@ function buildActionEvent(
   return {
     fetch: fetchImpl,
     cookies: fakeCookies(deletedCookies),
-    locals: {
-      staff: {
-        sub: CALLER_ID,
-        role: 'general',
-        regionId: null,
-        tournamentType: null,
-        sessionsValidFrom: 1756085025678,
-      },
-    },
+    locals: staffLocals({...GENERAL_STAFF, sub: CALLER_ID}),
     url: new URL('http://localhost/admin/staff'),
     request: {formData: async () => formData},
   } as Parameters<typeof actions.invite>[0];
@@ -129,15 +100,23 @@ function inviteFormData(overrides: Record<string, string> = {}): FormData {
 
 describe('admin staff +page.server load', () => {
   it('returns the accounts alongside the regions the invite form offers', async () => {
-    await expect(load(buildLoadEvent(fakeFetch()))).resolves.toEqual({
+    await expect(load(buildLoadEvent(fakeApi()))).resolves.toEqual({
       accounts: [ACCOUNT],
       regions: [TOKYO],
     });
   });
 
   it('reports a failed read as a bad gateway', async () => {
-    const failing = (async () =>
-      jsonResponse({error: 'boom'}, 500)) as typeof fetch;
+    // Both reads go out together; either failing fails the page.
+    const failing = fakeFetch([
+      {method: 'GET', url: '/api/regions', body: [TOKYO]},
+      {
+        method: 'GET',
+        url: '/api/staff/accounts',
+        status: 500,
+        body: {error: 'boom'},
+      },
+    ]);
 
     await expect(load(buildLoadEvent(failing))).rejects.toMatchObject({
       status: 502,
@@ -147,9 +126,9 @@ describe('admin staff +page.server load', () => {
 
 describe('admin staff invite action', () => {
   it('sends a regional account with its scope', async () => {
-    const calls: ApiCall[] = [];
+    const calls: RecordedRequest[] = [];
     const event = buildActionEvent(
-      fakeFetch({status: 201, calls}),
+      fakeApi({status: 201, calls}),
       inviteFormData(),
     );
 
@@ -172,9 +151,9 @@ describe('admin staff invite action', () => {
   });
 
   it('drops the scope controls for a general account', async () => {
-    const calls: ApiCall[] = [];
+    const calls: RecordedRequest[] = [];
     const event = buildActionEvent(
-      fakeFetch({status: 201, calls}),
+      fakeApi({status: 201, calls}),
       inviteFormData({role: 'general'}),
     );
 
@@ -186,7 +165,7 @@ describe('admin staff invite action', () => {
   });
 
   it('reports an address already registered on the email field', async () => {
-    const event = buildActionEvent(fakeFetch({status: 409}), inviteFormData());
+    const event = buildActionEvent(fakeApi({status: 409}), inviteFormData());
 
     await expect(actions.invite(event)).resolves.toMatchObject({
       status: 409,
@@ -206,7 +185,7 @@ describe('admin staff invite action', () => {
 
   it('names a general account as the one already registered', async () => {
     const event = buildActionEvent(
-      fakeFetch({status: 409}),
+      fakeApi({status: 409}),
       inviteFormData({role: 'general'}),
     );
 
@@ -223,9 +202,9 @@ describe('admin staff invite action', () => {
   });
 
   it('refuses a regional account with no region without asking the API', async () => {
-    const calls: ApiCall[] = [];
+    const calls: RecordedRequest[] = [];
     const event = buildActionEvent(
-      fakeFetch({calls}),
+      fakeApi({calls}),
       inviteFormData({regionId: ''}),
     );
 
@@ -238,7 +217,7 @@ describe('admin staff invite action', () => {
   // has that control. A `general` invite has no region select at all.
   it('attaches a refused region to its control for a regional invite', async () => {
     const event = buildActionEvent(
-      fakeFetch({status: 400, error: 'unknown region'}),
+      fakeApi({status: 400, error: 'unknown region'}),
       inviteFormData(),
     );
 
@@ -250,7 +229,7 @@ describe('admin staff invite action', () => {
 
   it('names no control when a general invite is refused', async () => {
     const event = buildActionEvent(
-      fakeFetch({status: 400, error: 'unknown region'}),
+      fakeApi({status: 400, error: 'unknown region'}),
       inviteFormData({role: 'general'}),
     );
 
@@ -265,7 +244,7 @@ describe('admin staff invite action', () => {
   // re-send button instead.
   it('says to use the re-send button when the invite mail could not go out', async () => {
     const event = buildActionEvent(
-      fakeFetch({
+      fakeApi({
         status: 500,
         error: 'account created but the setup mail could not be sent',
       }),
@@ -285,10 +264,10 @@ describe('admin staff invite action', () => {
 
 describe('admin staff re-send action', () => {
   it('asks the API to mail the account its password link again', async () => {
-    const calls: ApiCall[] = [];
+    const calls: RecordedRequest[] = [];
     const formData = new FormData();
     formData.set('id', ACCOUNT.id);
-    const event = buildActionEvent(fakeFetch({calls}), formData);
+    const event = buildActionEvent(fakeApi({calls}), formData);
 
     await expect(actions.resend(event)).resolves.toMatchObject({
       intent: 'resend',
@@ -307,7 +286,7 @@ describe('admin staff re-send action', () => {
   it('attaches a failure to the row it came from', async () => {
     const formData = new FormData();
     formData.set('id', ACCOUNT.id);
-    const event = buildActionEvent(fakeFetch({status: 404}), formData);
+    const event = buildActionEvent(fakeApi({status: 404}), formData);
 
     await expect(actions.resend(event)).resolves.toMatchObject({
       status: 404,
@@ -329,10 +308,10 @@ describe('admin staff revoke action', () => {
   }
 
   it("asks the API to end every session of the row's account", async () => {
-    const calls: ApiCall[] = [];
+    const calls: RecordedRequest[] = [];
     const deletedCookies: string[] = [];
     const event = buildActionEvent(
-      fakeFetch({calls}),
+      fakeApi({calls}),
       revokeFormData(ACCOUNT.id),
       deletedCookies,
     );
@@ -360,7 +339,7 @@ describe('admin staff revoke action', () => {
     // session on the way there.
     const deletedCookies: string[] = [];
     const event = buildActionEvent(
-      fakeFetch(),
+      fakeApi(),
       revokeFormData(CALLER_ID),
       deletedCookies,
     );
@@ -375,7 +354,7 @@ describe('admin staff revoke action', () => {
   it('sends a session the API refuses to the login form', async () => {
     const deletedCookies: string[] = [];
     const event = buildActionEvent(
-      fakeFetch({status: 401}),
+      fakeApi({status: 401}),
       revokeFormData(ACCOUNT.id),
       deletedCookies,
     );
@@ -389,7 +368,7 @@ describe('admin staff revoke action', () => {
 
   it('attaches an unknown account to the row it came from', async () => {
     const event = buildActionEvent(
-      fakeFetch({status: 404}),
+      fakeApi({status: 404}),
       revokeFormData(ACCOUNT.id),
     );
 
@@ -406,7 +385,7 @@ describe('admin staff revoke action', () => {
 
   it('reports any other failure as one the revocation did not survive', async () => {
     const event = buildActionEvent(
-      fakeFetch({status: 500}),
+      fakeApi({status: 500}),
       revokeFormData(ACCOUNT.id),
     );
 
@@ -429,8 +408,8 @@ describe('admin staff disable action', () => {
   }
 
   it("asks the API to disable the row's account", async () => {
-    const calls: ApiCall[] = [];
-    const event = buildActionEvent(fakeFetch({calls}), rowFormData(ACCOUNT.id));
+    const calls: RecordedRequest[] = [];
+    const event = buildActionEvent(fakeApi({calls}), rowFormData(ACCOUNT.id));
 
     await expect(actions.disable(event)).resolves.toMatchObject({
       intent: 'disable',
@@ -449,7 +428,7 @@ describe('admin staff disable action', () => {
 
   it('explains a refusal to leave no general staff', async () => {
     const event = buildActionEvent(
-      fakeFetch({
+      fakeApi({
         status: 409,
         error: 'cannot disable the last general staff account',
       }),
@@ -469,7 +448,7 @@ describe('admin staff disable action', () => {
 
   it("explains a refusal to disable the caller's own account", async () => {
     const event = buildActionEvent(
-      fakeFetch({status: 409, error: 'cannot disable your own account'}),
+      fakeApi({status: 409, error: 'cannot disable your own account'}),
       rowFormData(CALLER_ID),
     );
 
@@ -481,7 +460,7 @@ describe('admin staff disable action', () => {
 
   it('reports any other failure beside the row', async () => {
     const event = buildActionEvent(
-      fakeFetch({status: 500}),
+      fakeApi({status: 500}),
       rowFormData(ACCOUNT.id),
     );
 
@@ -498,10 +477,10 @@ describe('admin staff disable action', () => {
 
 describe('admin staff enable action', () => {
   it("asks the API to enable the row's account", async () => {
-    const calls: ApiCall[] = [];
+    const calls: RecordedRequest[] = [];
     const formData = new FormData();
     formData.set('id', ACCOUNT.id);
-    const event = buildActionEvent(fakeFetch({calls}), formData);
+    const event = buildActionEvent(fakeApi({calls}), formData);
 
     await expect(actions.enable(event)).resolves.toMatchObject({
       intent: 'enable',
@@ -520,7 +499,7 @@ describe('admin staff enable action', () => {
   it('attaches an unknown account to the row it came from', async () => {
     const formData = new FormData();
     formData.set('id', ACCOUNT.id);
-    const event = buildActionEvent(fakeFetch({status: 404}), formData);
+    const event = buildActionEvent(fakeApi({status: 404}), formData);
 
     await expect(actions.enable(event)).resolves.toMatchObject({
       status: 404,
@@ -534,7 +513,7 @@ describe('admin staff re-send action (disabled account)', () => {
     const formData = new FormData();
     formData.set('id', ACCOUNT.id);
     const event = buildActionEvent(
-      fakeFetch({status: 409, error: 'staff account disabled'}),
+      fakeApi({status: 409, error: 'staff account disabled'}),
       formData,
     );
 

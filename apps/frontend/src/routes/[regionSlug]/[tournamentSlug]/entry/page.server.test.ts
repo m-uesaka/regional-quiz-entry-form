@@ -8,6 +8,16 @@ import type {
   Tournament,
 } from '@regional-quiz/shared';
 import {formatJstDateTime} from '$lib/jst-datetime';
+import {fakeCookies} from '../../../../test-support/fake-cookies';
+import {
+  fakeFetch,
+  type FakeRequest,
+  type RecordedRequest,
+} from '../../../../test-support/fake-fetch';
+import {
+  GENERAL_STAFF,
+  staffLocals,
+} from '../../../../test-support/staff-locals';
 import {actions, load} from './+page.server';
 
 // Well in the past relative to any plausible test run time, so this is
@@ -52,14 +62,6 @@ const FORM_FIELD_DEFS: FormFieldDef[] = [
   },
 ];
 
-const GENERAL_STAFF: StaffClaims = {
-  sub: '00000000-0000-0000-0000-000000000003',
-  role: 'general',
-  regionId: null,
-  tournamentType: null,
-  sessionsValidFrom: 1756085025678,
-};
-
 /** 地域スタッフ covering exactly the tournament under test. */
 const OWN_REGIONAL_STAFF: StaffClaims = {
   sub: '00000000-0000-0000-0000-000000000004',
@@ -99,55 +101,82 @@ interface FakeApiOptions {
    * makes the request itself fail, as a network error would.
    */
   entryCounts?: {status: number; body: unknown} | 'throw';
-  /** Collects every requested URL, for asserting which endpoints ran. */
-  requests?: string[];
+  /** Collects every request sent, for asserting which endpoints ran. */
+  requests?: RecordedRequest[];
   /**
-   * Collects the `cf-turnstile-response` header of every entry submission,
-   * which is how the widget's token reaches the API.
+   * Collects every request sent with its headers, for the
+   * `cf-turnstile-response` one of an entry submission, which is how the
+   * widget's token reaches the API.
    */
-  turnstileTokens?: Array<string | null>;
+  requestsWithHeaders?: FakeRequest[];
 }
 
 /**
  * Builds a fake `fetch` that answers each of the endpoints the page talks
- * to by path, so a test only has to say which one should behave unusually.
+ * to, so a test only has to say which one should behave unusually.
  * @param options Overrides for the individual endpoints.
  */
 function fakeApi(options: FakeApiOptions = {}): typeof fetch {
-  const tournament = options.tournament ?? OPEN_TOURNAMENT;
-  return (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url =
-      typeof input === 'string' ? input : new URL(String(input)).pathname;
-    options.requests?.push(url);
-    if (url.includes('/regulations')) {
-      return Response.json(options.regulations ?? REGULATIONS);
-    }
-    if (url.includes('/entry-counts')) {
-      if (options.entryCounts === 'throw') {
-        throw new TypeError('fetch failed');
-      }
-      const counts = options.entryCounts ?? {
-        status: 200,
-        body: {confirmedCount: 0, waitlistedCount: 0},
-      };
-      return Response.json(counts.body, {status: counts.status});
-    }
-    if (url.includes('/form-definitions/')) {
-      return Response.json(options.formFieldDefs ?? FORM_FIELD_DEFS);
-    }
-    if (url.includes('/entries')) {
-      options.turnstileTokens?.push(
-        new Headers(init?.headers).get('cf-turnstile-response'),
-      );
-      const entry =
-        options.entryResponse ??
-        (url.endsWith('/entries/session')
-          ? {status: 201, body: {id: 'entry'}}
-          : {status: 202, body: {ok: true}});
-      return Response.json(entry.body, {status: entry.status});
-    }
-    return Response.json(tournament, {status: options.tournamentStatus ?? 200});
-  }) as typeof fetch;
+  // Both tournaments share the id, and a test standing a refusal in for the
+  // tournament has none to read it from.
+  const tournamentPath = `/api/tournaments/${OPEN_TOURNAMENT.id}`;
+  const counts = options.entryCounts ?? {
+    status: 200,
+    body: {confirmedCount: 0, waitlistedCount: 0},
+  };
+  return fakeFetch(
+    [
+      {
+        method: 'GET',
+        url: /^\/api\/tournaments\/tokyo\/saikyoi$/,
+        status: options.tournamentStatus ?? 200,
+        body: options.tournament ?? OPEN_TOURNAMENT,
+      },
+      {
+        method: 'GET',
+        url: `${tournamentPath}/regulations`,
+        body: options.regulations ?? REGULATIONS,
+      },
+      {
+        method: 'GET',
+        url: `/api/form-definitions/${OPEN_TOURNAMENT.id}`,
+        body: options.formFieldDefs ?? FORM_FIELD_DEFS,
+      },
+      counts === 'throw'
+        ? {
+            method: 'GET',
+            url: `${tournamentPath}/entry-counts`,
+            respond: () => {
+              throw new TypeError('fetch failed');
+            },
+          }
+        : {method: 'GET', url: `${tournamentPath}/entry-counts`, ...counts},
+      {
+        method: 'POST',
+        url: `${tournamentPath}/entries/session`,
+        ...(options.entryResponse ?? {status: 201, body: {id: 'entry'}}),
+      },
+      {
+        method: 'POST',
+        url: `${tournamentPath}/entries`,
+        ...(options.entryResponse ?? {status: 202, body: {ok: true}}),
+      },
+    ],
+    options.requests,
+    options.requestsWithHeaders,
+  );
+}
+
+/** The URLs `requests` went to, in order. */
+function urlsOf(requests: RecordedRequest[]): string[] {
+  return requests.map(r => r.url);
+}
+
+/** The `cf-turnstile-response` header of each entry submission sent. */
+function turnstileTokens(requests: FakeRequest[]): Array<string | null> {
+  return requests
+    .filter(r => r.method === 'POST')
+    .map(r => r.headers.get('cf-turnstile-response'));
 }
 
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
@@ -163,13 +192,9 @@ function buildEvent(options: {
       tournamentSlug: options.tournamentSlug ?? 'saikyoi',
     },
     fetch: options.fetch,
-    locals: {staff: options.staff, participant: null},
+    locals: staffLocals(options.staff),
     url: new URL('http://localhost/tokyo/saikyoi/entry'),
-    cookies: {
-      delete: (name: string) => {
-        options.deletedCookies?.push(name);
-      },
-    },
+    cookies: fakeCookies(options.deletedCookies),
   } as unknown as Parameters<typeof load>[0];
 }
 
@@ -503,11 +528,7 @@ function buildActionEvent(options: {
     }),
     locals: {staff: null, participant: options.participant ?? null},
     url: new URL('http://localhost/tokyo/saikyoi/entry'),
-    cookies: {
-      delete: (name: string) => {
-        options.deletedCookies?.push(name);
-      },
-    },
+    cookies: fakeCookies(options.deletedCookies),
   } as unknown as Parameters<typeof actions.default>[0];
 }
 
@@ -532,7 +553,7 @@ describe('entry +page.server default action for a logged-in participant', () => 
   // The address and password typed into it must not be dropped in favour of
   // whoever that is.
   it('keeps a form rendered anonymously on the anonymous path even with a session', async () => {
-    const requests: string[] = [];
+    const requests: RecordedRequest[] = [];
 
     const result = await actions.default(
       buildActionEvent({
@@ -543,14 +564,16 @@ describe('entry +page.server default action for a logged-in participant', () => 
     );
 
     expect(result).toEqual({submitted: true, email: 'taro@example.com'});
-    expect(requests).toContain(
+    expect(urlsOf(requests)).toContain(
       `/api/tournaments/${OPEN_TOURNAMENT.id}/entries`,
     );
-    expect(requests.some(url => url.endsWith('/entries/session'))).toBe(false);
+    expect(urlsOf(requests).some(url => url.endsWith('/entries/session'))).toBe(
+      false,
+    );
   });
 
   it('enters under the session without asking for credentials', async () => {
-    const requests: string[] = [];
+    const requests: RecordedRequest[] = [];
 
     const result = await actions.default(
       buildActionEvent({
@@ -561,7 +584,7 @@ describe('entry +page.server default action for a logged-in participant', () => 
     );
 
     expect(result).toEqual({submitted: true, loggedIn: true});
-    expect(requests).toContain(
+    expect(urlsOf(requests)).toContain(
       `/api/tournaments/${OPEN_TOURNAMENT.id}/entries/session`,
     );
   });
@@ -569,7 +592,7 @@ describe('entry +page.server default action for a logged-in participant', () => 
   // The session already says who is asking, so the API refuses directly and
   // the form can say why.
   it('answers a submission to a tournament paused since the form opened in place, keeping what was typed', async () => {
-    const requests: string[] = [];
+    const requests: RecordedRequest[] = [];
     const result = await actions.default(
       buildActionEvent({
         fetch: fakeApi({
@@ -589,7 +612,7 @@ describe('entry +page.server default action for a logged-in participant', () => 
         values: {name: '山田太郎'},
       },
     });
-    expect(requests.some(url => url.includes('/entries'))).toBe(false);
+    expect(urlsOf(requests).some(url => url.includes('/entries'))).toBe(false);
   });
 
   it('says paused when the entry POST itself is refused as paused', async () => {
@@ -627,7 +650,7 @@ describe('entry +page.server default action for a logged-in participant', () => 
   });
 
   it('sends a participant whose session lapsed while the form was open to log in', async () => {
-    const requests: string[] = [];
+    const requests: RecordedRequest[] = [];
 
     const result = await actions.default(
       buildActionEvent({
@@ -643,7 +666,7 @@ describe('entry +page.server default action for a logged-in participant', () => 
         loginPath: '/mypage/login?redirectTo=%2Ftokyo%2Fsaikyoi%2Fentry',
       },
     });
-    expect(requests.some(url => url.includes('/entries'))).toBe(false);
+    expect(urlsOf(requests).some(url => url.includes('/entries'))).toBe(false);
   });
 
   // The cookie still reads as valid here, but the API cut it (a password
@@ -688,16 +711,18 @@ describe('entry +page.server default action', () => {
   // may or may not exist, so the result names the address mailed and claims
   // nothing else.
   it('posts an anonymous submission to the address-blind endpoint', async () => {
-    const requests: string[] = [];
+    const requests: RecordedRequest[] = [];
 
     await actions.default(
       buildActionEvent({fetch: fakeApi({requests}), fields: validFormData()}),
     );
 
-    expect(requests).toContain(
+    expect(urlsOf(requests)).toContain(
       `/api/tournaments/${OPEN_TOURNAMENT.id}/entries`,
     );
-    expect(requests.some(url => url.endsWith('/entries/session'))).toBe(false);
+    expect(urlsOf(requests).some(url => url.endsWith('/entries/session'))).toBe(
+      false,
+    );
   });
 
   it('rejects a mismatched password confirmation before calling the API', async () => {
@@ -735,13 +760,15 @@ describe('entry +page.server default action', () => {
   });
 
   it('does not read the regulations while handling a submission', async () => {
-    const requests: string[] = [];
+    const requests: RecordedRequest[] = [];
 
     await actions.default(
       buildActionEvent({fetch: fakeApi({requests}), fields: validFormData()}),
     );
 
-    expect(requests.some(url => url.includes('/regulations'))).toBe(false);
+    expect(urlsOf(requests).some(url => url.includes('/regulations'))).toBe(
+      false,
+    );
   });
 
   it('reports a per-field failure in Japanese', async () => {
@@ -889,7 +916,7 @@ describe('entry +page.server default action', () => {
     // form over (#95), so this is the submission a visitor who beat
     // hydration — or has JS off — actually makes, and the action is what has
     // to answer it.
-    const requests: string[] = [];
+    const requests: RecordedRequest[] = [];
     const result = await actions.default(
       buildActionEvent({
         fetch: fakeApi({
@@ -917,7 +944,7 @@ describe('entry +page.server default action', () => {
       },
     });
     // Refused here, so the API is never asked to create the entry.
-    expect(requests.some(url => url.includes('/entries'))).toBe(false);
+    expect(urlsOf(requests).some(url => url.includes('/entries'))).toBe(false);
   });
 
   it('reports every rejected field, custom and built-in, in one answer', async () => {
@@ -1001,28 +1028,28 @@ describe('entry +page.server default action', () => {
   });
 
   it("forwards the widget's token to the API", async () => {
-    const turnstileTokens: Array<string | null> = [];
+    const requestsWithHeaders: FakeRequest[] = [];
 
     await actions.default(
       buildActionEvent({
-        fetch: fakeApi({turnstileTokens}),
+        fetch: fakeApi({requestsWithHeaders}),
         fields: validFormData(),
       }),
     );
 
-    expect(turnstileTokens).toEqual(['a-turnstile-token']);
+    expect(turnstileTokens(requestsWithHeaders)).toEqual(['a-turnstile-token']);
   });
 
   it('sends an empty token when the widget produced none', async () => {
     // What a submission with the widget unsolved (or never loaded) looks
     // like. Refusing it is the API's job, not this page's, so nothing here
     // stops the call from being made.
-    const turnstileTokens: Array<string | null> = [];
+    const requestsWithHeaders: FakeRequest[] = [];
 
     await actions.default(
       buildActionEvent({
         fetch: fakeApi({
-          turnstileTokens,
+          requestsWithHeaders,
           entryResponse: {
             status: 400,
             body: {error: 'turnstile verification failed'},
@@ -1032,19 +1059,19 @@ describe('entry +page.server default action', () => {
       }),
     );
 
-    expect(turnstileTokens).toEqual(['']);
+    expect(turnstileTokens(requestsWithHeaders)).toEqual(['']);
   });
 
   it('drops a token that could not travel in a header', async () => {
     // A direct POST to this action, rather than anything the widget wrote:
     // forwarded as it stands, `new Request()` throws on the newline and the
     // participant gets a 500 error page instead of the challenge's 400.
-    const turnstileTokens: Array<string | null> = [];
+    const requestsWithHeaders: FakeRequest[] = [];
 
     const result = await actions.default(
       buildActionEvent({
         fetch: fakeApi({
-          turnstileTokens,
+          requestsWithHeaders,
           entryResponse: {
             status: 400,
             body: {error: 'turnstile verification failed'},
@@ -1057,7 +1084,7 @@ describe('entry +page.server default action', () => {
     );
 
     expect(result).toMatchObject({status: 400});
-    expect(turnstileTokens).toEqual(['']);
+    expect(turnstileTokens(requestsWithHeaders)).toEqual(['']);
   });
 
   it('reports a refused Turnstile token as something to retry', async () => {

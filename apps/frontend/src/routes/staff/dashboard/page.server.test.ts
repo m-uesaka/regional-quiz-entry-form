@@ -1,26 +1,20 @@
 import {describe, expect, it} from 'vitest';
-import type {Cookies, HttpError, Redirect} from '@sveltejs/kit';
+import type {HttpError, Redirect} from '@sveltejs/kit';
 import type {
   DashboardTournamentSummary,
   StaffClaims,
 } from '@regional-quiz/shared';
+import {fakeCookies} from '../../../test-support/fake-cookies';
+import {
+  fakeFetch,
+  type RecordedRequest,
+} from '../../../test-support/fake-fetch';
+import {
+  GENERAL_STAFF,
+  REGIONAL_STAFF,
+  staffLocals,
+} from '../../../test-support/staff-locals';
 import {load} from './+page.server';
-
-const GENERAL_STAFF: StaffClaims = {
-  sub: '00000000-0000-0000-0000-000000000001',
-  role: 'general',
-  regionId: null,
-  tournamentType: null,
-  sessionsValidFrom: 1756085025678,
-};
-
-const REGIONAL_STAFF: StaffClaims = {
-  sub: '00000000-0000-0000-0000-000000000002',
-  role: 'regional',
-  regionId: '00000000-0000-0000-0000-000000000003',
-  tournamentType: 'saikyoi',
-  sessionsValidFrom: 1756085025678,
-};
 
 const SUMMARIES: DashboardTournamentSummary[] = [
   {
@@ -38,25 +32,11 @@ const SUMMARIES: DashboardTournamentSummary[] = [
   },
 ];
 
-function fakeFetch(status = 200, body: unknown = SUMMARIES): typeof fetch {
-  return (async () =>
-    new Response(JSON.stringify(body), {
-      status,
-      headers: {'Content-Type': 'application/json'},
-    })) as typeof fetch;
-}
-
-/**
- * A stand-in for `event.cookies`, recording the names deleted on it: a
- * session the API refuses is dropped on the way to the login screen.
- * @param deleted Collects the deleted cookie names.
- */
-function fakeCookies(deleted: string[] = []): Cookies {
-  return {
-    delete: (name: string) => {
-      deleted.push(name);
-    },
-  } as unknown as Cookies;
+/** Builds a fake `fetch` answering the dashboard API as given. */
+function fakeApi(status = 200, body: unknown = SUMMARIES): typeof fetch {
+  return fakeFetch([
+    {method: 'GET', url: '/api/staff/dashboard', status, body},
+  ]);
 }
 
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
@@ -68,14 +48,14 @@ function buildEvent(options: {
   return {
     fetch: options.fetch,
     cookies: fakeCookies(options.deletedCookies),
-    locals: {staff: options.staff},
+    locals: staffLocals(options.staff),
     url: new URL('http://localhost/staff/dashboard'),
   } as Parameters<typeof load>[0];
 }
 
 describe('staff dashboard +page.server load', () => {
   it('redirects to the login screen when there is no staff session', async () => {
-    const event = buildEvent({fetch: fakeFetch(), staff: null});
+    const event = buildEvent({fetch: fakeApi(), staff: null});
 
     await expect(load(event)).rejects.toMatchObject({
       status: 303,
@@ -84,23 +64,20 @@ describe('staff dashboard +page.server load', () => {
   });
 
   it('throws 403 for regional staff without calling the API', async () => {
-    let called = false;
+    const requests: RecordedRequest[] = [];
     const event = buildEvent({
-      fetch: (async () => {
-        called = true;
-        return new Response('[]');
-      }) as typeof fetch,
+      fetch: fakeFetch([], requests),
       staff: REGIONAL_STAFF,
     });
 
     await expect(load(event)).rejects.toMatchObject({
       status: 403,
     } satisfies Partial<HttpError>);
-    expect(called).toBe(false);
+    expect(requests).toEqual([]);
   });
 
   it('returns every region summary for general staff', async () => {
-    const event = buildEvent({fetch: fakeFetch(), staff: GENERAL_STAFF});
+    const event = buildEvent({fetch: fakeApi(), staff: GENERAL_STAFF});
 
     await expect(load(event)).resolves.toEqual({summaries: SUMMARIES});
   });
@@ -108,7 +85,7 @@ describe('staff dashboard +page.server load', () => {
   it('redirects to the login screen when the session expired before the API call', async () => {
     const deletedCookies: string[] = [];
     const event = buildEvent({
-      fetch: fakeFetch(401),
+      fetch: fakeApi(401),
       staff: GENERAL_STAFF,
       deletedCookies,
     });
@@ -124,7 +101,7 @@ describe('staff dashboard +page.server load', () => {
   });
 
   it('throws 403 when the API rejects the session as out of scope', async () => {
-    const event = buildEvent({fetch: fakeFetch(403), staff: GENERAL_STAFF});
+    const event = buildEvent({fetch: fakeApi(403), staff: GENERAL_STAFF});
 
     await expect(load(event)).rejects.toMatchObject({
       status: 403,
@@ -132,7 +109,7 @@ describe('staff dashboard +page.server load', () => {
   });
 
   it('throws 502 when the dashboard request fails', async () => {
-    const event = buildEvent({fetch: fakeFetch(500), staff: GENERAL_STAFF});
+    const event = buildEvent({fetch: fakeApi(500), staff: GENERAL_STAFF});
 
     await expect(load(event)).rejects.toMatchObject({
       status: 502,

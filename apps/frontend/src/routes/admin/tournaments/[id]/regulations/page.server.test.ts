@@ -1,7 +1,10 @@
 import {describe, expect, it} from 'vitest';
-import type {Cookies, HttpError} from '@sveltejs/kit';
+import type {HttpError} from '@sveltejs/kit';
 import type {Regulation, Tournament} from '@regional-quiz/shared';
 import type {RegulationRowValues} from '$lib/types/regulation-form';
+import {fakeCookies} from '../../../../../test-support/fake-cookies';
+import {fakeFetch} from '../../../../../test-support/fake-fetch';
+import {jsonResponse} from '../../../../../test-support/json-response';
 import {actions, load} from './+page.server';
 
 const TOURNAMENT_ID = '00000000-0000-0000-0000-000000000001';
@@ -53,7 +56,7 @@ interface FetchLog {
  * @param options.putError The `{error}` message to answer a refusal with.
  * @param log Collects the saved bodies.
  */
-function fakeFetch(
+function fakeApi(
   options: {
     putStatus?: number;
     putError?: string;
@@ -66,50 +69,49 @@ function fakeFetch(
   } = {},
   log: FetchLog = {putBodies: []},
 ): typeof fetch {
-  return (async (input, init) => {
-    if (init?.method === 'PUT') {
-      log.putBodies.push(JSON.parse(String(init.body)));
-      const status = options.putStatus ?? 200;
-      return jsonResponse(
-        status < 400 ? {ok: true} : {error: options.putError ?? 'nope'},
-        status,
-      );
-    }
-    if (String(input).endsWith('/sheet-import/regulations/preview')) {
-      log.previewBodies?.push(JSON.parse(String(init?.body)));
-      return jsonResponse(
-        options.preview?.body ?? {regulations: []},
-        options.preview?.status ?? 200,
-      );
-    }
-    if (String(input).endsWith('/regulations')) {
-      const status = options.regulationsStatus ?? 200;
-      return status < 400
-        ? jsonResponse(options.stored ?? [GENERAL, STUDENT])
-        : jsonResponse({error: 'tournament not found'}, status);
-    }
-    return jsonResponse(options.tournaments ?? [TOURNAMENT]);
-  }) as typeof fetch;
-}
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {'Content-Type': 'application/json'},
-  });
-}
-
-/**
- * A stand-in for `event.cookies`, recording the names deleted on it: a
- * session the API refuses is dropped on the way to the login screen.
- * @param deleted Collects the deleted cookie names.
- */
-function fakeCookies(deleted: string[] = []): Cookies {
-  return {
-    delete: (name: string) => {
-      deleted.push(name);
+  const putStatus = options.putStatus ?? 200;
+  const regulationsStatus = options.regulationsStatus ?? 200;
+  const regulationsPath = `/api/tournaments/${TOURNAMENT_ID}/regulations`;
+  return fakeFetch([
+    {
+      method: 'PUT',
+      url: regulationsPath,
+      respond: ({body}) => {
+        // The fake only answers the save action, whose body is always this
+        // shape; the tests read it back as plain records.
+        log.putBodies.push(body as FetchLog['putBodies'][number]);
+        return jsonResponse(
+          putStatus < 400 ? {ok: true} : {error: options.putError ?? 'nope'},
+          putStatus,
+        );
+      },
     },
-  } as unknown as Cookies;
+    {
+      method: 'POST',
+      url: '/api/sheet-import/regulations/preview',
+      respond: ({body}) => {
+        log.previewBodies?.push(body as Record<string, unknown>);
+        return jsonResponse(
+          options.preview?.body ?? {regulations: []},
+          options.preview?.status ?? 200,
+        );
+      },
+    },
+    {
+      method: 'GET',
+      url: regulationsPath,
+      status: regulationsStatus,
+      body:
+        regulationsStatus < 400
+          ? (options.stored ?? [GENERAL, STUDENT])
+          : {error: 'tournament not found'},
+    },
+    {
+      method: 'GET',
+      url: /^\/api\/tournaments$/,
+      body: options.tournaments ?? [TOURNAMENT],
+    },
+  ]);
 }
 
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
@@ -182,14 +184,20 @@ function setRow(
 
 describe('admin regulations +page.server load', () => {
   it("returns the tournament's regulations", async () => {
-    await expect(load(buildLoadEvent(fakeFetch()))).resolves.toEqual({
+    await expect(load(buildLoadEvent(fakeApi()))).resolves.toEqual({
       regulations: [GENERAL, STUDENT],
     });
   });
 
   it('reports a failed read as a bad gateway', async () => {
-    const failing = (async () =>
-      jsonResponse({error: 'boom'}, 500)) as typeof fetch;
+    const failing = fakeFetch([
+      {
+        method: 'GET',
+        url: /^\/api\/tournaments(\/[^/]+\/regulations)?$/,
+        status: 500,
+        body: {error: 'boom'},
+      },
+    ]);
 
     await expect(load(buildLoadEvent(failing))).rejects.toMatchObject({
       status: 502,
@@ -201,13 +209,13 @@ describe('admin regulations +page.server load', () => {
   // otherwise a stale or mistyped `[id]` reads as a bad gateway.
   it('reports the 404 the regulations gate answers as not found', async () => {
     await expect(
-      load(buildLoadEvent(fakeFetch({regulationsStatus: 404}))),
+      load(buildLoadEvent(fakeApi({regulationsStatus: 404}))),
     ).rejects.toMatchObject({status: 404} satisfies Partial<HttpError>);
   });
 
   it('reports an id absent from the tournament list as not found', async () => {
     await expect(
-      load(buildLoadEvent(fakeFetch({tournaments: []}))),
+      load(buildLoadEvent(fakeApi({tournaments: []}))),
     ).rejects.toMatchObject({status: 404} satisfies Partial<HttpError>);
   });
 });
@@ -221,7 +229,7 @@ describe('admin regulations save action', () => {
     // can put them right.
     setRow(formData, 0, {id: GENERAL.id, order: '2', label: '一般の部'});
     setRow(formData, 1, {id: STUDENT.id, order: '1', label: '学生の部'});
-    const event = buildActionEvent(fakeFetch({}, log), formData);
+    const event = buildActionEvent(fakeApi({}, log), formData);
 
     await expect(actions.save(event)).resolves.toMatchObject({saved: true});
     expect(log.putBodies[0].regulations.map(r => r.label)).toEqual([
@@ -240,7 +248,7 @@ describe('admin regulations save action', () => {
     setRow(formData, 0, {id: GENERAL.id, label: '一般の部'});
     setRow(formData, 1, {label: '新設の部'});
     setRow(formData, 2, {id: STUDENT.id, order: '1', label: '学生の部'});
-    const event = buildActionEvent(fakeFetch({}, log), formData);
+    const event = buildActionEvent(fakeApi({}, log), formData);
 
     await expect(actions.save(event)).resolves.toMatchObject({saved: true});
     expect(log.putBodies[0].regulations.map(r => r.label)).toEqual([
@@ -256,7 +264,7 @@ describe('admin regulations save action', () => {
     // Set out of order on purpose: the index decides, not the body order.
     setRow(formData, 1, {id: STUDENT.id, label: '学生の部'});
     setRow(formData, 0, {id: GENERAL.id, label: '一般の部'});
-    const event = buildActionEvent(fakeFetch({}, log), formData);
+    const event = buildActionEvent(fakeApi({}, log), formData);
 
     await expect(actions.save(event)).resolves.toMatchObject({saved: true});
     expect(log.putBodies[0].regulations).toEqual([
@@ -282,7 +290,7 @@ describe('admin regulations save action', () => {
     setRow(formData, 1, {label: '新設の部'});
     // The blank row the page always renders under the others.
     setRow(formData, 2, {label: ''});
-    const event = buildActionEvent(fakeFetch({}, log), formData);
+    const event = buildActionEvent(fakeApi({}, log), formData);
 
     await expect(actions.save(event)).resolves.toMatchObject({saved: true});
     expect(log.putBodies[0].regulations).toEqual([
@@ -306,7 +314,7 @@ describe('admin regulations save action', () => {
     const formData = new FormData();
     setRow(formData, 0, {id: GENERAL.id, label: '一般の部'});
     setRow(formData, 1, {id: STUDENT.id, label: '学生の部', remove: true});
-    const event = buildActionEvent(fakeFetch({}, log), formData);
+    const event = buildActionEvent(fakeApi({}, log), formData);
 
     await expect(actions.save(event)).resolves.toMatchObject({saved: true});
     expect(log.putBodies[0].regulations.map(r => r.label)).toEqual([
@@ -323,7 +331,7 @@ describe('admin regulations save action', () => {
       priorityStartsAt: '2026-04-01T09:00',
       priorityEndsAt: '2026-04-30T09:00',
     });
-    const event = buildActionEvent(fakeFetch({}, log), formData);
+    const event = buildActionEvent(fakeApi({}, log), formData);
 
     await expect(actions.save(event)).resolves.toMatchObject({saved: true});
     expect(log.putBodies[0].regulations[0]).toMatchObject({
@@ -349,7 +357,7 @@ describe('admin regulations save action', () => {
       });
       // A set that all closes is refused, so one regulation stays.
       setRow(formData, 1, {id: GENERAL.id, label: '一般の部'});
-      const event = buildActionEvent(fakeFetch({}, log), formData);
+      const event = buildActionEvent(fakeApi({}, log), formData);
 
       await expect(actions.save(event)).resolves.toMatchObject({saved: true});
       return log.putBodies[0].regulations[0];
@@ -372,7 +380,7 @@ describe('admin regulations save action', () => {
       const log: FetchLog = {putBodies: []};
       const formData = new FormData();
       setRow(formData, 0, {label: '一般の部', closesWithPriority: true});
-      const event = buildActionEvent(fakeFetch({}, log), formData);
+      const event = buildActionEvent(fakeApi({}, log), formData);
 
       await expect(actions.save(event)).resolves.toMatchObject({
         status: 400,
@@ -393,7 +401,7 @@ describe('admin regulations save action', () => {
       label: '一般の部',
       priorityStartsAt: '2026-04-01T09:00',
     });
-    const event = buildActionEvent(fakeFetch({}, log), formData);
+    const event = buildActionEvent(fakeApi({}, log), formData);
 
     await expect(actions.save(event)).resolves.toMatchObject({
       status: 400,
@@ -409,7 +417,7 @@ describe('admin regulations save action', () => {
     const log: FetchLog = {putBodies: []};
     const formData = new FormData();
     setRow(formData, 0, {id: GENERAL.id, label: '一般の部', remove: true});
-    const event = buildActionEvent(fakeFetch({}, log), formData);
+    const event = buildActionEvent(fakeApi({}, log), formData);
 
     await expect(actions.save(event)).resolves.toMatchObject({
       status: 400,
@@ -424,7 +432,7 @@ describe('admin regulations save action', () => {
     const formData = new FormData();
     setRow(formData, 0, {id: GENERAL.id, label: '一般の部'});
     setRow(formData, 1, {label: '', closesWithPriority: true});
-    const event = buildActionEvent(fakeFetch({}, log), formData);
+    const event = buildActionEvent(fakeApi({}, log), formData);
 
     await expect(actions.save(event)).resolves.toMatchObject({
       status: 400,
@@ -437,7 +445,7 @@ describe('admin regulations save action', () => {
     const log: FetchLog = {putBodies: []};
     const formData = new FormData();
     setRow(formData, 0, {id: GENERAL.id, label: ''});
-    const event = buildActionEvent(fakeFetch({}, log), formData);
+    const event = buildActionEvent(fakeApi({}, log), formData);
 
     await expect(actions.save(event)).resolves.toMatchObject({
       status: 400,
@@ -451,7 +459,7 @@ describe('admin regulations save action', () => {
     const formData = new FormData();
     setRow(formData, 0, {id: GENERAL.id, label: '一般の部'});
     const event = buildActionEvent(
-      fakeFetch({putStatus: 409, putError: message}),
+      fakeApi({putStatus: 409, putError: message}),
       formData,
     );
 
@@ -464,7 +472,7 @@ describe('admin regulations save action', () => {
   it('echoes the submitted rows back so a refused save re-renders them', async () => {
     const formData = new FormData();
     setRow(formData, 0, {id: GENERAL.id, label: '書き換えた名前'});
-    const event = buildActionEvent(fakeFetch({putStatus: 409}), formData);
+    const event = buildActionEvent(fakeApi({putStatus: 409}), formData);
 
     await expect(actions.save(event)).resolves.toMatchObject({
       data: {rows: [expect.objectContaining({label: '書き換えた名前'})]},
@@ -486,7 +494,7 @@ describe('admin regulations import action', () => {
   it('pairs sheet rows with stored ones by name and ticks the rest', async () => {
     const log: FetchLog = {putBodies: [], previewBodies: []};
     const event = buildImportEvent(
-      fakeFetch(
+      fakeApi(
         {
           preview: {
             body: {
@@ -560,7 +568,7 @@ describe('admin regulations import action', () => {
       priorityEndsAt: '2026-08-08T01:00:00.000Z',
     };
     const event = buildImportEvent(
-      fakeFetch({
+      fakeApi({
         stored,
         preview: {
           body: {
@@ -594,7 +602,7 @@ describe('admin regulations import action', () => {
   it('does not carry a stored setting onto a row the sheet left without a window', async () => {
     const stored = [{...STUDENT, closesWithPriority: true}, GENERAL];
     const event = buildImportEvent(
-      fakeFetch({
+      fakeApi({
         stored,
         preview: {
           body: {
@@ -624,7 +632,7 @@ describe('admin regulations import action', () => {
   it("surfaces the preview API's message and keeps the stored rows", async () => {
     const message = '2行目: 優先期間は開始と終了の両方を指定してください';
     const event = buildImportEvent(
-      fakeFetch({preview: {status: 400, body: {error: message}}}),
+      fakeApi({preview: {status: 400, body: {error: message}}}),
       'sheet-id',
     );
 
@@ -641,7 +649,7 @@ describe('admin regulations import action', () => {
 
   it('refuses a blank spreadsheet ID without asking the API', async () => {
     const log: FetchLog = {putBodies: [], previewBodies: []};
-    const event = buildImportEvent(fakeFetch({}, log), '  ');
+    const event = buildImportEvent(fakeApi({}, log), '  ');
 
     await expect(actions.import(event)).resolves.toMatchObject({
       status: 400,
@@ -652,7 +660,7 @@ describe('admin regulations import action', () => {
 
   it('sends an expired session to the login page', async () => {
     const event = buildImportEvent(
-      fakeFetch({preview: {status: 401, body: {error: 'unauthorized'}}}),
+      fakeApi({preview: {status: 401, body: {error: 'unauthorized'}}}),
       'sheet-id',
     );
 
@@ -663,7 +671,7 @@ describe('admin regulations import action', () => {
   // them: the preview passes and only the stored read is refused.
   it('sends a session that expired on the stored read to the login page', async () => {
     const event = buildImportEvent(
-      fakeFetch({regulationsStatus: 401}),
+      fakeApi({regulationsStatus: 401}),
       'sheet-id',
     );
 

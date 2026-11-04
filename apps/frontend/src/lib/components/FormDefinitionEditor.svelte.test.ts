@@ -1,6 +1,7 @@
 import {render, screen} from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
+import {jsonResponse} from '../../test-support/json-response';
 import FormDefinitionEditor from './FormDefinitionEditor.svelte';
 
 const TOURNAMENT_ID = '00000000-0000-0000-0000-000000000000';
@@ -12,13 +13,6 @@ const PROPS = {
   tournamentType: 'saikyoi',
   initialYaml: STORED_YAML,
 } as const;
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {'Content-Type': 'application/json'},
-  });
-}
 
 describe('FormDefinitionEditor', () => {
   let fetchMock: ReturnType<typeof vi.fn>;

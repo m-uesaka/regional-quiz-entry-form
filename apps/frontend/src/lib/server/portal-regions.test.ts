@@ -1,14 +1,14 @@
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import type {HttpError} from '@sveltejs/kit';
 import type {PortalTournament} from '@regional-quiz/shared';
+import {fakeFetch} from '../../test-support/fake-fetch';
 import {loadPortalRegions} from './portal-regions';
 
-function fakeFetch(status: number, body: unknown): typeof fetch {
-  return (async () =>
-    new Response(JSON.stringify(body), {
-      status,
-      headers: {'Content-Type': 'application/json'},
-    })) as typeof fetch;
+/** Builds a fake `fetch` answering the portal API as given. */
+function fakeApi(status: number, body: unknown): typeof fetch {
+  return fakeFetch([
+    {method: 'GET', url: '/api/portal/tournaments', status, body},
+  ]);
 }
 
 const TOURNAMENT: PortalTournament = {
@@ -31,7 +31,7 @@ afterEach(() => {
 
 describe('loadPortalRegions', () => {
   it('groups the tournaments by region with their status', async () => {
-    const regions = await loadPortalRegions(fakeFetch(200, [TOURNAMENT]));
+    const regions = await loadPortalRegions(fakeApi(200, [TOURNAMENT]));
 
     expect(regions).toEqual([
       {
@@ -61,7 +61,7 @@ describe('loadPortalRegions', () => {
       .mockImplementation(() => {});
 
     await expect(
-      loadPortalRegions(fakeFetch(500, {error: 'boom'})),
+      loadPortalRegions(fakeApi(500, {error: 'boom'})),
     ).rejects.toMatchObject({status: 502} satisfies Partial<HttpError>);
     expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('500'));
   });

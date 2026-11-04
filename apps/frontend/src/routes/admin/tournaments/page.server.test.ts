@@ -1,6 +1,8 @@
 import {describe, expect, it} from 'vitest';
-import type {Cookies, HttpError} from '@sveltejs/kit';
+import type {HttpError} from '@sveltejs/kit';
 import type {Region, Tournament} from '@regional-quiz/shared';
+import {fakeCookies} from '../../../test-support/fake-cookies';
+import {fakeFetch} from '../../../test-support/fake-fetch';
 import {load} from './+page.server';
 
 const TOKYO: Region = {
@@ -39,13 +41,6 @@ const TOURNAMENTS = [
   tournament('00000000-0000-0000-0000-000000000003', TOKYO.id, 'saikyoi'),
 ];
 
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {'Content-Type': 'application/json'},
-  });
-}
-
 /** What `load` returns (its generated type also admits `void`). */
 interface LoadData {
   tournaments: Array<Tournament & {regionName: string}>;
@@ -58,19 +53,19 @@ function buildLoadEvent(
 ): Parameters<typeof load>[0] {
   return {
     fetch: fetchImpl,
-    cookies: {delete: () => {}} as unknown as Cookies,
+    cookies: fakeCookies(),
     url: new URL(`http://localhost/admin/tournaments${search}`),
   } as Parameters<typeof load>[0];
 }
 
-const fakeFetch = (async (input: RequestInfo | URL) =>
-  String(input).includes('/regions')
-    ? jsonResponse([TOKYO, AICHI])
-    : jsonResponse(TOURNAMENTS)) as typeof fetch;
+const api = fakeFetch([
+  {method: 'GET', url: /^\/api\/regions$/, body: [TOKYO, AICHI]},
+  {method: 'GET', url: /^\/api\/tournaments$/, body: TOURNAMENTS},
+]);
 
 describe('admin tournament list +page.server load', () => {
   it('lists every tournament with its region, in the order the API set', async () => {
-    const data = (await load(buildLoadEvent(fakeFetch))) as LoadData;
+    const data = (await load(buildLoadEvent(api))) as LoadData;
 
     expect(
       data.tournaments.map(t => `${t.regionName} ${t.type} ${t.id.slice(-1)}`),
@@ -79,16 +74,21 @@ describe('admin tournament list +page.server load', () => {
   });
 
   it('says a delete just happened when the edit screen sent it here', async () => {
-    const data = (await load(
-      buildLoadEvent(fakeFetch, '?deleted'),
-    )) as LoadData;
+    const data = (await load(buildLoadEvent(api, '?deleted'))) as LoadData;
 
     expect(data.deleted).toBe(true);
   });
 
   it('reports a failed read as a bad gateway', async () => {
-    const failing = (async () =>
-      jsonResponse({error: 'nope'}, 500)) as unknown as typeof fetch;
+    const failing = fakeFetch([
+      {method: 'GET', url: '/api/regions', body: [TOKYO, AICHI]},
+      {
+        method: 'GET',
+        url: '/api/tournaments',
+        status: 500,
+        body: {error: 'nope'},
+      },
+    ]);
 
     await expect(load(buildLoadEvent(failing))).rejects.toMatchObject({
       status: 502,
