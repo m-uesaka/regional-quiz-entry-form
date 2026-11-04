@@ -84,8 +84,7 @@ describe.skipIf(!(await isDbReachable()))(
       expect(job).toEqual({
         ok: true,
         value: {
-          id: jobId,
-          tournamentId,
+          jobId,
           subject: CONTENT.subject,
           total: 7,
           sent: 0,

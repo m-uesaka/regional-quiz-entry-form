@@ -3,7 +3,6 @@ import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
 import {
   StaffMailInputSchema,
-  type StaffMailJob,
   type StaffMailResult,
 } from '@regional-quiz/shared';
 import type {Bindings, StaffEnv} from '../types/env';
@@ -256,15 +255,6 @@ export const staffMailRoute = new Hono<StaffEnv>()
         return c.json({error: 'mail job not found'}, 404);
       }
 
-      const response: StaffMailJob = {
-        jobId: result.value.id,
-        subject: result.value.subject,
-        total: result.value.total,
-        sent: result.value.sent,
-        failed: result.value.failed,
-        createdAt: result.value.createdAt,
-        updatedAt: result.value.updatedAt,
-      };
-      return c.json(response);
+      return c.json(result.value);
     },
   );
