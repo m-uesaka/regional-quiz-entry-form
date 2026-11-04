@@ -1,6 +1,7 @@
 import {
   COMMON_ERROR_CODES,
   ENTRY_ERROR_CODES,
+  entryAvailability,
   isEditableEntryStatus,
   NOT_EDITABLE_ENTRY_CODES,
   isEntryErrorCode,
@@ -359,23 +360,26 @@ export async function checkEntrySubmission(
   }
 
   const now = new Date();
-  if (
-    !isWithinEntryPeriod(
-      tournament.entry_opens_at,
-      tournament.entry_closes_at,
-      now,
-    )
-  ) {
+  // The same reading as the gate in front of the route. A pause by staff
+  // (0039) stops only new entries: edits, cancellations and confirmations of
+  // entries already made go on.
+  const availability = entryAvailability(
+    {
+      entryOpensAt: tournament.entry_opens_at,
+      entryClosesAt: tournament.entry_closes_at,
+      entriesPaused: tournament.entries_paused,
+    },
+    now,
+  );
+  if (availability === 'paused') {
+    return {ok: false, status: 403, error: ENTRY_ERROR_CODES.ENTRIES_PAUSED};
+  }
+  if (availability !== 'open') {
     return {
       ok: false,
       status: 403,
       error: ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED,
     };
-  }
-  // Paused by staff (0039). Only new entries stop: edits, cancellations and
-  // confirmations of entries already made go on.
-  if (tournament.entries_paused) {
-    return {ok: false, status: 403, error: ENTRY_ERROR_CODES.ENTRIES_PAUSED};
   }
 
   const regulations = tournament.regulations.map(regulation => ({
