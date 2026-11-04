@@ -27,7 +27,7 @@ import {
 } from './db';
 import {sendEntryNoticeEmail, type EntryNoticeReason} from './entry-notice';
 import {sendVerificationEmail} from './entry-verification';
-import type {LibFailure} from './errors';
+import type {InternalFailure, LibFailure} from './errors';
 import {validateCustomFieldValues} from './form-field-defs';
 import {hashPassword, verifyPassword} from './password';
 import {
@@ -672,6 +672,10 @@ async function withdrawnTournamentNames(
  * another one, writes the entry -- which is what the region's dual-entry
  * rule refuses, by trigger -- and its regulations and mails the verification
  * link.
+ *
+ * Each of those steps is a stage function below, run in that order, and the
+ * first one to refuse ends the submission. A stage that fails after the
+ * entry was written rolls it back itself (`rollbackEntry()`).
  * @param env The Worker bindings.
  * @param tournament The checked tournament.
  * @param participantId The participant being entered.
@@ -697,22 +701,135 @@ async function enterTournament(
   const db = createDbClient(env);
   const tournamentId = tournament.id;
 
+  const lapsed = await lapseExpiredPendingEntries(db, participantId);
+  if (!lapsed.ok) {
+    return lapsed;
+  }
+
+  const reusable = await findReusableEntry(db, participantId, tournamentId);
+  if (!reusable.ok) {
+    return reusable;
+  }
+  const {existingEntry} = reusable;
+
+  // Taking part in another region is what stops an entry here, not having
+  // registered in one: a participant who cancelled there in time can enter
+  // here (#236), and the account follows. Only a verified participant gets
+  // here unsettled, once proved by password or session, so a stranger's
+  // submission can't move an account; an unverified account's region was
+  // settled when it was made or taken over, and claiming it again on a stale
+  // read could undo a takeover. An entry that then fails leaves the account
+  // moved, which is harmless: with nothing holding it, it can move again.
+  if (!unverifiedAccount) {
+    const claimed = await claimTournamentRegion(
+      db,
+      participantId,
+      tournament.region_id,
+    );
+    if (!claimed.ok) {
+      return claimed;
+    }
+  }
+
+  const written = await writeEntry(
+    db,
+    participantId,
+    tournamentId,
+    input,
+    existingEntry,
+  );
+  if (!written.ok) {
+    return written;
+  }
+  const {entryId} = written;
+
+  const stored = await storeEntryRegulations(
+    db,
+    entryId,
+    tournamentId,
+    input.regulationIds,
+    existingEntry,
+  );
+  if (!stored.ok) {
+    return stored;
+  }
+
+  if (
+    unverifiedAccount &&
+    !(await isStillUnverifiedAccountOf(
+      db,
+      participantId,
+      unverifiedAccount.passwordHash,
+    ))
+  ) {
+    await rollbackEntry(db, entryId, tournamentId, existingEntry);
+    return {
+      ok: false,
+      status: 409,
+      error: ENTRY_ERROR_CODES.SUPERSEDED_BY_LATER_SUBMISSION,
+    };
+  }
+
+  const mailed = await mailVerificationLink(
+    env,
+    db,
+    entryId,
+    email,
+    tournament,
+    existingEntry,
+    unverifiedAccount?.withdrawnTournaments,
+  );
+  if (!mailed.ok) {
+    return mailed;
+  }
+  return {ok: true, entry: {id: entryId}};
+}
+
+/**
+ * The first stage of `enterTournament()`: cancels the participant's entries
+ * whose verification link expired unused (`lapse_expired_pending_entries()`).
+ * @param db The Supabase client to write with.
+ * @param participantId The participant being entered.
+ */
+async function lapseExpiredPendingEntries(
+  db: DbClient,
+  participantId: string,
+): Promise<{ok: true} | InternalFailure> {
   // An entry whose verification link expired unused can never be confirmed,
-  // yet it would still refuse a re-entry below as `already entered` and, in
-  // a region without dual entry, hold the region's other tournament too
-  // (#172). Cancelling those first lets the check below and the seat trigger
-  // treat them like any cancellation: this tournament's row is reused with a
-  // fresh link, and the other tournament's no longer counts. Entries whose
-  // link is still valid are left alone. Done here rather than by a scheduled
-  // sweep, since only a new entry from the same participant is ever held up
-  // by one.
+  // yet it would still refuse a re-entry in `findReusableEntry()` as
+  // `already entered` and, in a region without dual entry, hold the region's
+  // other tournament too (#172). Cancelling those first lets that check and
+  // the seat trigger treat them like any cancellation: this tournament's row
+  // is reused with a fresh link, and the other tournament's no longer counts.
+  // Entries whose link is still valid are left alone. Done here rather than
+  // by a scheduled sweep, since only a new entry from the same participant is
+  // ever held up by one.
   const {error: lapseError} = await db.rpc('lapse_expired_pending_entries', {
     p_participant_id: participantId,
   });
   if (lapseError) {
     return {ok: false, status: 500, error: lapseError.message};
   }
+  return {ok: true};
+}
 
+/**
+ * The stage of `enterTournament()` that looks up the participant's existing
+ * entry for the tournament, refusing the submission unless there is none or
+ * it is cancelled.
+ * @param db The Supabase client to read with.
+ * @param participantId The participant being entered.
+ * @param tournamentId The tournament being entered.
+ * @return The cancelled entry to reuse, as a snapshot `rollbackEntry()` can
+ *     restore, or `null` when a fresh entry is to be inserted.
+ */
+async function findReusableEntry(
+  db: DbClient,
+  participantId: string,
+  tournamentId: string,
+): Promise<
+  {ok: true; existingEntry: ExistingEntryRow | null} | LibFailure<409>
+> {
   // A participant who cancelled may enter the same tournament again with the
   // same credentials. The unique (participant_id, tournament_id) constraint
   // means that has to reuse the cancelled row instead of inserting a second
@@ -730,42 +847,71 @@ async function enterTournament(
     return {
       ok: false,
       status: 409,
-      // Still pending after the lapse above means its link is still valid.
+      // Still pending after `lapseExpiredPendingEntries()` means its link is
+      // still valid.
       error:
         existingEntry.status === 'pending_verification'
           ? ENTRY_ERROR_CODES.ENTRY_PENDING_VERIFICATION
           : ENTRY_ERROR_CODES.ALREADY_ENTERED,
     };
   }
+  return {ok: true, existingEntry};
+}
 
-  // Taking part in another region is what stops an entry here, not having
-  // registered in one: a participant who cancelled there in time can enter
-  // here (#236), and the account follows. Only a verified participant gets
-  // here unsettled, once proved by password or session, so a stranger's
-  // submission can't move an account; an unverified account's region was
-  // settled when it was made or taken over, and claiming it again on a stale
-  // read could undo a takeover. An entry that then fails leaves the account
-  // moved, which is harmless: with nothing holding it, it can move again.
-  if (!unverifiedAccount) {
-    const {data: claimedRegion, error: claimError} = await db.rpc(
-      'claim_participant_region',
-      {
-        p_participant_id: participantId,
-        p_region_id: tournament.region_id,
-      },
-    );
-    if (claimError) {
-      return {ok: false, status: 500, error: claimError.message};
-    }
-    if (!claimedRegion) {
-      return {
-        ok: false,
-        status: 409,
-        error: ENTRY_ERROR_CODES.ALREADY_REGISTERED_IN_ANOTHER_REGION,
-      };
-    }
+/**
+ * The stage of `enterTournament()` that moves a verified participant to the
+ * tournament's region (`claim_participant_region()`), refusing the
+ * submission when they are taking part in another one. Skipped for an
+ * unverified account (see the call site).
+ * @param db The Supabase client to write with.
+ * @param participantId The participant being entered.
+ * @param regionId The tournament's region.
+ */
+async function claimTournamentRegion(
+  db: DbClient,
+  participantId: string,
+  regionId: string,
+): Promise<{ok: true} | LibFailure<409>> {
+  const {data: claimedRegion, error: claimError} = await db.rpc(
+    'claim_participant_region',
+    {
+      p_participant_id: participantId,
+      p_region_id: regionId,
+    },
+  );
+  if (claimError) {
+    return {ok: false, status: 500, error: claimError.message};
   }
+  if (!claimedRegion) {
+    return {
+      ok: false,
+      status: 409,
+      error: ENTRY_ERROR_CODES.ALREADY_REGISTERED_IN_ANOTHER_REGION,
+    };
+  }
+  return {ok: true};
+}
 
+/**
+ * The stage of `enterTournament()` that writes the `entries` row: a fresh
+ * insert, or `reenter_cancelled_entry()` over the participant's own
+ * cancelled row. This is the write the region's dual-entry rule refuses, by
+ * trigger. Nothing is left behind when it fails, so there is nothing to roll
+ * back.
+ * @param db The Supabase client to write with.
+ * @param participantId The participant being entered.
+ * @param tournamentId The tournament being entered.
+ * @param input The entry itself.
+ * @param existingEntry The cancelled entry to reuse, from
+ *     `findReusableEntry()`, or `null` to insert a fresh one.
+ */
+async function writeEntry(
+  db: DbClient,
+  participantId: string,
+  tournamentId: string,
+  input: EntrySessionInput,
+  existingEntry: ExistingEntryRow | null,
+): Promise<{ok: true; entryId: string} | LibFailure<409>> {
   const entryValues = {
     participant_id: participantId,
     tournament_id: tournamentId,
@@ -839,7 +985,26 @@ async function enterTournament(
       error: error?.message ?? 'failed to create entry',
     };
   }
+  return {ok: true, entryId: entry.id};
+}
 
+/**
+ * The stage of `enterTournament()` that writes the regulations the new entry
+ * claims, rolling the entry back when that fails.
+ * @param db The Supabase client to write with.
+ * @param entryId The entry `writeEntry()` wrote.
+ * @param tournamentId The entry's tournament.
+ * @param regulationIds The regulations the entry claims.
+ * @param existingEntry The cancelled entry the write reused, or `null`, for
+ *     `rollbackEntry()`.
+ */
+async function storeEntryRegulations(
+  db: DbClient,
+  entryId: string,
+  tournamentId: string,
+  regulationIds: readonly string[],
+  existingEntry: ExistingEntryRow | null,
+): Promise<{ok: true} | LibFailure<409>> {
   // The selection is written after the entry because it references it. The
   // composite foreign keys behind `entry_regulations` are what refuse a
   // regulation belonging to another tournament, so a submission that got
@@ -849,17 +1014,17 @@ async function enterTournament(
   // one claiming nothing.
   const {error: regulationsError} = await replaceEntryRegulations(
     db,
-    entry.id,
+    entryId,
     tournamentId,
-    input.regulationIds,
+    regulationIds,
   );
   if (regulationsError) {
     console.error('failed to store the entry regulations', {
-      entryId: entry.id,
+      entryId,
       code: regulationsError.code,
       error: regulationsError.message,
     });
-    await rollbackEntry(db, entry.id, tournamentId, existingEntry);
+    await rollbackEntry(db, entryId, tournamentId, existingEntry);
     // A regulation dropped by a concurrent `sync_regulations()` is the only
     // failure of that write the participant can act on, so it alone earns
     // `REGULATION_NO_LONGER_AVAILABLE`. Anything else is a server fault, and
@@ -873,27 +1038,35 @@ async function enterTournament(
         }
       : {ok: false, status: 500, error: regulationsError.message};
   }
+  return {ok: true};
+}
 
-  if (
-    unverifiedAccount &&
-    !(await isStillUnverifiedAccountOf(
-      db,
-      participantId,
-      unverifiedAccount.passwordHash,
-    ))
-  ) {
-    await rollbackEntry(db, entry.id, tournamentId, existingEntry);
-    return {
-      ok: false,
-      status: 409,
-      error: ENTRY_ERROR_CODES.SUPERSEDED_BY_LATER_SUBMISSION,
-    };
-  }
-
+/**
+ * The last stage of `enterTournament()`: mails the verification link of the
+ * entry just written, rolling the entry back when the mail can't be sent.
+ * @param env The Worker bindings.
+ * @param db The Supabase client to roll back with.
+ * @param entryId The entry `writeEntry()` wrote.
+ * @param email The participant's address, where the link is sent.
+ * @param tournament The checked tournament.
+ * @param existingEntry The cancelled entry the write reused, or `null`, for
+ *     `rollbackEntry()`.
+ * @param withdrawnTournaments The tournaments whose pending entries a
+ *     takeover withdrew (see `withdrawnTournamentNames()`), if any.
+ */
+async function mailVerificationLink(
+  env: Bindings,
+  db: DbClient,
+  entryId: string,
+  email: string,
+  tournament: EntryTournamentRow,
+  existingEntry: ExistingEntryRow | null,
+  withdrawnTournaments: string[] | undefined,
+): Promise<{ok: true} | InternalFailure> {
   try {
     await sendVerificationEmail(
       env,
-      entry.id,
+      entryId,
       email,
       tournamentDisplayName(
         tournament.name,
@@ -901,13 +1074,13 @@ async function enterTournament(
         tournament.type,
       ),
       tournament.capacity !== null,
-      unverifiedAccount?.withdrawnTournaments,
+      withdrawnTournaments,
     );
   } catch (mailError) {
     // Rolled back because the participant never received a usable
     // verification link, so the entry they can't confirm must not stand in
     // the way of them trying again.
-    await rollbackEntry(db, entry.id, tournamentId, existingEntry);
+    await rollbackEntry(db, entryId, tournament.id, existingEntry);
     const message =
       mailError instanceof Error ? mailError.message : 'unknown error';
     return {
@@ -916,7 +1089,7 @@ async function enterTournament(
       error: `failed to send verification email: ${message}`,
     };
   }
-  return {ok: true, entry: {id: entry.id}};
+  return {ok: true};
 }
 
 /**
