@@ -198,7 +198,7 @@ if ('yaml' in body) {
 
 Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts` にまとめています(#199)。ルートは `mapPgError(error, table, context)` に「このルートで名前を付けられるコード → `{status, error}`」の表を渡し、表に無いコードは `internalError()` でログに送って定型文の 500 にします。Postgres の元のメッセージ(テーブル名・制約名を含む)は応答に載せません。
 
-同じ種類の違反は、どのルートでも同じステータスで返します。
+`mapPgError()` を使う管理 API(`routes/tournaments.ts`・`routes/regions.ts`・`routes/staff-accounts.ts`)では、同じ種類の違反は、どのルートでも同じステータスで返します。
 
 | コード | 意味 | ステータス |
 | --- | --- | --- |
@@ -208,6 +208,11 @@ Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts
 | `PGRST116` | `.single()` の更新対象が無い | `404` |
 
 この対応は `PgErrorTable` の型で固定しています。表のこれらのコードに別のステータスを書くとコンパイルエラーになります(`23503` だけは文によって `400` か `409` のどちらか)。
+
+参加者のエントリー送信(`apps/backend/src/lib/entries.ts`)は `mapPgError()` を使わず、同時操作による競合を参加者が対処できる 409 として返すため、この表とは次の点で異なります。
+
+- 再エントリー時に `.single()` が `PGRST116` を返した場合(取り消し済みの行を同時の送信が先に取得・削除した)は、`404` ではなく `409` の `concurrent submission` を返します
+- エントリーの保存後にレギュレーションの選択を書き込む際の `23503` は、同時の `sync_regulations()` によるレギュレーションの削除を意味するため、`400` ではなく `409` の `regulation no longer available` を返します(エントリーはロールバックします)
 
 `P0002` 以降の独自コードは Postgres 関数ごとに意味が違う(例: `P0003` は無効なトークン・未知のレギュレーション・大会 ID の不一致のいずれか)ため、`pg-errors.ts` では意味ごとに別名の定数(`INVALID_TOKEN_SQLSTATE`、`UNKNOWN_REGULATION_SQLSTATE` など)を定義し、呼び出した関数に対応する定数とだけ比べます。
 
