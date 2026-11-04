@@ -6,6 +6,12 @@ import {
   REGION_DUAL_ENTRY_SQLSTATE,
   STAFF_ACCOUNT_DISABLED_SQLSTATE,
 } from '../lib/pg-errors';
+import {
+  CUSTOM_FIELD_VALUE_MAX_LENGTH,
+  CUSTOM_FIELD_VALUES_TOTAL_MAX_LENGTH,
+  ENTRY_FREE_TEXT_MAX_LENGTH,
+  ENTRY_NAME_MAX_LENGTH,
+} from '@regional-quiz/shared';
 import {DB_URL, isDbReachable} from '../test-support/db';
 
 // Probed once for the whole file rather than per `describe`, so a run without
@@ -1363,7 +1369,9 @@ describe.skipIf(!dbReachable)(
 
 // The database's copy of the entry length limits (migration 0021). The Zod
 // schemas in `packages/shared` are what the API enforces; this check is the
-// backstop for rows written with plain SQL.
+// backstop for rows written with plain SQL. The migration spells the numbers
+// out on purpose; the tests below use the shared constants, so the two copies
+// failing to agree is what they catch.
 describe.skipIf(!dbReachable)(
   'entries_text_lengths (local Supabase integration)',
   () => {
@@ -1439,6 +1447,28 @@ describe.skipIf(!dbReachable)(
       }
     }
 
+    /**
+     * Custom field answers that add up to `total` characters, none of them
+     * longer than one answer may be: a `note` and an `allergies` checkbox
+     * answer taking the rest.
+     * @param total The combined length wanted.
+     */
+    function customFieldValuesOfLength(
+      total: number,
+    ): Record<string, string | string[]> {
+      const allergies: string[] = [];
+      for (
+        let left = total - CUSTOM_FIELD_VALUE_MAX_LENGTH;
+        left > 0;
+        left -= CUSTOM_FIELD_VALUE_MAX_LENGTH
+      ) {
+        allergies.push(
+          'あ'.repeat(Math.min(left, CUSTOM_FIELD_VALUE_MAX_LENGTH)),
+        );
+      }
+      return {note: 'あ'.repeat(CUSTOM_FIELD_VALUE_MAX_LENGTH), allergies};
+    }
+
     beforeEach(cleanup);
 
     afterAll(async () => {
@@ -1452,13 +1482,10 @@ describe.skipIf(!dbReachable)(
       const errno = await insertError(
         {
           ...entry,
-          display_name: 'あ'.repeat(100),
-          free_text: 'あ'.repeat(2000),
+          display_name: 'あ'.repeat(ENTRY_NAME_MAX_LENGTH),
+          free_text: 'あ'.repeat(ENTRY_FREE_TEXT_MAX_LENGTH),
         },
-        {
-          note: 'あ'.repeat(2000),
-          allergies: Array.from({length: 4}, () => 'あ'.repeat(2000)),
-        },
+        customFieldValuesOfLength(CUSTOM_FIELD_VALUES_TOTAL_MAX_LENGTH),
       );
 
       expect(errno).toBeUndefined();
@@ -1469,7 +1496,7 @@ describe.skipIf(!dbReachable)(
 
       const errno = await insertError({
         ...entry,
-        display_name: 'あ'.repeat(101),
+        display_name: 'あ'.repeat(ENTRY_NAME_MAX_LENGTH + 1),
       });
 
       // check_violation
@@ -1479,10 +1506,10 @@ describe.skipIf(!dbReachable)(
     it('entries rejects custom field answers over the combined maximum', async () => {
       const entry = await seedEntry();
 
-      const errno = await insertError(entry, {
-        note: 'あ'.repeat(2000),
-        allergies: Array.from({length: 5}, () => 'あ'.repeat(1601)),
-      });
+      const errno = await insertError(
+        entry,
+        customFieldValuesOfLength(CUSTOM_FIELD_VALUES_TOTAL_MAX_LENGTH + 1),
+      );
 
       expect(errno).toBe('23514');
     });
