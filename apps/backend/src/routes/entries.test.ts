@@ -158,7 +158,7 @@ const PASSWORD_CHANGED_AT = '2026-10-01T00:00:00.000Z';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** The cancelled entry a re-entry reuses, as `enterTournament()` reads it. */
+/** The cancelled entry a re-entry reuses, as `findReusableEntry()` reads it. */
 const CANCELLED_ENTRY = {
   id: ENTRY_ID,
   name: '以前の氏名',

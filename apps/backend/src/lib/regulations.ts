@@ -124,7 +124,7 @@ export function regulationSyncFailure(error: {
     // The final delete in `sync_regulations()` does reach this. The in-use
     // check ahead of it doesn't rule it out: an entry's regulations are
     // written to `entry_regulations` by a statement of their own
-    // (`replaceEntryRegulations()` in `lib/entries.ts`), and that table has
+    // (`replaceEntryRegulations()` in `lib/entry-submission.ts`), and that table has
     // no foreign key to `tournaments`, so the insert takes no lock on the
     // tournament row the function holds `for update`. One that commits
     // between the check and the delete fails the delete here instead -- the
