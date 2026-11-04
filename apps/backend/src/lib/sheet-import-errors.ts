@@ -1,4 +1,4 @@
-import {SheetFetchError} from './sheet-to-form-definition';
+import {SheetFetchError} from './google-sheets';
 
 /** How a failed sheet import is answered. */
 export interface SheetImportFailure {
@@ -36,9 +36,9 @@ export function classifySheetImportError(e: unknown): SheetImportFailure {
     // ID or an inaccessible sheet — a caller-input-shaped failure.
     return {status: 400, error: e.message};
   }
-  // A ZodError (malformed row data) or a plain Error from the converters
-  // (unknown type label, duplicate options, an unreadable date, ...) is
-  // also caller-input-shaped, not a server fault.
+  // The converters' own errors (a `FormSheetError`, or a regulation row
+  // that can't be read) are staff-facing Japanese naming the sheet row, and
+  // caller-input-shaped rather than a server fault.
   return {
     status: 400,
     error: e instanceof Error ? e.message : 'invalid sheet data',
