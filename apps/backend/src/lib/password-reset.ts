@@ -143,27 +143,15 @@ export async function requestPasswordReset(
 
 /**
  * Sets a new password for the participant a reset token was issued for and
- * burns the token.
+ * burns the token, along with every other one outstanding for the
+ * participant. The token check, the update and the locking are
+ * `confirmTokenPasswordReset()`'s.
  *
- * The token has to be unused and unexpired; every other reset link
- * outstanding for the same participant is burnt along with it.
- *
- * The token check, the password update and that burning all happen inside
- * the `reset_participant_password` Postgres function, so they commit or roll
- * back together: a failure to burn the remaining links can no longer leave
- * the new password in place while an older link stays usable. That function
- * also serializes on the participant, so two confirmations presenting two
- * different links for the same participant are applied one after the other
- * and the second is refused as already used, rather than racing (see the
- * migrations for details).
- *
- * The same statement stamps `participants.password_changed_at`, which is what
- * makes a reset cut the participant's existing sessions: they are stateless
- * week-long JWTs, so `requireParticipant()` checks the value each one carries
- * against that column rather than trusting the signature alone.
- *
- * The work itself, shared with the staff flow, is
- * `confirmTokenPasswordReset()`.
+ * What is particular to participants: `reset_participant_password` also
+ * stamps `participants.password_changed_at`, which is what makes a reset cut
+ * the participant's existing sessions. They are stateless week-long JWTs, so
+ * `requireParticipant()` checks the value each one carries against that
+ * column rather than trusting the signature alone.
  * @param env The Worker bindings.
  * @param input The validated raw token and the new password.
  */

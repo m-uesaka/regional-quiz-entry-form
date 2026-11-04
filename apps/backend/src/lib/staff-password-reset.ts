@@ -48,8 +48,6 @@ export type StaffPasswordLinkKind = 'issued' | 'requested';
 export type StaffPasswordLinkResult =
   {ok: true} | {ok: false; disabled: boolean; error: string};
 
-export type StaffPasswordResetResult = TokenPasswordResetResult;
-
 /**
  * Names the account a setup mail is for. One address may hold a 最強位 and a
  * 新人王 account at once (#166), so 「スタッフアカウント」 alone wouldn't say
@@ -283,20 +281,15 @@ export async function requestStaffPasswordReset(
 /**
  * Sets the password a staff member chose from their invite (or reset) link
  * and burns the link, along with every other one outstanding for the same
- * account.
- *
- * The token check, the password update and that burning all happen inside
- * `reset_staff_password`, so they commit or roll back together and two links
- * for the same account can't be redeemed at once; see the migration for the
- * locking order. The work itself, shared with the participant flow, is
- * `confirmTokenPasswordReset()`.
+ * account. The token check, the update and the locking are
+ * `confirmTokenPasswordReset()`'s.
  * @param env The Worker bindings.
  * @param input The validated raw token and the password to set.
  */
 export async function confirmStaffPasswordReset(
   env: Bindings,
   input: StaffPasswordResetConfirmInput,
-): Promise<StaffPasswordResetResult> {
+): Promise<TokenPasswordResetResult> {
   return confirmTokenPasswordReset(
     env,
     {tokenTable: 'staff_password_reset_tokens', rpc: 'reset_staff_password'},

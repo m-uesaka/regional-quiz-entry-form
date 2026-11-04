@@ -61,17 +61,26 @@ for (const target of TARGETS) {
       }) as unknown as typeof fetch;
     }
 
-    /** A response the test expects never to be asked for. */
+    let unexpectedCalls: number;
+
+    /**
+     * The response to a request the test expects never to be sent. Counted
+     * rather than thrown: supabase-js turns a throwing `fetch` into an error
+     * result, which the code under test would handle like any other.
+     */
     function unexpected(): Response {
-      throw new Error('unexpected request');
+      unexpectedCalls++;
+      return Response.json(POSTGREST_ERROR, {status: 500});
     }
 
     beforeEach(() => {
       requests = [];
+      unexpectedCalls = 0;
     });
 
     afterEach(() => {
       globalThis.fetch = originalFetch;
+      expect(unexpectedCalls).toBe(0);
     });
 
     it('reads the live token from its own table before anything else', async () => {
