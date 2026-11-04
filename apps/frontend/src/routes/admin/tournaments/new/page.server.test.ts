@@ -180,7 +180,7 @@ describe('admin tournament create action', () => {
 
   it('surfaces a duplicate tournament, which the API answers with 409', async () => {
     const event = buildActionEvent(
-      fakeFetch({
+      fakeApi({
         status: 409,
         error: 'この地域には同じ種別の大会がすでにあります',
       }),
