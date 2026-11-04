@@ -6,16 +6,14 @@
   import {toTournamentFormValues} from '$lib/tournament-form';
   import {promotionNotice} from '$lib/waitlist-promotion';
   import type {
-    Tournament,
     Region,
+    TournamentDetail,
     WaitlistPromotion,
   } from '@regional-quiz/shared';
   import type {TournamentFormValues} from '$lib/types/tournament-form';
 
-  interface Props {
-    tournament: Tournament;
-    /** The 大会名 as staff typed it, or null when it was left blank. */
-    customName: string | null;
+  // `tournament` and `customName` as `GET /api/tournaments/:id` answers them.
+  interface Props extends Pick<TournamentDetail, 'tournament' | 'customName'> {
     /** The tournament's stored form definition, written out as YAML. */
     formDefinitionYaml: string;
     /** Passed straight through to the form's region select. */

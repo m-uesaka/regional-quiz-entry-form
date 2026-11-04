@@ -9,14 +9,18 @@ import {
 } from 'bun:test';
 import {SQL} from 'bun';
 import {sign} from 'hono/jwt';
-import type {Bindings} from '../types/env';
 import {app} from '../index';
-import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {testBindings} from '../test-support/bindings';
 import {
   staffSessionAwareFetch,
   TEST_SESSIONS_VALID_FROM_MS,
 } from '../test-support/staff-session';
-import {DB_URL, isDbReachable} from '../test-support/db';
+import {
+  DB_URL,
+  isDbReachable,
+  SUPABASE_SECRET_KEY,
+  SUPABASE_URL,
+} from '../test-support/db';
 
 // Every staff guard checks the session against
 // `staff_accounts.sessions_valid_from` before the handler runs; answer that
@@ -31,28 +35,13 @@ afterEach(() => {
   globalThis.fetch = fetchWithoutSessionStub;
 });
 
-// Local Supabase stack (`supabase start`), same convention as
-// `routes/tournaments.test.ts`. Skipped automatically when it isn't
-// reachable locally; see `test-support/db.ts`.
-const SUPABASE_URL = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
-// Publicly documented local-dev demo key for Supabase CLI's default stack
-// (fixed `super-secret-jwt-token-with-at-least-32-characters-long` JWT
-// secret) — not a real credential, safe to commit.
-const SUPABASE_SECRET_KEY =
-  process.env.SUPABASE_SECRET_KEY ??
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
 const SESSION_SECRET = 'test-session-secret';
 
-const env: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
+const env = testBindings({
   SUPABASE_URL,
   SUPABASE_SECRET_KEY,
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL: 'https://entry.example.com',
   SESSION_SECRET,
-};
+});
 
 async function generalStaffCookie(): Promise<string> {
   const token = await sign(

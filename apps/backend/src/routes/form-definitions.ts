@@ -1,6 +1,5 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {z} from 'zod';
 import {
   FormDefinitionUploadSchema,
   parseFormDefinitionYaml,
@@ -19,8 +18,7 @@ import {
   TournamentSlugMismatchError,
 } from '../lib/form-definitions';
 import {fetchFormFieldDefs} from '../lib/form-field-defs';
-
-const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
+import {TournamentIdParamSchema} from './params';
 
 // The staff-only upload gets `requireGeneralStaff()` attached per-route
 // rather than through `.use('*', ...)`, because the read below is public

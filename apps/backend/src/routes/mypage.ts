@@ -1,6 +1,5 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {z} from 'zod';
 import {
   COMMON_ERROR_CODES,
   EntryEditInputSchema,
@@ -19,8 +18,7 @@ import {
   ENTRY_REGULATIONS_COLUMNS,
   entryRegulationLabels,
 } from '../lib/entry-regulations';
-
-const EntryIdParamSchema = z.object({entryId: z.string().uuid()});
+import {EntryIdParamSchema} from './params';
 
 const LIST_COLUMNS = `
   id, tournament_id, status, waitlist_position,

@@ -1,6 +1,5 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {z} from 'zod';
 import {
   RegulationSchema,
   RegulationSyncInputSchema,
@@ -21,8 +20,7 @@ import {
   UnknownRegulationError,
 } from '../lib/regulations';
 import {TournamentNotFoundError} from '../lib/tournament-errors';
-
-const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
+import {TournamentIdParamSchema} from './params';
 
 const REGULATION_COLUMNS = `
   id, tournament_id, label, priority_starts_at, priority_ends_at,

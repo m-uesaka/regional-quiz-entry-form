@@ -7,7 +7,7 @@ import {verificationMailSubject} from '../lib/entry-verification';
 import {hashPassword, verifyPassword} from '../lib/password';
 import {legacyHashPassword} from '../test-support/password';
 import {
-  PERMISSIVE_PLATFORM_BINDINGS,
+  testBindings,
   refusingRateLimiter,
   TURNSTILE_TEST_TOKEN,
   turnstileAwareFetch,
@@ -22,16 +22,7 @@ import {
 // These requests are rejected by `zValidator()` or by the challenge in front
 // of it before any database call, so they run unconditionally (including
 // CI).
-const env: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
-  SUPABASE_URL: 'https://example.supabase.co',
-  SUPABASE_SECRET_KEY: 'dummy-service-role-key',
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL: 'https://entry.example.com',
-  SESSION_SECRET: 'test-session-secret',
-};
+const env = testBindings();
 
 const TOURNAMENT_PATH =
   '/api/tournaments/22222222-2222-2222-2222-222222222222/entries';

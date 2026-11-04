@@ -1,6 +1,5 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {z} from 'zod';
 import {
   EntryInputSchema,
   EntrySessionInputSchema,
@@ -16,8 +15,7 @@ import {respondFailure} from '../lib/errors';
 import {requireParticipant} from '../middleware/participant-auth';
 import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
 import {requireTurnstile} from '../middleware/turnstile';
-
-const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
+import {TournamentIdParamSchema} from './params';
 
 // Matches the period both mail-trigger limiters count over
 // (`wrangler.toml`).

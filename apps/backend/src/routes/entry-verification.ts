@@ -1,6 +1,9 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {EntryVerificationInputSchema} from '@regional-quiz/shared';
+import {
+  EntryVerificationInputSchema,
+  EntryVerificationResponseSchema,
+} from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {confirmEntryByToken} from '../lib/entry-confirmation';
 import {respondFailure} from '../lib/errors';
@@ -26,6 +29,11 @@ export const entryVerificationRoute = new Hono<Env>().post(
       // endpoint anyone with a link can reach, so it stays in the log.
       return respondFailure(c, result, 'failed to confirm the entry');
     }
-    return c.json({status: result.entryStatus, tournament: result.tournament});
+    return c.json(
+      EntryVerificationResponseSchema.parse({
+        status: result.entryStatus,
+        tournament: result.tournament,
+      }),
+    );
   },
 );

@@ -1,6 +1,6 @@
 import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
 import {COMMON_ERROR_CODES} from '@regional-quiz/shared';
-import type {Bindings} from '../types/env';
+import {testBindings} from '../test-support/bindings';
 import {verifyPassword} from './password';
 import {INVALID_TOKEN_SQLSTATE} from './pg-errors';
 import {hashToken} from './token';
@@ -9,10 +9,7 @@ import {
   type TokenPasswordResetTarget,
 } from './token-password-reset';
 
-const env = {
-  SUPABASE_URL: 'http://localhost:54321',
-  SUPABASE_SECRET_KEY: 'test-secret-key',
-} as Bindings;
+const env = testBindings();
 
 const TOKEN = 'raw-reset-token';
 const NEW_PASSWORD = 'a-brand-new-password';

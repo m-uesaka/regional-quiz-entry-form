@@ -1,20 +1,12 @@
 import {afterEach, describe, expect, it} from 'bun:test';
 import {Hono} from 'hono';
 import {requireTurnstile, TURNSTILE_TOKEN_HEADER} from './turnstile';
-import type {Bindings, Env} from '../types/env';
-import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import type {Env} from '../types/env';
+import {testBindings} from '../test-support/bindings';
 
-const ENV: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
-  SUPABASE_URL: 'https://example.supabase.co',
-  SUPABASE_SECRET_KEY: 'dummy-service-role-key',
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL: 'https://entry.example.com',
-  SESSION_SECRET: 'test-session-secret',
+const ENV = testBindings({
   TURNSTILE_SECRET_KEY: 'the-secret',
-};
+});
 
 const app = new Hono<Env>().post('/x', requireTurnstile(), c =>
   c.json({reached: true}),

@@ -1,6 +1,5 @@
 import {Hono} from 'hono';
 import {
-  defaultTournamentName,
   isAcceptingEntries,
   PortalTournamentSchema,
   type PortalTournament,
@@ -8,6 +7,7 @@ import {
 import type {Env} from '../types/env';
 import {createDbClient, type Tables} from '../lib/db';
 import {internalError} from '../lib/errors';
+import {tournamentDisplayName} from '../lib/tournaments';
 
 /** A `tournaments` row with its region embedded, as selected below. */
 interface PortalTournamentRow extends Pick<
@@ -62,10 +62,10 @@ function rowToPortalTournament(
     regionName: row.regions?.name,
     regionAllowsDualEntry: row.regions?.allows_dual_entry,
     tournamentType: row.type,
-    // Blank-named tournaments are named after their region on read (0024).
+    // Without a region the row fails the schema on `regionSlug` anyway.
     tournamentName:
-      row.name ??
-      (row.regions && defaultTournamentName(row.regions.name, row.type)),
+      row.regions &&
+      tournamentDisplayName(row.name, row.regions.name, row.type),
     entryOpensAt: row.entry_opens_at,
     entryClosesAt: row.entry_closes_at,
     entriesPaused: row.entries_paused,

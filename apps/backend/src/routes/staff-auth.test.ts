@@ -7,7 +7,7 @@ import {
 } from '../lib/password';
 import type {Bindings} from '../types/env';
 import {
-  PERMISSIVE_PLATFORM_BINDINGS,
+  testBindings,
   refusingRateLimiter,
   TURNSTILE_TEST_TOKEN,
   turnstileAwareFetch,
@@ -19,16 +19,7 @@ import {
   mockAccountFetchWithRehash,
 } from '../test-support/password';
 
-const ENV: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
-  SUPABASE_URL: 'https://example.supabase.co',
-  SUPABASE_SECRET_KEY: 'dummy-service-role-key',
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL: 'https://entry.example.com',
-  SESSION_SECRET: 'test-session-secret',
-};
+const ENV = testBindings();
 
 const STAFF_ID = '33333333-3333-3333-3333-333333333333';
 const REGION_ID = '11111111-1111-1111-1111-111111111111';

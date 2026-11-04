@@ -1,27 +1,7 @@
+import type {StaffMailJob} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient, type Tables} from './db';
 import type {InternalResult} from './errors';
-
-/**
- * What a staff bulk send is recorded as while it runs and after it ends.
- *
- * The body is not part of this. It is read separately, as `MailJobContent`
- * and only by the queue consumer: this shape backs the endpoint the staff
- * screen polls while a send runs, and pulling 20 000 characters out of
- * Postgres several times a second to then drop them is waste on the one
- * path that repeats.
- */
-export interface MailJob {
-  id: string;
-  tournamentId: string;
-  subject: string;
-  /** Addresses enqueued when the send was accepted. */
-  total: number;
-  sent: number;
-  failed: number;
-  createdAt: string;
-  updatedAt: string;
-}
 
 /** The content half of a job, which is all the queue consumer reads. */
 export interface MailJobContent {
@@ -33,20 +13,13 @@ export interface MailJobContent {
 /** Shape of a `mail_jobs` row (snake_case), minus the body. */
 type MailJobRow = Pick<
   Tables<'mail_jobs'>,
-  | 'id'
-  | 'tournament_id'
-  | 'subject'
-  | 'total'
-  | 'sent'
-  | 'failed'
-  | 'created_at'
-  | 'updated_at'
+  'id' | 'subject' | 'total' | 'sent' | 'failed' | 'created_at' | 'updated_at'
 >;
 
-function rowToMailJob(row: MailJobRow): MailJob {
+/** Turns a row into what the staff status endpoint answers with. */
+function rowToStaffMailJob(row: MailJobRow): StaffMailJob {
   return {
-    id: row.id,
-    tournamentId: row.tournament_id,
+    jobId: row.id,
     subject: row.subject,
     total: row.total,
     sent: row.sent,
@@ -130,7 +103,10 @@ export async function fetchMailJobContent(
 /**
  * Reads one job of one tournament, or `null` when there is no such job.
  *
- * The body is left out of the select on purpose -- see `MailJob`. The
+ * The body is left out of the select on purpose: this backs the endpoint
+ * the staff screen polls while a send runs, and pulling 20 000 characters
+ * out of Postgres several times a second to then drop them is waste on the
+ * one path that repeats. The consumer reads it as `MailJobContent` instead. The
  * tournament is part of the lookup rather than checked afterwards:
  * this is what the staff endpoint scopes on, so a job id belonging to
  * another region's tournament has to come back as "not found" rather than
@@ -143,20 +119,18 @@ export async function fetchMailJob(
   env: Bindings,
   tournamentId: string,
   jobId: string,
-): Promise<InternalResult<MailJob | null>> {
+): Promise<InternalResult<StaffMailJob | null>> {
   const db = createDbClient(env);
   const {data, error} = await db
     .from('mail_jobs')
-    .select(
-      'id, tournament_id, subject, total, sent, failed, created_at, updated_at',
-    )
+    .select('id, subject, total, sent, failed, created_at, updated_at')
     .eq('id', jobId)
     .eq('tournament_id', tournamentId)
     .maybeSingle();
   if (error) {
     return {ok: false, status: 500, error: error.message};
   }
-  return {ok: true, value: data ? rowToMailJob(data) : null};
+  return {ok: true, value: data ? rowToStaffMailJob(data) : null};
 }
 
 /**

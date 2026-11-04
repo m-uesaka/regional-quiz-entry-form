@@ -1,29 +1,24 @@
 import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
-import type {Bindings} from '../types/env';
 import {promoteWaitlistedEntries} from './waitlist';
-import {hashPassword} from './password';
-import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
-import {DB_URL, isDbReachable} from '../test-support/db';
+import {testBindings} from '../test-support/bindings';
+import {
+  DB_URL,
+  isDbReachable,
+  SUPABASE_SECRET_KEY,
+  SUPABASE_URL,
+} from '../test-support/db';
+import {
+  createEntryRow,
+  createTournamentAndRegulation,
+  deleteTestRegionRows,
+  type TournamentFixture,
+} from '../test-support/db-fixtures';
 
-// Local Supabase stack (`supabase start`), same convention as
-// `lib/db-schema.test.ts`. Skipped automatically when it isn't
-// reachable locally; see `test-support/db.ts`.
-const SUPABASE_URL = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
-const SUPABASE_SECRET_KEY =
-  process.env.SUPABASE_SECRET_KEY ??
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
-
-const env: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
+const env = testBindings({
   SUPABASE_URL,
   SUPABASE_SECRET_KEY,
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL: 'https://entry.example.com',
-  SESSION_SECRET: 'test-session-secret',
-};
+});
 
 describe.skipIf(!(await isDbReachable()))(
   'promoteWaitlistedEntries (local Supabase integration)',
@@ -58,80 +53,26 @@ describe.skipIf(!(await isDbReachable()))(
 
     afterAll(async () => {
       globalThis.fetch = originalFetch;
-      await sql`delete from entries where tournament_id in (
-        select id from tournaments where region_id in (
-          select id from regions where slug like ${testRegionSlug + '%'}
-        )
-      )`;
-      await sql`delete from participants where email like ${'%@' + testEmailDomain}`;
-      await sql`delete from regulations where tournament_id in (
-        select id from tournaments where region_id in (
-          select id from regions where slug like ${testRegionSlug + '%'}
-        )
-      )`;
-      await sql`delete from tournaments where region_id in (
-        select id from regions where slug like ${testRegionSlug + '%'}
-      )`;
-      await sql`delete from regions where slug like ${testRegionSlug + '%'}`;
+      await deleteTestRegionRows(sql, testRegionSlug, testEmailDomain);
       await sql.close();
     });
 
-    async function createTournamentAndRegulation(
-      suffix: string,
-    ): Promise<{regionId: string; tournamentId: string; regulationId: string}> {
-      const [region] = await sql`
-        insert into regions (slug, name)
-        values (${testRegionSlug + '-' + suffix}, 'テスト地域')
-        returning id
-      `;
-      const [tournament] = await sql`
-        insert into tournaments (
-          region_id, type, name, capacity, entry_opens_at, entry_closes_at
-        ) values (
-          ${region.id}, 'saikyoi', 'テスト大会', 1,
-          '2020-01-01T00:00:00Z', '2099-01-01T00:00:00Z'
-        )
-        returning id
-      `;
-      const [regulation] = await sql`
-        insert into regulations (tournament_id, label)
-        values (${tournament.id}, 'テストレギュレーション')
-        returning id
-      `;
-      return {
-        regionId: region.id as string,
-        tournamentId: tournament.id as string,
-        regulationId: regulation.id as string,
-      };
+    // Capacity 1, so one confirmed entry fills the tournament.
+    async function createFixture(suffix: string): Promise<TournamentFixture> {
+      return createTournamentAndRegulation(sql, `${testRegionSlug}-${suffix}`, {
+        capacity: 1,
+      });
     }
 
     async function createWaitlistedEntry(
-      regionId: string,
-      tournamentId: string,
-      regulationId: string,
+      fixture: TournamentFixture,
       waitlistPosition: number,
     ): Promise<string> {
-      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
-      const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${regionId}, ${email}, ${await hashPassword('quiz-entry-pass1')})
-        returning id
-      `;
-      const [entry] = await sql`
-        insert into entries (
-          participant_id, tournament_id, name, furigana, display_name,
-          status, waitlist_position
-        ) values (
-          ${participant.id}, ${tournamentId}, '山田太郎', 'ヤマダタロウ', '太郎',
-          'waitlisted', ${waitlistPosition}
-        )
-        returning id
-      `;
-      await sql`
-        insert into entry_regulations (entry_id, regulation_id, tournament_id)
-        values (${entry.id}, ${regulationId}, ${tournamentId})
-      `;
-      return entry.id as string;
+      const {entryId} = await createEntryRow(sql, fixture, testEmailDomain, {
+        status: 'waitlisted',
+        waitlistPosition,
+      });
+      return entryId;
     }
 
     async function statusOf(entryId: string) {
@@ -148,16 +89,9 @@ describe.skipIf(!(await isDbReachable()))(
     }
 
     async function createConfirmedEntry(
-      regionId: string,
-      tournamentId: string,
-      regulationId: string,
+      fixture: TournamentFixture,
     ): Promise<void> {
-      const id = await createWaitlistedEntry(
-        regionId,
-        tournamentId,
-        regulationId,
-        0,
-      );
+      const id = await createWaitlistedEntry(fixture, 0);
       await sql`
         update entries set status = 'confirmed', waitlist_position = null
         where id = ${id}
@@ -166,19 +100,9 @@ describe.skipIf(!(await isDbReachable()))(
 
     // A cancellation frees the one seat (the fixture's capacity is 1).
     it('promotes the entry with the smallest waitlist_position', async () => {
-      const fixture = await createTournamentAndRegulation('promote');
-      const second = await createWaitlistedEntry(
-        fixture.regionId,
-        fixture.tournamentId,
-        fixture.regulationId,
-        2,
-      );
-      const first = await createWaitlistedEntry(
-        fixture.regionId,
-        fixture.tournamentId,
-        fixture.regulationId,
-        1,
-      );
+      const fixture = await createFixture('promote');
+      const second = await createWaitlistedEntry(fixture, 2);
+      const first = await createWaitlistedEntry(fixture, 1);
 
       await promoteWaitlistedEntries(env, fixture.tournamentId);
 
@@ -199,21 +123,11 @@ describe.skipIf(!(await isDbReachable()))(
       // The fixture's capacity is 1, so a single confirmed entry means the
       // seat this promotion was triggered for has already been taken by a
       // concurrent confirmation.
-      const fixture = await createTournamentAndRegulation('at-capacity');
-      const waitlisted = await createWaitlistedEntry(
-        fixture.regionId,
-        fixture.tournamentId,
-        fixture.regulationId,
-        1,
-      );
+      const fixture = await createFixture('at-capacity');
+      const waitlisted = await createWaitlistedEntry(fixture, 1);
       await sql`
         update entries set status = 'confirmed', waitlist_position = null
-        where id = ${await createWaitlistedEntry(
-          fixture.regionId,
-          fixture.tournamentId,
-          fixture.regulationId,
-          2,
-        )}
+        where id = ${await createWaitlistedEntry(fixture, 2)}
       `;
 
       await promoteWaitlistedEntries(env, fixture.tournamentId);
@@ -226,7 +140,7 @@ describe.skipIf(!(await isDbReachable()))(
     });
 
     it('does nothing when there is no waitlisted entry', async () => {
-      const fixture = await createTournamentAndRegulation('empty');
+      const fixture = await createFixture('empty');
 
       await expect(
         promoteWaitlistedEntries(env, fixture.tournamentId),
@@ -235,18 +149,11 @@ describe.skipIf(!(await isDbReachable()))(
 
     describe('promoteWaitlistedEntries', () => {
       it('fills the seats a raised capacity freed, in waitlist order', async () => {
-        const f = await createTournamentAndRegulation('raise');
-        await createConfirmedEntry(f.regionId, f.tournamentId, f.regulationId);
+        const f = await createFixture('raise');
+        await createConfirmedEntry(f);
         const waiting = [];
         for (const position of [3, 1, 2]) {
-          waiting.push(
-            await createWaitlistedEntry(
-              f.regionId,
-              f.tournamentId,
-              f.regulationId,
-              position,
-            ),
-          );
+          waiting.push(await createWaitlistedEntry(f, position));
         }
         await sql`update tournaments set capacity = 3 where id = ${f.tournamentId}`;
         mailedTo = [];
@@ -268,21 +175,11 @@ describe.skipIf(!(await isDbReachable()))(
       });
 
       it('promotes everyone waiting when the capacity is cleared', async () => {
-        const f = await createTournamentAndRegulation('clear');
-        await createConfirmedEntry(f.regionId, f.tournamentId, f.regulationId);
+        const f = await createFixture('clear');
+        await createConfirmedEntry(f);
         const waiting = [
-          await createWaitlistedEntry(
-            f.regionId,
-            f.tournamentId,
-            f.regulationId,
-            1,
-          ),
-          await createWaitlistedEntry(
-            f.regionId,
-            f.tournamentId,
-            f.regulationId,
-            2,
-          ),
+          await createWaitlistedEntry(f, 1),
+          await createWaitlistedEntry(f, 2),
         ];
         await sql`update tournaments set capacity = null where id = ${f.tournamentId}`;
 
@@ -296,15 +193,10 @@ describe.skipIf(!(await isDbReachable()))(
       });
 
       it('promotes nobody when no seat is free', async () => {
-        const f = await createTournamentAndRegulation('full');
-        await createConfirmedEntry(f.regionId, f.tournamentId, f.regulationId);
-        await createConfirmedEntry(f.regionId, f.tournamentId, f.regulationId);
-        const waiting = await createWaitlistedEntry(
-          f.regionId,
-          f.tournamentId,
-          f.regulationId,
-          1,
-        );
+        const f = await createFixture('full');
+        await createConfirmedEntry(f);
+        await createConfirmedEntry(f);
+        const waiting = await createWaitlistedEntry(f, 1);
         mailedTo = [];
 
         // Capacity 1 with 2 confirmed: lowered below what is confirmed.
@@ -319,13 +211,8 @@ describe.skipIf(!(await isDbReachable()))(
       // The promotions are committed; a lost mail must not report them as
       // not having happened, but staff need to know who wasn't told.
       it('counts the mails that could not be sent', async () => {
-        const f = await createTournamentAndRegulation('mailfail');
-        const waiting = await createWaitlistedEntry(
-          f.regionId,
-          f.tournamentId,
-          f.regulationId,
-          1,
-        );
+        const f = await createFixture('mailfail');
+        const waiting = await createWaitlistedEntry(f, 1);
         mailFails = true;
         const originalConsoleError = console.error;
         console.error = () => {};
