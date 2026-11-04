@@ -10,7 +10,7 @@ import {
 import type {ParticipantEnv} from '../types/env';
 import {requireParticipant} from '../middleware/participant-auth';
 import {createDbClient, type Tables} from '../lib/db';
-import {cancelOwnEntry, updateOwnEntry} from '../lib/entries';
+import {cancelOwnEntry, updateOwnEntry} from '../lib/own-entries';
 import {internalError, respondFailure} from '../lib/errors';
 import {tournamentDisplayName} from '../lib/tournaments';
 import {fetchFormFieldDefs} from '../lib/form-field-defs';
