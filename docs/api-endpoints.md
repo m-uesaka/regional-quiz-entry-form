@@ -803,11 +803,11 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 | ステータス | 条件 |
 | --- | --- |
-| 400 | スプレッドシート ID が不正・シートにアクセスできない(Google からの 4xx)、行データが `FormFieldDefYamlSchema` に合わない、`type` 列が既定のラベルでない、`options` 列に重複がある |
+| 400 | スプレッドシート ID が不正・シートにアクセスできない(Google からの 4xx)、行データが `FormFieldDefYamlSchema` に合わない、`type` 列が既定のラベルでない、`options` 列に重複がある、`key` が複数の行で使われている |
 | 502 | Google への接続失敗(ネットワークエラー)または Google からの 5xx |
 | 503 | Google からのレート制限(429) |
 
-詳細は [`google-sheets-integration.md`](./google-sheets-integration.md) を参照。
+シートの内容に起因する 400 の `error` は、大会一覧からの一括登録(`POST /api/sheet-import/tournaments/preview`)の行ごとのエラーと同じ文言で、`フォーム定義 3行目: C列(type)「プルダウン」はチェックボックス・ラジオボタン・自由記述・自由記述（一行）のいずれでもありません` のようにシートの行と列を含みます(`key` の重複は `フォーム定義: A列(key)「notes」が複数の行で使われています`)。詳細は [`google-sheets-integration.md`](./google-sheets-integration.md) を参照。
 
 ### `POST /api/sheet-import/regulations/preview`
 

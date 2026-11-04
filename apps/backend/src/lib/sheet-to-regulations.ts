@@ -4,7 +4,12 @@ import {
   type RegulationUpsert,
 } from '@regional-quiz/shared';
 import {JST_OFFSET_MS} from './jst';
-import {fetchSheetValues, SheetFetchError} from './sheet-to-form-definition';
+import {
+  cellText,
+  fetchSheetValues,
+  isBlankCell,
+  SheetFetchError,
+} from './google-sheets';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -116,7 +121,7 @@ export function sheetValuesToRegulations(
     ) {
       return;
     }
-    const label = isBlankCell(labelCell) ? '' : String(labelCell).trim();
+    const label = cellText(labelCell);
     if (label === '') {
       throw new Error(`${rowNumber}行目: レギュレーション名が空です`);
     }
@@ -161,14 +166,6 @@ export function sheetValuesToRegulations(
     throw new Error(`${prefix}${issue?.message ?? '内容を確認してください'}`);
   }
   return parsed.data.regulations;
-}
-
-function isBlankCell(cell: unknown): boolean {
-  return (
-    cell === undefined ||
-    cell === null ||
-    (typeof cell === 'string' && cell.trim() === '')
-  );
 }
 
 /**

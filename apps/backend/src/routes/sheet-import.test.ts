@@ -274,6 +274,54 @@ describe('sheet-import routes', () => {
     });
   });
 
+  // The same words the bulk import uses for the same sheet, rather than
+  // the converter's English or a dump of Zod issues.
+  it('answers a mistake on the sheet with 400 naming its row', async () => {
+    const cases: Array<[unknown[][], string]> = [
+      [
+        [['notes', '備考', 'プルダウン', '任意']],
+        'フォーム定義 2行目: C列(type)「プルダウン」はチェックボックス・ラジオボタン・自由記述・自由記述（一行）のいずれでもありません',
+      ],
+      [
+        [
+          ['notes', '備考', '自由記述', '任意'],
+          ['Bad Key', '備考', '自由記述', '任意'],
+        ],
+        'フォーム定義 3行目: A列(key)「Bad Key」は小文字の英字で始まり、小文字の英数字と _ だけにしてください',
+      ],
+      [
+        [
+          ['notes', '備考', '自由記述', '任意'],
+          ['notes', '備考2', '自由記述', '任意'],
+        ],
+        'フォーム定義: A列(key)「notes」が複数の行で使われています',
+      ],
+    ];
+    const cookie = await generalStaffCookie();
+    for (const [values, message] of cases) {
+      globalThis.fetch = staffSessionAwareFetch((() =>
+        Promise.resolve(
+          new Response(JSON.stringify({values}), {status: 200}),
+        )) as unknown as typeof fetch);
+
+      const res = await app.request(
+        '/api/sheet-import/preview',
+        {
+          method: 'POST',
+          headers: {cookie, 'content-type': 'application/json'},
+          body: JSON.stringify({
+            spreadsheetId: 'sheet-id',
+            tournamentSlug: 'saikyoi',
+          }),
+        },
+        env,
+      );
+
+      expect(res.status).toBe(400);
+      expect((await res.json()) as unknown).toEqual({error: message});
+    }
+  });
+
   describe('POST /regulations/preview', () => {
     function previewRegulations(cookie?: string, body: unknown = {}) {
       return app.request(

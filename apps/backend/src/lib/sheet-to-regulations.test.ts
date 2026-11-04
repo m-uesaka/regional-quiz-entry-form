@@ -1,5 +1,5 @@
 import {afterEach, describe, expect, it} from 'bun:test';
-import {SheetFetchError} from './sheet-to-form-definition';
+import {SheetFetchError} from './google-sheets';
 import {
   fetchRegulationSheetValues,
   sheetValuesToRegulations,

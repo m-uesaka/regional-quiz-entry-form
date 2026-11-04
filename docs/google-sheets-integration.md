@@ -34,7 +34,8 @@ flowchart LR
 
 | ファイル | 役割 |
 | --- | --- |
-| `apps/backend/src/lib/sheet-to-form-definition.ts` | `fetchSheetRows()`(Sheets API v4 呼び出し)・`sheetRowsToYaml()`(行データ→YAML変換) |
+| `apps/backend/src/lib/google-sheets.ts` | Sheets API v4 の呼び出し(`fetchSheetValues()`・入力シートの2タブを1リクエストで読む `fetchEntrySheet()`)・`SheetFetchError`・セルの文字列化(`cellText()` / `isBlankCell()`) |
+| `apps/backend/src/lib/sheet-to-form-definition.ts` | `fetchSheetRows()`(フォーム定義タブの取得)・`formRowsToFields()`(行データ→項目定義。行・列を示す日本語のエラー)・`sheetRowsToYaml()`(行データ→YAML変換) |
 | `apps/backend/src/lib/sheet-to-regulations.ts` | `fetchRegulationSheetValues()`(「レギュレーション」シートの取得)・`sheetValuesToRegulations()`(行データ→レギュレーション配列) |
 | `apps/backend/src/routes/sheet-import.ts` | `POST /api/sheet-import/preview`(フォーム定義)・`POST /api/sheet-import/regulations/preview`(レギュレーション)・`POST /api/sheet-import/tournaments/preview`・`POST /api/sheet-import/tournaments`(大会一覧からの一括登録の確認と登録、#168)。統括スタッフ限定 |
 | `apps/backend/src/lib/tournament-bulk-import.ts` | 大会一覧の読み取り(`parseTournamentIndex()`)・定員と日時の読み取り(`parseCapacity()` / `parseJstDateTime()`)・確認(`previewTournamentImport()`)・選んだ行の登録(`importTournaments()`) |
@@ -80,7 +81,7 @@ Sheets API 専用の SDK(`googleapis` 等)は使わず、`fetch` で REST エン
 ## 5. フォーム定義シート(先頭のシート)のフォーマット規約
 
 - 取り込み範囲は固定で `A2:E`(1行目はヘッダー行として扱われ、読み飛ばされる)。シート名を指定していないため、読まれるのは**先頭(左端)のシート**。フォーム定義のシートは先頭に置くこと。
-- データ行は2行目から**空行を挟まず**に詰めて書く。途中に空行があると、その行の `type` が空として扱われ `Unknown field type: undefined` で取り込みに失敗する(末尾の空行は Sheets API が返さないので問題ない)。
+- データ行は2行目から**空行を挟まず**に詰めて書く。途中に空行があると、その行の `type` が空として扱われ `フォーム定義 N行目: C列(type)が空です。途中に空行がある場合は行を詰めてください` で取り込みに失敗する(末尾の空行は Sheets API が返さないので問題ない)。
 - 列は左から順に **`key, label, type, required, options`** の5列固定。
 
 | 列 | 内容 | 例 |
@@ -176,17 +177,17 @@ C列(type)・D列(required)は Google スプレッドシート側のデータの
 1. 統括スタッフが大会編集画面のフォーム定義エディタ(`FormDefinitionEditor.svelte`)で「スプレッドシートID」を入力し、「スプレッドシートから読み込む」を押す。大会スラッグは手入力させず、**エディタが編集中の大会の `type`(`saikyoi` / `shinjinou`)を親から props で受け取ってそのまま使う**。対象の種別はエディタ上部に表示される。
 2. フロントエンドが `POST /api/sheet-import/preview` に `{spreadsheetId, tournamentSlug}`(`packages/shared` の `SheetImportRequestSchema`)を送信。`tournamentSlug` は `TournamentTypeSchema` の enum なので、`saikyoi` / `shinjinou` 以外は 400 で弾かれる。ルートは `requireGeneralStaff()` ミドルウェアで保護されており、統括スタッフ(`role: 'general'`)のみアクセス可能(未ログイン・セッション切れは 401、地域スタッフは 403)。この認証チェックはボディの検証より先に走る。
 3. バックエンドの `fetchSheetRows(spreadsheetId, c.env.GOOGLE_SHEETS_API_KEY)` がシートの `A2:E` を取得。ネットワークエラーや Google からの非 2xx レスポンスは、HTTP ステータス(取得できた場合)を保持した `SheetFetchError` として throw される。
-4. `sheetRowsToYaml(tournamentSlug, rows)` が各行を YAML 化する。
-   - `key` はスプレッドシートの A 列に地域スタッフが入力した値をそのまま使う(5章参照)。
-   - `type` は `TYPE_LABELS`(`チェックボックス`→`checkbox`、`ラジオボタン`→`radio`、`自由記述`→`textarea`、`自由記述（一行）`→`textfield`)で内部の enum に変換。未知の値の場合は `Unknown field type: {値}` を throw。
+4. `sheetRowsToYaml(tournamentSlug, rows)` が `formRowsToFields(rows)` で各行を項目定義に変換し、YAML 化する。`formRowsToFields()` は大会一覧からの一括登録(#168)でも使う変換で、誤りはどちらでも同じ文言の `FormSheetError`(シートの行番号と列を含む日本語)として throw される。
+   - `key` はスプレッドシートの A 列に地域スタッフが入力した値をそのまま使う(5章参照)。形式が不正な場合は `フォーム定義 3行目: A列(key)「Bad Key」は小文字の英字で始まり、小文字の英数字と _ だけにしてください`。
+   - `type` は `TYPE_LABELS`(`チェックボックス`→`checkbox`、`ラジオボタン`→`radio`、`自由記述`→`textarea`、`自由記述（一行）`→`textfield`)で内部の enum に変換。未知の値の場合は `フォーム定義 2行目: C列(type)「{値}」はチェックボックス・ラジオボタン・自由記述・自由記述（一行）のいずれでもありません`、空の場合は `フォーム定義 2行目: C列(type)が空です。途中に空行がある場合は行を詰めてください`。
    - `required` は文字列 `'必須'` との一致で boolean 化(それ以外はすべて `false`)。
-   - `options` はカンマ区切り文字列を trim・空要素除去した配列に変換。重複が残っている場合は `Duplicate option values: {値}` を throw。
-   - 最後に `FormFieldDefYamlSchema.parse()` で行ごとに検証(例: `key` が不正な形式、`ラジオボタン` なのに `options` が空、など)。バリデーション失敗時は `ZodError` を throw。
-   - **`key` の重複はここでは検出されない**(行単位の検証しかしていないため)。重複したままでもプレビューは成功し、保存時の `FormDefinitionYamlSchema` の検証で 400 になる。
+   - `options` はカンマ区切り文字列を trim・空要素除去した配列に変換。重複が残っている場合は `フォーム定義 2行目: E列(options)に同じ選択肢が複数あります`。
+   - 最後に `FormFieldDefYamlSchema` で行ごとに検証する。`ラジオボタン` なのに `options` が空なら `フォーム定義 2行目: ラジオボタンには E列(options)に選択肢が1つ以上必要です`、それ以外の列なら `フォーム定義 2行目: B列(label)の値が正しくありません` の形。
+   - `key` の重複もここで検出し、`フォーム定義: A列(key)「notes」が複数の行で使われています` になる(保存時の `FormDefinitionYamlSchema` の検証を待たない)。
 5. 上記で例外が発生した場合のレスポンスは原因によって異なる:
    - `SheetFetchError` でネットワーク障害または Google 側の 5xx → **502**。`error` は固定文言「Google スプレッドシートへの接続に失敗しました」(元の例外はサーバーログにのみ出力)。
    - `SheetFetchError` で Google のレート制限(429)→ **503**。`error` は固定文言「Google スプレッドシートへのリクエストが制限されています。しばらくしてから再試行してください」。
-   - `SheetFetchError` でそれ以外の非 2xx(400/403/404 など、スプレッドシートID誤り・非公開など)、または `sheetRowsToYaml` からの `ZodError`/`Error`(入力起因) → **400**。`error` は例外のメッセージそのまま(`Failed to fetch sheet: 403`、`Unknown field type: ...` など。`ZodError` の場合は issue 一覧の JSON 文字列)。
+   - `SheetFetchError` でそれ以外の非 2xx(400/403/404 など、スプレッドシートID誤り・非公開など)、または `sheetRowsToYaml` からの `FormSheetError`(入力起因) → **400**。`error` は例外のメッセージそのまま(`Failed to fetch sheet: 403`、上記の `フォーム定義 2行目: ...` など)。
    - いずれの場合も `{error: string}` を返す。成功時は `{yaml}` を 200 で返す。
    - リクエストボディ自体が `SheetImportRequestSchema` に合わない場合の 400 だけは形が異なり、`@hono/zod-validator` 既定の `{success: false, error: ZodError}` になる。パネルはこの場合「入力内容を確認してください」と表示する。
 6. プレビューされた YAML を確認し、「保存」を押すと `PUT /api/form-definitions/:tournamentId` に `{yaml: previewYaml}` を送信。
@@ -326,11 +327,11 @@ curl -X POST http://localhost:8787/api/sheet-import/tournaments \
 | プレビューで 400、`Failed to fetch sheet: 400`/`404` | スプレッドシートIDが誤っている | URL 内の `/d/` と `/edit` の間の文字列を再確認 |
 | プレビューで 502、「Google スプレッドシートへの接続に失敗しました」 | Google Sheets API へのネットワーク接続に失敗、または Google 側が 5xx を返した | 統括スタッフ側で復旧を待って再試行。継続する場合は Cloudflare Workers 側のログ・Google Cloud のステータスを確認 |
 | プレビューで 503、「Google スプレッドシートへのリクエストが制限されています…」 | Google Sheets API のレート制限(429)にかかった | しばらく待ってから再試行 |
-| プレビューで 400、`Unknown field type: ...` | `type` 列が `チェックボックス`/`ラジオボタン`/`自由記述`/`自由記述（一行）` のいずれでもない | プルダウン(データの入力規則)の選択肢から入力し直す。表記ゆれ(全角/半角スペース等)がないか確認 |
-| プレビューで 400、`Unknown field type: undefined` | データ行の途中に空行がある、または `type` 列が空欄の行がある | 空行を削除して行を詰める。`type` 列をプルダウンから選択する |
-| プレビューで 400、`Duplicate option values: ...` | `options` 列内の値が trim 後に重複している | カンマ区切りの選択肢から重複を削除 |
-| プレビューで Zod バリデーションエラー(例: `key` が不正な形式、`ラジオボタン` なのに `options` が空) | シートの列内容がフォーマット規約(5章)に沿っていない | シートの列順・`key` の形式(`/^[a-z][a-z0-9_]*$/`)・`options` の記法(カンマ区切り)を修正 |
-| プレビューは成功するが保存で 400、「フィールドキーが重複しています」 | シート内で同じ `key` が複数行に使われている(プレビューでは検出されない) | 重複している `key` を修正してプレビューからやり直す |
+| プレビューで 400、`フォーム定義 N行目: C列(type)「...」は...のいずれでもありません` | `type` 列が `チェックボックス`/`ラジオボタン`/`自由記述`/`自由記述（一行）` のいずれでもない | プルダウン(データの入力規則)の選択肢から入力し直す。表記ゆれ(全角/半角スペース等)がないか確認 |
+| プレビューで 400、`フォーム定義 N行目: C列(type)が空です…` | データ行の途中に空行がある、または `type` 列が空欄の行がある | 空行を削除して行を詰める。`type` 列をプルダウンから選択する |
+| プレビューで 400、`フォーム定義 N行目: E列(options)に同じ選択肢が複数あります` | `options` 列内の値が trim 後に重複している | カンマ区切りの選択肢から重複を削除 |
+| プレビューで 400、`フォーム定義 N行目: A列(key)「...」は小文字の英字で始まり…` / `ラジオボタンには E列(options)に選択肢が1つ以上必要です` / `B列(label)の値が正しくありません` など | シートの列内容がフォーマット規約(5章)に沿っていない | シートの列順・`key` の形式(`/^[a-z][a-z0-9_]*$/`)・`options` の記法(カンマ区切り)を修正 |
+| プレビューで 400、`フォーム定義: A列(key)「...」が複数の行で使われています` | シート内で同じ `key` が複数行に使われている | 重複している `key` を修正してプレビューからやり直す |
 | 保存で 400、`YAML の tournamentSlug (...) が保存先の大会の種別 (...) と一致しません` | YAML の `tournamentSlug` が保存先の大会の種別と違う(API を直接叩いて別種別の YAML を送った場合など。パネル経由では編集中の大会の種別が自動で入る) | 保存先の大会の編集画面でプレビューからやり直す |
 | レギュレーションの読み込みで「「レギュレーション」シートを読み取れません…」 | `レギュレーション` という名前のシートが無い(名前の表記ゆれ・前後の空白を含む)、またはスプレッドシートIDが誤っている | シート名を `レギュレーション` に直す。IDを再確認 |
 | レギュレーションの読み込みで `N行目: 優先期間の開始(終了)を日時として読み取れません` | 日時の書き方が規約(6章)に沿っていない、または存在しない日付 | `2026-08-01 10:00` の形で書き直す |

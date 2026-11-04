@@ -1,9 +1,13 @@
 import {afterEach, describe, expect, it} from 'bun:test';
 import {parseFormDefinitionYaml} from '@regional-quiz/shared';
+import {SheetFetchError} from './google-sheets';
 import {
   fetchSheetRows,
+  formRowsToFields,
+  FormSheetError,
   sheetRowsToYaml,
-  SheetFetchError,
+  sheetValuesToRows,
+  type SheetRow,
 } from './sheet-to-form-definition';
 
 describe('fetchSheetRows', () => {
@@ -178,7 +182,9 @@ describe('sheetRowsToYaml', () => {
           options: '',
         },
       ]),
-    ).toThrow('Unknown field type: text');
+    ).toThrow(
+      'フォーム定義 2行目: C列(type)「text」はチェックボックス・ラジオボタン・自由記述・自由記述（一行）のいずれでもありません',
+    );
   });
 
   it('throws on an invalid key', () => {
@@ -192,7 +198,7 @@ describe('sheetRowsToYaml', () => {
           options: '',
         },
       ]),
-    ).toThrow();
+    ).toThrow('フォーム定義 2行目: A列(key)「Invalid Key」');
   });
 
   it('drops blank options produced by stray commas', () => {
@@ -222,6 +228,71 @@ describe('sheetRowsToYaml', () => {
           options: 'red, red',
         },
       ]),
-    ).toThrow('Duplicate option values');
+    ).toThrow('フォーム定義 2行目: E列(options)に同じ選択肢が複数あります');
+  });
+});
+
+describe('formRowsToFields', () => {
+  const NOTES: SheetRow = {
+    key: 'notes',
+    label: '備考',
+    type: '自由記述',
+    required: '任意',
+    options: undefined,
+  };
+
+  it('reads each row into a field', () => {
+    expect(formRowsToFields([NOTES])).toEqual([
+      {key: 'notes', label: '備考', type: 'textarea', required: false},
+    ]);
+  });
+
+  it('names the row a mistake is on, in Japanese', () => {
+    const cases: Array<[unknown[][], string]> = [
+      [
+        [
+          ['notes', '備考', '自由記述', '任意'],
+          ['Bad Key', '備考', '自由記述', '任意'],
+        ],
+        'フォーム定義 3行目: A列(key)「Bad Key」は小文字の英字で始まり、小文字の英数字と _ だけにしてください',
+      ],
+      [
+        [['notes', '備考', '自由記述'], [], ['memo', 'メモ', '自由記述']],
+        'フォーム定義 3行目: C列(type)が空です。途中に空行がある場合は行を詰めてください',
+      ],
+      [
+        [['size', 'サイズ', 'ラジオボタン', '必須', 'S, S']],
+        'フォーム定義 2行目: E列(options)に同じ選択肢が複数あります',
+      ],
+      [
+        [['size', 'サイズ', 'ラジオボタン', '必須']],
+        'フォーム定義 2行目: ラジオボタンには E列(options)に選択肢が1つ以上必要です',
+      ],
+      // A grid cell without a displayed value, inside the row.
+      [
+        [['notes', undefined, '自由記述']],
+        'フォーム定義 2行目: B列(label)の値が正しくありません',
+      ],
+      [
+        [
+          ['notes', '備考', '自由記述'],
+          ['notes', '備考2', '自由記述'],
+        ],
+        'フォーム定義: A列(key)「notes」が複数の行で使われています',
+      ],
+    ];
+    for (const [values, message] of cases) {
+      const rows = sheetValuesToRows(values);
+      expect(() => formRowsToFields(rows)).toThrow(FormSheetError);
+      expect(() => formRowsToFields(rows)).toThrow(message);
+    }
+  });
+
+  it('keeps an empty label, which the schema takes', () => {
+    const [field] = formRowsToFields(
+      sheetValuesToRows([['notes', '', '自由記述']]),
+    );
+
+    expect(field.label).toBe('');
   });
 });
