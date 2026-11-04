@@ -1,24 +1,22 @@
-import {COMMON_ERROR_CODES} from '@regional-quiz/shared';
 import type {PasswordResetConfirmInput} from '@regional-quiz/shared/password-policy';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
-import type {LibFailure} from './errors';
 import {createMailSender} from './mailer';
-import {hashPassword} from './password';
-import {INVALID_TOKEN_SQLSTATE} from './pg-errors';
 import {
   buildSystemMail,
   describeLinkLifetime,
   systemMailSubject,
 } from './system-mail';
 import {generateToken, hashToken} from './token';
+import {
+  confirmTokenPasswordReset,
+  type TokenPasswordResetResult,
+} from './token-password-reset';
 
 // Deliberately shorter than the entry verification link's 24 hours: a reset
 // link is a standing takeover of the account it was mailed to, so it should
 // stop working soon after the participant asked for it.
 const TOKEN_TTL_MS = 60 * 60 * 1000;
-
-type ConfirmResult = {ok: true} | LibFailure<400>;
 
 /**
  * Issues a one-time password reset token for the participant registered
@@ -163,55 +161,19 @@ export async function requestPasswordReset(
  * makes a reset cut the participant's existing sessions: they are stateless
  * week-long JWTs, so `requireParticipant()` checks the value each one carries
  * against that column rather than trusting the signature alone.
+ *
+ * The work itself, shared with the staff flow, is
+ * `confirmTokenPasswordReset()`.
  * @param env The Worker bindings.
  * @param input The validated raw token and the new password.
  */
 export async function confirmPasswordReset(
   env: Bindings,
   input: PasswordResetConfirmInput,
-): Promise<ConfirmResult> {
-  const db = createDbClient(env);
-  const tokenHash = await hashToken(input.token);
-
-  // A cheap look at the token before the password is hashed: PBKDF2 is
-  // deliberately expensive (see `./password`), and hashing up front would
-  // let anyone spend that work by posting tokens that were never going to be
-  // valid. Nothing is decided here -- the row can still be consumed or
-  // expire between this read and the call below, which is why
-  // `reset_participant_password` re-checks it under the participant lock.
-  const {data: candidate, error} = await db
-    .from('password_reset_tokens')
-    .select('id')
-    .eq('token_hash', tokenHash)
-    .is('used_at', null)
-    .gt('expires_at', new Date().toISOString())
-    .maybeSingle();
-  // A failed read must not be reported as a bad token: that would tell the
-  // participant their link had expired when the database was simply down.
-  if (error) {
-    return {ok: false, status: 500, error: error.message};
-  }
-  if (!candidate) {
-    return {
-      ok: false,
-      status: 400,
-      error: COMMON_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
-    };
-  }
-
-  const {error: resetError} = await db.rpc('reset_participant_password', {
-    p_token_hash: tokenHash,
-    p_password_hash: await hashPassword(input.newPassword),
-  });
-  if (resetError) {
-    if (resetError.code === INVALID_TOKEN_SQLSTATE) {
-      return {
-        ok: false,
-        status: 400,
-        error: COMMON_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
-      };
-    }
-    return {ok: false, status: 500, error: resetError.message};
-  }
-  return {ok: true};
+): Promise<TokenPasswordResetResult> {
+  return confirmTokenPasswordReset(
+    env,
+    {tokenTable: 'password_reset_tokens', rpc: 'reset_participant_password'},
+    input,
+  );
 }
