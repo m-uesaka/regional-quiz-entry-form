@@ -7,19 +7,10 @@ import {
   CLIENT_IP_HEADER,
 } from '@regional-quiz/shared';
 import {clientIp, emailKey, rateLimit, rateLimitAddress} from './rate-limit';
-import type {Bindings, Env} from '../types/env';
-import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import type {Env} from '../types/env';
+import {testBindings} from '../test-support/bindings';
 
-const ENV: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
-  SUPABASE_URL: 'https://example.supabase.co',
-  SUPABASE_SECRET_KEY: 'dummy-service-role-key',
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL: 'https://entry.example.com',
-  SESSION_SECRET: 'test-session-secret',
-};
+const ENV = testBindings();
 
 const FORWARD_SECRET = 'test-client-ip-forward-secret';
 

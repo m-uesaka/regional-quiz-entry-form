@@ -1,13 +1,12 @@
 import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
 import type {FormDefinitionYaml, TournamentType} from '@regional-quiz/shared';
-import type {Bindings} from '../types/env';
 import {
   syncFormFieldDefs,
   TournamentNotFoundError,
   TournamentSlugMismatchError,
 } from './form-definitions';
-import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {testBindings} from '../test-support/bindings';
 import {DB_URL, isDbReachable} from '../test-support/db';
 
 // Local Supabase stack (`supabase start`), same convention as
@@ -20,16 +19,10 @@ const SUPABASE_SECRET_KEY =
   process.env.SUPABASE_SECRET_KEY ??
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
 
-const env: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
+const env = testBindings({
   SUPABASE_URL,
   SUPABASE_SECRET_KEY,
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL: 'https://entry.example.com',
-  SESSION_SECRET: 'test-session-secret',
-};
+});
 
 describe.skipIf(!(await isDbReachable()))(
   'form-definitions lib (local Supabase integration)',

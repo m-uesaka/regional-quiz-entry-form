@@ -10,10 +10,9 @@ import {
 import {SQL} from 'bun';
 import {NO_LASTING_REGULATION_MESSAGE} from '@regional-quiz/shared';
 import {sign} from 'hono/jwt';
-import type {Bindings} from '../types/env';
 import type {TournamentRow} from '../lib/tournaments';
 import {app} from '../index';
-import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {testBindings} from '../test-support/bindings';
 import {
   closedEntryPeriodTournament,
   openEntryPeriodTournament,
@@ -52,16 +51,11 @@ const SUPABASE_SECRET_KEY =
 
 const SESSION_SECRET = 'test-session-secret';
 
-const env: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
+const env = testBindings({
   SUPABASE_URL: process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321',
   SUPABASE_SECRET_KEY,
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL: 'https://entry.example.com',
   SESSION_SECRET,
-};
+});
 
 async function staffCookie(role: 'general' | 'regional'): Promise<string> {
   const token = await sign(

@@ -2,27 +2,14 @@ import {afterEach, describe, expect, it} from 'bun:test';
 import {verify} from 'hono/jwt';
 import {participantAuthRoute} from './participant-auth';
 import {hashPassword, verifyPassword} from '../lib/password';
-import type {Bindings} from '../types/env';
-import {
-  PERMISSIVE_PLATFORM_BINDINGS,
-  refusingRateLimiter,
-} from '../test-support/bindings';
+import {testBindings, refusingRateLimiter} from '../test-support/bindings';
 import {
   collectingExecutionContext,
   legacyHashPassword,
   mockAccountFetchWithRehash,
 } from '../test-support/password';
 
-const ENV: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
-  SUPABASE_URL: 'https://example.supabase.co',
-  SUPABASE_SECRET_KEY: 'dummy-service-role-key',
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL: 'https://entry.example.com',
-  SESSION_SECRET: 'test-session-secret',
-};
+const ENV = testBindings();
 
 const PARTICIPANT_ID = '44444444-4444-4444-4444-444444444444';
 

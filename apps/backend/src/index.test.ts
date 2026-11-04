@@ -1,23 +1,14 @@
 import {describe, expect, it} from 'bun:test';
 import {app} from './index';
-import {PERMISSIVE_PLATFORM_BINDINGS} from './test-support/bindings';
+import {testBindings} from './test-support/bindings';
 import type {Bindings} from './types/env';
 
 const FRONTEND_URL = 'https://entry.example.com';
 const FOREIGN_ORIGIN = 'https://evil.example';
 
-// Only `FRONTEND_URL` matters to the origin check; the rest is filler so the
-// literal typechecks. Nothing below reaches Supabase or the mail provider.
-const ENV: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
-  SUPABASE_URL: 'http://127.0.0.1:1',
-  SUPABASE_SECRET_KEY: 'dummy-secret-key',
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL,
-  SESSION_SECRET: 'dummy-session-secret',
-};
+// Only `FRONTEND_URL` matters to the origin check. Nothing below reaches
+// Supabase or the mail provider; port 1 makes sure of the former.
+const ENV = testBindings({SUPABASE_URL: 'http://127.0.0.1:1', FRONTEND_URL});
 
 // A state-changing endpoint that needs neither a session nor a database, so
 // what answers is the origin check and nothing else. Posted with no body, it

@@ -1,11 +1,10 @@
-// Filler for the platform bindings the app has grown, for the tests of
-// everything else. Every test that hands a route or a `lib/` function an
-// environment builds a `Bindings` literal, and six of those fields (a
-// Turnstile secret, four rate limiters, and the bulk mail queue) have
-// nothing to do with what most of those tests are about — but leaving them
-// out no longer typechecks, and leaving the limiters undefined makes the
-// middleware throw. They are spread in from here instead, so the next
-// binding is one edit rather than twenty-eight.
+// Filler for the bindings the app has grown, for the tests of everything
+// else. Every test that hands a route or a `lib/` function an environment
+// needs a whole `Bindings`, and most of its fields (the secrets, the rate
+// limiters, the bulk mail queue) have nothing to do with what most of those
+// tests are about -- but leaving them out no longer typechecks, and leaving
+// the limiters undefined makes the middleware throw. `testBindings()` fills
+// them in, so the next binding is one edit here rather than one per test.
 //
 // Not imported by `src/index.ts`, so none of this reaches the deployed
 // Worker: `wrangler deploy` bundles from that entry point outwards.
@@ -95,6 +94,30 @@ export const PERMISSIVE_PLATFORM_BINDINGS: Pick<
   MAIL_TRIGGER_EMAIL_RATE_LIMITER: allowingRateLimiter(),
   BULK_MAIL_QUEUE: new RecordingQueue<BulkMailMessage>(),
 };
+
+/**
+ * A full `Bindings` for a test: placeholders for every secret and variable,
+ * the permissive platform bindings above, and then `overrides`.
+ *
+ * The placeholders point nowhere real -- `SUPABASE_URL` in particular is an
+ * address no test reaches without stubbing `fetch`. The integration suites
+ * override it (and the key) with the local stack's, from `test-support/db`.
+ * @param overrides Fields to replace, e.g. the `SESSION_SECRET` a test signs
+ *     its tokens with.
+ */
+export function testBindings(overrides: Partial<Bindings> = {}): Bindings {
+  return {
+    ...PERMISSIVE_PLATFORM_BINDINGS,
+    SUPABASE_URL: 'https://example.supabase.co',
+    SUPABASE_SECRET_KEY: 'dummy-service-role-key',
+    MAIL_API_KEY: 'dummy-mail-api-key',
+    GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
+    MAIL_FROM_ADDRESS: 'entry@example.com',
+    FRONTEND_URL: 'https://entry.example.com',
+    SESSION_SECRET: 'test-session-secret',
+    ...overrides,
+  };
+}
 
 /** A token for the endpoints behind `requireTurnstile()` to be given. */
 export const TURNSTILE_TEST_TOKEN = 'dummy-turnstile-token';

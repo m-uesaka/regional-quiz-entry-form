@@ -1,7 +1,7 @@
 import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
 import {Hono} from 'hono';
 import {sign} from 'hono/jwt';
-import type {Bindings, Env, StaffEnv} from './types/env';
+import type {Env, StaffEnv} from './types/env';
 import {app} from './index';
 import {
   requireOpenEntryPeriodOrStaff,
@@ -13,7 +13,7 @@ import {
   requireStaffForTournament,
 } from './middleware/staff-auth';
 import {
-  PERMISSIVE_PLATFORM_BINDINGS,
+  testBindings,
   TURNSTILE_TEST_TOKEN,
   turnstileAwareFetch,
 } from './test-support/bindings';
@@ -270,16 +270,14 @@ function toConcretePath(path: string): string {
   });
 }
 
-const TEST_ENV: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
+const TEST_ENV = testBindings({
   SUPABASE_URL: 'http://supabase.invalid',
   SUPABASE_SECRET_KEY: 'test-secret-key',
   MAIL_API_KEY: 'test-mail-api-key',
   GOOGLE_SHEETS_API_KEY: 'test-sheets-api-key',
   MAIL_FROM_ADDRESS: 'noreply@example.com',
   FRONTEND_URL: 'http://localhost:5173',
-  SESSION_SECRET: 'test-session-secret',
-};
+});
 
 // The region every tournament and entry the stub below hands back belongs
 // to, and one that is not it.

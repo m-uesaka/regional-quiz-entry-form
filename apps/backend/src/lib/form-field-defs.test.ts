@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
-import type {Bindings} from '../types/env';
+import {testBindings} from '../test-support/bindings';
 import {createDbClient} from './db';
 import {fetchFormFieldDefs, validateCustomFieldValues} from './form-field-defs';
 
@@ -21,10 +21,7 @@ const POSTGREST_ERROR = {
   code: '57P01',
 };
 
-const db = createDbClient({
-  SUPABASE_URL: 'http://localhost:54321',
-  SUPABASE_SECRET_KEY: 'test-secret-key',
-} as Bindings);
+const db = createDbClient(testBindings());
 
 describe('form field def reads (mocked Supabase)', () => {
   const originalFetch = globalThis.fetch;
