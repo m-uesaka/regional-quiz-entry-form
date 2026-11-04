@@ -11,12 +11,9 @@ import {
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
 import {internalError} from '../lib/errors';
+import {SheetFetchError} from '../lib/google-sheets';
 import {classifySheetImportError} from '../lib/sheet-import-errors';
-import {
-  fetchSheetRows,
-  SheetFetchError,
-  sheetRowsToYaml,
-} from '../lib/sheet-to-form-definition';
+import {fetchSheetRows, sheetRowsToYaml} from '../lib/sheet-to-form-definition';
 import {
   fetchRegulationSheetValues,
   sheetValuesToRegulations,

@@ -166,6 +166,8 @@ interface FakeEntrySheet {
   formRows: FakeCell[][];
   /** `undefined` for a spreadsheet with no regulation tab. */
   regulationRows?: FakeCell[][];
+  /** A status Google refuses the read with, instead of the tabs. */
+  refusedWith?: number;
 }
 
 /** A `spreadsheets.get` grid row for `cells`. */
@@ -226,6 +228,9 @@ describe.skipIf(!(await isDbReachable()))(
         }
         requestedSheetIds.push(id);
         const sheet = entrySheets[id];
+        if (sheet?.refusedWith !== undefined) {
+          return Response.json({error: 'refused'}, {status: sheet.refusedWith});
+        }
         if (!sheet || sheet.regulationRows === undefined) {
           return Response.json({error: 'not found'}, {status: 400});
         }
@@ -897,7 +902,7 @@ describe.skipIf(!(await isDbReachable()))(
         ],
         [
           [FORM_ROWS[1], FORM_ROWS[1]],
-          'フォーム定義: A列(key)「notes」が複数の行で使われています',
+          'フォーム定義 2行目と3行目: A列(key)「notes」が複数の行で使われています',
         ],
       ];
       for (const [formRows, message] of cases) {
@@ -911,6 +916,28 @@ describe.skipIf(!(await isDbReachable()))(
         expect(row.error).toStartWith(message);
       }
       expect(await tournamentOf(regionB, 'shinjinou')).toBeUndefined();
+    });
+
+    it("labels only the regulation tab's own mistakes as the regulation tab's", async () => {
+      indexValues = [HEADER, indexRow(regionB, '新人王', 's1')];
+      entrySheets = {
+        s1: {formRows: FORM_ROWS, regulationRows: [['', 46000, 46007]]},
+      };
+      stubSheets();
+
+      const [mistake] = await previewTournamentImport(env, 'index', NOW);
+
+      expect(mistake.error).toBe(
+        'レギュレーション: 2行目: レギュレーション名が空です',
+      );
+
+      // A read Google refuses is about the spreadsheet, not about the tab.
+      entrySheets = {s1: {formRows: FORM_ROWS, refusedWith: 403}};
+      stubSheets();
+
+      const [refused] = await previewTournamentImport(env, 'index', NOW);
+
+      expect(refused.error).toBe('Failed to fetch sheet: 403');
     });
   },
 );

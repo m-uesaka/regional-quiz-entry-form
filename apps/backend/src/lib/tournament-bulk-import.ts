@@ -14,15 +14,12 @@
 // form definition and its regulations) by `import_tournament()` in one
 // transaction, or not at all: a row that fails anywhere is reported back
 // with the reason, while the rest go ahead.
-import {ZodError} from 'zod';
 import {
   defaultTournamentName,
-  parseFormDefinitionYaml,
   REGULATION_SHEET_NAME,
   spreadsheetIdFromInput,
   TOURNAMENT_TYPE_LABELS,
   TournamentTypeSchema,
-  type FormFieldDefYaml,
   type RegulationUpsert,
   type TournamentImportAction,
   type TournamentImportCurrent,
@@ -40,17 +37,20 @@ import {IMPORT_ACTION_STALE_SQLSTATE} from './pg-errors';
 import {regulationSyncFailure} from './regulations';
 import {classifySheetImportError} from './sheet-import-errors';
 import {
-  DuplicateOptionError,
+  cellText,
   fetchEntrySheet,
   fetchSheetValues,
   SheetFetchError,
-  sheetRowsToYaml,
+} from './google-sheets';
+import {
+  FormSheetError,
+  formRowsToFields,
   sheetValuesToRows,
-  TYPE_LABELS,
-  UnknownFieldTypeError,
-  type SheetRow,
 } from './sheet-to-form-definition';
-import {sheetValuesToRegulations} from './sheet-to-regulations';
+import {
+  RegulationSheetError,
+  sheetValuesToRegulations,
+} from './sheet-to-regulations';
 import {promoteWaitlistedEntries} from './waitlist';
 
 /** The headers of the 大会一覧 sheet's columns this reads. */
@@ -592,7 +592,7 @@ async function prepareRow(
       context.env.GOOGLE_SHEETS_API_KEY,
       REGULATION_SHEET_NAME,
     );
-    const fields = formRowsToFields(type, sheetValuesToRows(formValues));
+    const fields = formRowsToFields(sheetValuesToRows(formValues));
     return {
       regionId,
       type,
@@ -610,8 +610,13 @@ async function prepareRow(
     if (e instanceof SheetFetchError && e.status === 400) {
       return `入力シートを読み取れません。スプレッドシートIDと、「${REGULATION_SHEET_NAME}」シートがあるかを確認してください`;
     }
-    // The regulation tab's own errors already name the row in Japanese.
-    return `レギュレーション: ${classifySheetImportError(e).error}`;
+    // The regulation tab's own errors already name the row in Japanese;
+    // only they get the tab's name, so a failure reading the spreadsheet is
+    // not presented as a problem with that tab.
+    if (e instanceof RegulationSheetError) {
+      return `レギュレーション: ${e.message}`;
+    }
+    return classifySheetImportError(e).error;
   }
 }
 
@@ -708,96 +713,6 @@ async function importRow(
     error: null,
     promotion,
   };
-}
-
-/**
- * A mistake on the form-definition tab of a row's entry sheet, worded for
- * staff and naming the sheet row it is on.
- */
-class FormSheetError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'FormSheetError';
-  }
-}
-
-// What each column of the form tab is called in a message.
-const FORM_COLUMN_NAMES: Record<string, string> = {
-  key: 'A列(key)',
-  label: 'B列(label)',
-  type: 'C列(type)',
-  required: 'D列(required)',
-  options: 'E列(options)',
-};
-
-/**
- * The fields the form tab defines, checked one row at a time so a mistake
- * is reported with its sheet row in Japanese rather than as the converter's
- * English message or a dump of Zod issues.
- * @param type The tournament's type.
- * @param rows The form tab's rows, from row 2.
- * @throws {FormSheetError} For the first row that is wrong, or for a key
- *     used twice.
- */
-function formRowsToFields(
-  type: TournamentType,
-  rows: SheetRow[],
-): FormFieldDefYaml[] {
-  const fields = rows.map((row, index) => {
-    const at = `フォーム定義 ${index + 2}行目`;
-    try {
-      // `sheetRowsToYaml()` is the conversion the edit screen's import uses,
-      // so both read a sheet the same way; it is run per row here only to
-      // know which row a failure belongs to.
-      const [field] = parseFormDefinitionYaml(
-        sheetRowsToYaml(type, [row]),
-      ).fields;
-      return field;
-    } catch (e: unknown) {
-      if (e instanceof UnknownFieldTypeError) {
-        throw new FormSheetError(
-          e.label === undefined || e.label === ''
-            ? `${at}: C列(type)が空です。途中に空行がある場合は行を詰めてください`
-            : `${at}: C列(type)「${e.label}」は${Object.keys(TYPE_LABELS).join('・')}のいずれでもありません`,
-        );
-      }
-      if (e instanceof DuplicateOptionError) {
-        throw new FormSheetError(
-          `${at}: E列(options)に同じ選択肢が複数あります`,
-        );
-      }
-      if (e instanceof ZodError) {
-        const column = String(e.issues[0]?.path[0] ?? '');
-        if (column === 'key') {
-          throw new FormSheetError(
-            `${at}: A列(key)「${row.key ?? ''}」は小文字の英字で始まり、小文字の英数字と _ だけにしてください`,
-          );
-        }
-        if (column === 'options') {
-          throw new FormSheetError(
-            `${at}: ラジオボタンには E列(options)に選択肢が1つ以上必要です`,
-          );
-        }
-        throw new FormSheetError(
-          `${at}: ${FORM_COLUMN_NAMES[column] ?? column}の値が正しくありません`,
-        );
-      }
-      throw e;
-    }
-  });
-  const keys = fields.map(field => field.key);
-  const duplicate = keys.find((key, index) => keys.indexOf(key) !== index);
-  if (duplicate !== undefined) {
-    throw new FormSheetError(
-      `フォーム定義: A列(key)「${duplicate}」が複数の行で使われています`,
-    );
-  }
-  return fields;
-}
-
-/** A cell as trimmed text; empty for a cell the API left out. */
-function cellText(cell: unknown): string {
-  return cell === undefined || cell === null ? '' : String(cell).trim();
 }
 
 /**
