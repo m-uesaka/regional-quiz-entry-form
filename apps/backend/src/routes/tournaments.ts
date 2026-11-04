@@ -2,6 +2,7 @@ import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
 import {
   TournamentCreateInputSchema,
+  TournamentDetailSchema,
   TournamentOrderInputSchema,
   TournamentResetInputSchema,
   type TournamentCreateInput,
@@ -210,11 +211,13 @@ export const tournamentsRoute = new Hono<StaffEnv>()
       if (!data) {
         return c.json({error: 'tournament not found'}, 404);
       }
-      return c.json({
-        tournament: rowToTournament(data),
-        customName: data.name,
-        formFieldDefs: data.form_field_defs.map(toFormFieldDef),
-      });
+      return c.json(
+        TournamentDetailSchema.parse({
+          tournament: rowToTournament(data),
+          customName: data.name,
+          formFieldDefs: data.form_field_defs.map(toFormFieldDef),
+        }),
+      );
     },
   )
   .post(

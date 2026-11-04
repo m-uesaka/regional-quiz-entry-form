@@ -1,18 +1,12 @@
-import {COMMON_ERROR_CODES, type TournamentType} from '@regional-quiz/shared';
+import {
+  COMMON_ERROR_CODES,
+  type EntryVerificationTournament,
+} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import type {LibFailure} from './errors';
 import {INVALID_TOKEN_SQLSTATE} from './pg-errors';
 import {hashToken} from './token';
-
-/**
- * The tournament a confirmed entry belongs to, as the public list page's
- * URL names it, so the frontend can drop that list from its cache (#125).
- */
-interface ConfirmedTournament {
-  regionSlug: string;
-  type: TournamentType;
-}
 
 /**
  * The 400 is the participant's problem -- the token is unknown, expired,
@@ -28,7 +22,7 @@ type ConfirmResult =
       ok: true;
       // Not `status`, which on a failure is the HTTP status.
       entryStatus: 'confirmed' | 'waitlisted';
-      tournament: ConfirmedTournament | null;
+      tournament: EntryVerificationTournament | null;
     }
   | LibFailure<400>;
 
@@ -87,7 +81,7 @@ export async function confirmEntryByToken(
 async function readConfirmedTournament(
   env: Bindings,
   tokenHash: string,
-): Promise<ConfirmedTournament | null> {
+): Promise<EntryVerificationTournament | null> {
   const {data, error} = await createDbClient(env)
     .from('email_verification_tokens')
     .select('entries(tournaments(type, regions(slug)))')

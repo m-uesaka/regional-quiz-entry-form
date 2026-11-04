@@ -157,6 +157,27 @@ export type EntryVerificationInput = z.infer<
   typeof EntryVerificationInputSchema
 >;
 
+// The tournament a confirmed entry belongs to, as the public list page's URL
+// names it, so the frontend can drop that list from its cache (#125).
+export const EntryVerificationTournamentSchema = z.object({
+  regionSlug: z.string(),
+  type: TournamentTypeSchema,
+});
+export type EntryVerificationTournament = z.infer<
+  typeof EntryVerificationTournamentSchema
+>;
+
+// Response body of a successful `POST /api/entries/verify`: what the entry
+// became, and its tournament -- null when that could not be read back, in
+// which case the list catches up when its cached copy expires.
+export const EntryVerificationResponseSchema = z.object({
+  status: z.enum(['confirmed', 'waitlisted']),
+  tournament: EntryVerificationTournamentSchema.nullable(),
+});
+export type EntryVerificationResponse = z.infer<
+  typeof EntryVerificationResponseSchema
+>;
+
 export const EntryStatusSchema = z.enum([
   'pending_verification',
   'confirmed',
