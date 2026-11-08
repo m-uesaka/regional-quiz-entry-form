@@ -162,6 +162,15 @@ export type TournamentUpdateResponse = z.infer<
   typeof TournamentUpdateResponseSchema
 >;
 
+// What `PATCH /api/tournaments/:id` answers (409) when it would move a
+// tournament that has entries to another region or type (#284): the entries
+// would follow without the dual-entry checks they were accepted under, so
+// the database refuses it (`tournaments_lock_region_type_with_entries`,
+// 0049). Shown as it is above the admin form. Deleting the entries with the
+// participant data reset lifts it.
+export const TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE =
+  'エントリーがある大会の地域・種別は変更できません。変更するには、先に参加者データをリセットしてください';
+
 // Japanese display labels for each tournament type, shared so staff-facing
 // screens don't each carry their own copy of the wording.
 export const TOURNAMENT_TYPE_LABELS: Record<TournamentType, string> = {

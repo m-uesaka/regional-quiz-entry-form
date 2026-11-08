@@ -123,9 +123,10 @@ export const actions = {
         redirectToStaffLogin(cookies, url);
       }
       // A constraint the database refused -- 400 for a region that doesn't
-      // exist, 409 for a second tournament of the same type in it (#199) --
-      // which the API words in Japanese itself, so it is shown rather than
-      // replaced.
+      // exist, 409 for a second tournament of the same type in it (#199) or
+      // for a region or type changed while the tournament has entries
+      // (#284) -- which the API words in Japanese itself, so it is shown
+      // rather than replaced.
       if (res.status === 400 || res.status === 409) {
         return updateFailure(
           res.status,

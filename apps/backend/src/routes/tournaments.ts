@@ -8,6 +8,7 @@ import {
   TournamentResetInputSchema,
   type TournamentCreateInput,
   type TournamentResetResponse,
+  TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE,
   TournamentUpdateInputSchema,
   type TournamentUpdateInput,
   type TournamentUpdateResponse,
@@ -35,6 +36,7 @@ import {
   type PgErrorTable,
   stillReferenced,
   TOURNAMENT_IDS_MISMATCH_SQLSTATE,
+  TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE,
   UNIQUE_VIOLATION_SQLSTATE,
 } from '../lib/pg-errors';
 import {rowToTournament, TOURNAMENT_COLUMNS} from '../lib/tournaments';
@@ -63,6 +65,12 @@ const TOURNAMENT_WRITE_ERRORS = {
   [DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE]: {
     status: 409,
     error: DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
+  },
+  // A PATCH would move a tournament that has entries to another region or
+  // type (0049, #284). Only an update can raise it.
+  [TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE]: {
+    status: 409,
+    error: TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE,
   },
 } as const satisfies PgErrorTable<400 | 409>;
 

@@ -1,6 +1,11 @@
 import {describe, expect, it} from 'vitest';
 import type {HttpError} from '@sveltejs/kit';
-import type {FormFieldDef, Region, Tournament} from '@regional-quiz/shared';
+import {
+  TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE,
+  type FormFieldDef,
+  type Region,
+  type Tournament,
+} from '@regional-quiz/shared';
 import {fakeCookies} from '../../../../../test-support/fake-cookies';
 import {
   fakeFetch,
@@ -338,6 +343,24 @@ describe('admin tournament update action', () => {
       data: {
         error: 'この地域には同じ種別の大会がすでにあります',
         values: {name: '書きかけの大会名'},
+      },
+    });
+  });
+
+  // #284: the tournament has entries, which a move would carry past the
+  // dual-entry checks they were accepted under.
+  it('surfaces a region or type change refused for a tournament with entries', async () => {
+    const event = buildActionEvent(
+      fakeApi({status: 409, error: TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE}),
+      updateFormData({type: 'shinjinou'}),
+    );
+
+    await expect(actions.update(event)).resolves.toMatchObject({
+      status: 409,
+      data: {
+        saved: false,
+        error: TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE,
+        values: {type: 'shinjinou'},
       },
     });
   });

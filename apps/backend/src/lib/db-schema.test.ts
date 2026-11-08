@@ -6,6 +6,7 @@ import {
   PARTICIPANT_REGION_SQLSTATE,
   REGION_DUAL_ENTRY_SQLSTATE,
   STAFF_ACCOUNT_DISABLED_SQLSTATE,
+  TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE,
 } from '../lib/pg-errors';
 import {
   CUSTOM_FIELD_VALUE_MAX_LENGTH,
@@ -1351,6 +1352,163 @@ describe.skipIf(!dbReachable)(
       await other.close();
 
       expect(shared.every(value => !value)).toBe(true);
+    });
+  },
+);
+
+// 0049, #284: a tournament's entries were accepted under the dual-entry
+// checks of its region and type, so neither may change while it has any.
+describe.skipIf(!dbReachable)(
+  'region and type of a tournament with entries (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const regionSlug = 'db-schema-region-type-lock-test-region';
+    const emailDomain = 'db-schema-region-type-lock-test.example.com';
+
+    async function cleanup() {
+      const slugs = [regionSlug, `${regionSlug}-other`];
+      await sql`delete from entries where tournament_id in (
+        select t.id from tournaments t join regions r on r.id = t.region_id
+        where r.slug in ${sql(slugs)}
+      )`;
+      await sql`delete from participants where email like ${'%@' + emailDomain}`;
+      await sql`delete from tournaments where region_id in (
+        select id from regions where slug in ${sql(slugs)}
+      )`;
+      await sql`delete from regions where slug in ${sql(slugs)}`;
+    }
+
+    beforeEach(cleanup);
+
+    afterAll(async () => {
+      await cleanup();
+      await sql.close();
+    });
+
+    /** A region with a 最強位, a participant of that region, and another region. */
+    async function seed() {
+      const [region] = await sql`
+        insert into regions (slug, name) values (${regionSlug}, '移動元')
+        returning id
+      `;
+      const [other] = await sql`
+        insert into regions (slug, name) values (${`${regionSlug}-other`}, '移動先')
+        returning id
+      `;
+      const [tournament] = await sql`
+        insert into tournaments (
+          region_id, type, name, entry_opens_at, entry_closes_at
+        ) values (
+          ${region.id}, 'saikyoi', 'テスト大会', '2020-01-01T00:00:00Z',
+          '2099-01-01T00:00:00Z'
+        )
+        returning id
+      `;
+      const [participant] = await sql`
+        insert into participants (region_id, email, password_hash)
+        values (${region.id}, ${`p-${crypto.randomUUID()}@${emailDomain}`}, 'x')
+        returning id
+      `;
+      return {
+        regionId: region.id as string,
+        otherRegionId: other.id as string,
+        tournamentId: tournament.id as string,
+        participantId: participant.id as string,
+      };
+    }
+
+    function insertEntry(
+      db: SQL,
+      tournamentId: string,
+      participantId: string,
+      status = 'pending_verification',
+    ) {
+      return db`
+        insert into entries (
+          participant_id, tournament_id, name, furigana, display_name, status
+        ) values (
+          ${participantId}, ${tournamentId}, '山田太郎', 'ヤマダタロウ', '太郎',
+          ${status}
+        )
+      `;
+    }
+
+    async function refusalOf(query: PromiseLike<unknown>) {
+      try {
+        await query;
+        return undefined;
+      } catch (e: unknown) {
+        const {errno} = e as {errno?: string};
+        if (!errno) {
+          throw e;
+        }
+        return errno;
+      }
+    }
+
+    it('refuses changing the region or type once there is an entry, cancelled or not', async () => {
+      const {otherRegionId, tournamentId, participantId} = await seed();
+      await insertEntry(sql, tournamentId, participantId, 'cancelled');
+
+      const moved = await refusalOf(sql`
+        update tournaments set region_id = ${otherRegionId}
+        where id = ${tournamentId}
+      `);
+      const retyped = await refusalOf(sql`
+        update tournaments set type = 'shinjinou' where id = ${tournamentId}
+      `);
+
+      expect(moved).toBe(TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE);
+      expect(retyped).toBe(TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE);
+    });
+
+    it('lets the same region and type be written back, and anything else change', async () => {
+      const {regionId, tournamentId, participantId} = await seed();
+      await insertEntry(sql, tournamentId, participantId);
+
+      const code = await refusalOf(sql`
+        update tournaments
+        set region_id = ${regionId}, type = 'saikyoi', name = '改名',
+          capacity = 10
+        where id = ${tournamentId}
+      `);
+
+      expect(code).toBeUndefined();
+    });
+
+    it('lets a tournament without entries move', async () => {
+      const {otherRegionId, tournamentId} = await seed();
+
+      const code = await refusalOf(sql`
+        update tournaments set region_id = ${otherRegionId}, type = 'shinjinou'
+        where id = ${tournamentId}
+      `);
+
+      expect(code).toBeUndefined();
+    });
+
+    // The move waits on the tournament row an uncommitted entry holds for
+    // its foreign key, and then sees that entry.
+    it('sees an entry committed while the move waited for the tournament row', async () => {
+      const {otherRegionId, tournamentId, participantId} = await seed();
+      const holder = await sql.reserve();
+      const mover = new SQL(DB_URL);
+      try {
+        await holder`begin`;
+        await insertEntry(holder, tournamentId, participantId);
+        const move = refusalOf(mover`
+          update tournaments set region_id = ${otherRegionId}
+          where id = ${tournamentId}
+        `);
+        // Give the move time to reach the row lock it then waits on.
+        await Bun.sleep(200);
+        await holder`commit`;
+
+        expect(await move).toBe(TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE);
+      } finally {
+        holder.release();
+        await mover.close();
+      }
     });
   },
 );
