@@ -2,7 +2,17 @@ import {fail, redirect} from '@sveltejs/kit';
 import {PasswordResetRequestInputSchema} from '@regional-quiz/shared';
 import {PasswordResetConfirmInputSchema} from '@regional-quiz/shared/password-policy';
 import {createApiClient} from '$lib/api';
-import {readTurnstileToken, TURNSTILE_TOKEN_FIELD} from '$lib/turnstile';
+import {readString} from '$lib/form-data';
+import {
+  readTurnstileToken,
+  TURNSTILE_FAILED_MESSAGE,
+  TURNSTILE_TOKEN_FIELD,
+} from '$lib/turnstile';
+import {
+  PASSWORD_MISMATCH_MESSAGE,
+  TOO_MANY_REQUESTS_MESSAGE,
+} from '$lib/form-errors';
+import {zodFieldErrors} from '$lib/zod-field-errors';
 import {
   clearResetToken,
   PARTICIPANT_RESET_TOKEN_COOKIE,
@@ -11,15 +21,6 @@ import {
 } from '$lib/server/reset-token';
 import {clearParticipantSession} from '$lib/server/participant-session';
 import type {Actions, PageServerLoad} from './$types';
-
-/**
- * Shown for a 429 from the API. The request half of this flow mails a link
- * to whatever address it is given, so it is rate limited per IP and per
- * address (#116) -- and the limit can be met by someone who never submitted
- * anything themselves, which the wording allows for.
- */
-const TOO_MANY_REQUESTS_MESSAGE =
-  '送信が集中しています。しばらく待ってから再度お試しください';
 
 /**
  * Decides which half of the reset flow this page is showing.
@@ -54,7 +55,7 @@ export const actions = {
 
     if (token === null) {
       const parsed = PasswordResetRequestInputSchema.safeParse({
-        email: String(formData.get('email') ?? ''),
+        email: readString(formData, 'email'),
       });
       if (!parsed.success) {
         return fail(400, {
@@ -85,8 +86,7 @@ export const actions = {
           // The body was checked above, so the only 400 left is the
           // challenge in front of the endpoint refusing the token.
           return fail(400, {
-            error:
-              '「私はロボットではありません」の確認に失敗しました。ページを再読み込みして、もう一度お試しください',
+            error: TURNSTILE_FAILED_MESSAGE,
             tokenRejected: false,
           });
         }
@@ -101,10 +101,10 @@ export const actions = {
       return {sent: true};
     }
 
-    const newPassword = String(formData.get('newPassword') ?? '');
-    if (newPassword !== String(formData.get('newPasswordConfirm') ?? '')) {
+    const newPassword = readString(formData, 'newPassword');
+    if (newPassword !== readString(formData, 'newPasswordConfirm')) {
       return fail(400, {
-        error: 'パスワードが一致しません',
+        error: PASSWORD_MISMATCH_MESSAGE,
         tokenRejected: false,
       });
     }
@@ -118,7 +118,7 @@ export const actions = {
       // broke (too short, too long, or too common).
       return fail(400, {
         error:
-          parsed.error.flatten().fieldErrors.newPassword?.[0] ??
+          zodFieldErrors(parsed.error).newPassword?.[0] ??
           'パスワードを正しく入力してください',
         tokenRejected: false,
       });

@@ -13,7 +13,7 @@
   import Card from '$lib/components/ui/atoms/Card.svelte';
   import Chip from '$lib/components/ui/atoms/Chip.svelte';
   import Label from '$lib/components/ui/atoms/Label.svelte';
-  import Message from '$lib/components/ui/items/Message.svelte';
+  import FlashMessage from '$lib/components/ui/items/FlashMessage.svelte';
   import type {RowIntent} from './+page.server';
   import type {PageProps} from './$types';
 
@@ -94,14 +94,10 @@
     </div>
 
     {#if inviteResult?.saved}
-      <Message variant="success">
-        <p role="status" class="text-sm text-foreground">招待メールを送信しました</p>
-      </Message>
+      <FlashMessage kind="success">招待メールを送信しました</FlashMessage>
     {/if}
     {#if inviteResult?.error}
-      <Message variant="danger">
-        <p role="alert" class="text-sm text-foreground">{inviteResult.error}</p>
-      </Message>
+      <FlashMessage kind="error">{inviteResult.error}</FlashMessage>
     {/if}
 
     <form method="POST" action="?/invite" class="flex flex-col gap-4">
@@ -213,61 +209,39 @@
               </div>
 
               {#if result?.saved}
-                <Message variant="success">
-                  <p role="status" class="text-sm text-foreground">
-                    パスワード設定メールを再送しました
-                  </p>
-                </Message>
+                <FlashMessage kind="success">
+                  パスワード設定メールを再送しました
+                </FlashMessage>
               {/if}
               {#if result?.error}
-                <Message variant="danger">
-                  <p role="alert" class="text-sm text-foreground">{result.error}</p>
-                </Message>
+                <FlashMessage kind="error">{result.error}</FlashMessage>
               {/if}
 
               {#if revokeResult?.saved}
-                <Message variant="success">
-                  <p role="status" class="text-sm text-foreground">
-                    このアカウントのログイン中のセッションをすべて無効化しました
-                  </p>
-                </Message>
+                <FlashMessage kind="success">
+                  このアカウントのログイン中のセッションをすべて無効化しました
+                </FlashMessage>
               {/if}
               {#if revokeResult?.error}
-                <Message variant="danger">
-                  <p role="alert" class="text-sm text-foreground">
-                    {revokeResult.error}
-                  </p>
-                </Message>
+                <FlashMessage kind="error">{revokeResult.error}</FlashMessage>
               {/if}
 
               {#if disableResult?.saved}
-                <Message variant="success">
-                  <p role="status" class="text-sm text-foreground">
-                    このアカウントを無効化しました
-                  </p>
-                </Message>
+                <FlashMessage kind="success">
+                  このアカウントを無効化しました
+                </FlashMessage>
               {/if}
               {#if disableResult?.error}
-                <Message variant="danger">
-                  <p role="alert" class="text-sm text-foreground">
-                    {disableResult.error}
-                  </p>
-                </Message>
+                <FlashMessage kind="error">{disableResult.error}</FlashMessage>
               {/if}
 
               {#if enableResult?.saved}
-                <Message variant="success">
-                  <p role="status" class="text-sm text-foreground">
-                    このアカウントを有効化しました
-                  </p>
-                </Message>
+                <FlashMessage kind="success">
+                  このアカウントを有効化しました
+                </FlashMessage>
               {/if}
               {#if enableResult?.error}
-                <Message variant="danger">
-                  <p role="alert" class="text-sm text-foreground">
-                    {enableResult.error}
-                  </p>
-                </Message>
+                <FlashMessage kind="error">{enableResult.error}</FlashMessage>
               {/if}
 
               {#if disabled}

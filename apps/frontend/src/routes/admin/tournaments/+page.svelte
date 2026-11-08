@@ -7,7 +7,7 @@
   import Table from '$lib/components/ui/atoms/Table.svelte';
   import TableData from '$lib/components/ui/atoms/TableData.svelte';
   import TableHead from '$lib/components/ui/atoms/TableHead.svelte';
-  import Message from '$lib/components/ui/items/Message.svelte';
+  import FlashMessage from '$lib/components/ui/items/FlashMessage.svelte';
   import {formatJstDateTime} from '$lib/jst-datetime';
   import type {PageProps} from './$types';
 
@@ -18,9 +18,7 @@
   <PageHeader title="大会" />
 
   {#if data.deleted}
-    <Message variant="success">
-      <p role="status" class="text-sm text-foreground">大会を削除しました</p>
-    </Message>
+    <FlashMessage kind="success">大会を削除しました</FlashMessage>
   {/if}
 
   <p class="flex flex-wrap gap-x-4 text-sm">

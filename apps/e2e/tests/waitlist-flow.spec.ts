@@ -48,9 +48,7 @@ test('a cancellation promotes the waitlisted entry behind it', async ({
       queued.email,
     );
     await expect(
-      waitlistedPage.getByText(
-        '定員に達していたため、キャンセル待ちになりました。',
-      ),
+      waitlistedPage.getByText('キャンセル待ちとして受け付けました。'),
     ).toBeVisible();
 
     await page.goto(entryListPath(SAIKYOI));

@@ -7,7 +7,6 @@ import {
   entryAvailability,
   findCustomFieldValuesErrors,
   TournamentEntryCountsSchema,
-  TournamentTypeSchema,
   type EntryErrorCode,
   type FormFieldDef,
   type Regulation,
@@ -16,17 +15,20 @@ import {
 } from '@regional-quiz/shared';
 import {
   createApiClient,
-  isUnauthorized,
   pickApiErrorMessage,
   readErrorMessage,
-  resolveApiErrorMessage,
   type ApiErrorMessages,
 } from '$lib/api';
+import {readString, readStrings} from '$lib/form-data';
 import {isWaitlistOpen, priorityEntryNotices} from '$lib/priority-entry';
 import {participantLoginPath} from '$lib/server/participant-login';
 import {clearParticipantSession} from '$lib/server/participant-session';
-import {redirectToStaffLogin} from '$lib/server/staff-session';
-import {readTurnstileToken, TURNSTILE_TOKEN_FIELD} from '$lib/turnstile';
+import {fetchTournamentBySlug} from '$lib/server/tournament-by-slug';
+import {
+  readTurnstileToken,
+  TURNSTILE_FAILED_MESSAGE,
+  TURNSTILE_TOKEN_FIELD,
+} from '$lib/turnstile';
 import {
   customFieldErrors,
   entrySchemaFieldErrors,
@@ -34,17 +36,8 @@ import {
   readFormText,
 } from '$lib/server/custom-field-values';
 import type {EntryFieldErrors, EntryFormValues} from '$lib/types/entry-form';
+import {TOO_MANY_REQUESTS_MESSAGE} from '$lib/form-errors';
 import type {Actions, PageServerLoad, RequestEvent} from './$types';
-
-/**
- * What a 429 from the API is shown as. The rate limit it comes from is
- * counted per IP *and* per address (#116), so a participant can also meet it
- * without having submitted anything themselves -- from a shared connection,
- * say -- which is why the wording asks for patience rather than blaming the
- * submission.
- */
-const TOO_MANY_REQUESTS_MESSAGE =
-  '送信が集中しています。しばらく待ってから再度お試しください';
 
 /**
  * What a logged-in submission is told when its session is no longer good:
@@ -127,10 +120,8 @@ const ENTRY_ERROR_MESSAGES: Record<AnsweredEntryErrorCode, string> = {
     'この大会へのエントリーが同時に送信されていました。マイページでエントリー状況をご確認ください',
   [ENTRY_ERROR_CODES.ALREADY_ENTERED_ANOTHER_TOURNAMENT]:
     'この地域では、最強位と新人王のどちらか一方にのみエントリーできます',
-  // Answered by the challenge in front of the API, which refuses a missing
-  // and an invalid token alike. Both are fixed by solving the widget again.
-  [ENTRY_ERROR_CODES.TURNSTILE_VERIFICATION_FAILED]:
-    '「私はロボットではありません」の確認に失敗しました。ページを再読み込みして、もう一度お試しください',
+  // Answered by the challenge in front of the API.
+  [ENTRY_ERROR_CODES.TURNSTILE_VERIFICATION_FAILED]: TURNSTILE_FAILED_MESSAGE,
   [ENTRY_ERROR_CODES.TOO_MANY_REQUESTS]: TOO_MANY_REQUESTS_MESSAGE,
 };
 
@@ -157,56 +148,17 @@ const ENTRY_REFUSAL_MESSAGES: ApiErrorMessages = {
  * @param event The request's `params` and `fetch`, plus the `cookies` and
  *     `url` a refused staff session is cleared and redirected with.
  */
-async function fetchTournament({
-  params,
-  fetch,
-  cookies,
-  url,
-}: Pick<
-  RequestEvent,
-  'params' | 'fetch' | 'cookies' | 'url'
->): Promise<Tournament> {
-  // The RPC client's param type for `tournamentSlug` is the literal union
-  // `'saikyoi' | 'shinjinou'` (inferred from the backend's zValidator), not
-  // a bare `string`, so a raw route param needs narrowing before it
-  // typechecks. An invalid slug is reported as "not found", not a 500.
-  const parsedType = TournamentTypeSchema.safeParse(params.tournamentSlug);
-  if (!parsedType.success) {
-    throw error(404, '大会が見つかりません');
-  }
-
-  const api = createApiClient(fetch);
-  const res = await api.api.tournaments[':regionSlug'][':tournamentSlug'].$get({
-    param: {regionSlug: params.regionSlug, tournamentSlug: parsedType.data},
+async function fetchTournament(
+  event: Pick<RequestEvent, 'params' | 'fetch' | 'cookies' | 'url'>,
+): Promise<Tournament> {
+  return fetchTournamentBySlug(event, {
+    // A paused tournament (0039) is gated the same way as a closed entry
+    // period, but said apart.
+    forbiddenMessages: {
+      byCode: {[ENTRY_ERROR_CODES.ENTRIES_PAUSED]: ENTRIES_PAUSED_MESSAGE},
+      fallback: ENTRY_ERROR_MESSAGES[ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED],
+    },
   });
-  if (!res.ok) {
-    if (res.status === 404) {
-      throw error(404, '大会が見つかりません');
-    }
-    // A 401 means the request carried a staff cookie the gate refused: it
-    // expired, or its sessions were revoked. Only staff hold that cookie, so
-    // it is dropped and its holder sent to log in again, rather than told
-    // the period is closed while the dead cookie stays put.
-    if (isUnauthorized(res)) {
-      redirectToStaffLogin(cookies, url);
-    }
-    // The backend applies the same entry-period rule this page does
-    // (`middleware/entry-period.ts`), and answers before the tournament is
-    // readable at all -- so outside the period this is what a visitor with
-    // no staff session, or one covering another region, actually gets.
-    if (res.status === 403) {
-      // A paused tournament (0039) is gated the same way, but said apart.
-      throw error(
-        403,
-        await resolveApiErrorMessage(res, {
-          byCode: {[ENTRY_ERROR_CODES.ENTRIES_PAUSED]: ENTRIES_PAUSED_MESSAGE},
-          fallback: ENTRY_ERROR_MESSAGES[ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED],
-        }),
-      );
-    }
-    throw error(502, '大会情報の取得に失敗しました');
-  }
-  return res.json();
 }
 
 /**
@@ -369,13 +321,13 @@ function readEntryFormValues(
   formFieldDefs: FormFieldDef[],
 ): EntryFormValues {
   return {
-    name: String(formData.get('name') ?? ''),
-    furigana: String(formData.get('furigana') ?? ''),
-    displayName: String(formData.get('displayName') ?? ''),
-    email: String(formData.get('email') ?? ''),
+    name: readString(formData, 'name'),
+    furigana: readString(formData, 'furigana'),
+    displayName: readString(formData, 'displayName'),
+    email: readString(formData, 'email'),
     // A checkbox group, so every checked box arrives under the same name —
     // `getAll`, not `get`.
-    regulationIds: formData.getAll('regulationIds').map(String),
+    regulationIds: readStrings(formData, 'regulationIds'),
     freeText: readFormText(formData, 'freeText'),
     customFieldValues: readCustomFieldValues(formData, formFieldDefs),
   };
@@ -505,8 +457,8 @@ export const actions = {
       const parsed = EntryInputSchema.safeParse({
         ...entry,
         email,
-        password: String(formData.get('password') ?? ''),
-        passwordConfirm: String(formData.get('passwordConfirm') ?? ''),
+        password: readString(formData, 'password'),
+        passwordConfirm: readString(formData, 'passwordConfirm'),
       });
       if (!parsed.success || customFieldValuesErrors.length > 0) {
         return invalid(

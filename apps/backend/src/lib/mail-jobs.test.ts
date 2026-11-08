@@ -40,8 +40,8 @@ describe.skipIf(!(await isDbReachable()))(
         insert into tournaments (
           region_id, type, name, entry_opens_at, entry_closes_at
         ) values
-          (${region.id}, 'saikyoi', 'テスト最強位', now(), now()),
-          (${region.id}, 'shinjinou', 'テスト新人王', now(), now())
+          (${region.id}, 'saikyoi', 'テスト最強位', now() - interval '1 day', now()),
+          (${region.id}, 'shinjinou', 'テスト新人王', now() - interval '1 day', now())
         returning id
       `;
       tournamentId = tournaments[0].id;

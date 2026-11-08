@@ -8,6 +8,7 @@
 
 import type {SQL} from 'bun';
 import {hashPassword} from '../lib/password';
+import {generateToken, hashToken} from '../lib/token';
 
 /** The ids `createTournamentAndRegulation()` created. */
 export interface TournamentFixture {
@@ -116,6 +117,33 @@ export async function createEntryRow(
     participantId: participant.id as string,
     entryId: entry.id as string,
   };
+}
+
+/**
+ * Issues an email verification token for `entryId`, as a submission's
+ * confirmation mail would.
+ * @param sql The connection to the local database.
+ * @param entryId The entry the token confirms.
+ * @param options When the token expires (far in the future if omitted),
+ *     and whether it has already been used.
+ * @return The raw token, as the verification link carries it.
+ */
+export async function createVerificationToken(
+  sql: SQL,
+  entryId: string,
+  options: {expiresAt?: string; used?: boolean} = {},
+): Promise<string> {
+  const token = generateToken();
+  await sql`
+    insert into email_verification_tokens (
+      entry_id, token_hash, expires_at, used_at
+    ) values (
+      ${entryId}, ${await hashToken(token)},
+      ${options.expiresAt ?? '2099-01-01T00:00:00Z'},
+      ${options.used ? '2020-01-01T00:00:00Z' : null}
+    )
+  `;
+  return token;
 }
 
 /**

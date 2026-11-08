@@ -9,12 +9,12 @@ import {
 import {createApiClient, isUnauthorized, readErrorMessage} from '$lib/api';
 import {
   parseTournamentFormValues,
-  questionSetError,
   readTournamentFormValues,
   isResetConfirmation,
   RESET_CONFIRMATION_WORD,
 } from '$lib/tournament-form';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
+import {INVALID_INPUT_MESSAGE} from '$lib/form-errors';
 import type {TournamentFormValues} from '$lib/types/tournament-form';
 import type {Actions, PageServerLoad} from './$types';
 
@@ -50,8 +50,6 @@ interface TournamentResetActionResult {
   reset: TournamentResetResponse | null;
   resetError: string | null;
 }
-
-const INVALID_INPUT_MESSAGE = '入力内容を確認してください';
 
 // Read and written on the server rather than in the browser (this was a
 // `+page.ts` calling the API from the client): `/api/*` is only routed to
@@ -106,25 +104,22 @@ export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
 export const actions = {
   update: async ({params, request, fetch, cookies, url}) => {
     const values = readTournamentFormValues(await request.formData());
-    const input = parseTournamentFormValues(values);
-    if (!input) {
-      return updateFailure(
-        400,
-        values,
-        questionSetError(values) ?? INVALID_INPUT_MESSAGE,
-      );
+    const parsed = parseTournamentFormValues(values);
+    if (!parsed.ok) {
+      return updateFailure(400, values, parsed.error);
     }
 
     const res = await createApiClient(fetch).api.tournaments[':id'].$patch({
       param: {id: params.id},
-      json: input,
+      json: parsed.input,
     });
     if (!res.ok) {
       if (isUnauthorized(res)) {
         redirectToStaffLogin(cookies, url);
       }
       // A constraint the database refused -- 400 for a region that doesn't
-      // exist, 409 for a second tournament of the same type in it (#199) --
+      // exist or an entry period that doesn't open before it closes (#285),
+      // 409 for a second tournament of the same type in it (#199) --
       // which the API words in Japanese itself, so it is shown rather than
       // replaced.
       if (res.status === 400 || res.status === 409) {

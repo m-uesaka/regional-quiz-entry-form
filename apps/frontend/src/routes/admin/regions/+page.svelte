@@ -6,7 +6,7 @@
   import Card from '$lib/components/ui/atoms/Card.svelte';
   import Checkbox from '$lib/components/ui/atoms/Checkbox.svelte';
   import Label from '$lib/components/ui/atoms/Label.svelte';
-  import Message from '$lib/components/ui/items/Message.svelte';
+  import FlashMessage from '$lib/components/ui/items/FlashMessage.svelte';
   import type {PageProps} from './$types';
 
   const {data, form}: PageProps = $props();
@@ -35,14 +35,10 @@
     <h2 class="text-lg font-bold">地域を追加</h2>
 
     {#if createResult?.saved}
-      <Message variant="success">
-        <p role="status" class="text-sm text-foreground">地域を追加しました</p>
-      </Message>
+      <FlashMessage kind="success">地域を追加しました</FlashMessage>
     {/if}
     {#if createResult?.error}
-      <Message variant="danger">
-        <p role="alert" class="text-sm text-foreground">{createResult.error}</p>
-      </Message>
+      <FlashMessage kind="error">{createResult.error}</FlashMessage>
     {/if}
 
     <form method="POST" action="?/create" class="flex flex-col gap-4">
@@ -105,14 +101,10 @@
               <h3 class="font-mono text-base font-bold">{region.slug}</h3>
 
               {#if result?.saved}
-                <Message variant="success">
-                  <p role="status" class="text-sm text-foreground">保存しました</p>
-                </Message>
+                <FlashMessage kind="success">保存しました</FlashMessage>
               {/if}
               {#if result?.error}
-                <Message variant="danger">
-                  <p role="alert" class="text-sm text-foreground">{result.error}</p>
-                </Message>
+                <FlashMessage kind="error">{result.error}</FlashMessage>
               {/if}
 
               <form method="POST" action="?/update" class="flex flex-col gap-4">

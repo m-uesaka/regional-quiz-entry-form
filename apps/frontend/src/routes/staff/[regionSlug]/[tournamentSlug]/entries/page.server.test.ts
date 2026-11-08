@@ -239,6 +239,7 @@ describe('staff entries +page.server load', () => {
 
     await expect(load(event)).rejects.toMatchObject({
       status: 403,
+      body: {message: 'この大会のエントリーを閲覧する権限がありません'},
     } satisfies Partial<HttpError>);
   });
 

@@ -16,6 +16,8 @@
 // with the reason, while the rest go ahead.
 import {
   defaultTournamentName,
+  ENTRY_PERIOD_ORDER_MESSAGE,
+  isEntryPeriodOrdered,
   REGULATION_SHEET_NAME,
   spreadsheetIdFromInput,
   TOURNAMENT_TYPE_LABELS,
@@ -571,8 +573,10 @@ async function prepareRow(
   if (entryClosesAt === null) {
     return `エントリー終了「${row.entryClosesAt}」を日時として読み取れません(例: 2026/12/16 23:59:59)`;
   }
-  if (Date.parse(entryOpensAt) >= Date.parse(entryClosesAt)) {
-    return 'エントリー開始がエントリー終了より後になっています';
+  if (!isEntryPeriodOrdered(entryOpensAt, entryClosesAt)) {
+    // The values as the sheet has them, so staff can find the cells, before
+    // the same message the admin form shows.
+    return `エントリー期間「${row.entryOpensAt} 〜 ${row.entryClosesAt}」: ${ENTRY_PERIOD_ORDER_MESSAGE}`;
   }
   if (Date.parse(entryClosesAt) <= context.now.getTime()) {
     return 'エントリー終了が既に過ぎています';

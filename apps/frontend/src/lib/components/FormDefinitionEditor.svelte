@@ -16,6 +16,7 @@ stands, so a reloaded sheet can be checked (and touched up) first.
   import Input from '$lib/components/ui/atoms/Input.svelte';
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import Textarea from '$lib/components/ui/atoms/Textarea.svelte';
+  import FlashMessage from '$lib/components/ui/items/FlashMessage.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
 
   interface Props {
@@ -166,9 +167,7 @@ stands, so a reloaded sheet can be checked (and touched up) first.
   </form>
 
   {#if loadError}
-    <Message variant="danger">
-      <p class="text-sm text-foreground" role="alert">{loadError}</p>
-    </Message>
+    <FlashMessage kind="error">{loadError}</FlashMessage>
   {/if}
   {#if loaded}
     <Message variant="default">
@@ -195,12 +194,8 @@ stands, so a reloaded sheet can be checked (and touched up) first.
   </form>
 
   {#if showSaved}
-    <Message variant="success">
-      <p class="text-sm text-foreground" role="status">保存しました</p>
-    </Message>
+    <FlashMessage kind="success">保存しました</FlashMessage>
   {:else if saveStatus === 'error' && saveError}
-    <Message variant="danger">
-      <p class="text-sm text-foreground" role="alert">{saveError}</p>
-    </Message>
+    <FlashMessage kind="error">{saveError}</FlashMessage>
   {/if}
 </Card>

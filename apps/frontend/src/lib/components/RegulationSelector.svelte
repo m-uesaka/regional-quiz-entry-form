@@ -5,6 +5,7 @@
     regulationSelectionRefusal,
     selectableRegulations,
   } from '@regional-quiz/shared';
+  import {Hydrated} from '$lib/hydrated.svelte';
 
   interface Props {
     regulations: Regulation[];
@@ -63,10 +64,7 @@
   // silently refuses to submit past with JS off (#95). The action's own
   // `EntryInputSchema` check answers such a submission with a message
   // either way.
-  let hydrated = $state(false);
-  $effect(() => {
-    hydrated = true;
-  });
+  const hydrated = new Hydrated();
 </script>
 
 <!-- Native checkboxes inside their own `<label>`: the label (badge
@@ -90,7 +88,7 @@
         class="size-4 cursor-pointer accent-primary"
         name="regulationIds"
         value={regulation.id}
-        required={hydrated && chosen.length === 0}
+        required={hydrated.current && chosen.length === 0}
         bind:group={value}
       />
       {regulation.label}

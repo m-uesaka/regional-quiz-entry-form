@@ -1,6 +1,11 @@
 import {describe, expect, it} from 'vitest';
 import type {HttpError} from '@sveltejs/kit';
-import type {FormFieldDef, Region, Tournament} from '@regional-quiz/shared';
+import {
+  ENTRY_PERIOD_ORDER_MESSAGE,
+  type FormFieldDef,
+  type Region,
+  type Tournament,
+} from '@regional-quiz/shared';
 import {fakeCookies} from '../../../../../test-support/fake-cookies';
 import {
   fakeFetch,
@@ -281,6 +286,46 @@ describe('admin tournament update action', () => {
       data: {
         error: '問題セットに空白は使えません',
         values: {questionSet: '宮 崎'},
+      },
+    });
+    expect(calls).toEqual([]);
+  });
+
+  // #285: the period is checked here by the API's own rule, so the
+  // mistake is named rather than refused at large.
+  for (const entryClosesAt of ['2026-01-01T09:00', '2025-12-31T09:00']) {
+    it(`names an entry period closing at ${entryClosesAt}, without asking the API`, async () => {
+      const calls: RecordedRequest[] = [];
+      const event = buildActionEvent(
+        fakeApi({calls}),
+        updateFormData({entryClosesAt}),
+      );
+
+      await expect(actions.update(event)).resolves.toMatchObject({
+        status: 400,
+        data: {
+          error: ENTRY_PERIOD_ORDER_MESSAGE,
+          values: {entryClosesAt},
+        },
+      });
+      expect(calls).toEqual([]);
+    });
+  }
+
+  it('names both a bad 問題セット and a bad entry period at once', async () => {
+    const calls: RecordedRequest[] = [];
+    const event = buildActionEvent(
+      fakeApi({calls}),
+      updateFormData({
+        questionSet: '宮　崎',
+        entryClosesAt: '2026-01-01T09:00',
+      }),
+    );
+
+    await expect(actions.update(event)).resolves.toMatchObject({
+      status: 400,
+      data: {
+        error: `問題セットに空白は使えません。${ENTRY_PERIOD_ORDER_MESSAGE}`,
       },
     });
     expect(calls).toEqual([]);

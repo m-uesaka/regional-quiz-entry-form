@@ -1,3 +1,5 @@
+import {readString} from '$lib/form-data';
+
 /**
  * The name Turnstile gives the hidden control it writes its token into, and
  * the header the API expects that token in.
@@ -8,6 +10,14 @@
  * `apps/backend/src/middleware/turnstile.ts`.
  */
 export const TURNSTILE_TOKEN_FIELD = 'cf-turnstile-response';
+
+/**
+ * Shown when the challenge in front of the API refuses the token. It refuses
+ * a missing and an invalid token alike, and both are fixed by solving the
+ * widget again.
+ */
+export const TURNSTILE_FAILED_MESSAGE =
+  '「私はロボットではありません」の確認に失敗しました。ページを再読み込みして、もう一度お試しください';
 
 /**
  * What a Turnstile token may contain, as far as this page is concerned.
@@ -35,9 +45,6 @@ const TURNSTILE_TOKEN_PATTERN = /^[\x21-\x7e]{1,4096}$/;
  * @param formData The submitted form.
  */
 export function readTurnstileToken(formData: FormData): string {
-  const value = formData.get(TURNSTILE_TOKEN_FIELD);
-  if (typeof value !== 'string' || !TURNSTILE_TOKEN_PATTERN.test(value)) {
-    return '';
-  }
-  return value;
+  const value = readString(formData, TURNSTILE_TOKEN_FIELD);
+  return TURNSTILE_TOKEN_PATTERN.test(value) ? value : '';
 }

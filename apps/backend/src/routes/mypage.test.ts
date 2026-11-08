@@ -119,7 +119,7 @@ describe.skipIf(!(await isDbReachable()))(
           region_id, type, name, entry_opens_at, entry_closes_at
         ) values (
           ${regionId}, ${type}, 'テスト大会',
-          ${options.entryOpensAt ?? new Date().toISOString()},
+          ${options.entryOpensAt ?? new Date(Date.now() - 86_400_000).toISOString()},
           ${options.entryClosesAt ?? new Date().toISOString()}
         )
         returning id

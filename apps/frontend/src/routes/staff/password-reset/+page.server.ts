@@ -2,7 +2,17 @@ import {fail, redirect} from '@sveltejs/kit';
 import {StaffPasswordResetRequestInputSchema} from '@regional-quiz/shared';
 import {StaffPasswordResetConfirmInputSchema} from '@regional-quiz/shared/password-policy';
 import {createApiClient} from '$lib/api';
-import {readTurnstileToken, TURNSTILE_TOKEN_FIELD} from '$lib/turnstile';
+import {readString} from '$lib/form-data';
+import {
+  readTurnstileToken,
+  TURNSTILE_FAILED_MESSAGE,
+  TURNSTILE_TOKEN_FIELD,
+} from '$lib/turnstile';
+import {
+  PASSWORD_MISMATCH_MESSAGE,
+  TOO_MANY_REQUESTS_MESSAGE,
+} from '$lib/form-errors';
+import {zodFieldErrors} from '$lib/zod-field-errors';
 import {
   clearResetToken,
   readResetToken,
@@ -15,14 +25,6 @@ import type {Actions, PageServerLoad} from './$types';
 // once the token is gone, so asking for a new link is the way forward.
 const NEEDS_A_NEW_LINK_MESSAGE =
   'このリンクは無効か、有効期限が切れています。もう一度パスワード再設定を申し込むか、統括スタッフにリンクの再発行を依頼してください';
-
-/**
- * Shown for a 429 from the API, as on the participant screen: the request
- * half mails a link to whatever address it is given, so it is rate limited
- * per IP and per address.
- */
-const TOO_MANY_REQUESTS_MESSAGE =
-  '送信が集中しています。しばらく待ってから再度お試しください';
 
 /** The query parameter that asks for the request form (see `load`). */
 const REQUEST_PARAM = 'request';
@@ -68,8 +70,8 @@ export const actions = {
     // request API even if a stale token cookie was left in this browser.
     if (formData.has('email')) {
       const parsed = StaffPasswordResetRequestInputSchema.safeParse({
-        email: String(formData.get('email') ?? ''),
-        scope: String(formData.get('scope') ?? ''),
+        email: readString(formData, 'email'),
+        scope: readString(formData, 'scope'),
       });
       if (!parsed.success) {
         return fail(400, {
@@ -95,8 +97,7 @@ export const actions = {
           // The body was checked above, so the only 400 left is the
           // challenge in front of the endpoint refusing the token.
           return fail(400, {
-            error:
-              '「私はロボットではありません」の確認に失敗しました。ページを再読み込みして、もう一度お試しください',
+            error: TURNSTILE_FAILED_MESSAGE,
             tokenRejected: false,
           });
         }
@@ -118,10 +119,10 @@ export const actions = {
       return fail(400, {error: NEEDS_A_NEW_LINK_MESSAGE, tokenRejected: true});
     }
 
-    const newPassword = String(formData.get('newPassword') ?? '');
-    if (newPassword !== String(formData.get('newPasswordConfirm') ?? '')) {
+    const newPassword = readString(formData, 'newPassword');
+    if (newPassword !== readString(formData, 'newPasswordConfirm')) {
       return fail(400, {
-        error: 'パスワードが一致しません',
+        error: PASSWORD_MISMATCH_MESSAGE,
         tokenRejected: false,
       });
     }
@@ -135,7 +136,7 @@ export const actions = {
       // broke (too short, too long, or too common).
       return fail(400, {
         error:
-          parsed.error.flatten().fieldErrors.newPassword?.[0] ??
+          zodFieldErrors(parsed.error).newPassword?.[0] ??
           'パスワードを正しく入力してください',
         tokenRejected: false,
       });

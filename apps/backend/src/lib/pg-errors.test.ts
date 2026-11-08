@@ -1,9 +1,11 @@
 import {afterEach, beforeEach, describe, expect, it, spyOn} from 'bun:test';
 import {
+  badRequest,
+  CHECK_VIOLATION_SQLSTATE,
+  constraintKey,
   duplicate,
   FOREIGN_KEY_VIOLATION_SQLSTATE,
   mapPgError,
-  missingReference,
   NO_ROW_PGRST_CODE,
   noRow,
   stillReferenced,
@@ -16,7 +18,7 @@ describe('the answers for each kind of violation', () => {
   });
 
   it('answers a missing referenced row with 400', () => {
-    expect(missingReference('no such region')).toEqual({
+    expect(badRequest('no such region')).toEqual({
       status: 400,
       error: 'no such region',
     });
@@ -44,7 +46,7 @@ describe('mapPgError', () => {
 
   const table = {
     [UNIQUE_VIOLATION_SQLSTATE]: duplicate('slug already in use'),
-    [FOREIGN_KEY_VIOLATION_SQLSTATE]: missingReference('unknown region'),
+    [FOREIGN_KEY_VIOLATION_SQLSTATE]: badRequest('unknown region'),
     [NO_ROW_PGRST_CODE]: noRow('region not found'),
   };
 
@@ -73,6 +75,54 @@ describe('mapPgError', () => {
       'failed to create the region',
       error,
     );
+  });
+
+  describe('an entry told apart by constraint', () => {
+    const checks = {
+      [constraintKey(
+        CHECK_VIOLATION_SQLSTATE,
+        'tournaments_entry_period_ordered',
+      )]: badRequest('period'),
+    };
+    const violating = (constraint: string) => ({
+      code: CHECK_VIOLATION_SQLSTATE,
+      message: `new row for relation "tournaments" violates check constraint "${constraint}"`,
+    });
+
+    it('answers the constraint it names with its entry', () => {
+      expect(
+        mapPgError(
+          violating('tournaments_entry_period_ordered'),
+          checks,
+          'failed',
+        ),
+      ).toEqual({body: {error: 'period'}, status: 400});
+      expect(consoleError).not.toHaveBeenCalled();
+    });
+
+    it('answers any other constraint, or none, with a logged 500', () => {
+      for (const error of [
+        violating('tournaments_question_set_format'),
+        // A longer name that starts with the one the entry names.
+        violating('tournaments_entry_period_ordered_too'),
+        violating('toString'),
+        {code: CHECK_VIOLATION_SQLSTATE, message: 'no constraint named'},
+        {code: CHECK_VIOLATION_SQLSTATE},
+      ]) {
+        expect(mapPgError(error, checks, 'failed').status).toBe(500);
+      }
+      expect(consoleError).toHaveBeenCalledTimes(5);
+    });
+
+    it('does not read the constraint off the details', () => {
+      // `details` holds the failing row, so whatever the request put in it.
+      const error = {
+        ...violating('tournaments_question_set_format'),
+        details:
+          'Failing row contains (constraint "tournaments_entry_period_ordered").',
+      };
+      expect(mapPgError(error, checks, 'failed').status).toBe(500);
+    });
   });
 
   it('answers an error without a code with a generic 500', () => {

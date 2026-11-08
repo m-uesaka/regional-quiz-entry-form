@@ -1,5 +1,6 @@
 import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
+import {confirmEntryByToken} from './entry-confirmation';
 import {promoteWaitlistedEntries} from './waitlist';
 import {testBindings} from '../test-support/bindings';
 import {
@@ -11,6 +12,7 @@ import {
 import {
   createEntryRow,
   createTournamentAndRegulation,
+  createVerificationToken,
   deleteTestRegionRows,
   type TournamentFixture,
 } from '../test-support/db-fixtures';
@@ -145,6 +147,95 @@ describe.skipIf(!(await isDbReachable()))(
       await expect(
         promoteWaitlistedEntries(env, fixture.tournamentId),
       ).resolves.toEqual({promotedCount: 0, mailFailedCount: 0});
+    });
+
+    // The cancellation commits before the promotion runs (`cancelOwnEntry()`
+    // makes them two RPCs), and a newcomer who follows their verification
+    // link in between used to take the freed seat ahead of the waitlist
+    // (#283). Now the newcomer queues, and their confirmation promotes the
+    // head into the seat; the cancellation's own promotion finds it taken.
+    it('keeps a confirmation between a cancellation and its promotion behind the waitlist', async () => {
+      const f = await createFixture('overtake');
+      const cancelling = await createEntryRow(sql, f, testEmailDomain, {
+        status: 'confirmed',
+      });
+      const waiting = await createWaitlistedEntry(f, 1);
+      const {entryId: newcomer} = await createEntryRow(sql, f, testEmailDomain);
+      const token = await createVerificationToken(sql, newcomer);
+
+      // The cancellation alone, as committed before the promotion's RPC.
+      const [cancelled] = await sql`
+        select previous_status from cancel_own_entry(
+          ${cancelling.entryId}, ${cancelling.participantId}
+        )
+      `;
+      expect(cancelled.previous_status).toBe('confirmed');
+      mailedTo = [];
+      expect(await confirmEntryByToken(env, token)).toMatchObject({
+        ok: true,
+        entryStatus: 'waitlisted',
+      });
+
+      const [waitingRow, newcomerRow] = await Promise.all(
+        [waiting, newcomer].map(statusOf),
+      );
+      expect(waitingRow).toMatchObject({
+        status: 'confirmed',
+        waitlist_position: null,
+      });
+      expect(newcomerRow).toMatchObject({
+        status: 'waitlisted',
+        waitlist_position: 1,
+      });
+      expect(mailedTo).toEqual([waitingRow.email]);
+
+      // The cancellation's promotion, arriving late, has no seat left.
+      mailedTo = [];
+      expect(await promoteWaitlistedEntries(env, f.tournamentId)).toEqual({
+        promotedCount: 0,
+        mailFailedCount: 0,
+      });
+      expect((await statusOf(newcomer)).status).toBe('waitlisted');
+      expect(mailedTo).toEqual([]);
+    });
+
+    // A promotion that failed leaves the seat empty; the next confirmation
+    // queues up instead of skipping the line, and fills the seat in order
+    // with the promotion it runs, rather than leaving it empty until the
+    // next cancellation or capacity save.
+    it('fills a seat a failed promotion left empty on the next confirmation', async () => {
+      const f = await createFixture('missed-promotion');
+      const waiting = await createWaitlistedEntry(f, 1);
+      const {entryId: newcomer} = await createEntryRow(sql, f, testEmailDomain);
+      const token = await createVerificationToken(sql, newcomer);
+      mailedTo = [];
+
+      expect(await confirmEntryByToken(env, token)).toMatchObject({
+        ok: true,
+        entryStatus: 'waitlisted',
+      });
+
+      const [waitingRow, newcomerRow] = await Promise.all(
+        [waiting, newcomer].map(statusOf),
+      );
+      expect(waitingRow).toMatchObject({
+        status: 'confirmed',
+        waitlist_position: null,
+      });
+      expect(newcomerRow).toMatchObject({
+        status: 'waitlisted',
+        waitlist_position: 1,
+      });
+      // Only the promoted participant: the newcomer was told by the page.
+      expect(mailedTo).toEqual([waitingRow.email]);
+
+      // Nothing is left for a later promotion to do.
+      mailedTo = [];
+      expect(await promoteWaitlistedEntries(env, f.tournamentId)).toEqual({
+        promotedCount: 0,
+        mailFailedCount: 0,
+      });
+      expect(mailedTo).toEqual([]);
     });
 
     describe('promoteWaitlistedEntries', () => {

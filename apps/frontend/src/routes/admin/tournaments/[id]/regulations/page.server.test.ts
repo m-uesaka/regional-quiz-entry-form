@@ -3,15 +3,19 @@ import type {HttpError} from '@sveltejs/kit';
 import type {Regulation, Tournament} from '@regional-quiz/shared';
 import type {RegulationRowValues} from '$lib/types/regulation-form';
 import {fakeCookies} from '../../../../../test-support/fake-cookies';
-import {fakeFetch} from '../../../../../test-support/fake-fetch';
+import {
+  fakeFetch,
+  type RecordedRequest,
+} from '../../../../../test-support/fake-fetch';
 import {jsonResponse} from '../../../../../test-support/json-response';
 import {actions, load} from './+page.server';
 
 const TOURNAMENT_ID = '00000000-0000-0000-0000-000000000001';
 
-// `load` reads the tournament list alongside the regulations: the gate in
-// front of the regulations endpoint answers an expired session with 403, so
-// the staff-only list is what surfaces the 401 a login redirect needs.
+// `load` reads the tournament alongside the regulations: the gate in front
+// of the regulations endpoint lets anyone through while the entry period is
+// open, so the staff-only `GET /api/tournaments/:id` is what surfaces the
+// 401 a login redirect needs.
 const TOURNAMENT: Tournament = {
   id: TOURNAMENT_ID,
   regionId: '00000000-0000-0000-0000-000000000021',
@@ -61,7 +65,8 @@ function fakeApi(
   options: {
     putStatus?: number;
     putError?: string;
-    tournaments?: Tournament[];
+    /** The status `GET /api/tournaments/:id` answers with. */
+    tournamentStatus?: number;
     regulationsStatus?: number;
     /** The regulations the tournament has stored. */
     stored?: Regulation[];
@@ -72,6 +77,7 @@ function fakeApi(
 ): typeof fetch {
   const putStatus = options.putStatus ?? 200;
   const regulationsStatus = options.regulationsStatus ?? 200;
+  const tournamentStatus = options.tournamentStatus ?? 200;
   const regulationsPath = `/api/tournaments/${TOURNAMENT_ID}/regulations`;
   return fakeFetch([
     {
@@ -109,16 +115,33 @@ function fakeApi(
     },
     {
       method: 'GET',
-      url: /^\/api\/tournaments$/,
-      body: options.tournaments ?? [TOURNAMENT],
+      // Anchored: a plain string matches as a substring, and would also
+      // answer the regulations read whenever this row came first.
+      url: new RegExp(`^/api/tournaments/${TOURNAMENT_ID}$`),
+      status: tournamentStatus,
+      body:
+        tournamentStatus < 400
+          ? {
+              tournament: TOURNAMENT,
+              customName: TOURNAMENT.name,
+              formFieldDefs: [],
+            }
+          : {error: 'tournament not found'},
     },
   ]);
 }
 
-/** Builds the partial `RequestEvent` `load` needs, cast for test use. */
-function buildLoadEvent(fetchImpl: typeof fetch): Parameters<typeof load>[0] {
+/**
+ * Builds the partial `RequestEvent` `load` needs, cast for test use.
+ * @param fetchImpl The `fetch` the API client is built on.
+ * @param id The `[id]` route parameter.
+ */
+function buildLoadEvent(
+  fetchImpl: typeof fetch,
+  id = TOURNAMENT_ID,
+): Parameters<typeof load>[0] {
   return {
-    params: {id: TOURNAMENT_ID},
+    params: {id},
     fetch: fetchImpl,
     cookies: fakeCookies(),
     url: new URL(
@@ -194,7 +217,7 @@ describe('admin regulations +page.server load', () => {
     const failing = fakeFetch([
       {
         method: 'GET',
-        url: /^\/api\/tournaments(\/[^/]+\/regulations)?$/,
+        url: /^\/api\/tournaments\/[^/]+(\/regulations)?$/,
         status: 500,
         body: {error: 'boom'},
       },
@@ -214,10 +237,77 @@ describe('admin regulations +page.server load', () => {
     ).rejects.toMatchObject({status: 404} satisfies Partial<HttpError>);
   });
 
-  it('reports an id absent from the tournament list as not found', async () => {
+  it('reports an id the tournament read does not find as not found', async () => {
     await expect(
-      load(buildLoadEvent(fakeApi({tournaments: []}))),
+      load(buildLoadEvent(fakeApi({tournamentStatus: 404}))),
     ).rejects.toMatchObject({status: 404} satisfies Partial<HttpError>);
+  });
+
+  // An id either read knows nothing of names no tournament, so its 404 wins
+  // over the other read failing outright.
+  it.each([
+    {tournamentStatus: 404, regulationsStatus: 500},
+    {tournamentStatus: 500, regulationsStatus: 404},
+  ])(
+    'reports a 404 alongside a failed read as not found (%o)',
+    async statuses => {
+      await expect(
+        load(buildLoadEvent(fakeApi(statuses))),
+      ).rejects.toMatchObject({status: 404} satisfies Partial<HttpError>);
+    },
+  );
+
+  it('reports an id that is not a UUID as not found, without asking the API', async () => {
+    const calls: RecordedRequest[] = [];
+    const fetchImpl = fakeFetch([], calls);
+
+    await expect(
+      load(buildLoadEvent(fetchImpl, 'not-a-uuid')),
+    ).rejects.toMatchObject({status: 404} satisfies Partial<HttpError>);
+    expect(calls).toEqual([]);
+  });
+
+  it('reads the tournament by its id rather than the whole list', async () => {
+    const calls: RecordedRequest[] = [];
+    const fetchImpl = fakeFetch(
+      [
+        {
+          method: 'GET',
+          url: `/api/tournaments/${TOURNAMENT_ID}/regulations`,
+          body: [GENERAL],
+        },
+        {
+          method: 'GET',
+          url: new RegExp(`^/api/tournaments/${TOURNAMENT_ID}$`),
+          body: {tournament: TOURNAMENT, customName: null, formFieldDefs: []},
+        },
+      ],
+      calls,
+    );
+
+    await load(buildLoadEvent(fetchImpl));
+    expect(calls.map(call => `${call.method} ${call.url}`).sort()).toEqual([
+      `GET /api/tournaments/${TOURNAMENT_ID}`,
+      `GET /api/tournaments/${TOURNAMENT_ID}/regulations`,
+    ]);
+  });
+
+  // While the entry period is open the gate in front of the regulations
+  // endpoint answers without looking at the session, so it is the staff-only
+  // tournament read that reports one that expired.
+  it('sends an expired session to the login page', async () => {
+    await expect(
+      load(buildLoadEvent(fakeApi({tournamentStatus: 401}))),
+    ).rejects.toMatchObject({status: 303});
+  });
+
+  // Outside the entry period the gate answers an expired session with 401
+  // itself, and it can be the only read that does: the session can expire
+  // between the two requests, which run side by side.
+  it('sends a session the regulations gate refuses to the login page', async () => {
+    await expect(
+      load(buildLoadEvent(fakeApi({regulationsStatus: 401}))),
+    ).rejects.toMatchObject({status: 303});
   });
 });
 
