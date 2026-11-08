@@ -102,8 +102,8 @@ export const actions = {
       return {sent: true};
     }
 
-    const newPassword = String(formData.get('newPassword') ?? '');
-    if (newPassword !== String(formData.get('newPasswordConfirm') ?? '')) {
+    const newPassword = readString(formData, 'newPassword');
+    if (newPassword !== readString(formData, 'newPasswordConfirm')) {
       return fail(400, {
         error: 'パスワードが一致しません',
         tokenRejected: false,

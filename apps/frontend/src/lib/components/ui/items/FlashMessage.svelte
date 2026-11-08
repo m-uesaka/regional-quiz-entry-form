@@ -16,21 +16,31 @@ an action, a different variant, or more than one line.
 -->
 <script lang="ts">
   import type {Snippet} from 'svelte';
-  import Message from './Message.svelte';
+  import Message, {type MessageVariants} from './Message.svelte';
+
+  type Kind = 'error' | 'success';
+
+  // Variant and role chosen together, so a new kind has to name both.
+  const APPEARANCE = {
+    error: {variant: 'danger', role: 'alert'},
+    success: {variant: 'success', role: 'status'},
+  } as const satisfies Record<
+    Kind,
+    {variant: MessageVariants['variant']; role: 'alert' | 'status'}
+  >;
 
   interface Props {
     /** Whether the action failed or succeeded. */
-    kind: 'error' | 'success';
+    kind: Kind;
     /** The text, which may contain inline elements such as a link. */
     children: Snippet;
   }
 
   const {kind, children}: Props = $props();
 
-  const variant = $derived(kind === 'error' ? 'danger' : 'success');
-  const role = $derived(kind === 'error' ? 'alert' : 'status');
+  const appearance = $derived(APPEARANCE[kind]);
 </script>
 
-<Message {variant}>
-  <p {role} class="text-sm text-foreground">{@render children()}</p>
+<Message variant={appearance.variant}>
+  <p role={appearance.role} class="text-sm text-foreground">{@render children()}</p>
 </Message>

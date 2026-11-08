@@ -19,7 +19,7 @@ import {
   readErrorMessage,
   type ApiErrorMessages,
 } from '$lib/api';
-import {readString} from '$lib/form-data';
+import {readString, readStrings} from '$lib/form-data';
 import {isWaitlistOpen, priorityEntryNotices} from '$lib/priority-entry';
 import {participantLoginPath} from '$lib/server/participant-login';
 import {clearParticipantSession} from '$lib/server/participant-session';
@@ -334,7 +334,7 @@ function readEntryFormValues(
     email: readString(formData, 'email'),
     // A checkbox group, so every checked box arrives under the same name —
     // `getAll`, not `get`.
-    regulationIds: formData.getAll('regulationIds').map(String),
+    regulationIds: readStrings(formData, 'regulationIds'),
     freeText: readFormText(formData, 'freeText'),
     customFieldValues: readCustomFieldValues(formData, formFieldDefs),
   };

@@ -6,7 +6,7 @@ import {
   type FormFieldDef,
 } from '@regional-quiz/shared';
 import {customFieldName} from '$lib/custom-field-name';
-import {readString} from '$lib/form-data';
+import {readString, readStrings} from '$lib/form-data';
 
 /**
  * Reads a text control from a submitted form with its line breaks as `\n`.
@@ -59,7 +59,7 @@ export function readCustomFieldValues(
       values[fieldDef.fieldKey] = readFormText(formData, controlName);
       continue;
     }
-    const checked = formData.getAll(controlName).map(String);
+    const checked = readStrings(formData, controlName);
     if (fieldDef.options && fieldDef.options.length > 0) {
       values[fieldDef.fieldKey] = checked;
     } else {
