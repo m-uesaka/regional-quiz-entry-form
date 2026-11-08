@@ -421,8 +421,8 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 
 | 経路 | ロック順 |
 | --- | --- |
-| エントリーの INSERT | 参加者行(`check_entry_seat()`)→ 大会行(外部キー検査の `for key share`) |
-| `reenter_cancelled_entry()` | 参加者行 → トークン行 → `entries` 行 |
+| エントリーの INSERT | 参加者行(`check_entry_seat()`)→ 大会行(`check_entry_seat()` と外部キー検査の `for key share`) |
+| `reenter_cancelled_entry()` | 参加者行 → トークン行 → `entries` 行 → 大会行(`check_entry_seat()` の `for key share`、`0050`) |
 | `confirm_entry_by_token()` | 参加者行 → トークン行 → 大会行 → `entries` 行 |
 | `take_over_unverified_participant()` | 参加者行 → トークン行 → `entries` 行(削除) |
 | `cancel_own_entry()` / `lapse_expired_pending_entries()` | トークン行 → 大会行 → `entries` 行 |
@@ -619,7 +619,7 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 **枠を取る書き込みだけ**を検査します(INSERT と、`cancelled` の行を再利用する再エントリーの UPDATE)。既に枠を持つ行のステータス変更(`pending_verification` → `confirmed`、キャンセル待ちの繰り上げ、キャンセル)は枠を取ったときに検査済みで、しかも `cancel_own_entry()` などが大会行のロックを持ったまま実行するため、そこで参加者行を取るとデッドロックを招きます(上の「エントリーまわりのロック順」)。
 
-参加者行を `for no key update` でロックしてから、次の順に検査します。地域行ではなく参加者行なのは、同じ地域の無関係な申し込みまで直列化しないためです。
+参加者行を `for no key update` でロックしてから、次の順に検査します。地域行ではなく参加者行なのは、同じ地域の無関係な申し込みまで直列化しないためです。続けて大会行を `for key share` でロックしてから大会の地域を読みます(`0050`、#284)。大会の地域・種別を変える UPDATE は大会行を `for update` で取るので、未コミットの移動と同時に来たエントリーは移動のコミットを待ち、移った先の地域で検査されます(ロックしないと移動前の地域で検査を通り、そのまま移った先に入っていました)。
 
 1. **地域をまたいだ参加。** 同じ問題セットの別の地域の大会に枠を押さえるエントリーがあれば(`participant_holds_conflicting_region()`)SQLSTATE `P0008`(`participant belongs to another region`)。`0043` までは参加者の地域(`participants.region_id`)と大会の地域の一致を見ていましたが、問題セットが違えば複数の地域に参加できるようになったので、エントリーそのものを見ます。`claim_participant_region_for_tournament()` の確認からエントリーの書き込みまでの間に、別の送信が別の地域の枠を取った場合の裏付けです。参加者行で直列化されるので、どちらが先でも後の側が先のエントリーを見て断ります。`enterTournament()` は `already registered in another region` の 409 にします(実際に枠があるので、やり直しを促す `concurrent submission` にはしません)。
 2. **重複エントリー。** `regions.allows_dual_entry` が `false` の地域で、同じ地域の別の大会に `cancelled` 以外のエントリーがあれば SQLSTATE `P0005`(`already entered another tournament in this region`)。アプリケーション側で「数える → 書く」と、地域の 2 大会への申し込みが同時に来たときに両方が 0 件を数えて両方とも通り、片方を取り消す経路も無いまま 2 枠を占有してしまいます。数えるのも書くのも参加者行のロックの下で行うので、この窓がありません。2 つ目のトランザクションは参加者行で待たされ、1 つ目のコミット後にその行を見て弾かれます。`enterTournament()` はこれを 409 `already entered another tournament in this region` に変換します(未認証の経路では案内メール `dual-entry` になります)。

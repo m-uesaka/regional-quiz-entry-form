@@ -133,6 +133,12 @@ export const NO_LASTING_REGULATION_SQLSTATE = 'P0009';
 export const DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE = 'P0010';
 
 /**
+ * Raised by `check_tournament_region_type_change()` (0050) when an update
+ * would change the region or type of a tournament that has entries.
+ */
+export const TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE = 'P0011';
+
+/**
  * What a tournament or region write refused with
  * `DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE` is answered with: shown as it is
  * above the admin form.
