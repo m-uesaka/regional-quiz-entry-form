@@ -112,10 +112,10 @@ export async function updateOwnEntry(
  *
  * The entry is looked up by `(id, participant_id)` so another participant's
  * entry is indistinguishable from a nonexistent one. Freeing a `confirmed`
- * seat promotes the head of the tournament's waitlist, unless another entry
- * confirmed into that seat first; cancelling from the waitlist itself only
- * closes the gap in the queue, and cancelling before the entry was ever
- * verified burns its outstanding verification token (see the migration).
+ * seat promotes the head of the tournament's waitlist; cancelling from the
+ * waitlist itself only closes the gap in the queue, and cancelling before
+ * the entry was ever verified burns its outstanding verification token (see
+ * the migration).
  * Cancelling an already-cancelled entry succeeds without promoting anyone.
  * @param env The Worker bindings.
  * @param participantId The logged-in participant, from the session cookie.
@@ -148,11 +148,13 @@ export async function cancelOwnEntry(
   if (cancelled.previous_status === 'confirmed') {
     try {
       // The cancellation above is already committed, so a
-      // `pending_verification` entry can confirm into the freed seat before
-      // this runs. `promote_waitlisted_entries` therefore counts the free
-      // seats under its own tournament lock and promotes nobody when the
-      // seat has been taken, instead of pushing the tournament over
-      // capacity. A mail it couldn't send is logged there.
+      // `pending_verification` entry can be confirmed before this runs. With
+      // anyone waiting, `confirm_entry_by_token` queues it behind them
+      // rather than into the freed seat (0047, #283); with nobody waiting
+      // it may take the seat, and `promote_waitlisted_entries` -- counting
+      // the free seats under its own tournament lock -- then promotes
+      // nobody instead of pushing the tournament over capacity. A mail it
+      // couldn't send is logged there.
       await promoteWaitlistedEntries(env, cancelled.entry_tournament_id);
     } catch (promotionError) {
       // The cancellation itself is already committed, so failing the request

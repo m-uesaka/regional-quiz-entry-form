@@ -179,6 +179,67 @@ describe.skipIf(!(await isDbReachable()))(
       expect(entryRow.waitlist_position).toBe(1);
     });
 
+    // A seat that came free while others wait is theirs: the cancellation
+    // that freed it commits before `promote_waitlisted_entries` runs, and a
+    // confirmation in between must not take it (#283).
+    it('waitlists behind an existing waitlist even when a seat is free', async () => {
+      const fixture = await createFixture('queue-first', 1);
+      const {entryId: waiting} = await createEntryRow(
+        sql,
+        fixture,
+        testEmailDomain,
+        {status: 'waitlisted', waitlistPosition: 1},
+      );
+      const entryId = await createEntryFixture(fixture);
+
+      const result = await confirmEntryByToken(
+        env,
+        await createTokenFixture(entryId),
+      );
+
+      expect(result).toMatchObject({ok: true, entryStatus: 'waitlisted'});
+      const rows = await sql`
+        select id, status, waitlist_position from entries
+        where tournament_id = ${fixture.tournamentId}
+        order by waitlist_position
+      `;
+      expect(rows).toEqual([
+        {id: waiting, status: 'waitlisted', waitlist_position: 1},
+        {id: entryId, status: 'waitlisted', waitlist_position: 2},
+      ]);
+    });
+
+    // Without a capacity a waitlist is left only by a failed promotion after
+    // the capacity was cleared; the queue still goes first.
+    it('waitlists behind an existing waitlist without a capacity', async () => {
+      const fixture = await createFixture('queue-first-unlimited', null);
+      await createEntryRow(sql, fixture, testEmailDomain, {
+        status: 'waitlisted',
+        waitlistPosition: 1,
+      });
+      const entryId = await createEntryFixture(fixture);
+
+      expect(
+        await confirmEntryByToken(env, await createTokenFixture(entryId)),
+      ).toMatchObject({ok: true, entryStatus: 'waitlisted'});
+      const [entryRow] = await sql`
+        select waitlist_position from entries where id = ${entryId}
+      `;
+      expect(entryRow.waitlist_position).toBe(2);
+    });
+
+    it('confirms into a free seat when nobody is waiting', async () => {
+      const fixture = await createFixture('free-seat', 2);
+      await createEntryFixture(fixture, 'confirmed');
+      // Cancelled entries leave no one in the queue.
+      await createEntryFixture(fixture, 'cancelled');
+      const entryId = await createEntryFixture(fixture);
+
+      expect(
+        await confirmEntryByToken(env, await createTokenFixture(entryId)),
+      ).toMatchObject({ok: true, entryStatus: 'confirmed'});
+    });
+
     it('rejects an expired token', async () => {
       const fixture = await createFixture('expired', null);
       const entryId = await createEntryFixture(fixture);

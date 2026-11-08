@@ -29,11 +29,13 @@ type ConfirmResult =
 /**
  * Confirms the `entries` row a verification token was issued for.
  *
- * The entry is set to `confirmed` if the tournament still has capacity, or
- * `waitlisted` (with the next `waitlist_position`) otherwise. The token is
- * marked used so it can't be replayed, and an entry that is no longer
- * awaiting verification -- a cancelled one, say -- is refused even when the
- * token itself is still valid.
+ * The entry is set to `confirmed` if the tournament still has capacity and
+ * nobody is on its waitlist, or `waitlisted` (at the tail, with the next
+ * `waitlist_position`) otherwise: a seat that came free while others were
+ * waiting is theirs, and `promote_waitlisted_entries` fills it in order
+ * (#283). The token is marked used so it can't be replayed, and an entry
+ * that is no longer awaiting verification -- a cancelled one, say -- is
+ * refused even when the token itself is still valid.
  *
  * This delegates to the `confirm_entry_by_token` Postgres function, which
  * performs the token lookup, capacity check, and both updates inside one
