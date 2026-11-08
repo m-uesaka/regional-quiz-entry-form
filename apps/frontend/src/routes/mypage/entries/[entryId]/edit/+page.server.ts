@@ -21,18 +21,9 @@ import {
 import {dropCachedEntryList} from '$lib/server/entry-list-cache';
 import {redirectToParticipantLogin} from '$lib/server/participant-session';
 import type {EntryEditFormValues} from '$lib/types/entry-form';
+import {NO_FIELD_ERRORS} from '$lib/form-errors';
+import type {FieldErrors} from '$lib/types/form-errors';
 import type {Actions, PageServerLoad} from './$types';
-
-/**
- * Per-field validation messages, keyed by the control's name. Every failure
- * this action returns carries one (empty when the refusal is about the
- * submission as a whole) so the page can index it without narrowing across
- * the action's result union.
- */
-type EditFieldErrors = Record<string, string[] | undefined>;
-
-/** Nothing to attach per field — the refusal is about the whole edit. */
-const NO_FIELD_ERRORS: EditFieldErrors = {};
 
 const ENTRY_PERIOD_CLOSED_MESSAGE = 'エントリー期間外のため編集できません';
 const ENTRY_CANCELLED_MESSAGE = 'キャンセル済みのエントリーは編集できません';
@@ -163,7 +154,7 @@ export const actions = {
     // are keyed by their namespaced control names, so they can't collide
     // with the schema's.
     if (!parsed.success || customFieldValuesErrors.length > 0) {
-      const fieldErrors: EditFieldErrors = {
+      const fieldErrors: FieldErrors = {
         ...(parsed.success ? {} : entrySchemaFieldErrors(parsed.error.issues)),
         ...customFieldErrors(customFieldValuesErrors, formFieldDefs),
       };

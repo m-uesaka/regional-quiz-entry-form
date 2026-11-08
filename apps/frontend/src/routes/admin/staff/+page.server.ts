@@ -13,12 +13,12 @@ import {
 import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {Actions, PageServerLoad} from './$types';
 import {readString} from '$lib/form-data';
+import {INVALID_INPUT_MESSAGE, NO_FIELD_ERRORS} from '$lib/form-errors';
+import type {FieldErrors} from '$lib/types/form-errors';
+import {zodFieldErrors} from '$lib/zod-field-errors';
 
 /** The buttons on an account's row. Shared with `+page.svelte`. */
 export type RowIntent = 'resend' | 'revoke' | 'disable' | 'enable';
-
-/** Per-field validation messages, keyed by the control's name. */
-type StaffFieldErrors = Record<string, string[] | undefined>;
 
 /** The controls of the invite form. */
 interface StaffInviteValues {
@@ -43,7 +43,7 @@ interface StaffActionResult {
   accountId: string | null;
   saved: boolean;
   error: string | null;
-  fieldErrors: StaffFieldErrors;
+  fieldErrors: FieldErrors;
   /** Echoed back so a rejected invite re-renders what was typed. */
   values: StaffInviteValues;
 }
@@ -54,11 +54,6 @@ const EMPTY_VALUES: StaffInviteValues = {
   regionId: '',
   tournamentType: 'saikyoi',
 };
-
-const INVALID_INPUT_MESSAGE = '入力内容を確認してください';
-
-/** Nothing to attach per control — the refusal is about the request itself. */
-const NO_FIELD_ERRORS: StaffFieldErrors = {};
 
 // The one 500 the create endpoint answers that isn't a server fault the
 // staff member can ignore: the account exists but its owner never got the
@@ -114,7 +109,7 @@ export const actions = {
         400,
         values,
         INVALID_INPUT_MESSAGE,
-        parsed.error.flatten().fieldErrors as StaffFieldErrors,
+        zodFieldErrors(parsed.error),
       );
     }
 
@@ -210,14 +205,7 @@ export const actions = {
       );
     }
 
-    return {
-      intent: 'resend',
-      accountId,
-      saved: true,
-      error: null,
-      fieldErrors: NO_FIELD_ERRORS,
-      values: EMPTY_VALUES,
-    } satisfies StaffActionResult;
+    return rowSuccess('resend', accountId);
   },
 
   // Ends every session the account has open (Task 11-3): for a device that
@@ -253,14 +241,7 @@ export const actions = {
       redirectToStaffLogin(cookies, url);
     }
 
-    return {
-      intent: 'revoke',
-      accountId,
-      saved: true,
-      error: null,
-      fieldErrors: NO_FIELD_ERRORS,
-      values: EMPTY_VALUES,
-    } satisfies StaffActionResult;
+    return rowSuccess('revoke', accountId);
   },
 
   // Shuts the account out (#156): no login, no session, no password link,
@@ -373,7 +354,7 @@ function inviteFailure(
   status: number,
   values: StaffInviteValues,
   message: string,
-  fieldErrors: StaffFieldErrors,
+  fieldErrors: FieldErrors,
 ) {
   return fail(status, {
     intent: 'invite',

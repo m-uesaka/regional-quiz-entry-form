@@ -6,6 +6,7 @@ import {
   type FormFieldDef,
 } from '@regional-quiz/shared';
 import {customFieldName} from '$lib/custom-field-name';
+import type {FieldErrors} from '$lib/types/form-errors';
 
 /**
  * Reads a text control from a submitted form with its line breaks as `\n`.
@@ -130,7 +131,7 @@ export function customFieldErrors(
  */
 export function entrySchemaFieldErrors(
   issues: ReadonlyArray<{path: ReadonlyArray<PropertyKey>; message: string}>,
-): Record<string, string[] | undefined> {
+): FieldErrors {
   const fieldErrors: Record<string, string[]> = {};
   for (const issue of issues) {
     const [field] = issue.path;
