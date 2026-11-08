@@ -1,6 +1,7 @@
 import {error, fail} from '@sveltejs/kit';
 import {
   RegulationSyncInputSchema,
+  TournamentSchema,
   type Regulation,
 } from '@regional-quiz/shared';
 import {
@@ -85,36 +86,40 @@ function importRefusal(
 const ROW_CONTROL_PATTERN = /^regulations\[(\d+)\]\.(\w+)$/;
 
 export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
+  // An id that isn't a UUID names no tournament, and is answered here
+  // rather than sent on to come back as the API's 400 -- which would then be
+  // indistinguishable from any other request the API refused. The edit page
+  // checks the same way.
+  if (!TournamentSchema.shape.id.safeParse(params.id).success) {
+    error(404, '大会が見つかりません');
+  }
+
   const api = createApiClient(fetch);
   // The regulations endpoint sits behind `requireOpenEntryPeriodOrStaff()`,
   // which answers 404 for an id no tournament has — so a mistyped or stale
   // `[id]` is refused rather than rendering a working-looking empty form
-  // whose save is the first thing to fail. The tournament list is read
-  // alongside it as the check that survives the gate ever being lifted off
-  // the regulations endpoint.
-  const [tournamentsRes, regulationsRes] = await Promise.all([
-    api.api.tournaments.$get(),
+  // whose save is the first thing to fail. The tournament itself is read
+  // alongside it (`GET /api/tournaments/:id`, #123) as the check that
+  // survives the gate ever being lifted off the regulations endpoint, and
+  // because that gate lets anyone through while the entry period is open,
+  // so only this staff-only read is sure to answer an expired session with
+  // the 401 a login redirect needs.
+  const [tournamentRes, regulationsRes] = await Promise.all([
+    api.api.tournaments[':id'].$get({param: {id: params.id}}),
     api.api.tournaments[':tournamentId'].regulations.$get({
       param: {tournamentId: params.id},
     }),
   ]);
-  if (!tournamentsRes.ok || !regulationsRes.ok) {
-    // The layout guard cannot rule this out: the JWT may expire between
-    // `hooks.server.ts` parsing it and these requests reaching the backend.
-    if (isUnauthorized(tournamentsRes) || isUnauthorized(regulationsRes)) {
-      redirectToStaffLogin(cookies, url);
-    }
-    if (isNotFound(regulationsRes)) {
-      error(404, '大会が見つかりません');
-    }
-    error(502, 'レギュレーションの取得に失敗しました');
+  // The layout guard cannot rule this out: the JWT may expire between
+  // `hooks.server.ts` parsing it and these requests reaching the backend.
+  if (isUnauthorized(tournamentRes) || isUnauthorized(regulationsRes)) {
+    redirectToStaffLogin(cookies, url);
   }
-
-  // `GET /api/tournaments/:id` doesn't exist (only list + create + update),
-  // so the tournament being edited is picked out of the full list.
-  const tournaments = await tournamentsRes.json();
-  if (!tournaments.some(tournament => tournament.id === params.id)) {
+  if (isNotFound(tournamentRes) || isNotFound(regulationsRes)) {
     error(404, '大会が見つかりません');
+  }
+  if (!tournamentRes.ok || !regulationsRes.ok) {
+    error(502, 'レギュレーションの取得に失敗しました');
   }
 
   return {regulations: await regulationsRes.json()};
