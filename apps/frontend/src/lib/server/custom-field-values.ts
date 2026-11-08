@@ -6,6 +6,7 @@ import {
   type FormFieldDef,
 } from '@regional-quiz/shared';
 import {customFieldName} from '$lib/custom-field-name';
+import {readString} from '$lib/form-data';
 
 /**
  * Reads a text control from a submitted form with its line breaks as `\n`.
@@ -20,7 +21,7 @@ import {customFieldName} from '$lib/custom-field-name';
  * @param name The control's name.
  */
 export function readFormText(formData: FormData, name: string): string {
-  return String(formData.get(name) ?? '').replace(/\r\n?/g, '\n');
+  return readString(formData, name).replace(/\r\n?/g, '\n');
 }
 
 /**
