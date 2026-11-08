@@ -7,9 +7,9 @@ import {createApiClient, isUnauthorized, readErrorMessage} from '$lib/api';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {Actions, PageServerLoad} from './$types';
 import {readString} from '$lib/form-data';
-
-/** Per-field validation messages, keyed by the control's name. */
-type RegionFieldErrors = Record<string, string[] | undefined>;
+import {INVALID_INPUT_MESSAGE, NO_FIELD_ERRORS} from '$lib/form-errors';
+import type {FieldErrors} from '$lib/types/form-errors';
+import {zodFieldErrors} from '$lib/zod-field-errors';
 
 /** The controls of either form on this screen. */
 interface RegionFormValues {
@@ -33,7 +33,7 @@ interface RegionsActionResult {
   regionId: string | null;
   saved: boolean;
   error: string | null;
-  fieldErrors: RegionFieldErrors;
+  fieldErrors: FieldErrors;
   /** Echoed back so a rejected submission re-renders what was typed. */
   values: RegionFormValues;
 }
@@ -43,11 +43,6 @@ const EMPTY_VALUES: RegionFormValues = {
   name: '',
   allowsDualEntry: false,
 };
-
-const INVALID_INPUT_MESSAGE = '入力内容を確認してください';
-
-/** Nothing to attach per control — the refusal is about the request itself. */
-const NO_FIELD_ERRORS: RegionFieldErrors = {};
 
 export const load: PageServerLoad = async ({fetch, cookies, url}) => {
   const res = await createApiClient(fetch).api.regions.$get();
@@ -81,7 +76,7 @@ export const actions = {
         400,
         values,
         INVALID_INPUT_MESSAGE,
-        parsed.error.flatten().fieldErrors as RegionFieldErrors,
+        zodFieldErrors(parsed.error),
       );
     }
 
@@ -142,7 +137,7 @@ export const actions = {
         regionId,
         values,
         INVALID_INPUT_MESSAGE,
-        parsed.error.flatten().fieldErrors as RegionFieldErrors,
+        zodFieldErrors(parsed.error),
       );
     }
 
@@ -205,7 +200,7 @@ function createFailure(
   status: number,
   values: RegionFormValues,
   message: string,
-  fieldErrors: RegionFieldErrors,
+  fieldErrors: FieldErrors,
 ) {
   return fail(status, {
     intent: 'create',
@@ -230,7 +225,7 @@ function updateFailure(
   regionId: string,
   values: RegionFormValues,
   message: string,
-  fieldErrors: RegionFieldErrors,
+  fieldErrors: FieldErrors,
 ) {
   return fail(status, {
     intent: 'update',

@@ -24,7 +24,11 @@ import {isWaitlistOpen, priorityEntryNotices} from '$lib/priority-entry';
 import {participantLoginPath} from '$lib/server/participant-login';
 import {clearParticipantSession} from '$lib/server/participant-session';
 import {fetchTournamentBySlug} from '$lib/server/tournament-by-slug';
-import {readTurnstileToken, TURNSTILE_TOKEN_FIELD} from '$lib/turnstile';
+import {
+  readTurnstileToken,
+  TURNSTILE_FAILED_MESSAGE,
+  TURNSTILE_TOKEN_FIELD,
+} from '$lib/turnstile';
 import {
   customFieldErrors,
   entrySchemaFieldErrors,
@@ -32,17 +36,8 @@ import {
   readFormText,
 } from '$lib/server/custom-field-values';
 import type {EntryFieldErrors, EntryFormValues} from '$lib/types/entry-form';
+import {TOO_MANY_REQUESTS_MESSAGE} from '$lib/form-errors';
 import type {Actions, PageServerLoad, RequestEvent} from './$types';
-
-/**
- * What a 429 from the API is shown as. The rate limit it comes from is
- * counted per IP *and* per address (#116), so a participant can also meet it
- * without having submitted anything themselves -- from a shared connection,
- * say -- which is why the wording asks for patience rather than blaming the
- * submission.
- */
-const TOO_MANY_REQUESTS_MESSAGE =
-  '送信が集中しています。しばらく待ってから再度お試しください';
 
 /**
  * What a logged-in submission is told when its session is no longer good:
@@ -125,10 +120,8 @@ const ENTRY_ERROR_MESSAGES: Record<AnsweredEntryErrorCode, string> = {
     'この大会へのエントリーが同時に送信されていました。マイページでエントリー状況をご確認ください',
   [ENTRY_ERROR_CODES.ALREADY_ENTERED_ANOTHER_TOURNAMENT]:
     'この地域では、最強位と新人王のどちらか一方にのみエントリーできます',
-  // Answered by the challenge in front of the API, which refuses a missing
-  // and an invalid token alike. Both are fixed by solving the widget again.
-  [ENTRY_ERROR_CODES.TURNSTILE_VERIFICATION_FAILED]:
-    '「私はロボットではありません」の確認に失敗しました。ページを再読み込みして、もう一度お試しください',
+  // Answered by the challenge in front of the API.
+  [ENTRY_ERROR_CODES.TURNSTILE_VERIFICATION_FAILED]: TURNSTILE_FAILED_MESSAGE,
   [ENTRY_ERROR_CODES.TOO_MANY_REQUESTS]: TOO_MANY_REQUESTS_MESSAGE,
 };
 

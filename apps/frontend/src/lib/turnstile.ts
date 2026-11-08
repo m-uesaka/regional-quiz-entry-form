@@ -12,6 +12,14 @@ import {readString} from '$lib/form-data';
 export const TURNSTILE_TOKEN_FIELD = 'cf-turnstile-response';
 
 /**
+ * Shown when the challenge in front of the API refuses the token. It refuses
+ * a missing and an invalid token alike, and both are fixed by solving the
+ * widget again.
+ */
+export const TURNSTILE_FAILED_MESSAGE =
+  '「私はロボットではありません」の確認に失敗しました。ページを再読み込みして、もう一度お試しください';
+
+/**
  * What a Turnstile token may contain, as far as this page is concerned.
  *
  * Visible ASCII only. Cloudflare documents the token as an opaque string of
