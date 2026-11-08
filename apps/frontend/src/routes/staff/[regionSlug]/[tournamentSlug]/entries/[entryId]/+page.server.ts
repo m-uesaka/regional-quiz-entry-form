@@ -22,7 +22,7 @@ export const load: PageServerLoad = async ({
   // tournament under this URL (and thus linking "back" to the wrong list).
   const tournament = await fetchTournamentBySlug(
     {params, fetch, cookies, url},
-    {forbiddenMessage: 'このエントリーを閲覧する権限がありません'},
+    {forbiddenMessages: {fallback: 'このエントリーを閲覧する権限がありません'}},
   );
 
   const api = createApiClient(fetch);

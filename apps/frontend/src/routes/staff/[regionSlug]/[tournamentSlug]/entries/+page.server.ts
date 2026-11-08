@@ -32,7 +32,11 @@ export const load: PageServerLoad = async ({
   // slug, so the tournament must be resolved first.
   const tournament = await fetchTournamentBySlug(
     {params, fetch, cookies, url},
-    {forbiddenMessage: 'この大会のエントリーを閲覧する権限がありません'},
+    {
+      forbiddenMessages: {
+        fallback: 'この大会のエントリーを閲覧する権限がありません',
+      },
+    },
   );
 
   const api = createApiClient(fetch);

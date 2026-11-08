@@ -1,7 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import type {HttpError, Redirect} from '@sveltejs/kit';
 import type {Tournament} from '@regional-quiz/shared';
-import {readErrorMessage} from '$lib/api';
 import {fakeCookies} from '../../test-support/fake-cookies';
 import {fakeFetch, type RecordedRequest} from '../../test-support/fake-fetch';
 import {STAFF_SESSION_COOKIE} from './staff-session';
@@ -81,7 +80,9 @@ describe('fetchTournamentBySlug', () => {
     const {event, requests} = buildEvent({});
 
     await expect(
-      fetchTournamentBySlug(event, {forbiddenMessage: FORBIDDEN_MESSAGE}),
+      fetchTournamentBySlug(event, {
+        forbiddenMessages: {fallback: FORBIDDEN_MESSAGE},
+      }),
     ).resolves.toEqual(TOURNAMENT);
     expect(requests).toEqual([
       {method: 'GET', url: '/api/tournaments/tokyo/saikyoi', body: undefined},
@@ -92,7 +93,9 @@ describe('fetchTournamentBySlug', () => {
     const {event, requests} = buildEvent({tournamentSlug: 'nope'});
 
     await expect(
-      fetchTournamentBySlug(event, {forbiddenMessage: FORBIDDEN_MESSAGE}),
+      fetchTournamentBySlug(event, {
+        forbiddenMessages: {fallback: FORBIDDEN_MESSAGE},
+      }),
     ).rejects.toMatchObject({
       status: 404,
       body: {message: '大会が見つかりません'},
@@ -104,7 +107,9 @@ describe('fetchTournamentBySlug', () => {
     const {event} = buildEvent({status: 404, body: {error: 'not found'}});
 
     await expect(
-      fetchTournamentBySlug(event, {forbiddenMessage: FORBIDDEN_MESSAGE}),
+      fetchTournamentBySlug(event, {
+        forbiddenMessages: {fallback: FORBIDDEN_MESSAGE},
+      }),
     ).rejects.toMatchObject({
       status: 404,
       body: {message: '大会が見つかりません'},
@@ -118,7 +123,9 @@ describe('fetchTournamentBySlug', () => {
     });
 
     await expect(
-      fetchTournamentBySlug(event, {forbiddenMessage: FORBIDDEN_MESSAGE}),
+      fetchTournamentBySlug(event, {
+        forbiddenMessages: {fallback: FORBIDDEN_MESSAGE},
+      }),
     ).rejects.toMatchObject({
       status: 303,
       location: `/staff/login?redirectTo=${encodeURIComponent(
@@ -132,14 +139,16 @@ describe('fetchTournamentBySlug', () => {
     const {event} = buildEvent({status: 403, body: {error: 'forbidden'}});
 
     await expect(
-      fetchTournamentBySlug(event, {forbiddenMessage: FORBIDDEN_MESSAGE}),
+      fetchTournamentBySlug(event, {
+        forbiddenMessages: {fallback: FORBIDDEN_MESSAGE},
+      }),
     ).rejects.toMatchObject({
       status: 403,
       body: {message: FORBIDDEN_MESSAGE},
     } satisfies Partial<HttpError>);
   });
 
-  it('throws 403 with the wording read off the refusal', async () => {
+  it('throws 403 with the wording picked by the refusal code', async () => {
     const {event} = buildEvent({
       status: 403,
       body: {error: 'entries_paused'},
@@ -147,12 +156,33 @@ describe('fetchTournamentBySlug', () => {
 
     await expect(
       fetchTournamentBySlug(event, {
-        forbiddenMessage: async res =>
-          `${res.status}: ${await readErrorMessage(res, '')}`,
+        forbiddenMessages: {
+          byCode: {entries_paused: 'paused'},
+          fallback: FORBIDDEN_MESSAGE,
+        },
       }),
     ).rejects.toMatchObject({
       status: 403,
-      body: {message: '403: entries_paused'},
+      body: {message: 'paused'},
+    } satisfies Partial<HttpError>);
+  });
+
+  it('falls back for a refusal code the wording does not know', async () => {
+    const {event} = buildEvent({
+      status: 403,
+      body: {error: 'entry_period_closed'},
+    });
+
+    await expect(
+      fetchTournamentBySlug(event, {
+        forbiddenMessages: {
+          byCode: {entries_paused: 'paused'},
+          fallback: FORBIDDEN_MESSAGE,
+        },
+      }),
+    ).rejects.toMatchObject({
+      status: 403,
+      body: {message: FORBIDDEN_MESSAGE},
     } satisfies Partial<HttpError>);
   });
 
@@ -160,7 +190,9 @@ describe('fetchTournamentBySlug', () => {
     const {event} = buildEvent({status: 500, body: {error: 'boom'}});
 
     await expect(
-      fetchTournamentBySlug(event, {forbiddenMessage: FORBIDDEN_MESSAGE}),
+      fetchTournamentBySlug(event, {
+        forbiddenMessages: {fallback: FORBIDDEN_MESSAGE},
+      }),
     ).rejects.toMatchObject({
       status: 502,
       body: {message: '大会情報の取得に失敗しました'},

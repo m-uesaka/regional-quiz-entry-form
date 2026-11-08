@@ -17,7 +17,6 @@ import {
   createApiClient,
   pickApiErrorMessage,
   readErrorMessage,
-  resolveApiErrorMessage,
   type ApiErrorMessages,
 } from '$lib/api';
 import {isWaitlistOpen, priorityEntryNotices} from '$lib/priority-entry';
@@ -161,11 +160,10 @@ async function fetchTournament(
   return fetchTournamentBySlug(event, {
     // A paused tournament (0039) is gated the same way as a closed entry
     // period, but said apart.
-    forbiddenMessage: res =>
-      resolveApiErrorMessage(res, {
-        byCode: {[ENTRY_ERROR_CODES.ENTRIES_PAUSED]: ENTRIES_PAUSED_MESSAGE},
-        fallback: ENTRY_ERROR_MESSAGES[ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED],
-      }),
+    forbiddenMessages: {
+      byCode: {[ENTRY_ERROR_CODES.ENTRIES_PAUSED]: ENTRIES_PAUSED_MESSAGE},
+      fallback: ENTRY_ERROR_MESSAGES[ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED],
+    },
   });
 }
 
