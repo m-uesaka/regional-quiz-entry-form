@@ -71,8 +71,12 @@
   {:else if data.status === 'waitlisted'}
     <Message variant="warning">
       <div class="flex flex-col gap-1 text-sm">
-        <p class="font-semibold">
-          定員に達していたため、キャンセル待ちになりました。
+        <p class="font-semibold">キャンセル待ちとして受け付けました。</p>
+        <!-- Not only a full tournament: anyone already waiting goes first
+             even when a seat is free, and this entry queues behind them
+             (#283). -->
+        <p>
+          定員に達しているか、先にキャンセル待ちをしている方がいるため、その後ろに並んでいます。
         </p>
         <!-- The position isn't in this endpoint's response; mypage lists it
              alongside the entry, so that's where the participant is sent for it. -->

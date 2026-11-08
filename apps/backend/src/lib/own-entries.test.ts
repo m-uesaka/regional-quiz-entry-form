@@ -355,6 +355,43 @@ describe.skipIf(!dbReachable)(
       expect(mailSendCount).toBe(0);
     });
 
+    // A seat an earlier, failed promotion left empty: cancelling from the
+    // queue retries the promotion, which fills it in order.
+    it('promotes into a seat left empty when a waitlisted entry is cancelled', async () => {
+      const fixture = await createFixture('waitlisted-free-seat');
+      const firstWaiting = await addEntry(fixture, 'waitlisted', 1);
+      const secondWaiting = await addEntry(fixture, 'waitlisted', 2);
+      const thirdWaiting = await addEntry(fixture, 'waitlisted', 3);
+      mailSendCount = 0;
+
+      const result = await cancelOwnEntry(
+        env,
+        secondWaiting.participantId,
+        secondWaiting.entryId,
+      );
+
+      expect(result.ok).toBe(true);
+      const rows = await sql`
+        select id, status, waitlist_position from entries
+        where tournament_id = ${fixture.tournamentId}
+        order by status, waitlist_position
+      `;
+      expect(rows).toEqual([
+        {
+          id: firstWaiting.entryId,
+          status: 'confirmed',
+          waitlist_position: null,
+        },
+        {id: thirdWaiting.entryId, status: 'waitlisted', waitlist_position: 1},
+        {
+          id: secondWaiting.entryId,
+          status: 'cancelled',
+          waitlist_position: null,
+        },
+      ]);
+      expect(mailSendCount).toBe(1);
+    });
+
     it("returns 404 for another participant's entry", async () => {
       const fixture = await createFixture('other-participant');
       const owner = await addEntry(fixture, 'confirmed');
