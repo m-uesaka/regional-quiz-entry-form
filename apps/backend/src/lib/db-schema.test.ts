@@ -1446,6 +1446,35 @@ describe.skipIf(!dbReachable)(
       }
     }
 
+    /** The backend id of a reserved connection, to watch it wait. */
+    async function backendPid(db: SQL): Promise<number> {
+      const [row] = await db`select pg_backend_pid() as pid`;
+      return (row as {pid: number}).pid;
+    }
+
+    /**
+     * Resolves once backend `pid` is waiting on a lock, so the other side
+     * commits only after the statement under test has reached it.
+     */
+    async function waitUntilLockWaiting(pid: number): Promise<void> {
+      const deadline = Date.now() + 5_000;
+      for (;;) {
+        const [row] = await sql`
+          select exists (
+            select 1 from pg_stat_activity
+            where pid = ${pid} and wait_event_type = 'Lock'
+          ) as waiting
+        `;
+        if ((row as {waiting: boolean}).waiting) {
+          return;
+        }
+        if (Date.now() > deadline) {
+          throw new Error(`backend ${pid} never waited on a lock`);
+        }
+        await Bun.sleep(10);
+      }
+    }
+
     it('refuses changing the region or type once there is an entry, cancelled or not', async () => {
       const {otherRegionId, tournamentId, participantId} = await seed();
       await insertEntry(sql, tournamentId, participantId, 'cancelled');
@@ -1487,27 +1516,76 @@ describe.skipIf(!dbReachable)(
       expect(code).toBeUndefined();
     });
 
-    // The move waits on the tournament row an uncommitted entry holds for
-    // its foreign key, and then sees that entry.
+    // The move waits on the tournament row an uncommitted entry holds, and
+    // then sees that entry.
     it('sees an entry committed while the move waited for the tournament row', async () => {
       const {otherRegionId, tournamentId, participantId} = await seed();
       const holder = await sql.reserve();
-      const mover = new SQL(DB_URL);
+      const mover = await sql.reserve();
       try {
+        const moverPid = await backendPid(mover);
         await holder`begin`;
         await insertEntry(holder, tournamentId, participantId);
         const move = refusalOf(mover`
           update tournaments set region_id = ${otherRegionId}
           where id = ${tournamentId}
         `);
-        // Give the move time to reach the row lock it then waits on.
-        await Bun.sleep(200);
+        await waitUntilLockWaiting(moverPid);
         await holder`commit`;
 
         expect(await move).toBe(TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE);
       } finally {
+        // A no-op after the commit; ends the transaction if the test failed
+        // before it, so the connection goes back to the pool clean.
+        await holder`rollback`.catch(() => {});
         holder.release();
-        await mover.close();
+        mover.release();
+      }
+    });
+
+    // The other order: the move holds the row first, and the entry is
+    // checked where the tournament ends up, not where it was.
+    it('checks an entry that waited for an uncommitted move against the destination', async () => {
+      const {otherRegionId, tournamentId, participantId} = await seed();
+      // The participant already has a seat in the destination, which (like
+      // the source) doesn't allow dual entry. The 新人王's common questions
+      // differ from the 最強位's (0046), so it doesn't conflict across
+      // regions: only once both tournaments are in one region.
+      const [held] = await sql`
+        insert into tournaments (
+          region_id, type, name, entry_opens_at, entry_closes_at
+        ) values (
+          ${otherRegionId}, 'shinjinou', '移動先の大会',
+          '2020-01-01T00:00:00Z', '2099-01-01T00:00:00Z'
+        )
+        returning id
+      `;
+      await insertEntry(sql, held.id as string, participantId);
+      const mover = await sql.reserve();
+      const enterer = await sql.reserve();
+      try {
+        const entererPid = await backendPid(enterer);
+        await mover`begin`;
+        await mover`
+          update tournaments set region_id = ${otherRegionId}
+          where id = ${tournamentId}
+        `;
+        const entry = refusalOf(
+          insertEntry(enterer, tournamentId, participantId),
+        );
+        await waitUntilLockWaiting(entererPid);
+        await mover`commit`;
+
+        expect(await entry).toBe(REGION_DUAL_ENTRY_SQLSTATE);
+        const [{count}] = await sql`
+          select count(*)::integer as count from entries
+          where tournament_id = ${tournamentId}
+        `;
+        expect(count).toBe(0);
+      } finally {
+        await mover`rollback`.catch(() => {});
+        mover.release();
+        enterer.release();
       }
     });
   },

@@ -240,9 +240,10 @@ export type TournamentUpdateResponse = z.infer<
 // would follow without the dual-entry checks they were accepted under, so
 // the database refuses it (`tournaments_lock_region_type_with_entries`,
 // 0050). Shown as it is above the admin form. Deleting the entries with the
-// participant data reset lifts it.
+// participant data reset lifts it, but the reset is refused while the entry
+// period is open (`P0007`, 0038), hence the condition in the wording.
 export const TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE =
-  'エントリーがある大会の地域・種別は変更できません。変更するには、先に参加者データをリセットしてください';
+  'エントリーがある大会の地域・種別は変更できません。受付期間外であれば、参加者データをリセットしてエントリーを消した後に変更できます';
 
 // Japanese display labels for each tournament type, shared so staff-facing
 // screens don't each carry their own copy of the wording.

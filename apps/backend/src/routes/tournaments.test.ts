@@ -1816,6 +1816,12 @@ describe.skipIf(!dbReachable)(
     const testRegionSlug = 'tournaments-region-lock-test-region';
     const testEmailDomain = 'tournaments-region-lock-test.example.com';
 
+    // The slugs are fixed, so rows a crashed run left behind would make the
+    // next run's fixtures collide: clear them before each test as well.
+    beforeEach(async () => {
+      await deleteTestRegionRows(sql, testRegionSlug, testEmailDomain);
+    });
+
     afterAll(async () => {
       await deleteTestRegionRows(sql, testRegionSlug, testEmailDomain);
       await sql.close();

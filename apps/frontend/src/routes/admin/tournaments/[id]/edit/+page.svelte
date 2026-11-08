@@ -65,6 +65,7 @@
       formDefinitionYaml={data.formDefinitionYaml}
       regions={data.regions}
       questionSets={data.questionSets}
+      regionTypeLocked={data.hasEntries}
       result={updateResult}
     />
   {/key}
