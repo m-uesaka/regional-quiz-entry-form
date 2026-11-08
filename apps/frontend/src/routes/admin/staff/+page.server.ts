@@ -13,11 +13,8 @@ import {
 import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {Actions, PageServerLoad} from './$types';
 import {readString} from '$lib/form-data';
-import {
-  INVALID_INPUT_MESSAGE,
-  NO_FIELD_ERRORS,
-  type FieldErrors,
-} from '$lib/types/form-errors';
+import {INVALID_INPUT_MESSAGE, NO_FIELD_ERRORS} from '$lib/form-errors';
+import type {FieldErrors} from '$lib/types/form-errors';
 import {zodFieldErrors} from '$lib/zod-field-errors';
 
 /** The buttons on an account's row. Shared with `+page.svelte`. */

@@ -10,7 +10,8 @@ import {
 import {
   PASSWORD_MISMATCH_MESSAGE,
   TOO_MANY_REQUESTS_MESSAGE,
-} from '$lib/types/form-errors';
+} from '$lib/form-errors';
+import {zodFieldErrors} from '$lib/zod-field-errors';
 import {
   clearResetToken,
   readResetToken,
@@ -134,7 +135,7 @@ export const actions = {
       // broke (too short, too long, or too common).
       return fail(400, {
         error:
-          parsed.error.flatten().fieldErrors.newPassword?.[0] ??
+          zodFieldErrors(parsed.error).newPassword?.[0] ??
           'パスワードを正しく入力してください',
         tokenRejected: false,
       });

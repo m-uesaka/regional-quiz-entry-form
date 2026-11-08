@@ -15,7 +15,7 @@ import {
   RESET_CONFIRMATION_WORD,
 } from '$lib/tournament-form';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
-import {INVALID_INPUT_MESSAGE} from '$lib/types/form-errors';
+import {INVALID_INPUT_MESSAGE} from '$lib/form-errors';
 import type {TournamentFormValues} from '$lib/types/tournament-form';
 import type {Actions, PageServerLoad} from './$types';
 

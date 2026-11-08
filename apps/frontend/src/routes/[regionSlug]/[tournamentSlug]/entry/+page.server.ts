@@ -35,7 +35,7 @@ import {
   readFormText,
 } from '$lib/server/custom-field-values';
 import type {EntryFieldErrors, EntryFormValues} from '$lib/types/entry-form';
-import {TOO_MANY_REQUESTS_MESSAGE} from '$lib/types/form-errors';
+import {TOO_MANY_REQUESTS_MESSAGE} from '$lib/form-errors';
 import type {Actions, PageServerLoad, RequestEvent} from './$types';
 
 /**

@@ -21,7 +21,8 @@ import {
 import {dropCachedEntryList} from '$lib/server/entry-list-cache';
 import {redirectToParticipantLogin} from '$lib/server/participant-session';
 import type {EntryEditFormValues} from '$lib/types/entry-form';
-import {NO_FIELD_ERRORS, type FieldErrors} from '$lib/types/form-errors';
+import {NO_FIELD_ERRORS} from '$lib/form-errors';
+import type {FieldErrors} from '$lib/types/form-errors';
 import type {Actions, PageServerLoad} from './$types';
 
 const ENTRY_PERIOD_CLOSED_MESSAGE = 'エントリー期間外のため編集できません';
