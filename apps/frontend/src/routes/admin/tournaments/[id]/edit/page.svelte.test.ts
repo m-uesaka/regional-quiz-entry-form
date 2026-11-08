@@ -1,8 +1,27 @@
 import {render, screen} from '@testing-library/svelte';
-import {describe, expect, it} from 'vitest';
+import userEvent from '@testing-library/user-event';
+import {afterEach, describe, expect, it, vi} from 'vitest';
 import type {Region, StaffClaims, Tournament} from '@regional-quiz/shared';
+import type {SubmitFunction} from '@sveltejs/kit';
 import Page from './+page.svelte';
 import type {PageProps} from './$types';
+
+// The forms `use:enhance` was put on, with the callback each was given.
+// Outside a running app the real action would reach for a router that
+// isn't there, so what is checked is that each form is enhanced and how
+// it asks for the update.
+const enhancedForms = vi.hoisted(
+  () => new Map<HTMLFormElement, SubmitFunction | undefined>(),
+);
+vi.mock('$app/forms', () => ({
+  enhance: (form: HTMLFormElement, submit?: SubmitFunction) => {
+    enhancedForms.set(form, submit);
+  },
+}));
+
+afterEach(() => {
+  enhancedForms.clear();
+});
 
 const TOURNAMENT: Tournament = {
   id: '00000000-0000-0000-0000-000000000001',
@@ -275,6 +294,71 @@ describe('admin tournament edit +page.svelte', () => {
     expect(screen.getByText(/対象: 新人王/)).toBeInTheDocument();
     expect(screen.getByLabelText('YAML')).toHaveValue(
       'tournamentSlug: shinjinou\nfields: []\n',
+    );
+  });
+
+  // A plain post would load the page afresh, re-seeding the YAML editor
+  // from the stored definition and throwing the draft away (#303).
+  it('sends every form through `use:enhance`', () => {
+    renderPage();
+
+    for (const name of ['更新', '参加者データをリセット', '大会を削除']) {
+      const form = screen.getByRole('button', {name}).closest('form');
+      expect(enhancedForms.has(form as HTMLFormElement)).toBe(true);
+    }
+  });
+
+  // The controls take `value` rather than `bind:value`, so a reset would
+  // put back what the page was first rendered with.
+  it('keeps the tournament form as typed after a save', async () => {
+    renderPage();
+    const form = screen
+      .getByRole('button', {name: '更新'})
+      .closest('form') as HTMLFormElement;
+    const submit = enhancedForms.get(form);
+    const update = vi.fn();
+
+    const callback = await submit?.(
+      {} as unknown as Parameters<SubmitFunction>[0],
+    );
+    await callback?.({update} as unknown as Parameters<
+      Exclude<typeof callback, void>
+    >[0]);
+
+    expect(update).toHaveBeenCalledExactlyOnceWith({reset: false});
+  });
+
+  it('keeps an unsaved YAML draft across a saved update', async () => {
+    const user = userEvent.setup();
+    const {rerender} = renderPage();
+    await user.type(screen.getByLabelText('YAML'), '# 手で直した');
+
+    // What the enhanced update leaves behind: `load` re-read, with the
+    // saved name, and the action's result.
+    await rerender({
+      params: {id: TOURNAMENT.id},
+      data: {
+        staff: STAFF,
+        tournament: {...TOURNAMENT, name: '第1回テスト最強位(改)'},
+        customName: '第1回テスト最強位(改)',
+        regions: REGIONS,
+        questionSets: QUESTION_SETS,
+        formDefinitionYaml: FORM_DEFINITION_YAML,
+      },
+      form: {
+        saved: true,
+        error: null,
+        values: null,
+        promotion: {promotedCount: 0, mailFailedCount: 0},
+      },
+    });
+
+    expect(screen.getByRole('status')).toHaveTextContent('更新しました');
+    expect(screen.getByLabelText(/大会名/)).toHaveValue(
+      '第1回テスト最強位(改)',
+    );
+    expect(screen.getByLabelText('YAML')).toHaveValue(
+      `${FORM_DEFINITION_YAML}# 手で直した`,
     );
   });
 

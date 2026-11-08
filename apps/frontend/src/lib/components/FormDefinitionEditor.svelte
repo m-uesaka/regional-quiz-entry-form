@@ -10,6 +10,7 @@ stands, so a reloaded sheet can be checked (and touched up) first.
     TOURNAMENT_TYPE_LABELS,
     type TournamentType,
   } from '@regional-quiz/shared';
+  import {beforeNavigate} from '$app/navigation';
   import {createApiClient} from '$lib/api';
   import Button from '$lib/components/ui/atoms/Button.svelte';
   import Card from '$lib/components/ui/atoms/Card.svelte';
@@ -36,9 +37,13 @@ stands, so a reloaded sheet can be checked (and touched up) first.
   const api = createApiClient();
 
   // Seeded once: after that the text is the staff member's draft, and a
-  // `load` re-run (say, after the tournament form above is saved) must not
-  // throw it away. The page keys this component on the tournament and its
-  // type, which is when a fresh start is wanted.
+  // `load` re-run must not throw it away. The page's other forms are sent
+  // with `use:enhance`, so saving the tournament form above (or resetting the
+  // entries) re-runs `load` without a page load and the draft stays (#303);
+  // without JavaScript they reload the page, and the draft -- which cannot
+  // be edited without JavaScript anyway -- starts over from what is stored.
+  // The page keys this component on the tournament and its type, which is
+  // when a fresh start is wanted.
   // svelte-ignore state_referenced_locally
   let yaml = $state(initialYaml);
   // The text as last stored: what `load` read, then what each save sent.
@@ -59,6 +64,30 @@ stands, so a reloaded sheet can be checked (and touched up) first.
   // 保存しました only while the text is still what was saved: typing after
   // the save makes it a draft again.
   const showSaved = $derived(saveStatus === 'saved' && yaml === storedYaml);
+  // Text that leaving the page would lose: only `storedYaml` comes back.
+  const unsaved = $derived(yaml !== storedYaml);
+
+  // Asks before a navigation throws an unsaved draft away (#303). Leaving the
+  // site, reloading or closing the tab (`leave`) can only be held up by the
+  // browser's own dialog, which `cancel()` asks for; SvelteKit raises this
+  // from `beforeunload`, so no listener of its own is needed. A `goto` is
+  // let through: on this page that is only a form action's redirect -- the
+  // tournament was deleted, or the session is gone -- which has already
+  // happened, and staying behind would leave a page that can't save.
+  beforeNavigate(navigation => {
+    if (!unsaved || navigation.type === 'goto') {
+      return;
+    }
+    if (navigation.type === 'leave') {
+      navigation.cancel();
+      return;
+    }
+    if (
+      !confirm('保存していない YAML の変更は失われます。このページを離れますか?')
+    ) {
+      navigation.cancel();
+    }
+  });
 
   async function handleLoadSheet(event: SubmitEvent): Promise<void> {
     event.preventDefault();

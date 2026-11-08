@@ -1,5 +1,6 @@
 <script lang="ts">
   import type {Region} from '@regional-quiz/shared';
+  import {enhance} from '$app/forms';
   import NativeSelect from '$lib/components/form/NativeSelect.svelte';
   import Button from '$lib/components/ui/atoms/Button.svelte';
   import Input from '$lib/components/ui/atoms/Input.svelte';
@@ -35,8 +36,25 @@
 <!-- Posted to a form action rather than sent from the browser: `/api/*` is
      only routed to the backend Worker for requests the frontend makes
      itself, so a client-side write would 404 in production until Task 9-5
-     lands. See the note in this page's `+page.server.ts`. -->
-<form class="flex flex-col gap-4" method="POST" {action}>
+     lands. See the note in this page's `+page.server.ts`.
+     Sent with `use:enhance` so that saving re-runs `load` without a page
+     load, which on the edit page would throw away the form definition's
+     unsaved YAML draft below (#303); without JavaScript it still posts as a
+     plain form. The controls are not reset after a successful save: they
+     take `value` rather than `bind:value`, so a reset would put back what
+     the page was first rendered with, and a field the save left unchanged
+     would never be set again from the re-read tournament. What was typed is
+     what was stored, and a field the API rewrote comes back through
+     `values`. -->
+<form
+  class="flex flex-col gap-4"
+  method="POST"
+  {action}
+  use:enhance={() =>
+    async ({update}) => {
+      await update({reset: false});
+    }}
+>
   <div class="flex flex-col gap-1.5">
     <Label for="tournament-region">地域</Label>
     <!-- A select rather than a UUID typed by hand: the id is not something

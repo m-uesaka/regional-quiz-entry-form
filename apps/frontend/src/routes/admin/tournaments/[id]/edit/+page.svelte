@@ -1,4 +1,5 @@
 <script lang="ts">
+  import {enhance} from '$app/forms';
   import TournamentEditor from '$lib/components/TournamentEditor.svelte';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
@@ -111,8 +112,16 @@
          button waits for a typed word rather than a tick (see
          `RESET_CONFIRMATION_WORD`). The word is checked by the action rather
          than a `pattern`, which would refuse the trailing full-width space an
-         IME leaves behind. -->
-    <form method="POST" action="?/reset" class="flex flex-col gap-3">
+         IME leaves behind. Sent with `use:enhance`, like the tournament form
+         above, so the form definition's unsaved YAML draft survives the
+         `load` re-run (#303); a successful reset clears the choice and the
+         typed word, as a page load would. -->
+    <form
+      method="POST"
+      action="?/reset"
+      class="flex flex-col gap-3"
+      use:enhance
+    >
       <fieldset class="flex flex-col gap-2">
         <legend class="mb-1 text-sm font-bold">参加者アカウント</legend>
         <div class="flex items-center gap-2">
@@ -168,8 +177,16 @@
 
     <!-- A form action, like the update above, and behind a required tick
          rather than a `confirm()` dialog, so it works without JavaScript and
-         cannot go off on a single stray click. -->
-    <form method="POST" action="?/delete" class="flex flex-col gap-3">
+         cannot go off on a single stray click. Sent with `use:enhance` so a
+         refused delete keeps the form definition's unsaved YAML draft (#303);
+         a successful one redirects to the list, which the draft's guard lets
+         through since the definition went with the tournament. -->
+    <form
+      method="POST"
+      action="?/delete"
+      class="flex flex-col gap-3"
+      use:enhance
+    >
       <div class="flex items-center gap-2">
         <Checkbox id="tournament-delete-confirm" name="confirm" required />
         <Label for="tournament-delete-confirm">この大会を削除する</Label>

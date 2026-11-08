@@ -1,8 +1,40 @@
+import type {BeforeNavigate, NavigationType} from '@sveltejs/kit';
 import {render, screen} from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {jsonResponse} from '../../test-support/json-response';
 import FormDefinitionEditor from './FormDefinitionEditor.svelte';
+
+// The callbacks the editor registers, so a test can stand in for the router
+// starting a navigation.
+const navigationGuards = vi.hoisted(
+  () => [] as Array<(navigation: BeforeNavigate) => void>,
+);
+vi.mock('$app/navigation', () => ({
+  beforeNavigate: (callback: (navigation: BeforeNavigate) => void) => {
+    navigationGuards.push(callback);
+  },
+}));
+
+/**
+ * Runs the registered guards over a navigation of the given type.
+ * @param type How the navigation was started.
+ * @return Whether a guard cancelled it.
+ */
+function navigate(type: Exclude<NavigationType, 'enter'>): boolean {
+  let cancelled = false;
+  const navigation = {
+    type,
+    willUnload: type === 'leave',
+    cancel: () => {
+      cancelled = true;
+    },
+  } as unknown as BeforeNavigate;
+  for (const guard of navigationGuards) {
+    guard(navigation);
+  }
+  return cancelled;
+}
 
 const TOURNAMENT_ID = '00000000-0000-0000-0000-000000000000';
 const STORED_YAML = 'tournamentSlug: saikyoi\nfields: []\n';
@@ -24,6 +56,7 @@ describe('FormDefinitionEditor', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    navigationGuards.length = 0;
   });
 
   it('starts from the stored definition', () => {
@@ -152,6 +185,78 @@ describe('FormDefinitionEditor', () => {
         '確認してから保存してください',
       );
       expect(screen.getByLabelText('YAML')).toHaveValue(SHEET_YAML);
+    });
+  });
+
+  // Leaving the page throws the draft away, as nothing but the stored text
+  // comes back (#303).
+  describe('leaving with an unsaved draft', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    async function editDraft(): Promise<void> {
+      const user = userEvent.setup();
+      render(FormDefinitionEditor, {props: PROPS});
+      await user.type(screen.getByLabelText('YAML'), '# 手で直した');
+    }
+
+    it('lets the page go while the text is what is stored', () => {
+      const confirm = vi.spyOn(window, 'confirm');
+      render(FormDefinitionEditor, {props: PROPS});
+
+      expect(navigate('link')).toBe(false);
+      expect(navigate('leave')).toBe(false);
+      expect(confirm).not.toHaveBeenCalled();
+    });
+
+    it('stays when leaving is not confirmed', async () => {
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      await editDraft();
+
+      expect(navigate('link')).toBe(true);
+      expect(confirm).toHaveBeenCalledOnce();
+      expect(navigate('popstate')).toBe(true);
+    });
+
+    it('goes once leaving is confirmed', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      await editDraft();
+
+      expect(navigate('link')).toBe(false);
+    });
+
+    // Reloading, closing the tab or leaving the site can only be held up by
+    // the browser's own dialog, which cancelling asks for.
+    it("leaves an unload to the browser's own dialog", async () => {
+      const confirm = vi.spyOn(window, 'confirm');
+      await editDraft();
+
+      expect(navigate('leave')).toBe(true);
+      expect(confirm).not.toHaveBeenCalled();
+    });
+
+    // A form action's redirect: the tournament was deleted, or the session
+    // is gone, and staying behind would keep nothing.
+    it('lets a redirect through', async () => {
+      const confirm = vi.spyOn(window, 'confirm');
+      await editDraft();
+
+      expect(navigate('goto')).toBe(false);
+      expect(confirm).not.toHaveBeenCalled();
+    });
+
+    it('lets the page go once the draft is saved', async () => {
+      const user = userEvent.setup();
+      const confirm = vi.spyOn(window, 'confirm');
+      fetchMock.mockResolvedValueOnce(jsonResponse({ok: true}));
+      await editDraft();
+
+      await user.click(screen.getByRole('button', {name: '保存'}));
+      expect(await screen.findByText('保存しました')).toBeInTheDocument();
+
+      expect(navigate('link')).toBe(false);
+      expect(confirm).not.toHaveBeenCalled();
     });
   });
 
