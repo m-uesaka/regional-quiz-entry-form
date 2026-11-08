@@ -7,7 +7,6 @@ import {
   entryAvailability,
   findCustomFieldValuesErrors,
   TournamentEntryCountsSchema,
-  TournamentTypeSchema,
   type EntryErrorCode,
   type FormFieldDef,
   type Regulation,
@@ -16,16 +15,14 @@ import {
 } from '@regional-quiz/shared';
 import {
   createApiClient,
-  isUnauthorized,
   pickApiErrorMessage,
   readErrorMessage,
-  resolveApiErrorMessage,
   type ApiErrorMessages,
 } from '$lib/api';
 import {isWaitlistOpen, priorityEntryNotices} from '$lib/priority-entry';
 import {participantLoginPath} from '$lib/server/participant-login';
 import {clearParticipantSession} from '$lib/server/participant-session';
-import {redirectToStaffLogin} from '$lib/server/staff-session';
+import {fetchTournamentBySlug} from '$lib/server/tournament-by-slug';
 import {readTurnstileToken, TURNSTILE_TOKEN_FIELD} from '$lib/turnstile';
 import {
   customFieldErrors,
@@ -157,56 +154,17 @@ const ENTRY_REFUSAL_MESSAGES: ApiErrorMessages = {
  * @param event The request's `params` and `fetch`, plus the `cookies` and
  *     `url` a refused staff session is cleared and redirected with.
  */
-async function fetchTournament({
-  params,
-  fetch,
-  cookies,
-  url,
-}: Pick<
-  RequestEvent,
-  'params' | 'fetch' | 'cookies' | 'url'
->): Promise<Tournament> {
-  // The RPC client's param type for `tournamentSlug` is the literal union
-  // `'saikyoi' | 'shinjinou'` (inferred from the backend's zValidator), not
-  // a bare `string`, so a raw route param needs narrowing before it
-  // typechecks. An invalid slug is reported as "not found", not a 500.
-  const parsedType = TournamentTypeSchema.safeParse(params.tournamentSlug);
-  if (!parsedType.success) {
-    throw error(404, '大会が見つかりません');
-  }
-
-  const api = createApiClient(fetch);
-  const res = await api.api.tournaments[':regionSlug'][':tournamentSlug'].$get({
-    param: {regionSlug: params.regionSlug, tournamentSlug: parsedType.data},
+async function fetchTournament(
+  event: Pick<RequestEvent, 'params' | 'fetch' | 'cookies' | 'url'>,
+): Promise<Tournament> {
+  return fetchTournamentBySlug(event, {
+    // A paused tournament (0039) is gated the same way as a closed entry
+    // period, but said apart.
+    forbiddenMessages: {
+      byCode: {[ENTRY_ERROR_CODES.ENTRIES_PAUSED]: ENTRIES_PAUSED_MESSAGE},
+      fallback: ENTRY_ERROR_MESSAGES[ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED],
+    },
   });
-  if (!res.ok) {
-    if (res.status === 404) {
-      throw error(404, '大会が見つかりません');
-    }
-    // A 401 means the request carried a staff cookie the gate refused: it
-    // expired, or its sessions were revoked. Only staff hold that cookie, so
-    // it is dropped and its holder sent to log in again, rather than told
-    // the period is closed while the dead cookie stays put.
-    if (isUnauthorized(res)) {
-      redirectToStaffLogin(cookies, url);
-    }
-    // The backend applies the same entry-period rule this page does
-    // (`middleware/entry-period.ts`), and answers before the tournament is
-    // readable at all -- so outside the period this is what a visitor with
-    // no staff session, or one covering another region, actually gets.
-    if (res.status === 403) {
-      // A paused tournament (0039) is gated the same way, but said apart.
-      throw error(
-        403,
-        await resolveApiErrorMessage(res, {
-          byCode: {[ENTRY_ERROR_CODES.ENTRIES_PAUSED]: ENTRIES_PAUSED_MESSAGE},
-          fallback: ENTRY_ERROR_MESSAGES[ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED],
-        }),
-      );
-    }
-    throw error(502, '大会情報の取得に失敗しました');
-  }
-  return res.json();
 }
 
 /**
