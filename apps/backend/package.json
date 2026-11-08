@@ -15,6 +15,7 @@
     "test": "bun test",
     "hono:routes": "hono routes src/hono-cli-app.ts -e yaml",
     "hono:snapshot": "hono snapshot src/hono-cli-app.ts -e yaml",
+    "hono:batch": "hono batch - src/hono-cli-app.ts -e yaml",
     "staff:bootstrap": "bun src/scripts/bootstrap-general-staff.ts",
     "lint": "gts lint",
     "fix": "gts fix"
