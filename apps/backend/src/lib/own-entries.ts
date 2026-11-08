@@ -112,10 +112,11 @@ export async function updateOwnEntry(
  *
  * The entry is looked up by `(id, participant_id)` so another participant's
  * entry is indistinguishable from a nonexistent one. Freeing a `confirmed`
- * seat promotes the head of the tournament's waitlist; cancelling from the
- * waitlist itself only closes the gap in the queue, and cancelling before
- * the entry was ever verified burns its outstanding verification token (see
- * the migration).
+ * seat promotes the head of the tournament's waitlist. Cancelling from the
+ * waitlist itself closes the gap in the queue and also runs the promotion,
+ * which promotes nobody unless an earlier, failed promotion left a seat
+ * empty. Cancelling before the entry was ever verified burns its
+ * outstanding verification token (see the migration).
  * Cancelling an already-cancelled entry succeeds without promoting anyone.
  * @param env The Worker bindings.
  * @param participantId The logged-in participant, from the session cookie.
@@ -145,16 +146,24 @@ export async function cancelOwnEntry(
     return {ok: false, status: 404, error: COMMON_ERROR_CODES.ENTRY_NOT_FOUND};
   }
 
-  if (cancelled.previous_status === 'confirmed') {
+  // A waitlisted entry frees no seat, but its cancellation is a cheap
+  // chance to fill one an earlier promotion failed to (the promotion counts
+  // the free seats, so it does nothing when there are none). A
+  // `pending_verification` entry neither held a seat nor stood in the queue.
+  if (
+    cancelled.previous_status === 'confirmed' ||
+    cancelled.previous_status === 'waitlisted'
+  ) {
     try {
       // The cancellation above is already committed, so a
       // `pending_verification` entry can be confirmed before this runs. With
       // anyone waiting, `confirm_entry_by_token` queues it behind them
-      // rather than into the freed seat (0047, #283); with nobody waiting
-      // it may take the seat, and `promote_waitlisted_entries` -- counting
-      // the free seats under its own tournament lock -- then promotes
-      // nobody instead of pushing the tournament over capacity. A mail it
-      // couldn't send is logged there.
+      // rather than into the freed seat, and `confirmEntryByToken()` runs
+      // this same promotion itself (0047, #283); with nobody waiting it may
+      // take the seat. Either way `promote_waitlisted_entries` -- counting
+      // the free seats under its own tournament lock -- promotes nobody
+      // into a seat already taken instead of pushing the tournament over
+      // capacity. A mail it couldn't send is logged there.
       await promoteWaitlistedEntries(env, cancelled.entry_tournament_id);
     } catch (promotionError) {
       // The cancellation itself is already committed, so failing the request

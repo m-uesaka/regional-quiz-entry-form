@@ -13,21 +13,31 @@
 -- 同じ大会にキャンセル待ちが 1 件でもあれば、空席があっても新しいエントリーは
 -- キャンセル待ちの末尾に入れる。空席は `promote_waitlisted_entries()` が
 -- `waitlist_position` の順に埋める。キャンセル待ちの件数は、確定数と同じく
--- 大会の行のロックを取った後に数える。キャンセル待ちを動かす関数
--- (`cancel_own_entry()`、`promote_waitlisted_entries()`、
--- `lapse_expired_pending_entries()`)はどれも同じ大会の行のロックを取るので、
+-- 大会の行のロックを取った後に数える。キャンセル待ちの行を変える関数
+-- (`cancel_own_entry()` のキャンセルと順位の詰め直し、
+-- `promote_waitlisted_entries()` の繰り上げと振り直し、
+-- `reset_tournament_entries()` の削除)はどれも同じ大会の行のロックを取るので、
 -- 数え終えてから採番するまでの間にキャンセル待ちが変わることはない。
+-- (`lapse_expired_pending_entries()` も同じロックを取るが、取り消すのは
+-- `pending_verification` のエントリーだけで、キャンセル待ちは動かさない。)
+--
+-- 空席があるのにキャンセル待ちに入った場合は、呼び出し側
+-- (`confirmEntryByToken()`)が続けて `promote_waitlisted_entries()` を呼ぶ。
+-- 以前の繰り上げが失敗して空席が残っていても、次の確認で順番どおりに埋まり、
+-- 席が足りれば末尾に入れたばかりのエントリーもそのまま確定する。繰り上げを
+-- この関数の中で行わないのは、繰り上げた人への通知メールをアプリ側から送る
+-- ために返り値の形を変える必要があり、デプロイ中の古い Worker が呼べなくなる
+-- ため。
 --
 -- 定員なし(`capacity` が null)の大会でも規則は同じにする。定員なしの大会に
 -- キャンセル待ちが残るのは、定員を外した後の繰り上げが失敗したときだけで、
--- 定員をもう一度保存すれば(`PATCH /api/tournaments/:id`)残った全員が
--- 順番どおりに確定する。
+-- 上の繰り上げで新しいエントリーも含めて全員が確定する。
 --
 -- 対象外: 席を空ける操作と繰り上げを同じトランザクションにまとめること
 -- (`cancel_own_entry()` の中で繰り上げる等)。返り値の形と、繰り上げの
 -- 通知メールを送るアプリ側の流れが変わるので別に扱う。この変更の後は、
--- 繰り上げが失敗しても空席が順番を無視して取られることはなく、空いたまま
--- 次の繰り上げ(次のキャンセルや定員の保存)で順番どおりに埋まる。
+-- 繰り上げが失敗しても空席が順番を無視して取られることはなく、次の繰り上げ
+-- (次の確認・キャンセルや定員の保存)で順番どおりに埋まる。
 --
 -- 関数のシグネチャと返り値は変えないので、デプロイ中の古い Worker からも
 -- そのまま呼べる。
@@ -91,17 +101,17 @@ begin
       using errcode = 'P0003';
   end if;
 
-  select count(*) into v_confirmed_count
+  select count(*) filter (where status = 'confirmed'),
+         count(*) filter (where status = 'waitlisted')
+    into v_confirmed_count, v_waitlisted_count
     from entries
-    where tournament_id = v_tournament_id and status = 'confirmed';
-  select count(*) into v_waitlisted_count
-    from entries
-    where tournament_id = v_tournament_id and status = 'waitlisted';
+    where tournament_id = v_tournament_id;
 
   -- Anyone already waiting goes first: a seat freed by a cancellation or a
   -- raised capacity belongs to the head of the queue, which
   -- `promote_waitlisted_entries()` fills in order. So a non-empty queue
-  -- sends this entry to its tail even when a seat is free right now.
+  -- sends this entry to its tail even when a seat is free right now; the
+  -- caller then runs that promotion, which may well reach this entry.
   if v_waitlisted_count > 0
       or (v_capacity is not null and v_confirmed_count >= v_capacity) then
     v_status := 'waitlisted';
