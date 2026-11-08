@@ -15,6 +15,7 @@ import {
   RESET_CONFIRMATION_WORD,
 } from '$lib/tournament-form';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
+import {INVALID_INPUT_MESSAGE} from '$lib/types/form-errors';
 import type {TournamentFormValues} from '$lib/types/tournament-form';
 import type {Actions, PageServerLoad} from './$types';
 
@@ -50,8 +51,6 @@ interface TournamentResetActionResult {
   reset: TournamentResetResponse | null;
   resetError: string | null;
 }
-
-const INVALID_INPUT_MESSAGE = '入力内容を確認してください';
 
 // Read and written on the server rather than in the browser (this was a
 // `+page.ts` calling the API from the client): `/api/*` is only routed to

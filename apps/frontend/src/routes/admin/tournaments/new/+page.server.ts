@@ -6,6 +6,7 @@ import {
   readTournamentFormValues,
 } from '$lib/tournament-form';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
+import {INVALID_INPUT_MESSAGE} from '$lib/types/form-errors';
 import type {TournamentFormValues} from '$lib/types/tournament-form';
 import type {Actions, PageServerLoad} from './$types';
 
@@ -18,8 +19,6 @@ interface TournamentCreateActionResult {
   /** Echoed back so the refused form re-renders what was typed. */
   values: TournamentFormValues;
 }
-
-const INVALID_INPUT_MESSAGE = '入力内容を確認してください';
 
 // Read and written server-side rather than from the browser: `/api/*` is
 // only routed to the backend Worker for requests the frontend makes itself

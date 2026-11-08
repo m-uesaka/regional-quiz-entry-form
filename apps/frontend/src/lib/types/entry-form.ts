@@ -1,4 +1,5 @@
 import type {CustomFieldValues} from '@regional-quiz/shared';
+import type {FieldErrors} from '$lib/types/form-errors';
 
 /**
  * The entry form's own fields, echoed back verbatim after a failed
@@ -29,10 +30,5 @@ export interface EntryEditFormValues {
   customFieldValues: CustomFieldValues;
 }
 
-/**
- * Per-field validation messages, keyed by field name. Spelled out as a
- * record (rather than left as Zod's per-schema shape) so every failure the
- * entry action returns carries the same type and the form can index it by a
- * field name.
- */
-export type EntryFieldErrors = Record<string, string[] | undefined>;
+/** Per-field validation messages on the entry and edit forms. */
+export type EntryFieldErrors = FieldErrors;
