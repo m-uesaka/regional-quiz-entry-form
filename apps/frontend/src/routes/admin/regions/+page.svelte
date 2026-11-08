@@ -133,6 +133,7 @@
                 <div class="flex items-center gap-2">
                   <Checkbox
                     id="region-{region.id}-dual-entry"
+                    aria-describedby="region-{region.id}-dual-entry-hint"
                     name="allowsDualEntry"
                     checked={result?.values.allowsDualEntry ??
                       region.allowsDualEntry}
@@ -141,6 +142,14 @@
                     最強位と新人王の両方へのエントリーを認める
                   </Label>
                 </div>
+                <!-- 0045: refused while both tournaments share a question set,
+                     which is changed on another screen. -->
+                <p
+                  id="region-{region.id}-dual-entry-hint"
+                  class="text-sm text-muted-foreground"
+                >
+                  最強位と新人王に同じ問題セットが設定されていると、両方へのエントリーは認められません。先に大会の編集画面で、どちらかの問題セットを変更してください。
+                </p>
 
                 <div class="flex flex-wrap gap-2">
                   <Button type="submit">保存</Button>

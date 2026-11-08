@@ -17,6 +17,8 @@ import {
 } from '../lib/db';
 import {internalError} from '../lib/errors';
 import {
+  DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
+  DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE,
   duplicate,
   mapPgError,
   NO_ROW_PGRST_CODE,
@@ -132,11 +134,20 @@ export const regionsRoute = new Hono<StaffEnv>()
       if (error) {
         // `.single()` found no row to update. Its message talks about the
         // query shape rather than the region, so it is replaced -- the same
-        // translation `routes/tournaments.ts` does. Everything else is
-        // server-side, for the same reason as in the create handler.
+        // translation `routes/tournaments.ts` does. Allowing dual entry where
+        // both tournaments share a question set (0045) is the staff's to
+        // fix, so it is answered in the words the admin screen shows.
+        // Everything else is server-side, for the same reason as in the
+        // create handler.
         const {body, status} = mapPgError(
           error,
-          {[NO_ROW_PGRST_CODE]: noRow('region not found')},
+          {
+            [NO_ROW_PGRST_CODE]: noRow('region not found'),
+            [DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE]: {
+              status: 409,
+              error: DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
+            },
+          },
           'failed to update the region',
         );
         return c.json(body, status);

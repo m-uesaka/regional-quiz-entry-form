@@ -48,7 +48,7 @@ flowchart LR
 基本となるデータモデルの前提は次の通りです。
 
 - **地域(region)** の下に **大会(tournament)** があり、大会は「地域 × 大会種別(最強位 / 新人王)」の組で一意に決まる(`unique (region_id, type)`)。
-- **参加者アカウント(participant)** はメールアドレスで一意。**同じ問題セット(`tournaments.question_set`)の大会**には、地域をまたいで参加できない(`0043`)。既定(`null`)はすべての大会が共通問題なので、何も設定しなければ地域をまたいだ参加はできない。独自の問題を使う大会(例: 宮崎と鹿児島)に問題セット名を設定すると、問題セットが違う大会どうしは地域をまたいで参加できる。別の地域のエントリーを受付中にキャンセルしていれば、その地域にも制限はかからない(#236)。`participants.region_id` は最後にエントリーした地域の記録で、判定には使わない。
+- **参加者アカウント(participant)** はメールアドレスで一意。**同じ問題セット(`tournaments.question_set`)の大会**には、地域をまたいで参加できない(`0043`)。既定(`null`)は種別ごとの共通問題なので、何も設定しなければ、地域をまたいで同じ種別の大会(最強位どうし・新人王どうし)には参加できない。別の地域の最強位と新人王には参加できる(`0046`)。独自の問題を使う大会(例: 宮崎と鹿児島)に問題セット名を設定すると、問題セットが違う大会どうしは地域をまたいで参加できる。別の地域のエントリーを受付中にキャンセルしていれば、その地域にも制限はかからない(#236)。`participants.region_id` は最後にエントリーした地域の記録で、判定には使わない。
 - **エントリー(entry)** は「participant × tournament」の組ごとに1件のみ(`unique (participant_id, tournament_id)`)。同じ participant が同じ地域の最強位・新人王の両方に entry を持てるかは、地域ごとの設定(`regions.allows_dual_entry`、既定 `false`)で決まる。
 - **フォーム項目定義(form_field_defs)** は大会ごとに YAML から展開して保存する。フロントエンドはこれを読んでフォームを動的生成する。
 
@@ -106,6 +106,8 @@ flowchart TB
 
 `allows_dual_entry` は requirements.md の「両方に参加することができる**ような地域も存在します**」に対応します。既定を `false` にしているのは、現在の「どの地域でも両方に出られる」挙動が仕様の欠落であって意図された既定ではないためで、許可する地域には運用開始前に明示的に `true` を立ててもらいます。判定は `check_entry_seat()` トリガ(マイグレーション `0041`)だけが行い、`cancelled` 以外のエントリーが同一地域の別大会にあれば書き込みを断ります(下記)。`apps/backend/src/lib/entry-submission.ts` の `enterTournament()`(書き込み段階の `writeEntry()`)はこれを 409 に変換します。エントリーポータル(`/portal`)は `GET /api/portal/tournaments` の `regionAllowsDualEntry` でこの設定を受け取り、許可していて最強位・新人王の両方が並んでいる地域に「この地域は最強位と新人王の両方にエントリー可能です(重複エントリー可)」と表示します。地域のルールとしての表示なので、各大会の受付状況(受付開始前 / 受付中 / 受付終了)にかかわらず出します。
 
+重複エントリーを認める地域では、最強位と新人王に同じ問題セット(`tournaments.question_set`)を設定できません(`0045`。下記「重複エントリーを認める地域の問題セット」)。
+
 作成・編集は統括スタッフ向けの `GET` / `POST` / `PATCH /api/regions`(`apps/backend/src/routes/regions.ts`)から行えます。`slug` だけは公開済み URL の一部なので作成時に固定され、更新できません。
 
 ### tournaments — 大会
@@ -119,7 +121,7 @@ flowchart TB
 | `capacity` | integer | nullable | 定員。**`null` は「定員無制限」を意味する**(0 ではない) |
 | `entry_opens_at` | timestamptz | not null | エントリー開始日時 |
 | `entry_closes_at` | timestamptz | not null | エントリー終了日時 |
-| `question_set` | text | null 可、1〜100 文字・空白(全角空白を含む)と書式文字(ゼロ幅スペースなど)なし・NFKC 正規化済み(`tournaments_question_set_format`、`0043` → `0044`) | 使用する問題セットの名前(`0043`)。**`null` は共通問題**。地域をまたいだ参加を断るのは、問題セットが同じ(`null` どうしを含む)大会どうしだけ。同じ地域の最強位・新人王の組は `regions.allows_dual_entry` だけで決まり、この列は見ない。統括スタッフが管理画面の大会作成・編集画面の「問題セット」欄で設定する(`POST` / `PATCH /api/tournaments` の `questionSet`。空欄は `null`)。名前が 1 文字違うだけで別の問題セットになり、断るべきエントリーが通ってしまうので、入力は `packages/shared` の `QuestionSetInputSchema` が書式文字の除去・NFKC 正規化・前後の空白除去をし、途中の空白を拒否する。DB も `0044` から同じ形(NFKC 正規化済み・書式文字なし)の値しか受け付けないので、保存済みの名前を画面が送り直しても値は変わらない。画面は既にある名前を候補(`GET /api/tournaments/question-sets`)として出し、大会一覧にも列を表示する(異体字は制約では防げないので、候補から選ぶ)。スプレッドシートからの一括登録では設定せず、既存の値も変えない。設定を変えても既に受け付けたエントリーは検査し直さない |
+| `question_set` | text | null 可、1〜100 文字・空白(全角空白を含む)と書式文字(ゼロ幅スペースなど)なし・NFKC 正規化済み(`tournaments_question_set_format`、`0043` → `0044`) | 使用する問題セットの名前(`0043`)。**`null` は共通問題**。地域をまたいだ参加を断るのは、問題セットが同じ大会どうしだけ。`null` は**種別ごとの**共通問題で、`null` どうしは同じ種別(最強位どうし・新人王どうし)のときだけ同じ問題セットとして扱う(`0046`。最強位と新人王は基本的に問題を共通にしない)。名前を設定した問題セットは種別に関係なく名前だけで比べる。同じ地域の最強位・新人王の組は `regions.allows_dual_entry` だけで決まり、この列は見ない。統括スタッフが管理画面の大会作成・編集画面の「問題セット」欄で設定する(`POST` / `PATCH /api/tournaments` の `questionSet`。空欄は `null`)。名前が 1 文字違うだけで別の問題セットになり、断るべきエントリーが通ってしまうので、入力は `packages/shared` の `QuestionSetInputSchema` が書式文字の除去・NFKC 正規化・前後の空白除去をし、途中の空白を拒否する。DB も `0044` から同じ形(NFKC 正規化済み・書式文字なし)の値しか受け付けないので、保存済みの名前を画面が送り直しても値は変わらない。画面は既にある名前を候補(`GET /api/tournaments/question-sets`)として出し、大会一覧にも列を表示する(異体字は制約では防げないので、候補から選ぶ)。スプレッドシートからの一括登録では設定せず、既存の値も変えない。設定を変えても既に受け付けたエントリーは検査し直さない |
 | `entries_paused` | boolean | not null, default `false` | エントリー受付の一時中断(`0039`)。`true` の間は期間内でも新しいエントリーを受け付けず、フォームは担当スタッフにしか開けない。統括スタッフと担当の地域スタッフが `PUT /api/staff/tournaments/:tournamentId/entry-pause` で切り替える |
 | `created_at` | timestamptz | not null, default `now()` | |
 
@@ -630,6 +632,19 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 `supabase db push` は各バージョンを一度しか適用しません。そのため、**適用済みのマイグレーションファイルを直接書き換えても、既存環境には反映されません**。関数の挙動を変更する場合は、`0007` / `0008` のように**新しい番号のファイルで `create or replace function` し直す**のが本リポジトリの流儀です。その際は変更しない部分も含めて関数全体を書き直すことになるため、元ファイルからの差分をコメントに明記してください。
 
+### 重複エントリーを認める地域の問題セット(トリガ関数)
+
+`0045` の 2 つのトリガで、重複エントリーを認める地域(`regions.allows_dual_entry = true`)の最強位と新人王に同じ問題セットが付くのを防ぎます。両方に出られる 2 大会が同じ問題を使うと、片方で見た問題がもう片方でも出るためです。重複エントリーを認めない地域は、どのみち片方にしか出られないので制限しません。
+
+- `tournaments_check_question_set_for_dual_entry`(`tournaments` の before insert / update of `region_id`, `question_set`): 名前の付いた問題セットが、重複エントリーを認める同じ地域のもう一方の大会と同じなら、SQLSTATE `P0010` で断ります。編集画面は保存のたびに全項目を送るので、問題セットも地域も変わらない UPDATE では地域行を取らずに抜けます。種別は判定を変えないので見ません(同じ地域の 2 大会は必ず種別が違う)
+- `regions_check_dual_entry_question_sets`(`regions` の before update of `allows_dual_entry`): `false` → `true` にするとき、地域の大会に同じ問題セット(名前の付いたもの)があれば `P0010` で断ります
+
+「同じ問題セットか」は `same_question_set(set_a, type_a, set_b, type_b)` の 1 か所で決め、この 2 つのトリガ、`0045` の適用前の検査(`region_has_shared_question_set()`)、地域をまたいだ判定(`0046` の `participant_holds_conflicting_region()`)がすべてこれを呼びます。名前を付けた問題セットは名前で比べ、`null`(共通問題)は種別ごとに別の問題セットとします(最強位と新人王は基本的に問題を共通にしない)。同じ地域の 2 大会は種別が違うので、`null` どうしがここで同じになることはなく、両方 `null` のまま重複エントリーを認めている既存の地域はそのまま通ります。
+
+最強位と新人王の問題セットを入れ替えるには、先に片方を空欄にして保存します。1 大会ずつ保存するので、いきなり入れ替えるともう一方とぶつかって断られます。
+
+同じ地域の 2 大会への同時の変更や、地域の設定と大会の変更が同時に来ても検査をすり抜けないよう、大会側のトリガは地域行を `for no key update` で取ってから、別の文でもう一方の大会を読みます。`regions` の UPDATE は自分で同じ行ロックを取ります。地域行を取るのはこの 2 つだけで、エントリーまわりのロック順には関わりません。API は `P0010` を 409 と日本語の文言にします(`POST` / `PATCH /api/tournaments`、`PATCH /api/regions/:id`)。
+
 ### record_mail_job_progress(p_job_id, p_sent, p_failed)
 
 `mail_jobs` の `sent` / `failed` に、キューのコンシューマが処理し終えた 1 バッチ分を**加算**します。
@@ -683,3 +698,5 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0042_regulations_closes_with_priority.sql` | `regulations.closes_with_priority`(#243)。旧来の推定で枠が外れていた行のバックフィル。`sync_regulations()` を、キーが無ければ今の値を保つよう再定義 |
 | `0043_tournament_question_set.sql` | `tournaments.question_set`。地域をまたいだ参加を、問題セットが同じ大会どうしだけ断るように `check_entry_seat()` を再定義し、`participant_holds_conflicting_region()` / `claim_participant_region_for_tournament()` を追加 |
 | `0044_question_set_normalized.sql` | 既存の `question_set` を書式文字の除去と NFKC 正規化で揃え、揃っていない値を `tournaments_question_set_format` で拒否する(#271) |
+| `0045_dual_entry_question_sets.sql` | 問題セットの比較 `same_question_set()` と、重複エントリーを認める地域で最強位と新人王に同じ問題セットを設定できないようにするトリガ 2 つ。既に矛盾している地域があれば適用を止める |
+| `0046_common_question_sets_per_type.sql` | `participant_holds_conflicting_region()` を `same_question_set()` で再定義し、共通問題(`null`)を最強位用と新人王用で別の問題セットとして比べる |

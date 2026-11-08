@@ -15,6 +15,7 @@ import {
   staffSessionAwareFetch,
   TEST_SESSIONS_VALID_FROM_MS,
 } from '../test-support/staff-session';
+import {DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE} from '../lib/pg-errors';
 import {
   DB_URL,
   isDbReachable,
@@ -117,12 +118,17 @@ describe.skipIf(!(await isDbReachable()))(
     // run (or one where the `afterAll` delete itself failed) would otherwise
     // leave rows behind and make the next run's create fail with a 409 for a
     // reason that has nothing to do with the code under test.
-    beforeAll(async () => {
+    async function deleteTestRegions() {
+      await sql`delete from tournaments where region_id in (
+        select id from regions where slug like ${testSlugPrefix + '%'}
+      )`;
       await sql`delete from regions where slug like ${testSlugPrefix + '%'}`;
-    });
+    }
+
+    beforeAll(deleteTestRegions);
 
     afterAll(async () => {
-      await sql`delete from regions where slug like ${testSlugPrefix + '%'}`;
+      await deleteTestRegions();
       await sql.close();
     });
 
@@ -251,6 +257,38 @@ describe.skipIf(!(await isDbReachable()))(
       expect(res.status).toBe(200);
       expect(body.allowsDualEntry).toBe(true);
       expect(body.name).toBe('重複設定更新地域');
+    });
+
+    // 0045: both of its tournaments on one question set rule dual entry out.
+    it('refuses dual entry while both tournaments share a question set, in Japanese', async () => {
+      const created = (await (
+        await createRegion(`${testSlugPrefix}-shared-set`, '問題セット共有地域')
+      ).json()) as {id: string};
+      for (const type of ['saikyoi', 'shinjinou']) {
+        await sql`
+          insert into tournaments (
+            region_id, type, name, entry_opens_at, entry_closes_at, question_set
+          ) values (
+            ${created.id}, ${type}, ${type}, now(), now(), '共有セット'
+          )
+        `;
+      }
+      const cookie = await generalStaffCookie();
+
+      const res = await app.request(
+        `/api/regions/${created.id}`,
+        {
+          method: 'PATCH',
+          headers: {cookie, 'content-type': 'application/json'},
+          body: JSON.stringify({allowsDualEntry: true}),
+        },
+        env,
+      );
+
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as {error: string}).error).toBe(
+        DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
+      );
     });
 
     it('rejects a body with nothing to update', async () => {

@@ -184,4 +184,30 @@ describe('admin regions update action', () => {
       },
     });
   });
+
+  // 0045: allowing dual entry where both tournaments share a question set.
+  it("shows the API's own words for a refused dual-entry setting", async () => {
+    const formData = new FormData();
+    formData.set('id', TOKYO.id);
+    formData.set('name', '東京');
+    formData.set('allowsDualEntry', 'on');
+    const message =
+      '重複エントリーを認める地域では、最強位と新人王に同じ問題セットを設定できません';
+    const event = buildActionEvent(
+      fakeFetch([
+        {
+          method: 'PATCH',
+          url: `/api/regions/${TOKYO.id}`,
+          status: 409,
+          body: {error: message},
+        },
+      ]),
+      formData,
+    );
+
+    await expect(actions.update(event)).resolves.toMatchObject({
+      status: 409,
+      data: {intent: 'update', regionId: TOKYO.id, error: message},
+    });
+  });
 });

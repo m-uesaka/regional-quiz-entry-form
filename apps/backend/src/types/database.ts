@@ -601,6 +601,10 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      region_has_shared_question_set: {
+        Args: { p_region_id: string }
+        Returns: boolean
+      }
       reorder_tournaments: {
         Args: { p_tournament_ids: string[] }
         Returns: undefined
@@ -620,6 +624,15 @@ export type Database = {
           deleted_participant_count: number
           kept_participant_count: number
         }[]
+      }
+      same_question_set: {
+        Args: {
+          p_question_set_a: string
+          p_question_set_b: string
+          p_type_a: Database["public"]["Enums"]["tournament_type"]
+          p_type_b: Database["public"]["Enums"]["tournament_type"]
+        }
+        Returns: boolean
       }
       sync_form_field_defs: {
         Args: { p_rows: Json; p_tournament_id: string }

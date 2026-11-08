@@ -22,6 +22,8 @@ import {
   TEST_SESSIONS_VALID_FROM_MS,
 } from '../test-support/staff-session';
 import {
+  DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
+  DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE,
   ENTRY_PERIOD_OPEN_SQLSTATE,
   FOREIGN_KEY_VIOLATION_SQLSTATE,
   TOURNAMENT_IDS_MISMATCH_SQLSTATE,
@@ -236,6 +238,26 @@ describe('tournaments routes (database errors)', () => {
       error: 'この地域には同じ種別の大会がすでにあります',
     });
     expect(text).not.toContain('tournaments_region_id_type_key');
+  });
+
+  // 0045: the other tournament of a region allowing dual entry has the same
+  // question set. PostgREST answers a raised exception with 400.
+  it('answers a question set shared within a dual-entry region with 409 in Japanese', async () => {
+    stubPostgrestError(400, {
+      code: DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE,
+      message: 'dual entry tournaments share a question set',
+      details: null,
+      hint: null,
+    });
+
+    for (const method of ['POST', 'PATCH'] as const) {
+      const res = await request(method);
+
+      expect(res.status).toBe(409);
+      expect((await res.json()) as unknown).toEqual({
+        error: DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
+      });
+    }
   });
 
   it('PATCH /tournaments/:id reports a region that does not exist in Japanese', async () => {
