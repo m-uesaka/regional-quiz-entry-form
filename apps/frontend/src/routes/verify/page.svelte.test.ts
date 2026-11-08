@@ -47,7 +47,10 @@ describe('verify +page.svelte', () => {
     renderPage('waitlisted');
 
     expect(
-      screen.getByText('定員に達していたため、キャンセル待ちになりました。'),
+      screen.getByText('キャンセル待ちとして受け付けました。'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/先にキャンセル待ちをしている方がいるため/),
     ).toBeInTheDocument();
     expect(
       screen.getByText(/キャンセル待ちの順位はマイページから確認できます/),

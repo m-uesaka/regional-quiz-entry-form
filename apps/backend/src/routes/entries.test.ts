@@ -587,7 +587,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
 
     expect(recorded.mails).toHaveLength(1);
     expect(recorded.mails[0].html).toContain(
-      '定員に達している場合は、キャンセル待ちとして受け付けます。',
+      '定員に空きがない場合は、キャンセル待ちとして受け付けます(すでにキャンセル待ちの方がいる場合は、その後ろに並びます)。',
     );
   });
 
