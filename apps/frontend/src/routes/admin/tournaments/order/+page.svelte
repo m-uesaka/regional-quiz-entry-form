@@ -9,7 +9,7 @@
   import Table from '$lib/components/ui/atoms/Table.svelte';
   import TableData from '$lib/components/ui/atoms/TableData.svelte';
   import TableHead from '$lib/components/ui/atoms/TableHead.svelte';
-  import Message from '$lib/components/ui/items/Message.svelte';
+  import FlashMessage from '$lib/components/ui/items/FlashMessage.svelte';
   import {tick} from 'svelte';
   import {dragReorder, moveItem, renumberRows} from '$lib/drag-reorder';
   import {Hydrated} from '$lib/hydrated.svelte';
@@ -57,14 +57,10 @@
   </div>
 
   {#if form?.saved}
-    <Message variant="success">
-      <p role="status" class="text-sm text-foreground">表示順を保存しました</p>
-    </Message>
+    <FlashMessage kind="success">表示順を保存しました</FlashMessage>
   {/if}
   {#if form?.error}
-    <Message variant="danger">
-      <p role="alert" class="text-sm text-foreground">{form.error}</p>
-    </Message>
+    <FlashMessage kind="error">{form.error}</FlashMessage>
   {/if}
 
   {#if data.tournaments.length > 0}

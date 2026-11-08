@@ -16,6 +16,7 @@
   import Table from '$lib/components/ui/atoms/Table.svelte';
   import TableData from '$lib/components/ui/atoms/TableData.svelte';
   import TableHead from '$lib/components/ui/atoms/TableHead.svelte';
+  import FlashMessage from '$lib/components/ui/items/FlashMessage.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
   import {formatJstDateTime} from '$lib/jst-datetime';
   import {promotionNotice} from '$lib/waitlist-promotion';
@@ -115,9 +116,7 @@
     </div>
 
     {#if form?.error}
-      <Message variant="danger">
-        <p role="alert" class="text-sm text-foreground">{form.error}</p>
-      </Message>
+      <FlashMessage kind="error">{form.error}</FlashMessage>
     {/if}
 
     <form

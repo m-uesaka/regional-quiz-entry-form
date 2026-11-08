@@ -2,6 +2,7 @@
   import TournamentForm from '$lib/components/TournamentForm.svelte';
   import FormDefinitionEditor from '$lib/components/FormDefinitionEditor.svelte';
   import Card from '$lib/components/ui/atoms/Card.svelte';
+  import FlashMessage from '$lib/components/ui/items/FlashMessage.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
   import {toTournamentFormValues} from '$lib/tournament-form';
   import {promotionNotice} from '$lib/waitlist-promotion';
@@ -53,9 +54,7 @@
 
 <Card>
   {#if result?.saved}
-    <Message variant="success">
-      <p role="status" class="text-sm text-foreground">更新しました</p>
-    </Message>
+    <FlashMessage kind="success">更新しました</FlashMessage>
   {/if}
   {#if notice}
     <Message variant={notice.ok ? 'success' : 'warning'}>
@@ -63,9 +62,7 @@
     </Message>
   {/if}
   {#if result?.error}
-    <Message variant="danger">
-      <p role="alert" class="text-sm text-foreground">{result.error}</p>
-    </Message>
+    <FlashMessage kind="error">{result.error}</FlashMessage>
   {/if}
 
   <TournamentForm

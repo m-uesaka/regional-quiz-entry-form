@@ -7,7 +7,7 @@
   import NativeSelect from '$lib/components/form/NativeSelect.svelte';
   import Button, {buttonVariants} from '$lib/components/ui/atoms/Button.svelte';
   import Card from '$lib/components/ui/atoms/Card.svelte';
-  import Message from '$lib/components/ui/items/Message.svelte';
+  import FlashMessage from '$lib/components/ui/items/FlashMessage.svelte';
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import {pageQuery} from '$lib/pagination';
   import {tournamentEntryFormPath} from '$lib/portal';
@@ -92,17 +92,13 @@
       {/if}
     </p>
     {#if form?.pauseError}
-      <Message variant="danger">
-        <p role="alert" class="text-sm text-foreground">{form.pauseError}</p>
-      </Message>
+      <FlashMessage kind="error">{form.pauseError}</FlashMessage>
     {:else if form?.paused !== undefined && form.paused !== null}
-      <Message variant="success">
-        <p role="status" class="text-sm text-foreground">
-          {form.paused
-            ? 'エントリー受付を一時中断しました'
-            : 'エントリー受付を再開しました'}
-        </p>
-      </Message>
+      <FlashMessage kind="success">
+        {form.paused
+          ? 'エントリー受付を一時中断しました'
+          : 'エントリー受付を再開しました'}
+      </FlashMessage>
     {/if}
     <form method="POST" action={pauseAction}>
       <input type="hidden" name="tournamentId" value={data.tournament.id} />

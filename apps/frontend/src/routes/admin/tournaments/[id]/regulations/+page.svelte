@@ -12,6 +12,7 @@
   import Input from '$lib/components/ui/atoms/Input.svelte';
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import Link from '$lib/components/ui/atoms/Link.svelte';
+  import FlashMessage from '$lib/components/ui/items/FlashMessage.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
   import {dragReorder, moveItem, renumberRows} from '$lib/drag-reorder';
   import {Hydrated} from '$lib/hydrated.svelte';
@@ -101,11 +102,9 @@
   </p>
 
   {#if form?.saved}
-    <Message variant="success">
-      <p role="status" class="text-sm text-foreground">
-        レギュレーションを保存しました
-      </p>
-    </Message>
+    <FlashMessage kind="success">
+      レギュレーションを保存しました
+    </FlashMessage>
   {/if}
   {#if form?.imported}
     <Message variant="default">
@@ -117,9 +116,7 @@
     </Message>
   {/if}
   {#if form?.error}
-    <Message variant="danger">
-      <p role="alert" class="text-sm text-foreground">{form.error}</p>
-    </Message>
+    <FlashMessage kind="error">{form.error}</FlashMessage>
   {/if}
 
   <Card>

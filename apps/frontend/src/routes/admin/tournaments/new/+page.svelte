@@ -3,7 +3,7 @@
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
   import Card from '$lib/components/ui/atoms/Card.svelte';
-  import Message from '$lib/components/ui/items/Message.svelte';
+  import FlashMessage from '$lib/components/ui/items/FlashMessage.svelte';
   import {emptyTournamentFormValues} from '$lib/tournament-form';
   import type {PageProps} from './$types';
 
@@ -19,9 +19,7 @@
 
   <Card>
     {#if form?.error}
-      <Message variant="danger">
-        <p role="alert" class="text-sm text-foreground">{form.error}</p>
-      </Message>
+      <FlashMessage kind="error">{form.error}</FlashMessage>
     {/if}
 
     <TournamentForm

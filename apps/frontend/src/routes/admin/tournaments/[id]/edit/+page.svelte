@@ -9,6 +9,7 @@
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import Radio from '$lib/components/ui/atoms/Radio.svelte';
   import Link from '$lib/components/ui/atoms/Link.svelte';
+  import FlashMessage from '$lib/components/ui/items/FlashMessage.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
   import {isWithinEntryPeriod} from '@regional-quiz/shared';
   import {RESET_CONFIRMATION_WORD} from '$lib/tournament-form';
@@ -99,14 +100,10 @@
     {/if}
 
     {#if resetMessage}
-      <Message variant="success">
-        <p role="status" class="text-sm text-foreground">{resetMessage}</p>
-      </Message>
+      <FlashMessage kind="success">{resetMessage}</FlashMessage>
     {/if}
     {#if resetError}
-      <Message variant="danger">
-        <p role="alert" class="text-sm text-foreground">{resetError}</p>
-      </Message>
+      <FlashMessage kind="error">{resetError}</FlashMessage>
     {/if}
 
     <!-- A form action like the delete above. Neither choice is preselected,
@@ -166,9 +163,7 @@
     </p>
 
     {#if deleteError}
-      <Message variant="danger">
-        <p role="alert" class="text-sm text-foreground">{deleteError}</p>
-      </Message>
+      <FlashMessage kind="error">{deleteError}</FlashMessage>
     {/if}
 
     <!-- A form action, like the update above, and behind a required tick
