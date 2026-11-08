@@ -189,16 +189,56 @@ describe.skipIf(!dbReachable)(
       await sql`delete from participants where email = ${testEmail}`;
       await sql`delete from regulations where tournament_id in (
         select id from tournaments where region_id in (
-          select id from regions where slug = ${testRegionSlug}
+          select id from regions where slug like ${testRegionSlug + '%'}
         )
       )`;
       await sql`delete from tournaments where region_id in (
-        select id from regions where slug = ${testRegionSlug}
+        select id from regions where slug like ${testRegionSlug + '%'}
       )`;
-      await sql`delete from regions where slug = ${testRegionSlug}`;
+      await sql`delete from regions where slug like ${testRegionSlug + '%'}`;
     }
 
     beforeEach(cleanup);
+
+    /**
+     * Creates another region with a 最強位 tournament, for entries across
+     * regions. `cleanup()` removes it with the rest.
+     * @param suffix Makes the region's slug unique within the test.
+     * @param questionSet The tournament's question set (`null`: the common
+     *     one).
+     * @return The tournament's id.
+     */
+    async function seedOtherRegionTournament(
+      suffix: string,
+      questionSet: string | null = null,
+    ): Promise<string> {
+      const [region] = await sql`
+        insert into regions (slug, name, allows_dual_entry)
+        values (${testRegionSlug + '-' + suffix}, '別のテスト地域', false)
+        returning id
+      `;
+      const [tournament] = await sql`
+        insert into tournaments (
+          region_id, type, name, entry_opens_at, entry_closes_at, question_set
+        ) values (
+          ${region.id}, 'saikyoi', '別のテスト大会', now(), now(),
+          ${questionSet}
+        )
+        returning id
+      `;
+      return tournament.id as string;
+    }
+
+    /**
+     * Sets the question set of the seeded region's two tournaments.
+     * @param questionSet The question set, or `null` for the common one.
+     */
+    async function setOwnQuestionSet(questionSet: string | null) {
+      await sql`
+        update tournaments set question_set = ${questionSet}
+        where region_id = (select id from regions where slug = ${testRegionSlug})
+      `;
+    }
 
     afterAll(async () => {
       await cleanup();
@@ -309,24 +349,21 @@ describe.skipIf(!dbReachable)(
     });
 
     it('checks the region before the other tournament', async () => {
-      const {participantId, entryFor} = await seedRegion(false);
+      const {entryFor} = await seedRegion(false);
+      const otherTournamentId = await seedOtherRegionTournament('order');
+      await sql`insert into entries ${sql({
+        ...entryFor('saikyoi'),
+        tournament_id: otherTournamentId,
+      })}`;
+      // Different question sets while the two seats are taken, the same one
+      // afterwards: the entry below breaks both rules at once.
+      await setOwnQuestionSet('独自');
       await sql`insert into entries ${sql(entryFor('saikyoi'))}`;
-      const [otherRegion] = await sql`
-        insert into regions (slug, name, allows_dual_entry)
-        values (${testRegionSlug + '-order'}, 'テスト地域', false)
-        returning id
-      `;
-      await sql`
-        update participants set region_id = ${otherRegion.id}
-        where id = ${participantId}
-      `;
+      await setOwnQuestionSet(null);
 
       const code = await refusalOf(
         sql`insert into entries ${sql(entryFor('shinjinou'))}`,
       );
-      await sql`delete from entries where participant_id = ${participantId}`;
-      await sql`delete from participants where id = ${participantId}`;
-      await sql`delete from regions where id = ${otherRegion.id}`;
 
       expect(code).toBe(PARTICIPANT_REGION_SQLSTATE);
     });
@@ -450,21 +487,14 @@ describe.skipIf(!dbReachable)(
         update entries set status = 'cancelled'
         where participant_id = ${participantId}
       `;
-      const [otherRegion] = await sql`
-        insert into regions (slug, name, allows_dual_entry)
-        values (${testRegionSlug + '-reenter'}, 'テスト地域', false)
-        returning id
-      `;
-      await sql`
-        update participants set region_id = ${otherRegion.id}
-        where id = ${participantId}
-      `;
+      const otherTournamentId = await seedOtherRegionTournament('reenter');
+      await sql`insert into entries ${sql({
+        ...entryFor('saikyoi'),
+        tournament_id: otherTournamentId,
+      })}`;
       const otherRegionEntry = await refusalOf(
         reenter(sql, cancelled.id, participantId),
       );
-      await sql`delete from entries where participant_id = ${participantId}`;
-      await sql`delete from participants where id = ${participantId}`;
-      await sql`delete from regions where id = ${otherRegion.id}`;
 
       expect(dualEntry).toBe(REGION_DUAL_ENTRY_SQLSTATE);
       expect(otherRegionEntry).toBe(PARTICIPANT_REGION_SQLSTATE);
@@ -692,39 +722,129 @@ describe.skipIf(!dbReachable)(
       expect(count).toBe(2);
     });
 
-    // The backstop for `claim_participant_region()` (0040): a submission that
-    // passed it just before a concurrent one moved the account.
-    it("refuses a seat outside the participant's region", async () => {
+    // The backstop for `claim_participant_region_for_tournament()` (0043): a
+    // submission that passed it just before a concurrent one took a seat in
+    // another region on the same question set.
+    it('refuses a seat while another region on the same question set is held', async () => {
       const {participantId, entryFor} = await seedRegion(false);
       await sql`insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}`;
-      const [otherRegion] = await sql`
-        insert into regions (slug, name, allows_dual_entry)
-        values (${testRegionSlug + '-moved'}, 'テスト地域', false)
-        returning id
-      `;
-      await sql`
-        update participants set region_id = ${otherRegion.id}
-        where id = ${participantId}
-      `;
+      const otherTournamentId = await seedOtherRegionTournament('moved');
+      await sql`insert into entries ${sql({
+        ...entryFor('saikyoi'),
+        tournament_id: otherTournamentId,
+      })}`;
 
-      let code: string | undefined;
-      try {
-        await sql`
-          update entries set status = 'pending_verification'
-          where participant_id = ${participantId}
-        `;
-      } catch (e: unknown) {
-        code = (e as {errno?: string}).errno;
-      }
-      await sql`delete from entries where participant_id = ${participantId}`;
-      await sql`
-        update participants set region_id = (
-          select id from regions where slug = ${testRegionSlug}
-        ) where id = ${participantId}
-      `;
-      await sql`delete from regions where id = ${otherRegion.id}`;
+      const code = await refusalOf(sql`
+        update entries set status = 'pending_verification'
+        where participant_id = ${participantId}
+          and tournament_id = ${entryFor('saikyoi').tournament_id}
+      `);
 
       expect(code).toBe(PARTICIPANT_REGION_SQLSTATE);
+    });
+
+    // 宮崎 and 鹿児島 each use questions of their own (0043): an entry in
+    // one doesn't rule out the other, nor a region on the common questions.
+    it('allows seats in regions using different question sets', async () => {
+      const {participantId, entryFor} = await seedRegion(false);
+      const ownSetTournamentId = await seedOtherRegionTournament(
+        'own-set',
+        '宮崎',
+      );
+      const otherOwnSetTournamentId = await seedOtherRegionTournament(
+        'other-own-set',
+        '鹿児島',
+      );
+
+      await sql`insert into entries ${sql(entryFor('saikyoi'))}`;
+      await sql`insert into entries ${sql({
+        ...entryFor('saikyoi'),
+        tournament_id: ownSetTournamentId,
+      })}`;
+      await sql`insert into entries ${sql({
+        ...entryFor('saikyoi'),
+        tournament_id: otherOwnSetTournamentId,
+      })}`;
+
+      const [{count}] = await sql`
+        select count(*)::int as count from entries
+        where participant_id = ${participantId} and status <> 'cancelled'
+      `;
+      expect(count).toBe(3);
+    });
+
+    it('refuses seats in two regions sharing a question set of their own', async () => {
+      const {entryFor} = await seedRegion(false);
+      await setOwnQuestionSet('宮崎');
+      const sameSetTournamentId = await seedOtherRegionTournament(
+        'same-set',
+        '宮崎',
+      );
+      await sql`insert into entries ${sql(entryFor('saikyoi'))}`;
+
+      const code = await refusalOf(
+        sql`insert into entries ${sql({
+          ...entryFor('saikyoi'),
+          tournament_id: sameSetTournamentId,
+        })}`,
+      );
+
+      expect(code).toBe(PARTICIPANT_REGION_SQLSTATE);
+    });
+
+    // As in 0040: a confirmed entry cancelled after its tournament closed
+    // still holds the region, but only against the same question set.
+    it('holds a region for a late cancellation only on the same question set', async () => {
+      const {entryFor} = await seedRegion(false);
+      const otherTournamentId = await seedOtherRegionTournament('late');
+      await sql`insert into entries ${sql({
+        ...entryFor('saikyoi', 'cancelled'),
+        tournament_id: otherTournamentId,
+        email_verified_at: '2026-05-01T00:00:00Z',
+        cancelled_at: '2099-01-01T00:00:00Z',
+      })}`;
+
+      const sameSet = await refusalOf(
+        sql`insert into entries ${sql(entryFor('saikyoi'))}`,
+      );
+      await setOwnQuestionSet('独自');
+      const otherSet = await refusalOf(
+        sql`insert into entries ${sql(entryFor('saikyoi'))}`,
+      );
+
+      expect(sameSet).toBe(PARTICIPANT_REGION_SQLSTATE);
+      expect(otherSet).toBeUndefined();
+    });
+
+    it('claims a region by tournament, refusing only the same question set', async () => {
+      const {participantId, entryFor} = await seedRegion(false);
+      await sql`insert into entries ${sql(entryFor('saikyoi'))}`;
+      const sameSetTournamentId = await seedOtherRegionTournament('claim-same');
+      const ownSetTournamentId = await seedOtherRegionTournament(
+        'claim-own',
+        '鹿児島',
+      );
+      const claim = async (tournamentId: string) => {
+        const [row] = await sql`
+          select claim_participant_region_for_tournament(
+            ${participantId}, ${tournamentId}
+          ) as claimed
+        `;
+        return row.claimed as boolean;
+      };
+
+      const sameSet = await claim(sameSetTournamentId);
+      const ownSet = await claim(ownSetTournamentId);
+      const [{region_id: regionId}] = await sql`
+        select region_id from participants where id = ${participantId}
+      `;
+      const [{region_id: ownSetRegionId}] = await sql`
+        select region_id from tournaments where id = ${ownSetTournamentId}
+      `;
+
+      expect(sameSet).toBe(false);
+      expect(ownSet).toBe(true);
+      expect(regionId).toBe(ownSetRegionId);
     });
 
     it('moves a participant only while nothing holds their old region', async () => {
@@ -760,8 +880,8 @@ describe.skipIf(!dbReachable)(
       expect(regionId).toBe(otherRegion.id);
     });
 
-    // `claim_participant_region()` and `check_entry_seat()` take the
-    // participant row in turn, which is all that keeps these two apart.
+    // `claim_participant_region_for_tournament()` and `check_entry_seat()`
+    // take the participant row in turn, which is all that keeps these two apart.
     it('never leaves a participant in two regions when moving concurrently', async () => {
       const {participantId, entryFor} = await seedRegion(false);
       const [otherRegion] = await sql`
@@ -797,8 +917,8 @@ describe.skipIf(!dbReachable)(
           sql`insert into entries ${sql(original)}`.then(() => {}, refused),
           (async () => {
             const [{claimed}] = await moving`
-              select claim_participant_region(
-                ${participantId}, ${otherRegion.id}
+              select claim_participant_region_for_tournament(
+                ${participantId}, ${otherTournament.id}
               ) as claimed
             `;
             if (claimed) {

@@ -27,7 +27,7 @@ import {
 } from './db';
 import {sendEntryNoticeEmail, type EntryNoticeReason} from './entry-notice';
 import {sendVerificationEmail} from './entry-verification';
-import type {InternalFailure, LibFailure} from './errors';
+import type {InternalFailure, InternalResult, LibFailure} from './errors';
 import {validateCustomFieldValues} from './form-field-defs';
 import {hashPassword, verifyPassword} from './password';
 import {
@@ -446,23 +446,34 @@ async function createEntryAfterCheck(
 
   if (
     existingParticipant?.email_verified_at === null &&
-    existingParticipant.region_id === tournament.region_id &&
     (await isUnverifiedAccountPassword(existingParticipant, input.password))
   ) {
-    // Whoever made the account is still the one submitting, for the same
-    // region: nothing to take over, and the entries they made earlier stand
-    // -- a participant entering both of a region's tournaments before
-    // following either link keeps both (or is refused the second, where the
-    // region allows only one). Every link of the account still belongs to a
-    // submission made with its current password and region.
-    return enterTournament(
-      env,
+    const furtherEntry = await isFurtherEntryOfUnverifiedAccount(
+      db,
+      existingParticipant,
       tournament,
-      existingParticipant.id,
-      input.email,
-      input,
-      {passwordHash: existingParticipant.password_hash},
     );
+    if (!furtherEntry.ok) {
+      return furtherEntry;
+    }
+    if (furtherEntry.value) {
+      // Whoever made the account is still the one submitting, for a
+      // tournament its entries leave open: nothing to take over, and the
+      // entries they made earlier stand -- a participant entering both of a
+      // region's tournaments, or tournaments of two regions using different
+      // question sets, before following any link keeps them all (or is
+      // refused the second, where the region allows only one). Every link of
+      // the account still belongs to a submission made with its current
+      // password.
+      return enterTournament(
+        env,
+        tournament,
+        existingParticipant.id,
+        input.email,
+        input,
+        {passwordHash: existingParticipant.password_hash},
+      );
+    }
   }
 
   if (!existingParticipant || existingParticipant.email_verified_at === null) {
@@ -506,7 +517,8 @@ async function createEntryAfterCheck(
         passwordHash,
       });
     }
-    // A different password, or another region: the account is handed to
+    // A different password, or a tournament the account's entries rule out
+    // (another region using the same question set): the account is handed to
     // this submission, and what the earlier ones made goes with the old
     // password (see the migration for why it is deleted rather than kept).
     const {data: withdrawn, error: takeOverError} = await db.rpc(
@@ -627,6 +639,35 @@ async function isUnverifiedAccountPassword(
 }
 
 /**
+ * Whether an unverified account's own password, submitted again, makes a
+ * further entry rather than a takeover: the tournament is in the account's
+ * region, or nothing the account holds in another region shares its
+ * question set (`participant_holds_conflicting_region()`). Read without the
+ * participant's lock; `check_entry_seat()` decides again under it, so a
+ * concurrent submission at worst gets the 409 of a concurrent one.
+ * @param db The Supabase client to read with.
+ * @param account The unverified account.
+ * @param tournament The checked tournament.
+ */
+async function isFurtherEntryOfUnverifiedAccount(
+  db: DbClient,
+  account: ParticipantRow,
+  tournament: EntryTournamentRow,
+): Promise<InternalResult<boolean>> {
+  if (account.region_id === tournament.region_id) {
+    return {ok: true, value: true};
+  }
+  const {data: conflicting, error} = await db.rpc(
+    'participant_holds_conflicting_region',
+    {p_participant_id: account.id, p_tournament_id: tournament.id},
+  );
+  if (error) {
+    return {ok: false, status: 500, error: error.message};
+  }
+  return {ok: true, value: !conflicting};
+}
+
+/**
  * The display names of the tournaments whose pending entries a takeover
  * withdrew, for the verification mail of the entry that took over.
  *
@@ -713,19 +754,20 @@ async function enterTournament(
   }
   const {existingEntry} = reusable;
 
-  // Taking part in another region is what stops an entry here, not having
-  // registered in one: a participant who cancelled there in time can enter
-  // here (#236), and the account follows. Only a verified participant gets
-  // here unsettled, once proved by password or session, so a stranger's
-  // submission can't move an account; an unverified account's region was
-  // settled when it was made or taken over, and claiming it again on a stale
-  // read could undo a takeover. An entry that then fails leaves the account
-  // moved, which is harmless: with nothing holding it, it can move again.
+  // Taking part in another region on the same question set is what stops an
+  // entry here, not having registered in one: a participant who cancelled
+  // there in time can enter here (#236), and the account follows. Only a
+  // verified participant gets here unsettled, once proved by password or
+  // session, so a stranger's submission can't move an account; an
+  // unverified account's region was settled when it was made or taken over,
+  // and claiming it again on a stale read could undo a takeover. An entry
+  // that then fails leaves the account moved, which is harmless: with
+  // nothing holding it, it can move again.
   if (!unverifiedAccount) {
     const claimed = await claimTournamentRegion(
       db,
       participantId,
-      tournament.region_id,
+      tournamentId,
     );
     if (!claimed.ok) {
       return claimed;
@@ -918,23 +960,24 @@ async function findReusableEntry(
 
 /**
  * The stage of `enterTournament()` that moves a verified participant to the
- * tournament's region (`claim_participant_region()`), refusing the
- * submission when they are taking part in another one. Skipped for an
- * unverified account (see the call site).
+ * tournament's region (`claim_participant_region_for_tournament()`),
+ * refusing the submission when they are taking part in another region whose
+ * tournament uses the same question set. Skipped for an unverified account
+ * (see the call site).
  * @param db The Supabase client to write with.
  * @param participantId The participant being entered.
- * @param regionId The tournament's region.
+ * @param tournamentId The tournament being entered.
  */
 async function claimTournamentRegion(
   db: DbClient,
   participantId: string,
-  regionId: string,
+  tournamentId: string,
 ): Promise<{ok: true} | LibFailure<409>> {
   const {data: claimedRegion, error: claimError} = await db.rpc(
-    'claim_participant_region',
+    'claim_participant_region_for_tournament',
     {
       p_participant_id: participantId,
-      p_region_id: regionId,
+      p_tournament_id: tournamentId,
     },
   );
   if (claimError) {

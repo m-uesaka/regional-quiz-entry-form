@@ -219,8 +219,10 @@ interface MockSupabase {
   mails: SentMail[];
   /** The arguments each `take_over_unverified_participant()` call got. */
   takeOvers: Array<Record<string, unknown>>;
-  /** The arguments each `claim_participant_region()` call got. */
+  /** The arguments each `claim_participant_region_for_tournament()` call got. */
   regionClaims: Array<Record<string, unknown>>;
+  /** The arguments each `participant_holds_conflicting_region()` call got. */
+  conflictChecks: Array<Record<string, unknown>>;
   /** The arguments each `reenter_cancelled_entry()` call got. */
   reentries: Array<Record<string, unknown>>;
 }
@@ -252,8 +254,10 @@ function mockSupabase(options: {
    */
   verifiedMeanwhile?: Record<string, unknown>;
   /**
-   * Makes `claim_participant_region()` refuse: the participant has an entry
-   * in another region that isn't cancelled.
+   * Makes `claim_participant_region_for_tournament()` refuse and
+   * `participant_holds_conflicting_region()` answer true: the participant
+   * has an entry in another region on the same question set that isn't
+   * cancelled.
    */
   activeElsewhere?: boolean;
   /** The SQLSTATE the entry write is refused with, if it is. */
@@ -268,6 +272,7 @@ function mockSupabase(options: {
     mails: [],
     takeOvers: [],
     regionClaims: [],
+    conflictChecks: [],
     reentries: [],
   };
   const tournament = options.tournament ?? tournamentRow();
@@ -344,10 +349,15 @@ function mockSupabase(options: {
       // Nothing of this participant's has a lapsed verification link.
       case 'POST rpc/lapse_expired_pending_entries':
         return Response.json([]);
-      case 'POST rpc/claim_participant_region': {
+      case 'POST rpc/claim_participant_region_for_tournament': {
         const args = JSON.parse(String(init?.body)) as Record<string, unknown>;
         recorded.regionClaims.push(args);
         return Response.json(!options.activeElsewhere);
+      }
+      case 'POST rpc/participant_holds_conflicting_region': {
+        const args = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        recorded.conflictChecks.push(args);
+        return Response.json(Boolean(options.activeElsewhere));
       }
       case 'GET entries':
         return rows(options.cancelledEntry ? [options.cancelledEntry] : []);
@@ -523,7 +533,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     await settleBackgroundWork();
 
     expect(recorded.regionClaims).toEqual([
-      {p_participant_id: PARTICIPANT_ID, p_region_id: REGION_ID},
+      {p_participant_id: PARTICIPANT_ID, p_tournament_id: TOURNAMENT_ID},
     ]);
     expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
     expect(recorded.mails[0].subject).toBe(
@@ -756,10 +766,53 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     await settleBackgroundWork();
 
     expect(recorded.takeOvers).toHaveLength(0);
+    // Its own region: nothing to look up.
+    expect(recorded.conflictChecks).toHaveLength(0);
     expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
     expect(recorded.mails[0].subject).toBe(
       verificationMailSubject(TOURNAMENT_NAME),
     );
+  });
+
+  // Regions using different question sets (宮崎 and 鹿児島) can be entered
+  // together: a second entry before following the first link is a further
+  // entry, not a takeover that would withdraw the first.
+  it('enters an unverified account under its own password in a region it may also enter', async () => {
+    const recorded = mockSupabase({
+      participant: await registeredParticipant({
+        regionId: OTHER_REGION_ID,
+        verified: false,
+      }),
+    });
+
+    await postWithContext(TOURNAMENT_PATH, validBody);
+    await settleBackgroundWork();
+
+    expect(recorded.conflictChecks).toEqual([
+      {p_participant_id: PARTICIPANT_ID, p_tournament_id: TOURNAMENT_ID},
+    ]);
+    expect(recorded.takeOvers).toHaveLength(0);
+    expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
+    expect(recorded.mails[0].subject).toBe(
+      verificationMailSubject(TOURNAMENT_NAME),
+    );
+  });
+
+  it('takes over an unverified account under its own password in a region on the same question set', async () => {
+    const recorded = mockSupabase({
+      participant: await registeredParticipant({
+        regionId: OTHER_REGION_ID,
+        verified: false,
+      }),
+      activeElsewhere: true,
+    });
+
+    await postWithContext(TOURNAMENT_PATH, validBody);
+    await settleBackgroundWork();
+
+    expect(recorded.conflictChecks).toHaveLength(1);
+    expect(recorded.takeOvers).toHaveLength(1);
+    expect(recorded.takeOvers[0].p_region_id).toBe(REGION_ID);
   });
 
   it('holds a takeover to the rules for setting a password', async () => {
@@ -1146,7 +1199,7 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
 
     expect(res.status).toBe(201);
     expect(recorded.regionClaims).toEqual([
-      {p_participant_id: PARTICIPANT_ID, p_region_id: REGION_ID},
+      {p_participant_id: PARTICIPANT_ID, p_tournament_id: TOURNAMENT_ID},
     ]);
     expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
   });

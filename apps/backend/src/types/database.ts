@@ -444,6 +444,7 @@ export type Database = {
           entry_opens_at: string
           id: string
           name: string | null
+          question_set: string | null
           region_id: string
           type: Database["public"]["Enums"]["tournament_type"]
         }
@@ -456,6 +457,7 @@ export type Database = {
           entry_opens_at: string
           id?: string
           name?: string | null
+          question_set?: string | null
           region_id: string
           type: Database["public"]["Enums"]["tournament_type"]
         }
@@ -468,6 +470,7 @@ export type Database = {
           entry_opens_at?: string
           id?: string
           name?: string | null
+          question_set?: string | null
           region_id?: string
           type?: Database["public"]["Enums"]["tournament_type"]
         }
@@ -503,6 +506,10 @@ export type Database = {
       }
       claim_participant_region: {
         Args: { p_participant_id: string; p_region_id: string }
+        Returns: boolean
+      }
+      claim_participant_region_for_tournament: {
+        Args: { p_participant_id: string; p_tournament_id: string }
         Returns: boolean
       }
       confirm_entry_by_token: {
@@ -545,6 +552,10 @@ export type Database = {
       lapse_expired_pending_entries: {
         Args: { p_participant_id: string }
         Returns: string[]
+      }
+      participant_holds_conflicting_region: {
+        Args: { p_participant_id: string; p_tournament_id: string }
+        Returns: boolean
       }
       promote_waitlisted_entries: {
         Args: { p_tournament_id: string }

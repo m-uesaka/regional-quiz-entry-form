@@ -114,10 +114,12 @@ describe.skipIf(!(await isDbReachable()))(
       expect(after.email_verified_at).not.toBeNull();
 
       // A later confirmation of another entry leaves the original time alone.
+      // The other region uses questions of its own, so the first entry, now
+      // confirmed, doesn't rule it out (0043).
       const otherFixture = await createFixture('verify-account-again', null);
       await sql`
-        update participants set region_id = ${otherFixture.regionId}
-        where id = ${participantId}
+        update tournaments set question_set = '独自'
+        where id = ${otherFixture.tournamentId}
       `;
       const [otherEntry] = await sql`
         insert into entries (
