@@ -9,9 +9,8 @@ import {
 } from 'bun:test';
 import {SQL} from 'bun';
 import {sign} from 'hono/jwt';
-import type {Bindings} from '../types/env';
 import {app} from '../index';
-import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {testBindings} from '../test-support/bindings';
 import {
   closedEntryPeriodTournament,
   openEntryPeriodTournament,
@@ -22,6 +21,20 @@ import {
   staffSessionAwareFetch,
   TEST_SESSIONS_VALID_FROM_MS,
 } from '../test-support/staff-session';
+import {
+  DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
+  DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE,
+  ENTRY_PERIOD_OPEN_SQLSTATE,
+  FOREIGN_KEY_VIOLATION_SQLSTATE,
+  TOURNAMENT_IDS_MISMATCH_SQLSTATE,
+  UNIQUE_VIOLATION_SQLSTATE,
+} from '../lib/pg-errors';
+import {
+  DB_URL,
+  isDbReachable,
+  SUPABASE_SECRET_KEY,
+  SUPABASE_URL,
+} from '../test-support/db';
 
 // Every staff guard checks the session against
 // `staff_accounts.sessions_valid_from` before the handler runs; answer that
@@ -36,43 +49,13 @@ afterEach(() => {
   globalThis.fetch = fetchWithoutSessionStub;
 });
 
-// Local Supabase stack (`supabase start`), same convention as
-// `lib/db-schema.test.ts`. Skipped automatically when it isn't reachable,
-// e.g. in CI.
-const DB_URL =
-  process.env.SUPABASE_DB_URL ??
-  'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
-const SUPABASE_URL = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
-// Publicly documented local-dev demo key for Supabase CLI's default stack
-// (fixed `super-secret-jwt-token-with-at-least-32-characters-long` JWT
-// secret) — not a real credential, safe to commit.
-const SUPABASE_SECRET_KEY =
-  process.env.SUPABASE_SECRET_KEY ??
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
 const SESSION_SECRET = 'test-session-secret';
 
-async function isDbReachable(): Promise<boolean> {
-  const probe = new SQL(DB_URL);
-  try {
-    await probe`select 1`;
-    return true;
-  } catch {
-    return false;
-  } finally {
-    await probe.close();
-  }
-}
-
-const env: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
+const env = testBindings({
   SUPABASE_URL,
   SUPABASE_SECRET_KEY,
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL: 'https://entry.example.com',
   SESSION_SECRET,
-};
+});
 
 async function generalStaffCookie(): Promise<string> {
   const token = await sign(
@@ -239,7 +222,7 @@ describe('tournaments routes (database errors)', () => {
 
   it('POST /tournaments does not leak the raw database message on a constraint violation', async () => {
     stubPostgrestError(409, {
-      code: '23505',
+      code: UNIQUE_VIOLATION_SQLSTATE,
       message:
         'duplicate key value violates unique constraint "tournaments_region_id_type_key"',
       details: 'Key (region_id, type)=(…, saikyoi) already exists.',
@@ -249,16 +232,37 @@ describe('tournaments routes (database errors)', () => {
     const res = await request('POST');
     const text = await res.text();
 
-    expect(res.status).toBe(400);
+    // A unique violation is a 409 on every route (#199).
+    expect(res.status).toBe(409);
     expect(JSON.parse(text)).toEqual({
       error: 'この地域には同じ種別の大会がすでにあります',
     });
     expect(text).not.toContain('tournaments_region_id_type_key');
   });
 
+  // 0045: the other tournament of a region allowing dual entry has the same
+  // question set. PostgREST answers a raised exception with 400.
+  it('answers a question set shared within a dual-entry region with 409 in Japanese', async () => {
+    stubPostgrestError(400, {
+      code: DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE,
+      message: 'dual entry tournaments share a question set',
+      details: null,
+      hint: null,
+    });
+
+    for (const method of ['POST', 'PATCH'] as const) {
+      const res = await request(method);
+
+      expect(res.status).toBe(409);
+      expect((await res.json()) as unknown).toEqual({
+        error: DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
+      });
+    }
+  });
+
   it('PATCH /tournaments/:id reports a region that does not exist in Japanese', async () => {
     stubPostgrestError(409, {
-      code: '23503',
+      code: FOREIGN_KEY_VIOLATION_SQLSTATE,
       message:
         'insert or update on table "tournaments" violates foreign key constraint "tournaments_region_id_fkey"',
       details: null,
@@ -303,6 +307,7 @@ describe('PATCH /tournaments/:id (waitlist promotion, mocked Supabase)', () => {
     entry_opens_at: '2026-01-01T00:00:00+09:00',
     entry_closes_at: '2026-01-31T00:00:00+09:00',
     entries_paused: false,
+    question_set: null,
     regions: {name: 'テスト地域'},
   };
 
@@ -607,6 +612,7 @@ describe('GET /tournaments/:id and /:regionSlug/:tournamentSlug (queries)', () =
         entryOpensAt: tournament.entry_opens_at,
         entryClosesAt: tournament.entry_closes_at,
         entriesPaused: false,
+        questionSet: null,
       },
       customName: tournament.name,
       formFieldDefs: [],
@@ -755,7 +761,7 @@ describe('PUT /tournaments/order (mocked Supabase)', () => {
     stubRpc(() =>
       Response.json(
         {
-          code: 'P0003',
+          code: TOURNAMENT_IDS_MISMATCH_SQLSTATE,
           message: 'the tournament ids do not match the tournaments',
           details: null,
           hint: null,
@@ -873,7 +879,7 @@ describe('POST /tournaments/:id/reset (mocked Supabase)', () => {
     stubRpc(() =>
       Response.json(
         {
-          code: 'P0007',
+          code: ENTRY_PERIOD_OPEN_SQLSTATE,
           message: 'the entry period of the tournament is open',
           details: null,
           hint: null,
@@ -912,7 +918,11 @@ describe('POST /tournaments/:id/reset (mocked Supabase)', () => {
   });
 });
 
-describe.skipIf(!(await isDbReachable()))(
+// Probed once for the whole file, so a run without a database pays for one
+// failed connection rather than one per block.
+const dbReachable = await isDbReachable();
+
+describe.skipIf(!dbReachable)(
   'tournaments routes (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);
@@ -962,6 +972,76 @@ describe.skipIf(!(await isDbReachable()))(
       expect(body.regionId).toBe(regionId);
       expect(body.name).toBe('テスト大会');
       expect(typeof body.id).toBe('string');
+    });
+
+    // 0043: set on create, changed and cleared by PATCH, and suggested by
+    // `/question-sets` -- distinct, without the common questions' null.
+    it('stores the question set and lists the names in use', async () => {
+      const regionId = await createTestRegion('question-set');
+      const cookie = await generalStaffCookie();
+      const send = (method: string, path: string, body: unknown) =>
+        app.request(
+          path,
+          {
+            method,
+            headers: {cookie, 'content-type': 'application/json'},
+            body: JSON.stringify(body),
+          },
+          env,
+        );
+      const tournament = {
+        regionId,
+        name: '',
+        capacity: null,
+        entryOpensAt: '2026-01-01T00:00:00+09:00',
+        entryClosesAt: '2026-01-31T00:00:00+09:00',
+      };
+      const created = (await (
+        await send('POST', '/api/tournaments', {
+          ...tournament,
+          type: 'saikyoi',
+          questionSet: '　問題セットテストＡ ',
+        })
+      ).json()) as {id: string; questionSet: string | null};
+      await send('POST', '/api/tournaments', {
+        ...tournament,
+        type: 'shinjinou',
+        questionSet: '問題セットテストA',
+      });
+      const listed = (await (
+        await app.request(
+          '/api/tournaments/question-sets',
+          {headers: {cookie}},
+          env,
+        )
+      ).json()) as string[];
+
+      const refused = await send('PATCH', `/api/tournaments/${created.id}`, {
+        questionSet: '問題 セット',
+      });
+      const cleared = (await (
+        await send('PATCH', `/api/tournaments/${created.id}`, {
+          questionSet: null,
+        })
+      ).json()) as {questionSet: string | null};
+
+      expect(created.questionSet).toBe('問題セットテストA');
+      expect(listed.filter(name => name === '問題セットテストA')).toHaveLength(
+        1,
+      );
+      expect(listed).not.toContain(null);
+      expect(refused.status).toBe(400);
+      expect(cleared.questionSet).toBeNull();
+    });
+
+    it('lists the question sets for general staff only', async () => {
+      const res = await app.request(
+        '/api/tournaments/question-sets',
+        {headers: {cookie: await regionalStaffCookie(TEST_REGION_ID)}},
+        env,
+      );
+
+      expect(res.status).toBe(403);
     });
 
     it('lists tournaments for general staff', async () => {
@@ -1089,6 +1169,18 @@ describe.skipIf(!(await isDbReachable()))(
       expect(res.status).toBe(400);
       expect((await res.json()) as unknown).toEqual({
         error: '指定された地域が存在しません',
+      });
+    });
+
+    it('refuses a second tournament of the same type in a region with 409', async () => {
+      const regionId = await createTestRegion('duplicate-type');
+      const first = await postTournament(regionId, {});
+      const second = await postTournament(regionId, {});
+
+      expect(first.status).toBe(201);
+      expect(second.status).toBe(409);
+      expect((await second.json()) as unknown).toEqual({
+        error: 'この地域には同じ種別の大会がすでにあります',
       });
     });
 
@@ -1492,7 +1584,7 @@ describe.skipIf(!(await isDbReachable()))(
   },
 );
 
-describe.skipIf(!(await isDbReachable()))(
+describe.skipIf(!dbReachable)(
   'PUT /tournaments/order (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);

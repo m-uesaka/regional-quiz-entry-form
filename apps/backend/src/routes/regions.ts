@@ -1,6 +1,5 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {z} from 'zod';
 import {
   RegionCreateInputSchema,
   RegionUpdateInputSchema,
@@ -10,18 +9,29 @@ import {
 } from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
-import {createDbClient} from '../lib/db';
+import {
+  createDbClient,
+  type Tables,
+  type TablesInsert,
+  type TablesUpdate,
+} from '../lib/db';
 import {internalError} from '../lib/errors';
-
-const RegionIdParamSchema = z.object({id: z.string().uuid()});
+import {
+  DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
+  DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE,
+  duplicate,
+  mapPgError,
+  NO_ROW_PGRST_CODE,
+  noRow,
+  UNIQUE_VIOLATION_SQLSTATE,
+} from '../lib/pg-errors';
+import {IdParamSchema} from './params';
 
 /** Shape of a `regions` row as returned by Supabase. */
-interface RegionRow {
-  id: string;
-  slug: string;
-  name: string;
-  allows_dual_entry: boolean;
-}
+type RegionRow = Pick<
+  Tables<'regions'>,
+  'id' | 'slug' | 'name' | 'allows_dual_entry'
+>;
 
 /** The columns of `RegionRow`, for every select in this file. */
 const REGION_COLUMNS = 'id, slug, name, allows_dual_entry';
@@ -41,16 +51,26 @@ function rowToRegion(row: RegionRow): Region {
 }
 
 /**
- * Turns the API's camelCase input into the columns Supabase writes. Only
- * `allowsDualEntry` needs renaming — `slug` and `name` are spelled the same
- * on both sides — and every field the caller omitted is left out of the row,
- * so a PATCH updates exactly what it sent. The update schema refuses a body
- * that would leave nothing at all.
- * @param input The validated create or update body.
+ * Turns a create body into the columns Supabase writes. Every column is
+ * listed, so the return type checks that each one an insert requires is set.
+ * @param input The validated create body.
  */
-function toRegionRow(
-  input: RegionCreateInput | RegionUpdateInput,
-): Record<string, unknown> {
+function toRegionInsert(input: RegionCreateInput): TablesInsert<'regions'> {
+  return {
+    slug: input.slug,
+    name: input.name,
+    allows_dual_entry: input.allowsDualEntry,
+  };
+}
+
+/**
+ * Turns a PATCH body into the columns Supabase writes. Only
+ * `allowsDualEntry` needs renaming, and every field the caller omitted is
+ * left out of the row, so a PATCH updates exactly what it sent. The update
+ * schema refuses a body that would leave nothing at all.
+ * @param input The validated update body.
+ */
+function toRegionUpdate(input: RegionUpdateInput): TablesUpdate<'regions'> {
   const {allowsDualEntry, ...rest} = input;
   return allowsDualEntry === undefined
     ? rest
@@ -67,8 +87,7 @@ export const regionsRoute = new Hono<StaffEnv>()
     const {data, error} = await db
       .from('regions')
       .select(REGION_COLUMNS)
-      .order('name', {ascending: true})
-      .returns<RegionRow[]>();
+      .order('name', {ascending: true});
     if (error) {
       return c.json(internalError('failed to read the regions', error), 500);
     }
@@ -78,49 +97,60 @@ export const regionsRoute = new Hono<StaffEnv>()
     const db = createDbClient(c.env);
     const {data, error} = await db
       .from('regions')
-      .insert(toRegionRow(c.req.valid('json')))
+      .insert(toRegionInsert(c.req.valid('json')))
       .select(REGION_COLUMNS)
-      .returns<RegionRow[]>()
       .single();
     if (error) {
-      // 23505 is a unique violation, which here can only be the `slug`
-      // column. A slug already in use is an input mistake the staff can fix
-      // themselves, so it gets a 409 they can act on rather than a 500.
+      // A unique violation here can only be the `slug` column. A slug
+      // already in use is an input mistake the staff can fix themselves, so
+      // it gets a 409 they can act on rather than a 500.
       //
       // Nothing else here is caller-fixable: the body is already validated,
       // `name` is a plain `text` column and `regions` has no foreign keys, so
       // the remaining failures are Supabase being unreachable or rejecting
       // our key. Those belong in the Worker log as a 500, not in the response
       // as a 400 the admin UI would render as a form error.
-      if (error.code === '23505') {
-        return c.json({error: 'slug already in use'}, 409);
-      }
-      return c.json(internalError('failed to create the region', error), 500);
+      const {body, status} = mapPgError(
+        error,
+        {[UNIQUE_VIOLATION_SQLSTATE]: duplicate('slug already in use')},
+        'failed to create the region',
+      );
+      return c.json(body, status);
     }
     return c.json(rowToRegion(data), 201);
   })
   .patch(
     '/:id',
-    zValidator('param', RegionIdParamSchema),
+    zValidator('param', IdParamSchema),
     zValidator('json', RegionUpdateInputSchema),
     async c => {
       const db = createDbClient(c.env);
       const {data, error} = await db
         .from('regions')
-        .update(toRegionRow(c.req.valid('json')))
+        .update(toRegionUpdate(c.req.valid('json')))
         .eq('id', c.req.valid('param').id)
         .select(REGION_COLUMNS)
-        .returns<RegionRow[]>()
         .single();
       if (error) {
-        // PGRST116: `.single()` found no row to update. Its message talks
-        // about the query shape rather than the region, so it is replaced —
-        // the same translation `routes/tournaments.ts` does. Everything else
-        // is server-side, for the same reason as in the create handler.
-        if (error.code === 'PGRST116') {
-          return c.json({error: 'region not found'}, 404);
-        }
-        return c.json(internalError('failed to update the region', error), 500);
+        // `.single()` found no row to update. Its message talks about the
+        // query shape rather than the region, so it is replaced -- the same
+        // translation `routes/tournaments.ts` does. Allowing dual entry where
+        // both tournaments share a question set (0045) is the staff's to
+        // fix, so it is answered in the words the admin screen shows.
+        // Everything else is server-side, for the same reason as in the
+        // create handler.
+        const {body, status} = mapPgError(
+          error,
+          {
+            [NO_ROW_PGRST_CODE]: noRow('region not found'),
+            [DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE]: {
+              status: 409,
+              error: DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
+            },
+          },
+          'failed to update the region',
+        );
+        return c.json(body, status);
       }
       return c.json(rowToRegion(data));
     },

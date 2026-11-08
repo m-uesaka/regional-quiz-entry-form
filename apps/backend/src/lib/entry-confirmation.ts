@@ -1,45 +1,30 @@
-import type {TournamentType} from '@regional-quiz/shared';
+import {
+  COMMON_ERROR_CODES,
+  type EntryVerificationTournament,
+} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
+import type {LibFailure} from './errors';
+import {INVALID_TOKEN_SQLSTATE} from './pg-errors';
 import {hashToken} from './token';
 
 /**
- * `invalid_token` is the participant's problem -- the token is unknown,
- * expired, already used, or its entry is no longer awaiting verification --
- * and is the only failure the caller may present as "this link is no longer
- * valid". `internal` is everything else (a Supabase outage, a timeout, a
- * malformed response): the token may well still be good, so the caller must
- * report a server fault instead, or the participant is told to enter again
- * while their entry sits in `pending_verification` and a re-entry is refused
- * as a duplicate.
+ * The 400 is the participant's problem -- the token is unknown, expired,
+ * already used, or its entry is no longer awaiting verification -- and is the
+ * only failure the caller may present as "this link is no longer valid". The
+ * 500 is everything else (a Supabase outage, a timeout, a malformed response):
+ * the token may well still be good, so the caller must report a server fault
+ * instead, or the participant is told to enter again while their entry sits
+ * in `pending_verification` and a re-entry is refused as a duplicate.
  */
-type ConfirmFailureReason = 'invalid_token' | 'internal';
-
-/**
- * The tournament a confirmed entry belongs to, as the public list page's
- * URL names it, so the frontend can drop that list from its cache (#125).
- */
-interface ConfirmedTournament {
-  regionSlug: string;
-  type: TournamentType;
-}
-
 type ConfirmResult =
   | {
       ok: true;
-      status: 'confirmed' | 'waitlisted';
-      tournament: ConfirmedTournament | null;
+      // Not `status`, which on a failure is the HTTP status.
+      entryStatus: 'confirmed' | 'waitlisted';
+      tournament: EntryVerificationTournament | null;
     }
-  | {ok: false; reason: ConfirmFailureReason; error: string};
-
-/**
- * The SQLSTATE the `confirm_entry_by_token` Postgres function raises (see
- * `supabase/migrations/0003_confirm_entry_by_token_fn.sql`, amended by
- * `0008_confirm_entry_by_token_entry_status.sql`) when the token is unknown,
- * expired, or already used, or when the entry it was issued for is no longer
- * awaiting verification (it was cancelled in the meantime).
- */
-const INVALID_TOKEN_SQLSTATE = 'P0003';
+  | LibFailure<400>;
 
 /**
  * Confirms the `entries` row a verification token was issued for.
@@ -72,23 +57,18 @@ export async function confirmEntryByToken(
     if (error.code === INVALID_TOKEN_SQLSTATE) {
       return {
         ok: false,
-        reason: 'invalid_token',
-        error: 'invalid or expired token',
+        status: 400,
+        error: COMMON_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
       };
     }
-    return {ok: false, reason: 'internal', error: error.message};
+    return {ok: false, status: 500, error: error.message};
   }
 
   return {
     ok: true,
-    status: data as 'confirmed' | 'waitlisted',
+    entryStatus: data,
     tournament: await readConfirmedTournament(env, tokenHash),
   };
-}
-
-/** Shape of the token row as selected by `readConfirmedTournament`. */
-interface ConfirmedTournamentRow {
-  entries: {tournaments: {type: TournamentType; regions: {slug: string}}};
 }
 
 /**
@@ -101,12 +81,12 @@ interface ConfirmedTournamentRow {
 async function readConfirmedTournament(
   env: Bindings,
   tokenHash: string,
-): Promise<ConfirmedTournament | null> {
+): Promise<EntryVerificationTournament | null> {
   const {data, error} = await createDbClient(env)
     .from('email_verification_tokens')
     .select('entries(tournaments(type, regions(slug)))')
     .eq('token_hash', tokenHash)
-    .maybeSingle<ConfirmedTournamentRow>();
+    .maybeSingle();
   if (error || !data) {
     return null;
   }

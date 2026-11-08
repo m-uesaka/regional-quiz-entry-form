@@ -67,6 +67,28 @@ bunx supabase stop
 
 ローカルで `bun run db:migrate` がエラーなく通ることを確認してから、次のステップ(テスト環境への適用)に進みます。
 
+### 4.1 DB の型(`apps/backend/src/types/database.ts`)の再生成
+
+`apps/backend` の Supabase クライアントは `createClient<Database>()` で作っており(`apps/backend/src/lib/db.ts` の `DbClient`)、テーブル名・カラム名・select 文字列・RPC の引数と戻り値の型は、スキーマから生成した `Database` 型で検査されます。この型は `apps/backend/src/types/database.ts` にコミットしてあり、手では編集しません。
+
+**マイグレーションを追加・変更したら、同じ PR で型を再生成してコミットしてください。**
+
+```bash
+# ローカル DB にマイグレーションを適用してから
+bun run db:migrate
+
+# ローカル DB のスキーマから型を生成し直す(scripts/gen-db-types.sh。生成に失敗したときは既存のファイルを残す)
+bun run db:types
+```
+
+- 生成元はローカル DB です。`bun run db:types` の前に、そのマイグレーションがローカル DB に適用されている(`bun run db:migrate` 済み、または `bunx supabase db reset` 済み)ことを確認してください。他のブランチのマイグレーションが当たったままの DB から生成すると、そのブランチのテーブルやカラムまで型に入ります。
+- 再生成後に `bun run typecheck` を流すと、カラムの改名・削除や型の変更で壊れる select / insert / RPC 呼び出しがコンパイルエラーとして出ます。
+- 生成物は生成されたままの形でコミットします。そのため `gts lint`(`apps/backend/eslint.config.cjs`)と Prettier(ルートの `.prettierignore`)の対象からは外しています。`tsc` の型検査は通常どおり掛かります。
+- CI の `integration` ジョブは、統合テストの後に、全マイグレーションを当てたローカル Supabase から型を生成し直し、コミット済みのファイルと差分があれば失敗します。再生成を忘れた PR はここで止まります(テストが失敗しても、この確認は実行されます)。
+- 生成結果は Supabase CLI のバージョンでも変わることがあります。CLI(ルートの `devDependencies` と CI の `supabase/setup-cli` のバージョン)を上げたときも再生成してください。
+- 生成された型では、DB 関数の引数と戻り値の列はすべて非 null として表され、`jsonb` 列は `Json` になります(Supabase の型生成の制約)。生成器が知りえないこうした点は、`apps/backend/src/lib/db.ts` の `Database` で 1 か所にまとめて上書きしています(`entries.custom_field_values`、null を渡す・返す DB 関数など)。呼び出し側でキャストや `.overrideTypes()` を足さず、ここに追記してください。
+- 行の型(`Tables` / `TablesInsert` / `TablesUpdate`)も上書きを反映した `apps/backend/src/lib/db.ts` のものを import します。`apps/backend/src/types/database.ts` を直接 import するのは `lib/db.ts` だけです。
+
 ## 5. Supabase CLI でのプロジェクトリンクと手動デプロイ
 
 CLI はディレクトリ単位で1つのプロジェクトとしかリンクを保持できない(`supabase/.temp/project-ref` に保存される)ため、staging/production を切り替える際は都度 `link` し直します。CI では毎回リンクし直すため問題になりませんが、**手動でローカルから適用する場合は、今どちらにリンクされているか(`cat supabase/.temp/project-ref`)を必ず確認してから実行してください**。
@@ -449,7 +471,7 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 
 ## 7. CI/CD パイプライン
 
-`ci.yml`(typecheck/lint/test/e2e)に加えて、デプロイ用に 3 ファイルを置いています。ステップ構成が staging と production でほぼ同一なため、実体は `workflow_call` の再利用ワークフロー 1 つで、呼び出し側は環境ごとの差分だけを渡します。
+`ci.yml`(typecheck/lint/test/integration/e2e)に加えて、デプロイ用に 3 ファイルを置いています。ステップ構成が staging と production でほぼ同一なため、実体は `workflow_call` の再利用ワークフロー 1 つで、呼び出し側は環境ごとの差分だけを渡します。
 
 | ファイル | トリガー | 役割 |
 | --- | --- | --- |
@@ -463,17 +485,19 @@ Cloudflare のトークンは Worker 単位では絞れないため、staging �
 - リリース時は `develop` → `main` の PR を出してマージする。マージすると production にデプロイされる
 - 機能ブランチへの push 自体ではデプロイされない。マージ前に実環境で確認したい場合は、`deploy-staging` を `workflow_dispatch` でそのブランチを指定して実行する(次に `develop` へ push されるまで staging はそのブランチの内容になる)
 - `ci.yml` は PR と、`develop` / `main` への push で実行される
+- `ci.yml` の `check (test)` は DB なしで動くため、バックエンドの DB 統合テスト(`describe.skipIf(!(await isDbReachable()))`)はスキップされる。これらは `integration` ジョブが自前のローカル Supabase を起動して実行する。e2e とは別のジョブ(別のランナー・別のスタック)に分けているのは、同じ DB でテストデータが干渉しないようにするためで、片方の失敗がもう片方の結果を隠すこともない
+- `integration` ジョブは `REQUIRE_SUPABASE_DB=1` を設定する。これがあると DB に接続できないときはスキップではなく失敗になる(`apps/backend/src/test-support/db.ts`)。ローカルと `check (test)`、デプロイの `test` ではこの変数を設定しないので、DB がなければ従来どおりスキップされる。`.skip` の残りなど、この変数で防げないスキップがあれば、`integration` ジョブは `.github/scripts/assert-no-skipped-tests.sh` で失敗する。変数を有効にする値は `1` だけで、`0` や `false` は無効のまま
 
 呼び出し側は `secrets: inherit` を使うため、Secrets の参照先は呼び出し先ジョブの `environment:` で決まります。押さえておきたい点は次の通りです。
 
 - **マイグレーションは両 Cloudflare デプロイより前**。逆順にすると、2 ステップの間のリクエストが「まだ存在しない列」を引く新しい Worker に当たります。
 - **デプロイは cancel されない**。`concurrency` は環境ごとにキューイングする設定(`cancel-in-progress: false`)です。マイグレーション適用後に kill されると、スキーマだけが先行した状態が残るためです。
-- **typecheck / test を再実行する**。`ci.yml` の結果でこのワークフローを gate していないので、`ci.yml` を信用せずに自前で再確認します。lint は落としても本番を止める理由にはならないため再実行しません。
-- **Supabase CLI は `bunx supabase`**(ルートの devDependency)。本番に触れる CLI を `bun.lock` の 1 箇所で固定するためで、`ci.yml` の e2e ジョブが `supabase/setup-cli` を使っているのとは意図的に異なります。
+- **typecheck / test を再実行する**。`ci.yml` の結果でこのワークフローを gate していないので、`ci.yml` を信用せずに自前で再確認します。DB は起動しないので、ここで走るのは DB 統合テストを除いた分です。lint は落としても本番を止める理由にはならないため再実行しません。
+- **Supabase CLI は `bunx supabase`**(ルートの devDependency)。本番に触れる CLI を `bun.lock` の 1 箇所で固定するためで、`ci.yml` の integration / e2e ジョブが `supabase/setup-cli` を使っているのとは意図的に異なります。
 - **シークレットはデプロイで配布されない**。Worker / Pages のシークレットは 6.2・6.3 で一度登録するだけで、ワークフローは触りません。
 - **`/api/*` の route はワークフローが付ける**。`wrangler.toml` に `routes` は書かず、Environment 変数 `FRONTEND_HOST` から `--route` を組み立てます。アカウントが持たないゾーンを `wrangler.toml` に書くと `wrangler deploy` 自体が落ちるためで、実ドメインの有効化をコード変更なしの設定変更で済ませる狙いもあります(6.4)。
 - **最後に `/api/*` の疎通を確認する**。route はデプロイが成功しても効いていないことがあり、その場合ページは描画されるのにブラウザからの API 呼び出しだけが 404 になります。`FRONTEND_HOST` のオリジンで `/api/healthz` を叩き、返らなければデプロイを失敗させます。
-- **フロントエンドのビルドはマイグレーションより前**。`ci.yml` は typecheck/lint/test/e2e までで `build` を実行しないため、`vite build` が初めて走るのはこのジョブです。Pages アップロードの直前に置くと、ビルド失敗が「マイグレーション適用済み・新 Worker 適用済み・フロントエンドだけ古い」状態を残すので、typecheck / test と並べて前倒ししています。
+- **フロントエンドのビルドはマイグレーションより前**。`ci.yml` は typecheck/lint/test/integration/e2e までで `build` を実行しないため、`vite build` が初めて走るのはこのジョブです。Pages アップロードの直前に置くと、ビルド失敗が「マイグレーション適用済み・新 Worker 適用済み・フロントエンドだけ古い」状態を残すので、typecheck / test と並べて前倒ししています。
 
 再デプロイが必要になった場合は、対象ワークフローを `workflow_dispatch` から再実行してください。`supabase db push` は適用済みマイグレーションを飛ばすため、Cloudflare 側だけが失敗したケースはワークフロー全体の再実行で回復できます。
 

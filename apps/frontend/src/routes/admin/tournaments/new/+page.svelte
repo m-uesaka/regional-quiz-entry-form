@@ -24,6 +24,11 @@
       </Message>
     {/if}
 
-    <TournamentForm regions={data.regions} {values} submitLabel="作成" />
+    <TournamentForm
+      regions={data.regions}
+      {values}
+      questionSets={data.questionSets}
+      submitLabel="作成"
+    />
   </Card>
 </PageContainer>

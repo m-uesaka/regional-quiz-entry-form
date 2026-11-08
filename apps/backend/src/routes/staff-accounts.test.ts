@@ -10,7 +10,7 @@ import {
 import {SQL} from 'bun';
 import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
-import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {testBindings} from '../test-support/bindings';
 import {app} from '../index';
 import {isPasswordHashUsable} from '../lib/password';
 import {staffPasswordMailSubject} from '../lib/staff-password-reset';
@@ -21,6 +21,17 @@ import {
   TEST_SESSIONS_VALID_FROM,
   TEST_SESSIONS_VALID_FROM_MS,
 } from '../test-support/staff-session';
+import {
+  LAST_GENERAL_STAFF_SQLSTATE,
+  STAFF_ACCOUNT_DISABLED_SQLSTATE,
+  STAFF_ACCOUNT_NOT_FOUND_SQLSTATE,
+} from '../lib/pg-errors';
+import {
+  DB_URL,
+  isDbReachable,
+  SUPABASE_SECRET_KEY,
+  SUPABASE_URL,
+} from '../test-support/db';
 
 // Every staff guard checks the session against
 // `staff_accounts.sessions_valid_from` before the handler runs; answer that
@@ -35,43 +46,13 @@ afterEach(() => {
   globalThis.fetch = fetchWithoutSessionStub;
 });
 
-// Local Supabase stack (`supabase start`), same convention as
-// `routes/regions.test.ts`. Skipped automatically when it isn't reachable,
-// e.g. in CI.
-const DB_URL =
-  process.env.SUPABASE_DB_URL ??
-  'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
-const SUPABASE_URL = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
-// Publicly documented local-dev demo key for Supabase CLI's default stack
-// (fixed `super-secret-jwt-token-with-at-least-32-characters-long` JWT
-// secret) — not a real credential, safe to commit.
-const SUPABASE_SECRET_KEY =
-  process.env.SUPABASE_SECRET_KEY ??
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
 const SESSION_SECRET = 'test-session-secret';
 
-async function isDbReachable(): Promise<boolean> {
-  const probe = new SQL(DB_URL);
-  try {
-    await probe`select 1`;
-    return true;
-  } catch {
-    return false;
-  } finally {
-    await probe.close();
-  }
-}
-
-const BASE_ENV: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
+const BASE_ENV = testBindings({
   SUPABASE_URL,
   SUPABASE_SECRET_KEY,
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL: 'https://entry.example.com',
   SESSION_SECRET,
-};
+});
 
 async function generalStaffCookie(): Promise<string> {
   const token = await sign(
@@ -454,7 +435,10 @@ describe('POST /staff/accounts/:id/disable (mocked Supabase)', () => {
   it('answers 409 when no general staff account would be left', async () => {
     fakeDisableRpc({
       status: 400,
-      body: {code: 'P0004', message: 'cannot disable the last general'},
+      body: {
+        code: LAST_GENERAL_STAFF_SQLSTATE,
+        message: 'cannot disable the last general',
+      },
     });
 
     const res = await disableAccount(
@@ -471,7 +455,10 @@ describe('POST /staff/accounts/:id/disable (mocked Supabase)', () => {
   it('answers 404 for an account that does not exist', async () => {
     fakeDisableRpc({
       status: 400,
-      body: {code: 'P0002', message: 'staff account not found'},
+      body: {
+        code: STAFF_ACCOUNT_NOT_FOUND_SQLSTATE,
+        message: 'staff account not found',
+      },
     });
 
     const res = await disableAccount(
@@ -549,7 +536,10 @@ describe('POST /staff/accounts/:id/enable (mocked Supabase)', () => {
   it('returns 404 for an account that does not exist', async () => {
     fakeDisableRpc({
       status: 400,
-      body: {code: 'P0002', message: 'staff account not found'},
+      body: {
+        code: STAFF_ACCOUNT_NOT_FOUND_SQLSTATE,
+        message: 'staff account not found',
+      },
     });
 
     const res = await enableAccount(TARGET_STAFF_ID);
@@ -1316,7 +1306,7 @@ describe.skipIf(!(await isDbReachable()))(
         errno = (e as {errno?: unknown}).errno;
       }
 
-      expect(errno).toBe('P0005');
+      expect(errno).toBe(STAFF_ACCOUNT_DISABLED_SQLSTATE);
       const tokens = await sql`
         select 1 from staff_password_reset_tokens
         where staff_account_id = ${created.id}
@@ -1351,7 +1341,9 @@ describe.skipIf(!(await isDbReachable()))(
         for (const result of results) {
           if (result.status === 'rejected') {
             // Only the "last general" refusal is acceptable, never 40P01.
-            expect(result.reason).toMatchObject({errno: 'P0004'});
+            expect(result.reason).toMatchObject({
+              errno: LAST_GENERAL_STAFF_SQLSTATE,
+            });
           }
         }
         expect(results.some(r => r.status === 'fulfilled')).toBe(true);

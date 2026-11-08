@@ -2,6 +2,7 @@ import {createMiddleware} from 'hono/factory';
 import {getCookie} from 'hono/cookie';
 import {verify} from 'hono/jwt';
 import {
+  COMMON_ERROR_CODES,
   ParticipantClaimsSchema,
   type ParticipantClaims,
 } from '@regional-quiz/shared';
@@ -9,11 +10,6 @@ import type {ParticipantEnv} from '../types/env';
 import {createDbClient} from '../lib/db';
 
 export const PARTICIPANT_SESSION_COOKIE = 'participant_session';
-
-interface ParticipantSessionRow {
-  password_changed_at: string;
-  email_verified_at: string | null;
-}
 
 async function readParticipantClaims(
   token: string | undefined,
@@ -47,7 +43,7 @@ export function requireParticipant() {
       c.env.SESSION_SECRET,
     );
     if (!claims) {
-      return c.json({error: 'unauthorized'}, 401);
+      return c.json({error: COMMON_ERROR_CODES.UNAUTHORIZED}, 401);
     }
 
     // The signature alone can't tell whether this session was cut short: it
@@ -60,7 +56,6 @@ export function requireParticipant() {
       .from('participants')
       .select('password_changed_at, email_verified_at')
       .eq('id', claims.sub)
-      .returns<ParticipantSessionRow[]>()
       .maybeSingle();
     if (error) {
       // Not a 401: the session may well be fine and we simply couldn't check
@@ -88,7 +83,7 @@ export function requireParticipant() {
       !participant.email_verified_at ||
       Date.parse(participant.password_changed_at) !== claims.pwdChangedAt
     ) {
-      return c.json({error: 'unauthorized'}, 401);
+      return c.json({error: COMMON_ERROR_CODES.UNAUTHORIZED}, 401);
     }
 
     c.set('participantId', claims.sub);

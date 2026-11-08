@@ -1,6 +1,7 @@
 import type {EntryStatus, StaffMailStatusFilter} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
+import type {InternalFailure} from './errors';
 
 // PostgREST caps every response at the project's `db-max-rows`, so a single
 // unbounded select silently stops at that many entries. Recipients are
@@ -34,13 +35,7 @@ export const DEFAULT_EXCLUDED_STATUSES: readonly EntryStatus[] = [
   'cancelled',
 ];
 
-type RecipientsResult =
-  {ok: true; recipients: string[]} | {ok: false; error: string};
-
-/** Shape of the `entries` rows selected for their participant's address. */
-interface RecipientRow {
-  participants: {email: string};
-}
+type RecipientsResult = {ok: true; recipients: string[]} | InternalFailure;
 
 /**
  * Collects the addresses to mail for one tournament's entries.
@@ -99,10 +94,9 @@ export async function fetchTournamentRecipients(
       // of overlapping: without an order PostgREST makes no promise that
       // two ranges see the same row order.
       .order('id', {ascending: true})
-      .range(page * pageSize, (page + 1) * pageSize - 1)
-      .returns<RecipientRow[]>();
+      .range(page * pageSize, (page + 1) * pageSize - 1);
     if (error) {
-      return {ok: false, error: error.message};
+      return {ok: false, status: 500, error: error.message};
     }
 
     const rows = data ?? [];

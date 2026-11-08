@@ -6,9 +6,8 @@
   } from '@regional-quiz/shared';
   import {customFieldName} from '$lib/custom-field-name';
   import FieldLabelText from '$lib/components/FieldLabelText.svelte';
-  import Input from '$lib/components/ui/atoms/Input.svelte';
-  import Label from '$lib/components/ui/atoms/Label.svelte';
-  import Textarea from '$lib/components/ui/atoms/Textarea.svelte';
+  import FieldError from '$lib/components/form/FieldError.svelte';
+  import TextField from '$lib/components/form/TextField.svelte';
 
   interface Props {
     field: FormFieldDefYaml;
@@ -35,6 +34,11 @@
   // inputs (`name`, `email`, `password`, ...) can't submit under the same
   // key as it. See `$lib/custom-field-name`.
   const controlName = $derived(customFieldName(field.key));
+
+  // What the option groups and the lone box point `aria-describedby` at, so
+  // their message is read out with them as `TextField`'s is.
+  const errorId = $derived(`${controlName}-error`);
+  const describedBy = $derived(error ? errorId : undefined);
 
   // A `checkbox` field with no `options` is a plain boolean toggle (e.g.
   // "I agree to the rules"). To keep the component's value type consistent
@@ -74,45 +78,29 @@
   });
 </script>
 
-<!-- The branches below each render this under their control, so a
-     rejected answer is reported in the same place whatever the field
-     type is. -->
-{#snippet errorMessage()}
-  {#if error}<p class="text-sm text-destructive">{error}</p>{/if}
-{/snippet}
-
 <!-- The options stay native inputs inside their own `<label>`: a native
      radio/checkbox is what `bind:group` and the server-rendered `required`
      rely on, and the wrapping label is what names each option. -->
 {#if isFreeTextFieldType(field.type)}
-  <div class="flex flex-col gap-1.5">
-    <Label for={controlName}>
+  <!-- `TextField` takes text, and `value` is typed for every kind of field.
+       The caller hands over text for these types (`customFieldValueFor()`);
+       anything else shows as empty rather than as a joined list. -->
+  <TextField
+    id={controlName}
+    name={controlName}
+    multiline={field.type === 'textarea'}
+    required={field.required}
+    maxlength={CUSTOM_FIELD_VALUE_MAX_LENGTH}
+    {error}
+    bind:value={() => (typeof value === 'string' ? value : ''), typed => (value = typed)}
+  >
+    {#snippet label()}
       <FieldLabelText label={field.label} />
       {#if field.required}<span aria-hidden="true" class="ml-0.5 text-destructive">*</span>{/if}
-    </Label>
-    {#if field.type === 'textarea'}
-      <Textarea
-        id={controlName}
-        name={controlName}
-        required={field.required}
-        maxlength={CUSTOM_FIELD_VALUE_MAX_LENGTH}
-        isError={!!error}
-        bind:value
-      />
-    {:else}
-      <Input
-        id={controlName}
-        name={controlName}
-        required={field.required}
-        maxlength={CUSTOM_FIELD_VALUE_MAX_LENGTH}
-        isError={!!error}
-        bind:value
-      />
-    {/if}
-    {@render errorMessage()}
-  </div>
+    {/snippet}
+  </TextField>
 {:else if field.type === 'radio'}
-  <fieldset class="flex flex-col gap-2">
+  <fieldset class="flex flex-col gap-2" aria-describedby={describedBy}>
     <legend class="mb-1.5 text-sm/tight font-medium text-foreground">
       <FieldLabelText label={field.label} />
       {#if field.required}<span aria-hidden="true" class="ml-0.5 text-destructive">*</span>{/if}
@@ -130,11 +118,11 @@
         <FieldLabelText label={option} />
       </label>
     {/each}
-    {@render errorMessage()}
+    <FieldError {error} id={errorId} />
   </fieldset>
 {:else if field.type === 'checkbox'}
   {#if field.options && field.options.length > 0}
-    <fieldset class="flex flex-col gap-2">
+    <fieldset class="flex flex-col gap-2" aria-describedby={describedBy}>
       <legend class="mb-1.5 text-sm/tight font-medium text-foreground">
         <FieldLabelText label={field.label} />
         {#if field.required}<span aria-hidden="true" class="ml-0.5 text-destructive">*</span>{/if}
@@ -152,7 +140,7 @@
           <FieldLabelText label={option} />
         </label>
       {/each}
-      {@render errorMessage()}
+      <FieldError {error} id={errorId} />
     </fieldset>
   {:else}
     <div class="flex flex-col gap-1.5">
@@ -163,11 +151,13 @@
           name={controlName}
           value={booleanCheckboxValue}
           required={field.required}
+          aria-describedby={describedBy}
+          aria-invalid={error ? true : undefined}
           bind:group={value}
         />
         <FieldLabelText label={field.label} />
       </label>
-      {@render errorMessage()}
+      <FieldError {error} id={errorId} />
     </div>
   {/if}
 {/if}

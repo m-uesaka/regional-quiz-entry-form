@@ -133,6 +133,36 @@ describe('admin staff +page.svelte', () => {
     ).toHaveValue(TOKYO.id);
   });
 
+  it('points the region select at its rejection', () => {
+    renderPage([], [TOKYO], {
+      intent: 'invite',
+      accountId: null,
+      saved: false,
+      error: '入力内容を確認してください',
+      fieldErrors: {regionId: ['地域が見つかりません']},
+      values: {email: '', role: 'regional', regionId: '', tournamentType: ''},
+    } as PageForm);
+
+    const select = screen.getByLabelText('担当地域(地域スタッフのみ)');
+    expect(select).toHaveAttribute('aria-invalid', 'true');
+    expect(select).toHaveAttribute(
+      'aria-describedby',
+      'staff-invite-region-error',
+    );
+    expect(screen.getByText('地域が見つかりません')).toHaveAttribute(
+      'id',
+      'staff-invite-region-error',
+    );
+  });
+
+  it('leaves the region select undescribed with nothing rejected', () => {
+    renderPage([REGIONAL]);
+
+    const select = screen.getByLabelText('担当地域(地域スタッフのみ)');
+    expect(select).not.toHaveAttribute('aria-invalid');
+    expect(select).not.toHaveAttribute('aria-describedby');
+  });
+
   it('tells staff when no account exists yet', () => {
     renderPage([]);
 

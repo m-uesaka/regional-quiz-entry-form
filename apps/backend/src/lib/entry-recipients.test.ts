@@ -1,23 +1,13 @@
 import {afterEach, describe, expect, it} from 'bun:test';
 import {EntryStatusSchema} from '@regional-quiz/shared';
-import type {Bindings} from '../types/env';
 import {
   DEFAULT_EXCLUDED_STATUSES,
   DEFAULT_RECIPIENT_STATUSES,
   fetchTournamentRecipients,
 } from './entry-recipients';
-import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {testBindings} from '../test-support/bindings';
 
-const ENV: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
-  SUPABASE_URL: 'https://example.supabase.co',
-  SUPABASE_SECRET_KEY: 'dummy-service-role-key',
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL: 'https://entry.example.com',
-  SESSION_SECRET: 'test-session-secret',
-};
+const ENV = testBindings();
 
 const TOURNAMENT_ID = '44444444-4444-4444-4444-444444444444';
 
@@ -171,6 +161,10 @@ describe('fetchTournamentRecipients', () => {
 
     const result = await fetchTournamentRecipients(ENV, TOURNAMENT_ID);
 
-    expect(result).toEqual({ok: false, error: 'db is down'});
+    expect(result).toEqual({
+      ok: false,
+      status: 500,
+      error: 'db is down',
+    });
   });
 });

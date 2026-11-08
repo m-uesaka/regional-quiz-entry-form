@@ -1,9 +1,8 @@
 import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
 import {sign} from 'hono/jwt';
 import {MAX_SELECTIONS, parseFormDefinitionYaml} from '@regional-quiz/shared';
-import type {Bindings} from '../types/env';
 import {app} from '../index';
-import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {testBindings} from '../test-support/bindings';
 import {
   staffSessionAwareFetch,
   TEST_SESSIONS_VALID_FROM_MS,
@@ -24,16 +23,9 @@ afterEach(() => {
 
 const SESSION_SECRET = 'test-session-secret';
 
-const env: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
-  SUPABASE_URL: 'https://example.supabase.co',
-  SUPABASE_SECRET_KEY: 'dummy-service-role-key',
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL: 'https://entry.example.com',
+const env = testBindings({
   SESSION_SECRET,
-};
+});
 
 async function generalStaffCookie(): Promise<string> {
   const token = await sign(
@@ -272,6 +264,54 @@ describe('sheet-import routes', () => {
         },
       ],
     });
+  });
+
+  // The same words the bulk import uses for the same sheet, rather than
+  // the converter's English or a dump of Zod issues.
+  it('answers a mistake on the sheet with 400 naming its row', async () => {
+    const cases: Array<[unknown[][], string]> = [
+      [
+        [['notes', '備考', 'プルダウン', '任意']],
+        'フォーム定義 2行目: C列(type)「プルダウン」はチェックボックス・ラジオボタン・自由記述・自由記述（一行）のいずれでもありません',
+      ],
+      [
+        [
+          ['notes', '備考', '自由記述', '任意'],
+          ['Bad Key', '備考', '自由記述', '任意'],
+        ],
+        'フォーム定義 3行目: A列(key)「Bad Key」は小文字の英字で始まり、小文字の英数字と _ だけにしてください',
+      ],
+      [
+        [
+          ['notes', '備考', '自由記述', '任意'],
+          ['notes', '備考2', '自由記述', '任意'],
+        ],
+        'フォーム定義 2行目と3行目: A列(key)「notes」が複数の行で使われています',
+      ],
+    ];
+    const cookie = await generalStaffCookie();
+    for (const [values, message] of cases) {
+      globalThis.fetch = staffSessionAwareFetch((() =>
+        Promise.resolve(
+          new Response(JSON.stringify({values}), {status: 200}),
+        )) as unknown as typeof fetch);
+
+      const res = await app.request(
+        '/api/sheet-import/preview',
+        {
+          method: 'POST',
+          headers: {cookie, 'content-type': 'application/json'},
+          body: JSON.stringify({
+            spreadsheetId: 'sheet-id',
+            tournamentSlug: 'saikyoi',
+          }),
+        },
+        env,
+      );
+
+      expect(res.status).toBe(400);
+      expect((await res.json()) as unknown).toEqual({error: message});
+    }
   });
 
   describe('POST /regulations/preview', () => {

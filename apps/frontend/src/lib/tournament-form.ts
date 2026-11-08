@@ -1,4 +1,5 @@
 import {
+  QuestionSetInputSchema,
   TournamentCreateInputSchema,
   type Tournament,
   type TournamentCreateInput,
@@ -37,6 +38,7 @@ export function emptyTournamentFormValues(): TournamentFormValues {
     capacity: '',
     entryOpensAt: '',
     entryClosesAt: '',
+    questionSet: '',
   };
 }
 
@@ -63,6 +65,8 @@ export function toTournamentFormValues(
     capacity: tournament.capacity === null ? '' : String(tournament.capacity),
     entryOpensAt: toJstDatetimeLocal(tournament.entryOpensAt),
     entryClosesAt: toJstDatetimeLocal(tournament.entryClosesAt),
+    // A blank control is the common questions the API stores as null.
+    questionSet: tournament.questionSet ?? '',
   };
 }
 
@@ -80,6 +84,7 @@ export function readTournamentFormValues(
     capacity: readString(formData, 'capacity'),
     entryOpensAt: readString(formData, 'entryOpensAt'),
     entryClosesAt: readString(formData, 'entryClosesAt'),
+    questionSet: readString(formData, 'questionSet'),
   };
 }
 
@@ -106,6 +111,20 @@ export function parseTournamentFormValues(
     capacity: values.capacity.trim() === '' ? null : Number(values.capacity),
     entryOpensAt: fromJstDatetimeLocal(values.entryOpensAt),
     entryClosesAt: fromJstDatetimeLocal(values.entryClosesAt),
+    questionSet: values.questionSet,
   });
   return parsed.success ? parsed.data : null;
+}
+
+/**
+ * Why the form's 問題セット is refused, in words to show above the form, or
+ * null when it is fine. The one control staff type free text into that can
+ * be refused -- a space inside the name, a name too long -- so unlike the
+ * rest of the form a refusal here is a mistake worth naming rather than a
+ * bypassed browser check.
+ * @param values What the controls carried.
+ */
+export function questionSetError(values: TournamentFormValues): string | null {
+  const parsed = QuestionSetInputSchema.safeParse(values.questionSet);
+  return parsed.success ? null : (parsed.error.issues[0]?.message ?? null);
 }

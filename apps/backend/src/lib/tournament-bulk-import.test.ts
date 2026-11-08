@@ -1,8 +1,7 @@
 import {afterAll, afterEach, beforeAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
 import type {TournamentImportSelection} from '@regional-quiz/shared';
-import type {Bindings} from '../types/env';
-import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {testBindings} from '../test-support/bindings';
 import {
   importTournaments,
   parseCapacity,
@@ -11,6 +10,13 @@ import {
   previewTournamentImport,
   TournamentIndexError,
 } from './tournament-bulk-import';
+import {IMPORT_ACTION_STALE_SQLSTATE} from './pg-errors';
+import {
+  DB_URL,
+  isDbReachable,
+  SUPABASE_SECRET_KEY,
+  SUPABASE_URL,
+} from '../test-support/db';
 
 // The 大会一覧 sheet's header, as the sheet staff use has it.
 const HEADER = [
@@ -143,40 +149,10 @@ describe('parseCapacity', () => {
   });
 });
 
-// Local Supabase stack (`supabase start`), same convention as the other
-// integration suites. Skipped automatically when it isn't reachable.
-const DB_URL =
-  process.env.SUPABASE_DB_URL ??
-  'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
-const SUPABASE_URL = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
-// Publicly documented local-dev demo key for Supabase CLI's default stack —
-// not a real credential, safe to commit.
-const SUPABASE_SECRET_KEY =
-  process.env.SUPABASE_SECRET_KEY ??
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
-
-async function isDbReachable(): Promise<boolean> {
-  const probe = new SQL(DB_URL);
-  try {
-    await probe`select 1`;
-    return true;
-  } catch {
-    return false;
-  } finally {
-    await probe.close();
-  }
-}
-
-const env: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
+const env = testBindings({
   SUPABASE_URL,
   SUPABASE_SECRET_KEY,
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL: 'https://entry.example.com',
-  SESSION_SECRET: 'test-session-secret',
-};
+});
 
 /**
  * A cell the stub below serves: a string or number is both what the sheet
@@ -190,6 +166,8 @@ interface FakeEntrySheet {
   formRows: FakeCell[][];
   /** `undefined` for a spreadsheet with no regulation tab. */
   regulationRows?: FakeCell[][];
+  /** A status Google refuses the read with, instead of the tabs. */
+  refusedWith?: number;
 }
 
 /** A `spreadsheets.get` grid row for `cells`. */
@@ -250,6 +228,9 @@ describe.skipIf(!(await isDbReachable()))(
         }
         requestedSheetIds.push(id);
         const sheet = entrySheets[id];
+        if (sheet?.refusedWith !== undefined) {
+          return Response.json({error: 'refused'}, {status: sheet.refusedWith});
+        }
         if (!sheet || sheet.regulationRows === undefined) {
           return Response.json({error: 'not found'}, {status: 400});
         }
@@ -636,10 +617,10 @@ describe.skipIf(!(await isDbReachable()))(
       `;
 
       await expect(call('saikyoi', false)).rejects.toMatchObject({
-        errno: 'P0006',
+        errno: IMPORT_ACTION_STALE_SQLSTATE,
       });
       await expect(call('shinjinou', true)).rejects.toMatchObject({
-        errno: 'P0006',
+        errno: IMPORT_ACTION_STALE_SQLSTATE,
       });
       const after = await tournamentOf(regionA, 'saikyoi');
       expect(after?.capacity).toBe(existing?.capacity ?? null);
@@ -921,7 +902,7 @@ describe.skipIf(!(await isDbReachable()))(
         ],
         [
           [FORM_ROWS[1], FORM_ROWS[1]],
-          'フォーム定義: A列(key)「notes」が複数の行で使われています',
+          'フォーム定義 2行目と3行目: A列(key)「notes」が複数の行で使われています',
         ],
       ];
       for (const [formRows, message] of cases) {
@@ -935,6 +916,28 @@ describe.skipIf(!(await isDbReachable()))(
         expect(row.error).toStartWith(message);
       }
       expect(await tournamentOf(regionB, 'shinjinou')).toBeUndefined();
+    });
+
+    it("labels only the regulation tab's own mistakes as the regulation tab's", async () => {
+      indexValues = [HEADER, indexRow(regionB, '新人王', 's1')];
+      entrySheets = {
+        s1: {formRows: FORM_ROWS, regulationRows: [['', 46000, 46007]]},
+      };
+      stubSheets();
+
+      const [mistake] = await previewTournamentImport(env, 'index', NOW);
+
+      expect(mistake.error).toBe(
+        'レギュレーション: 2行目: レギュレーション名が空です',
+      );
+
+      // A read Google refuses is about the spreadsheet, not about the tab.
+      entrySheets = {s1: {formRows: FORM_ROWS, refusedWith: 403}};
+      stubSheets();
+
+      const [refused] = await previewTournamentImport(env, 'index', NOW);
+
+      expect(refused.error).toBe('Failed to fetch sheet: 403');
     });
   },
 );

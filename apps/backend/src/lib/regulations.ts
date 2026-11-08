@@ -1,33 +1,17 @@
-import type {RegulationUpsert} from '@regional-quiz/shared';
+import {
+  NO_LASTING_REGULATION_MESSAGE,
+  type RegulationUpsert,
+} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import {
+  FOREIGN_KEY_VIOLATION_SQLSTATE,
+  NO_LASTING_REGULATION_SQLSTATE,
+  REGULATION_IN_USE_SQLSTATE,
   TOURNAMENT_NOT_FOUND_SQLSTATE,
-  TournamentNotFoundError,
-} from './tournament-errors';
-
-/**
- * The SQLSTATEs the `sync_regulations` Postgres function raises (defined in
- * `supabase/migrations/0014_sync_regulations_fn.sql`, redefined against the
- * `entry_regulations` join table in `0018_entry_regulations.sql`) for the
- * two failures the caller is expected to report rather than treat as a
- * server error.
- */
-const UNKNOWN_REGULATION_SQLSTATE = 'P0003';
-const REGULATION_IN_USE_SQLSTATE = 'P0004';
-
-/**
- * Postgres' own `foreign_key_violation`, which the final delete in
- * `sync_regulations()` does reach. The in-use check ahead of it no longer
- * rules that out: an entry's regulations are written to `entry_regulations`
- * by a statement of their own (`replaceEntryRegulations()` in
- * `lib/entries.ts`), and that table has no foreign key to `tournaments`, so
- * the insert takes no lock on the tournament row the function holds
- * `for update`. One that commits between the check and the delete fails the
- * delete here instead — the same answer as P0004, reached a moment later,
- * which is why both are reported as "a regulation is still in use".
- */
-const FOREIGN_KEY_VIOLATION_SQLSTATE = '23503';
+  UNKNOWN_REGULATION_SQLSTATE,
+} from './pg-errors';
+import {TournamentNotFoundError} from './tournament-errors';
 
 /**
  * Thrown when a request names a regulation `id` that doesn't belong to the
@@ -57,6 +41,19 @@ export class RegulationInUseError extends Error {
 }
 
 /**
+ * Thrown when every regulation would be marked to close once saved, which
+ * would leave nothing to choose after the marked phases. The request schema
+ * catches the explicit case; this is the one where an omitted value kept a
+ * stored `true`. Staff-facing, and nothing has been written.
+ */
+export class NoLastingRegulationError extends Error {
+  constructor() {
+    super(NO_LASTING_REGULATION_MESSAGE);
+    this.name = 'NoLastingRegulationError';
+  }
+}
+
+/**
  * Brings a tournament's regulations in line with `regulations`, which is
  * the full set as it should look afterwards.
  *
@@ -78,6 +75,8 @@ export class RegulationInUseError extends Error {
  *     regulation of this tournament.
  * @throws {RegulationInUseError} If a regulation missing from
  *     `regulations` is still referenced by an entry.
+ * @throws {NoLastingRegulationError} If every regulation would be marked to
+ *     close once saved.
  */
 export async function syncRegulations(
   env: Bindings,
@@ -100,15 +99,19 @@ export async function syncRegulations(
 /**
  * The staff-facing error for a failure `sync_regulations()` raised that
  * names something in the request -- a regulation that doesn't belong to the
- * tournament, or one still in use -- whether it was called directly or from
- * `import_tournament()` (#168). `null` for any other failure, which is the
- * caller's to report.
+ * tournament, one still in use, or a set that all closes -- whether it was
+ * called directly or from `import_tournament()` (#168). `null` for any other
+ * failure, which is the caller's to report.
  * @param error The error supabase-js returned.
  */
 export function regulationSyncFailure(error: {
   code?: string;
   details?: string | null;
-}): UnknownRegulationError | RegulationInUseError | null {
+}):
+  | UnknownRegulationError
+  | RegulationInUseError
+  | NoLastingRegulationError
+  | null {
   switch (error.code) {
     // The offending ids/labels travel in the exception's `detail`, so the
     // staff-facing sentence is built here rather than in the database.
@@ -116,6 +119,17 @@ export function regulationSyncFailure(error: {
       return new UnknownRegulationError(error.details ?? '');
     case REGULATION_IN_USE_SQLSTATE:
       return new RegulationInUseError(error.details ?? '');
+    case NO_LASTING_REGULATION_SQLSTATE:
+      return new NoLastingRegulationError();
+    // The final delete in `sync_regulations()` does reach this. The in-use
+    // check ahead of it doesn't rule it out: an entry's regulations are
+    // written to `entry_regulations` by a statement of their own
+    // (`replaceEntryRegulations()` in `lib/entry-submission.ts`), and that
+    // table has no foreign key to `tournaments`, so the insert takes no lock
+    // on the tournament row the function holds `for update`. One that commits
+    // between the check and the delete fails the delete here instead -- the
+    // same answer as P0004, reached a moment later.
+    //
     // No labels here: `details` is Postgres' own wording about the
     // constraint, which describes the database rather than anything the
     // staff member can act on.

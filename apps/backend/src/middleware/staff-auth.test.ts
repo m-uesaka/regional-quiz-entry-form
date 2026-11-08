@@ -7,8 +7,8 @@ import {
   requireStaffForTournament,
   STAFF_SESSION_COOKIE,
 } from './staff-auth';
-import type {Bindings, StaffEnv} from '../types/env';
-import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import type {StaffEnv} from '../types/env';
+import {testBindings} from '../test-support/bindings';
 import {
   staffSessionAwareFetch,
   TEST_SESSIONS_VALID_FROM,
@@ -17,16 +17,9 @@ import {
 import {openEntryPeriodTournament} from '../test-support/tournaments';
 
 const SESSION_SECRET = 'test-session-secret';
-const ENV: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
-  SUPABASE_URL: 'https://example.supabase.co',
-  SUPABASE_SECRET_KEY: 'dummy-service-role-key',
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL: 'https://entry.example.com',
+const ENV = testBindings({
   SESSION_SECRET,
-};
+});
 
 const REGION_ID = '11111111-1111-1111-1111-111111111111';
 const OTHER_REGION_ID = '22222222-2222-2222-2222-222222222222';

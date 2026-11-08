@@ -1,28 +1,17 @@
 import {describe, expect, it} from 'vitest';
 import type {HttpError, Redirect} from '@sveltejs/kit';
 import type {StaffClaims} from '@regional-quiz/shared';
+import {
+  GENERAL_STAFF,
+  REGIONAL_STAFF,
+  staffLocals,
+} from '../../test-support/staff-locals';
 import {load} from './+layout.server';
-
-const GENERAL_STAFF: StaffClaims = {
-  sub: '00000000-0000-0000-0000-000000000001',
-  role: 'general',
-  regionId: null,
-  tournamentType: null,
-  sessionsValidFrom: 1756085025678,
-};
-
-const REGIONAL_STAFF: StaffClaims = {
-  sub: '00000000-0000-0000-0000-000000000002',
-  role: 'regional',
-  regionId: '00000000-0000-0000-0000-000000000003',
-  tournamentType: 'saikyoi',
-  sessionsValidFrom: 1756085025678,
-};
 
 /** Builds the partial `RequestEvent` `load` reads, cast for test use. */
 function buildEvent(staff: StaffClaims | null): Parameters<typeof load>[0] {
   return {
-    locals: {staff, participant: null},
+    locals: staffLocals(staff),
     url: new URL('http://localhost/admin/regions'),
   } as Parameters<typeof load>[0];
 }

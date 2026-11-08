@@ -1,47 +1,22 @@
 import {afterAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
 import {sign} from 'hono/jwt';
-import type {Bindings} from '../types/env';
 import {app} from '../index';
-import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {testBindings} from '../test-support/bindings';
+import {
+  DB_URL,
+  isDbReachable,
+  SUPABASE_SECRET_KEY,
+  SUPABASE_URL,
+} from '../test-support/db';
 
-// Local Supabase stack (`supabase start`), same convention as
-// `routes/tournaments.test.ts`. Skipped automatically when it isn't
-// reachable, e.g. in CI.
-const DB_URL =
-  process.env.SUPABASE_DB_URL ??
-  'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
-const SUPABASE_URL = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
-// Publicly documented local-dev demo key for Supabase CLI's default stack
-// (fixed `super-secret-jwt-token-with-at-least-32-characters-long` JWT
-// secret) — not a real credential, safe to commit.
-const SUPABASE_SECRET_KEY =
-  process.env.SUPABASE_SECRET_KEY ??
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
 const SESSION_SECRET = 'test-session-secret';
 
-async function isDbReachable(): Promise<boolean> {
-  const probe = new SQL(DB_URL);
-  try {
-    await probe`select 1`;
-    return true;
-  } catch {
-    return false;
-  } finally {
-    await probe.close();
-  }
-}
-
-const env: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
+const env = testBindings({
   SUPABASE_URL,
   SUPABASE_SECRET_KEY,
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL: 'https://entry.example.com',
   SESSION_SECRET,
-};
+});
 
 const ENTRY_ID = '11111111-1111-1111-1111-111111111111';
 
@@ -254,7 +229,7 @@ describe.skipIf(!(await isDbReachable()))(
 
     it('returns entries for both saikyoi and shinjinou in the same region', async () => {
       // Only a dual-entry region can hold this shape at all: everywhere else
-      // `check_region_dual_entry()` (migration 0016) refuses the second row.
+      // `check_entry_seat()` (migration 0041) refuses the second row.
       const regionId = await createRegion('both-types', true);
       const saikyoiId = await createTournament(regionId, 'saikyoi');
       const shinjinouId = await createTournament(regionId, 'shinjinou');
@@ -425,7 +400,24 @@ describe.skipIf(!(await isDbReachable()))(
         regionId,
         'mypage-reset-cuts-session@example.com',
       );
+      // The session is matched on the stamp to the millisecond. On a fast
+      // database the row can be written and updated within one, which would
+      // leave nothing to tell the two stamps apart, so this one is set well
+      // before the reset below.
+      await sql`
+        update participants
+          set password_changed_at = now() - interval '1 minute'
+          where id = ${participantId}
+      `;
       const cookie = await participantCookie(participantId);
+
+      // The 401 below only means something for a session that worked.
+      const before = await app.request(
+        '/api/mypage/entries',
+        {headers: {cookie}},
+        env,
+      );
+      expect(before.status).toBe(200);
 
       // Exactly what `reset_participant_password` does to the row, minus the
       // token bookkeeping: the session was valid a moment ago and has to stop

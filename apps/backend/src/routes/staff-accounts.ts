@@ -1,45 +1,57 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {z} from 'zod';
 import {
   StaffAccountCreateInputSchema,
   type StaffAccount,
-  type StaffRole,
-  type TournamentType,
 } from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
-import {createDbClient} from '../lib/db';
+import {createDbClient, type Tables} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {isPasswordHashUsable, UNUSABLE_PASSWORD_HASH} from '../lib/password';
+import {
+  duplicate,
+  FOREIGN_KEY_VIOLATION_SQLSTATE,
+  LAST_GENERAL_STAFF_SQLSTATE,
+  mapPgError,
+  missingReference,
+  type PgErrorTable,
+  STAFF_ACCOUNT_NOT_FOUND_SQLSTATE,
+  UNIQUE_VIOLATION_SQLSTATE,
+} from '../lib/pg-errors';
 import {sendStaffPasswordLink} from '../lib/staff-password-reset';
-
-const StaffAccountIdParamSchema = z.object({id: z.string().uuid()});
-
-const STAFF_ACCOUNT_COLUMNS =
-  'id, email, password_hash, role, region_id, tournament_type, ' +
-  'disabled_at, regions(slug, name)';
+import {IdParamSchema} from './params';
 
 /**
- * The SQLSTATEs `disable_staff_account()` / `enable_staff_account()`
- * (`supabase/migrations/0027_staff_account_enable_and_link_locking.sql`)
- * raise when the account doesn't exist, and -- disable only -- when
- * disabling it would leave no general staff account enabled.
+ * What disabling or enabling answers when `disable_staff_account()` /
+ * `enable_staff_account()` find no account with the id. The frontend matches
+ * the message.
  */
-const ACCOUNT_NOT_FOUND_SQLSTATE = 'P0002';
-const LAST_GENERAL_STAFF_SQLSTATE = 'P0004';
+const STAFF_ACCOUNT_NOT_FOUND_ERRORS = {
+  [STAFF_ACCOUNT_NOT_FOUND_SQLSTATE]: {
+    status: 404,
+    error: 'staff account not found',
+  },
+} as const satisfies PgErrorTable<404>;
+
+const STAFF_ACCOUNT_COLUMNS = `
+  id, email, password_hash, role, region_id, tournament_type,
+  disabled_at, regions(slug, name)
+`;
 
 /** Shape of a `staff_accounts` row as selected above. */
-interface StaffAccountRow {
-  id: string;
-  email: string;
-  password_hash: string;
-  role: StaffRole;
-  region_id: string | null;
-  tournament_type: TournamentType | null;
-  disabled_at: string | null;
+interface StaffAccountRow extends Pick<
+  Tables<'staff_accounts'>,
+  | 'id'
+  | 'email'
+  | 'password_hash'
+  | 'role'
+  | 'region_id'
+  | 'tournament_type'
+  | 'disabled_at'
+> {
   // The joined `regions` row, null for `general` staff, who have no region.
-  regions: {slug: string; name: string} | null;
+  regions: Pick<Tables<'regions'>, 'slug' | 'name'> | null;
 }
 
 // `password_hash` is read but never carried across: the list reports only
@@ -72,8 +84,7 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
     const {data, error} = await db
       .from('staff_accounts')
       .select(STAFF_ACCOUNT_COLUMNS)
-      .order('created_at', {ascending: true})
-      .returns<StaffAccountRow[]>();
+      .order('created_at', {ascending: true});
     if (error) {
       return c.json(
         internalError('failed to read the staff accounts', error),
@@ -105,30 +116,30 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
             input.role === 'regional' ? input.tournamentType : null,
         })
         .select(STAFF_ACCOUNT_COLUMNS)
-        .returns<StaffAccountRow[]>()
         .single();
       if (error) {
-        // 23505 is the unique violation on (`email`, `tournament_type`)
+        // The unique violation is the one on (`email`, `tournament_type`)
         // (#166): the address already has a regional account of this type,
         // or -- for a general invite -- a general one. A regional and a
-        // general account never clash, their types differ. 23503 is the
-        // foreign key on `region_id`. Both are input
+        // general account never clash, their types differ. The foreign key
+        // violation is `region_id` naming no region. Both are input
         // mistakes the staff member can fix from the form they just
         // submitted, so they get an answer they can act on rather than a
         // 500.
-        if (error.code === '23505') {
-          return c.json({error: 'email already in use'}, 409);
-        }
-        if (error.code === '23503') {
-          return c.json({error: 'unknown region'}, 400);
-        }
+        //
         // Everything left — including 23514, the role/scope check constraint,
         // which `StaffAccountCreateInputSchema` has already made
         // unrepresentable — is server-side.
-        return c.json(
-          internalError('failed to create the staff account', error),
-          500,
+        const {body, status} = mapPgError(
+          error,
+          {
+            [UNIQUE_VIOLATION_SQLSTATE]: duplicate('email already in use'),
+            [FOREIGN_KEY_VIOLATION_SQLSTATE]:
+              missingReference('unknown region'),
+          },
+          'failed to create the staff account',
         );
+        return c.json(body, status);
       }
 
       const account = rowToStaffAccount(data);
@@ -160,7 +171,7 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
   .post(
     '/accounts/:id/password-reset',
     requireGeneralStaff(),
-    zValidator('param', StaffAccountIdParamSchema),
+    zValidator('param', IdParamSchema),
     async c => {
       const db = createDbClient(c.env);
       // The address is read from the row rather than taken from the request:
@@ -170,7 +181,6 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
         .from('staff_accounts')
         .select('id, email')
         .eq('id', c.req.valid('param').id)
-        .returns<Array<{id: string; email: string}>>()
         .maybeSingle();
       if (error) {
         return c.json(
@@ -226,7 +236,7 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
   .post(
     '/accounts/:id/revoke-sessions',
     requireGeneralStaff(),
-    zValidator('param', StaffAccountIdParamSchema),
+    zValidator('param', IdParamSchema),
     async c => {
       const db = createDbClient(c.env);
       // The new value comes from the Worker's clock rather than Postgres'
@@ -239,7 +249,6 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
         .update({sessions_valid_from: new Date().toISOString()})
         .eq('id', c.req.valid('param').id)
         .select('id')
-        .returns<Array<{id: string}>>()
         .maybeSingle();
       if (error) {
         return c.json(
@@ -271,7 +280,7 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
   .post(
     '/accounts/:id/disable',
     requireGeneralStaff(),
-    zValidator('param', StaffAccountIdParamSchema),
+    zValidator('param', IdParamSchema),
     async c => {
       // Lowercased before comparing: the param schema and Postgres both
       // accept a UUID in either case, while the claim is always lowercase,
@@ -284,19 +293,18 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
         p_staff_account_id: id,
       });
       if (error) {
-        if (error.code === ACCOUNT_NOT_FOUND_SQLSTATE) {
-          return c.json({error: 'staff account not found'}, 404);
-        }
-        if (error.code === LAST_GENERAL_STAFF_SQLSTATE) {
-          return c.json(
-            {error: 'cannot disable the last general staff account'},
-            409,
-          );
-        }
-        return c.json(
-          internalError('failed to disable the staff account', error),
-          500,
+        const {body, status} = mapPgError(
+          error,
+          {
+            ...STAFF_ACCOUNT_NOT_FOUND_ERRORS,
+            [LAST_GENERAL_STAFF_SQLSTATE]: {
+              status: 409,
+              error: 'cannot disable the last general staff account',
+            },
+          },
+          'failed to disable the staff account',
         );
+        return c.json(body, status);
       }
       return c.json({ok: true});
     },
@@ -316,19 +324,20 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
   .post(
     '/accounts/:id/enable',
     requireGeneralStaff(),
-    zValidator('param', StaffAccountIdParamSchema),
+    zValidator('param', IdParamSchema),
     async c => {
       const {error} = await createDbClient(c.env).rpc('enable_staff_account', {
         p_staff_account_id: c.req.valid('param').id,
       });
       if (error) {
-        if (error.code === ACCOUNT_NOT_FOUND_SQLSTATE) {
-          return c.json({error: 'staff account not found'}, 404);
-        }
-        return c.json(
-          internalError('failed to enable the staff account', error),
-          500,
+        const {body, status} = mapPgError(
+          error,
+          {
+            ...STAFF_ACCOUNT_NOT_FOUND_ERRORS,
+          },
+          'failed to enable the staff account',
         );
+        return c.json(body, status);
       }
       return c.json({ok: true});
     },

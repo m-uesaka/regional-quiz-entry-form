@@ -1,17 +1,15 @@
 import {Hono} from 'hono';
 import type {Context} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {z} from 'zod';
 import {
   EntryListItemSchema,
   PageQuerySchema,
   TournamentEntryCountsSchema,
-  TournamentTypeSchema,
   type EntryListItem,
   type PageQuery,
 } from '@regional-quiz/shared';
 import type {Env} from '../types/env';
-import {createDbClient} from '../lib/db';
+import {createDbClient, type Tables} from '../lib/db';
 import {fetchPage, toPageResponse} from '../lib/paged-select';
 import {internalError} from '../lib/errors';
 import {
@@ -19,20 +17,18 @@ import {
   tournamentLookupFailure,
   type TournamentRow,
 } from '../lib/tournaments';
+import {TournamentIdParamSchema, TournamentBySlugParamSchema} from './params';
 
-const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
-const TournamentBySlugParamSchema = z.object({
-  regionSlug: z.string(),
-  tournamentSlug: TournamentTypeSchema,
-});
-
-/** Shape of an `entries` row as selected below (snake_case). */
-interface EntryListRow {
-  display_name: string;
-  status: 'confirmed' | 'waitlisted' | 'cancelled';
-  waitlist_position: number | null;
-  email_verified_at: string;
-}
+/**
+ * Shape of an `entries` row as selected below (snake_case). The select's
+ * filters leave only `confirmed`, `waitlisted` and `cancelled` rows, each
+ * with an `email_verified_at`, which the column types can't say;
+ * `EntryListItemSchema` is what holds the row to that.
+ */
+type EntryListRow = Pick<
+  Tables<'entries'>,
+  'display_name' | 'status' | 'waitlist_position' | 'email_verified_at'
+>;
 
 function rowToEntryListItem(row: EntryListRow): EntryListItem {
   return EntryListItemSchema.parse({
@@ -93,8 +89,7 @@ async function respondWithEntryList(
         .not('email_verified_at', 'is', null)
         .order('email_verified_at', {ascending: true})
         .order('id', {ascending: true})
-        .range(from, to)
-        .returns<EntryListRow[]>(),
+        .range(from, to),
     page,
   );
   if (error) {

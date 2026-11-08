@@ -3,7 +3,6 @@ import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
 import {
   StaffMailInputSchema,
-  type StaffMailJob,
   type StaffMailResult,
 } from '@regional-quiz/shared';
 import type {Bindings, StaffEnv} from '../types/env';
@@ -19,15 +18,15 @@ import {
   fetchMailJob,
   recordMailJobProgress,
 } from '../lib/mail-jobs';
-import {internalError} from '../lib/errors';
+import {internalError, respondFailure} from '../lib/errors';
 import {hasVisibleText, sanitizeMailHtml} from '../lib/mail-html';
 import {
   fetchTournamentById,
   tournamentDisplayName,
   tournamentLookupFailure,
 } from '../lib/tournaments';
+import {TournamentIdParamSchema} from './params';
 
-const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
 const MailJobParamSchema = TournamentIdParamSchema.extend({
   jobId: z.string().uuid(),
 });
@@ -115,10 +114,7 @@ export const staffMailRoute = new Hono<StaffEnv>()
         statusFilter,
       );
       if (!result.ok) {
-        return c.json(
-          internalError('failed to read the mail recipients', result.error),
-          500,
-        );
+        return respondFailure(c, result, 'failed to read the mail recipients');
       }
       const {recipients} = result;
 
@@ -134,10 +130,7 @@ export const staffMailRoute = new Hono<StaffEnv>()
         total: recipients.length,
       });
       if (!job.ok) {
-        return c.json(
-          internalError('failed to record the mail job', job.error),
-          500,
-        );
+        return respondFailure(c, job, 'failed to record the mail job');
       }
       const jobId = job.value;
 
@@ -190,12 +183,10 @@ export const staffMailRoute = new Hono<StaffEnv>()
 
       const entries = await fetchResendableEntryIds(c.env, tournamentId);
       if (!entries.ok) {
-        return c.json(
-          internalError(
-            'failed to read the unconfirmed entries',
-            entries.error,
-          ),
-          500,
+        return respondFailure(
+          c,
+          entries,
+          'failed to read the unconfirmed entries',
         );
       }
       const entryIds = entries.value;
@@ -216,10 +207,7 @@ export const staffMailRoute = new Hono<StaffEnv>()
         total: entryIds.length,
       });
       if (!job.ok) {
-        return c.json(
-          internalError('failed to record the mail job', job.error),
-          500,
-        );
+        return respondFailure(c, job, 'failed to record the mail job');
       }
       const jobId = job.value;
 
@@ -261,24 +249,12 @@ export const staffMailRoute = new Hono<StaffEnv>()
       // the middleware above only vouches for the tournament in the path.
       const result = await fetchMailJob(c.env, tournamentId, jobId);
       if (!result.ok) {
-        return c.json(
-          internalError('failed to read the mail job', result.error),
-          500,
-        );
+        return respondFailure(c, result, 'failed to read the mail job');
       }
       if (result.value === null) {
         return c.json({error: 'mail job not found'}, 404);
       }
 
-      const response: StaffMailJob = {
-        jobId: result.value.id,
-        subject: result.value.subject,
-        total: result.value.total,
-        sent: result.value.sent,
-        failed: result.value.failed,
-        createdAt: result.value.createdAt,
-        updatedAt: result.value.updatedAt,
-      };
-      return c.json(response);
+      return c.json(result.value);
     },
   );

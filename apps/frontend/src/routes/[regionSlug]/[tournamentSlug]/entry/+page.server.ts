@@ -1,18 +1,27 @@
 import {error, fail, isHttpError} from '@sveltejs/kit';
 import {
   canPreviewTournament,
+  ENTRY_ERROR_CODES,
   EntryInputSchema,
   EntrySessionInputSchema,
   entryAvailability,
   findCustomFieldValuesErrors,
   TournamentEntryCountsSchema,
   TournamentTypeSchema,
+  type EntryErrorCode,
   type FormFieldDef,
   type Regulation,
   type Tournament,
   type TournamentEntryCounts,
 } from '@regional-quiz/shared';
-import {createApiClient, isUnauthorized} from '$lib/api';
+import {
+  createApiClient,
+  isUnauthorized,
+  pickApiErrorMessage,
+  readErrorMessage,
+  resolveApiErrorMessage,
+  type ApiErrorMessages,
+} from '$lib/api';
 import {isWaitlistOpen, priorityEntryNotices} from '$lib/priority-entry';
 import {participantLoginPath} from '$lib/server/participant-login';
 import {clearParticipantSession} from '$lib/server/participant-session';
@@ -58,86 +67,88 @@ const ENTRIES_PAUSED_MESSAGE =
 const SESSION_ENTRY_FIELD = 'entryMode';
 const SESSION_ENTRY_VALUE = 'session';
 
+/** The fallback for a 400. */
+const CHECK_INPUT_MESSAGE = '入力内容を確認してください';
+
+/** The fallback for a 409. */
+const ALREADY_ENTERED_FALLBACK_MESSAGE = '既にエントリー済みです';
+
+/**
+ * Codes only the anonymous route's background half ends in: they go to the
+ * address's owner by mail or to the log (#117), and a logged-in submission has
+ * no password or unverified account to end in them. So the form is never
+ * answered with one, and has no wording for it.
+ */
+type MailOnlyEntryErrorCode =
+  | typeof ENTRY_ERROR_CODES.INVALID_PASSWORD
+  | typeof ENTRY_ERROR_CODES.COMMON_PASSWORD
+  | typeof ENTRY_ERROR_CODES.SUPERSEDED_BY_LATER_SUBMISSION;
+
+/** The codes the entry form can be answered with. */
+type AnsweredEntryErrorCode = Exclude<EntryErrorCode, MailOnlyEntryErrorCode>;
+
 /**
  * The backend's `error` strings mapped to what the form shows. The API
  * answers in English identifiers meant for clients, and the same status can
  * stand for several distinct refusals (403 is both "entry period closed"
  * and "wrong regulation during a priority window"), so the message — not
- * the status alone — decides the wording.
+ * the status alone — decides the wording. Typed by the codes, so a code
+ * added to `ENTRY_ERROR_CODES` without a message here doesn't compile.
  */
-const REGULATION_NO_LONGER_AVAILABLE = 'regulation no longer available';
-
-const ENTRY_ERROR_MESSAGES: Record<string, string> = {
-  'invalid tournament': '大会が見つかりません',
-  'entry period closed': 'エントリー期間外です',
+const ENTRY_ERROR_MESSAGES: Record<AnsweredEntryErrorCode, string> = {
+  [ENTRY_ERROR_CODES.INVALID_TOURNAMENT]: '大会が見つかりません',
+  [ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED]: 'エントリー期間外です',
   // Staff paused the tournament (0039) between the action's tournament read
   // and the entry POST. A pause before that read is caught by the action
   // itself.
-  'entries paused': ENTRIES_PAUSED_MESSAGE,
-  'regulation not eligible in priority window':
+  [ENTRY_ERROR_CODES.ENTRIES_PAUSED]: ENTRIES_PAUSED_MESSAGE,
+  [ENTRY_ERROR_CODES.REGULATION_NOT_ELIGIBLE]:
     '現在は優先期間中のため、優先対象のレギュレーションを1つ以上選択してください',
   // Only a logged-in submission is told this: an anonymous one is answered
   // the same whatever the address, and the reason goes to its owner by mail
   // (#117).
-  'already registered in another region':
-    '別の地域の大会にエントリーしているため、この大会にはエントリーできません。この大会にエントリーするには、マイページで別の地域の大会のエントリーをキャンセルしてください。受付終了後にキャンセルした大会がある場合は、別の地域の大会にはエントリーできません',
-  'already entered': 'この大会には既にエントリー済みです',
+  [ENTRY_ERROR_CODES.ALREADY_REGISTERED_IN_ANOTHER_REGION]:
+    'この大会と同じ問題を使う別の地域の大会にエントリーしているため、この大会にはエントリーできません。この大会にエントリーするには、マイページでその大会のエントリーをキャンセルしてください。同じ問題を使う別の地域の大会を受付終了後にキャンセルしている場合は、この大会にはエントリーできません',
+  [ENTRY_ERROR_CODES.ALREADY_ENTERED]: 'この大会には既にエントリー済みです',
   // An earlier entry whose verification link is still valid (#172). Once
   // that link expires, entering again goes through.
-  'entry pending verification':
+  [ENTRY_ERROR_CODES.ENTRY_PENDING_VERIFICATION]:
     'この大会へのエントリーは確定待ちです。確認メールのリンクを開いて確定してください。メールが見当たらない場合は、マイページでこのエントリーをキャンセルしてから、もう一度エントリーしてください',
-  // What the page offered is no longer on offer: staff changed the
-  // regulations, or a priority phase ended while the form was open. The form
+  // What the page offered is no longer on offer: staff deleted a regulation,
+  // or a priority phase ended while the form was open. The form
   // reads them again (`regulationsChanged`), so choosing again is what fixes
   // it, without losing what was typed.
-  [REGULATION_NO_LONGER_AVAILABLE]:
+  [ENTRY_ERROR_CODES.REGULATION_NO_LONGER_AVAILABLE]:
     '選択したレギュレーションが変更されました。選択し直して、もう一度お試しください',
   // Another submission for the same tournament -- from another tab, say --
   // wrote its entry first (#191). Whether that one is confirmed yet depends
   // on its mail, so the participant is sent to mypage to see which.
-  'concurrent submission':
+  [ENTRY_ERROR_CODES.CONCURRENT_SUBMISSION]:
     'この大会へのエントリーが同時に送信されていました。マイページでエントリー状況をご確認ください',
-  'already entered another tournament in this region':
+  [ENTRY_ERROR_CODES.ALREADY_ENTERED_ANOTHER_TOURNAMENT]:
     'この地域では、最強位と新人王のどちらか一方にのみエントリーできます',
   // Answered by the challenge in front of the API, which refuses a missing
   // and an invalid token alike. Both are fixed by solving the widget again.
-  'turnstile verification failed':
+  [ENTRY_ERROR_CODES.TURNSTILE_VERIFICATION_FAILED]:
     '「私はロボットではありません」の確認に失敗しました。ページを再読み込みして、もう一度お試しください',
-  'too many requests': TOO_MANY_REQUESTS_MESSAGE,
+  [ENTRY_ERROR_CODES.TOO_MANY_REQUESTS]: TOO_MANY_REQUESTS_MESSAGE,
 };
 
 /** Fallbacks for a status whose `error` string isn't one we know. */
 const ENTRY_STATUS_MESSAGES: Record<number, string> = {
-  400: '入力内容を確認してください',
+  400: CHECK_INPUT_MESSAGE,
   401: SESSION_EXPIRED_MESSAGE,
   403: 'この内容ではエントリーできません',
-  409: '既にエントリー済みです',
+  409: ALREADY_ENTERED_FALLBACK_MESSAGE,
   429: TOO_MANY_REQUESTS_MESSAGE,
 };
 
-/**
- * Reads the `{error: string}` body the backend returns with every failure.
- * The RPC client types the body as a union across statuses, so it is
- * narrowed here rather than asserted.
- * @param res The failed API response.
- */
-async function readErrorCode(res: {json(): Promise<unknown>}): Promise<string> {
-  try {
-    const body: unknown = await res.json();
-    if (
-      typeof body === 'object' &&
-      body !== null &&
-      'error' in body &&
-      typeof body.error === 'string'
-    ) {
-      return body.error;
-    }
-  } catch {
-    // A non-JSON body (a proxy error page, say) leaves the status to speak
-    // for itself.
-  }
-  return '';
-}
+/** What a refused submission is shown as. */
+const ENTRY_REFUSAL_MESSAGES: ApiErrorMessages = {
+  byCode: ENTRY_ERROR_MESSAGES,
+  byStatus: ENTRY_STATUS_MESSAGES,
+  fallback: 'エントリーの登録に失敗しました',
+};
 
 /**
  * Fetches the tournament named by the route, applying the same "not found"
@@ -187,9 +198,10 @@ async function fetchTournament({
       // A paused tournament (0039) is gated the same way, but said apart.
       throw error(
         403,
-        (await readErrorCode(res)) === 'entries paused'
-          ? ENTRIES_PAUSED_MESSAGE
-          : 'エントリー期間外です',
+        await resolveApiErrorMessage(res, {
+          byCode: {[ENTRY_ERROR_CODES.ENTRIES_PAUSED]: ENTRIES_PAUSED_MESSAGE},
+          fallback: ENTRY_ERROR_MESSAGES[ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED],
+        }),
       );
     }
     throw error(502, '大会情報の取得に失敗しました');
@@ -302,7 +314,7 @@ export const load: PageServerLoad = async ({
       403,
       availability === 'paused'
         ? ENTRIES_PAUSED_MESSAGE
-        : 'エントリー期間外です',
+        : ENTRY_ERROR_MESSAGES[ENTRY_ERROR_CODES.ENTRY_PERIOD_CLOSED],
     );
   }
 
@@ -331,9 +343,7 @@ export const load: PageServerLoad = async ({
       : availability === 'paused'
         ? ('paused' as const)
         : ('closed' as const),
-    priorityNotices: open
-      ? priorityEntryNotices(regulations, now, tournament)
-      : [],
+    priorityNotices: open ? priorityEntryNotices(regulations, now) : [],
     waitlistOpen:
       open &&
       entryCounts !== null &&
@@ -465,7 +475,7 @@ export const actions = {
      */
     const invalid = (schemaErrors: EntryFieldErrors) =>
       fail(400, {
-        error: '入力内容を確認してください',
+        error: CHECK_INPUT_MESSAGE,
         fieldErrors: {
           ...schemaErrors,
           ...customFieldErrors(customFieldValuesErrors, formFieldDefs),
@@ -518,19 +528,19 @@ export const actions = {
       if (res.status === 401) {
         clearParticipantSession(cookies, url);
       }
-      const code = await readErrorCode(res);
+      // Read here rather than by `resolveApiErrorMessage()`: the body can only
+      // be read once, and `regulationsChanged` below needs the code as well.
+      const code = await readErrorMessage(res, '');
       // The API's refusal is about the submission as a whole, not about one
       // input, so there is nothing to attach per field.
       const fieldErrors: EntryFieldErrors = {};
       return fail(res.status, {
-        error:
-          ENTRY_ERROR_MESSAGES[code] ??
-          ENTRY_STATUS_MESSAGES[res.status] ??
-          'エントリーの登録に失敗しました',
+        error: pickApiErrorMessage(code, res.status, ENTRY_REFUSAL_MESSAGES),
         fieldErrors,
         values,
         loginPath: res.status === 401 ? loginPath : null,
-        regulationsChanged: code === REGULATION_NO_LONGER_AVAILABLE,
+        regulationsChanged:
+          code === ENTRY_ERROR_CODES.REGULATION_NO_LONGER_AVAILABLE,
       });
     }
 

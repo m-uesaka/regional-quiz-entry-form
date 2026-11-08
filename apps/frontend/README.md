@@ -75,6 +75,12 @@ server-rendered page would come back blank. That breaks the pages that have to
 work before (or without) the client bundle, e.g. the staff login form echoing a
 rejected address back.
 
+`TextField` is the one place a caller may still pass a one-way `value={...}`:
+it only seeds the field, and the control underneath is bound by the component,
+so a typed value survives hydration all the same. The rule above is about what
+sits directly on an `<input>` or `<textarea>`, and it still holds for a control
+used on its own.
+
 ### A constraint that needs a re-render doesn't belong in the server's HTML
 
 The same rule applies to `required`, and the one control that got it wrong was
@@ -115,6 +121,13 @@ renders that child inside `{#key data.entry.id}` / `{#key data.tournament.id}`.
 not the `<script>` block's `$state`, which is exactly what has to be built
 afresh. Re-seeding from an `$effect` would work too, but it means writing state
 from an effect, which this app avoids.
+
+The two entry forms share their fields through `EntryNameFields`,
+`EntryFreeTextField` and `CustomFieldsSection`, each placed by the form itself,
+but not their seeding: those hold no `$state`, and
+take every value through `bind:` from the form that seeded it. So there is
+still one `untrack`ed read, in the component `{#key}` rebuilds, and a rejected
+submission re-rendering the sections has nothing to reset.
 
 The controls are not the only thing that has to move into the child. Whatever
 else the page accumulated about the record it was showing goes with them —

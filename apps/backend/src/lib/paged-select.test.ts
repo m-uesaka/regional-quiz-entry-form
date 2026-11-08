@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'bun:test';
 import {PAGE_SIZE_MAX} from '@regional-quiz/shared';
 import {SELECT_PAGE_SIZE, fetchAllRows, fetchPage} from './paged-select';
+import {RANGE_NOT_SATISFIABLE_PGRST_CODE} from './pg-errors';
 
 /**
  * A `selectPage` stub serving `rows` for whatever range is requested.
@@ -139,7 +140,10 @@ describe('fetchPage', () => {
         return Promise.resolve({
           data: null,
           count: null,
-          error: {message: 'Requested range not satisfiable', code: 'PGRST103'},
+          error: {
+            message: 'Requested range not satisfiable',
+            code: RANGE_NOT_SATISFIABLE_PGRST_CODE,
+          },
         });
       }
       return Promise.resolve({

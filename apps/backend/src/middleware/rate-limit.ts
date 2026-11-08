@@ -3,6 +3,7 @@ import {createMiddleware} from 'hono/factory';
 import {
   CLIENT_IP_FORWARD_SECRET_HEADER,
   CLIENT_IP_HEADER,
+  ENTRY_ERROR_CODES,
 } from '@regional-quiz/shared';
 import {timingSafeEqual} from '../lib/timing-safe';
 import type {Bindings, Env} from '../types/env';
@@ -48,7 +49,7 @@ export function rateLimit<I extends Input = Input>(
   return createMiddleware<Env, string, I>(async (c, next) => {
     const {success} = await binding(c.env).limit({key: keyOf(c)});
     if (!success) {
-      return c.json({error: 'too many requests'}, 429, {
+      return c.json({error: ENTRY_ERROR_CODES.TOO_MANY_REQUESTS}, 429, {
         'Retry-After': String(retryAfterSeconds),
       });
     }

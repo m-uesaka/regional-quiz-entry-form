@@ -1,6 +1,5 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {z} from 'zod';
 import {
   RegulationSchema,
   RegulationSyncInputSchema,
@@ -12,30 +11,33 @@ import {
   byTournamentIdParam,
   requireOpenEntryPeriodOrStaff,
 } from '../middleware/entry-period';
-import {createDbClient} from '../lib/db';
+import {createDbClient, type Tables} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {
+  NoLastingRegulationError,
   RegulationInUseError,
   syncRegulations,
   UnknownRegulationError,
 } from '../lib/regulations';
 import {TournamentNotFoundError} from '../lib/tournament-errors';
+import {TournamentIdParamSchema} from './params';
 
-const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
-
-const REGULATION_COLUMNS =
-  'id, tournament_id, label, priority_starts_at, priority_ends_at, ' +
-  'display_order';
+const REGULATION_COLUMNS = `
+  id, tournament_id, label, priority_starts_at, priority_ends_at,
+  closes_with_priority, display_order
+`;
 
 /** Shape of a `regulations` row as selected above (snake_case). */
-interface RegulationRow {
-  id: string;
-  tournament_id: string;
-  label: string;
-  priority_starts_at: string | null;
-  priority_ends_at: string | null;
-  display_order: number;
-}
+type RegulationRow = Pick<
+  Tables<'regulations'>,
+  | 'id'
+  | 'tournament_id'
+  | 'label'
+  | 'priority_starts_at'
+  | 'priority_ends_at'
+  | 'closes_with_priority'
+  | 'display_order'
+>;
 
 function rowToRegulation(row: RegulationRow): Regulation {
   return RegulationSchema.parse({
@@ -44,6 +46,7 @@ function rowToRegulation(row: RegulationRow): Regulation {
     label: row.label,
     priorityStartsAt: row.priority_starts_at,
     priorityEndsAt: row.priority_ends_at,
+    closesWithPriority: row.closes_with_priority,
     displayOrder: row.display_order,
   });
 }
@@ -67,8 +70,7 @@ export const regulationsRoute = new Hono<StaffEnv>()
         .from('regulations')
         .select(REGULATION_COLUMNS)
         .eq('tournament_id', c.req.valid('param').tournamentId)
-        .order('display_order', {ascending: true})
-        .returns<RegulationRow[]>();
+        .order('display_order', {ascending: true});
       if (error) {
         return c.json(
           internalError('failed to read the regulations', error),
@@ -97,11 +99,14 @@ export const regulationsRoute = new Hono<StaffEnv>()
         if (e instanceof TournamentNotFoundError) {
           return c.json({error: 'tournament not found'}, 404);
         }
-        // Both of these are staff mistakes the submitted form can be
-        // corrected for, and nothing has been written — the sync is one
-        // transaction — so the message names the offending regulations and
-        // is rendered by the staff screen verbatim.
-        if (e instanceof UnknownRegulationError) {
+        // These are staff mistakes the submitted form can be corrected for,
+        // and nothing has been written — the sync is one transaction — so
+        // the message says what to fix (naming the offending regulations
+        // where there are any) and is rendered by the staff screen verbatim.
+        if (
+          e instanceof UnknownRegulationError ||
+          e instanceof NoLastingRegulationError
+        ) {
           return c.json({error: e.message}, 400);
         }
         if (e instanceof RegulationInUseError) {

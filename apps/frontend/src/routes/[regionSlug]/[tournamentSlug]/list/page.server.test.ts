@@ -3,9 +3,14 @@ import type {HttpError} from '@sveltejs/kit';
 import type {EntryListItem} from '@regional-quiz/shared';
 import {dropCachedEntryList} from '$lib/server/entry-list-cache';
 import {
+  fakeFetch,
+  type RecordedRequest,
+} from '../../../../test-support/fake-fetch';
+import {
   fakePlatform,
   TOKYO_SAIKYOI_LIST_KEY,
 } from '../../../../test-support/fake-platform';
+import {pagedRoute} from '../../../../test-support/paged-route';
 import {load} from './+page.server';
 
 const ENTRIES: EntryListItem[] = [
@@ -30,32 +35,31 @@ const ENTRIES: EntryListItem[] = [
  * `GET /tournaments/:regionSlug/:tournamentSlug` — which stops answering
  * this page once entries close — fails these tests instead of passing.
  */
-function fakeFetch(options: {
+function fakeApi(options: {
   entries?: EntryListItem[];
   total?: number;
   status?: number;
-  /** Collects every requested URL. */
-  requests?: URL[];
+  /** Collects every request sent. */
+  requests?: RecordedRequest[];
 }): typeof fetch {
-  return (async input => {
-    const url = typeof input === 'string' ? input : input.toString();
-    if (!url.includes('/tokyo/saikyoi/entry-list')) {
-      throw new Error(`unexpected request to ${url}`);
-    }
-    const requested = new URL(url, 'http://localhost');
-    options.requests?.push(requested);
-    const entries = options.entries ?? [];
-    const page = {
-      items: entries,
-      total: options.total ?? entries.length,
-      limit: 100,
-      offset: Number(requested.searchParams.get('offset') ?? 0),
-    };
-    return new Response(JSON.stringify(page), {
-      status: options.status ?? 200,
-      headers: {'Content-Type': 'application/json'},
-    });
-  }) as typeof fetch;
+  return fakeFetch(
+    [
+      pagedRoute(
+        '/api/tournaments/tokyo/saikyoi/entry-list',
+        options.entries ?? [],
+        {
+          total: options.total,
+          status: options.status,
+        },
+      ),
+    ],
+    options.requests,
+  );
+}
+
+/** The query a recorded request was sent with. */
+function queryOf(request: RecordedRequest): URLSearchParams {
+  return new URL(request.url, 'http://localhost').searchParams;
 }
 
 /** Builds the partial `RequestEvent` `load` needs, cast for test use. */
@@ -78,7 +82,7 @@ function buildEvent(options: {
 
 describe('list +page.server load', () => {
   it('returns the entry list for a valid tournament', async () => {
-    const event = buildEvent({fetch: fakeFetch({entries: ENTRIES})});
+    const event = buildEvent({fetch: fakeApi({entries: ENTRIES})});
 
     await expect(load(event)).resolves.toEqual({
       entries: ENTRIES,
@@ -89,9 +93,9 @@ describe('list +page.server load', () => {
   });
 
   it('asks for the page the URL names and passes the total on', async () => {
-    const requests: URL[] = [];
+    const requests: RecordedRequest[] = [];
     const event = buildEvent({
-      fetch: fakeFetch({entries: ENTRIES, total: 250, requests}),
+      fetch: fakeApi({entries: ENTRIES, total: 250, requests}),
       search: '?offset=200',
     });
 
@@ -99,24 +103,24 @@ describe('list +page.server load', () => {
       total: 250,
       offset: 200,
     });
-    expect(requests[0].searchParams.get('offset')).toBe('200');
+    expect(queryOf(requests[0]).get('offset')).toBe('200');
   });
 
   it('asks for the first page when the URL offset is invalid', async () => {
-    const requests: URL[] = [];
+    const requests: RecordedRequest[] = [];
     const event = buildEvent({
-      fetch: fakeFetch({entries: ENTRIES, requests}),
+      fetch: fakeApi({entries: ENTRIES, requests}),
       search: '?offset=-5',
     });
 
     await load(event);
 
-    expect(requests[0].searchParams.get('offset')).toBe('0');
+    expect(queryOf(requests[0]).get('offset')).toBe('0');
   });
 
   it('throws 404 when the tournament slug is not a valid tournament type', async () => {
     const event = buildEvent({
-      fetch: fakeFetch({entries: ENTRIES}),
+      fetch: fakeApi({entries: ENTRIES}),
       tournamentSlug: 'nope',
     });
 
@@ -126,7 +130,7 @@ describe('list +page.server load', () => {
   });
 
   it('throws 404 when the tournament is not found', async () => {
-    const event = buildEvent({fetch: fakeFetch({status: 404})});
+    const event = buildEvent({fetch: fakeApi({status: 404})});
 
     await expect(load(event)).rejects.toMatchObject({
       status: 404,
@@ -134,7 +138,7 @@ describe('list +page.server load', () => {
   });
 
   it('throws 502 when the entry-list request fails', async () => {
-    const event = buildEvent({fetch: fakeFetch({status: 500})});
+    const event = buildEvent({fetch: fakeApi({status: 500})});
 
     await expect(load(event)).rejects.toMatchObject({
       status: 502,
@@ -150,7 +154,7 @@ describe('list +page.server load', () => {
     it('stores a fetched page for 30 seconds, under the list version', async () => {
       const {platform, stored, settled} = fakePlatform();
       const event = buildEvent({
-        fetch: fakeFetch({entries: ENTRIES}),
+        fetch: fakeApi({entries: ENTRIES}),
         platform,
       });
 
@@ -175,7 +179,7 @@ describe('list +page.server load', () => {
 
     it('answers from the cache without calling the backend', async () => {
       const {platform, settled} = fakePlatform();
-      await load(buildEvent({fetch: fakeFetch({entries: ENTRIES}), platform}));
+      await load(buildEvent({fetch: fakeApi({entries: ENTRIES}), platform}));
       await settled();
 
       const event = buildEvent({
@@ -195,13 +199,13 @@ describe('list +page.server load', () => {
 
     it('keeps pages apart', async () => {
       const {platform, settled} = fakePlatform();
-      await load(buildEvent({fetch: fakeFetch({entries: ENTRIES}), platform}));
+      await load(buildEvent({fetch: fakeApi({entries: ENTRIES}), platform}));
       await settled();
 
-      const requests: URL[] = [];
+      const requests: RecordedRequest[] = [];
       await load(
         buildEvent({
-          fetch: fakeFetch({entries: ENTRIES, total: 250, requests}),
+          fetch: fakeApi({entries: ENTRIES, total: 250, requests}),
           search: '?offset=100',
           platform,
         }),
@@ -212,12 +216,12 @@ describe('list +page.server load', () => {
 
     it('keeps tournaments apart', async () => {
       const {platform, settled} = fakePlatform();
-      await load(buildEvent({fetch: fakeFetch({entries: ENTRIES}), platform}));
+      await load(buildEvent({fetch: fakeApi({entries: ENTRIES}), platform}));
       await settled();
 
       // A different tournament type must miss and reach the backend.
       const event = buildEvent({
-        fetch: fakeFetch({entries: ENTRIES}),
+        fetch: fakeApi({entries: ENTRIES}),
         tournamentSlug: 'shinjinou',
         platform,
       });
@@ -228,7 +232,7 @@ describe('list +page.server load', () => {
     it('does not cache an offset the pager never links to', async () => {
       const {platform, stored, settled} = fakePlatform();
       const event = buildEvent({
-        fetch: fakeFetch({entries: ENTRIES, total: 250}),
+        fetch: fakeApi({entries: ENTRIES, total: 250}),
         search: '?offset=150',
         platform,
       });
@@ -241,7 +245,7 @@ describe('list +page.server load', () => {
 
     it('does not cache a failed read', async () => {
       const {platform, stored, settled} = fakePlatform();
-      const event = buildEvent({fetch: fakeFetch({status: 500}), platform});
+      const event = buildEvent({fetch: fakeApi({status: 500}), platform});
 
       await expect(load(event)).rejects.toMatchObject({status: 502});
       await settled();
@@ -251,16 +255,16 @@ describe('list +page.server load', () => {
 
     it('reaches the backend again once the list is dropped', async () => {
       const {platform, settled} = fakePlatform();
-      await load(buildEvent({fetch: fakeFetch({entries: ENTRIES}), platform}));
+      await load(buildEvent({fetch: fakeApi({entries: ENTRIES}), platform}));
       await settled();
 
       await dropCachedEntryList(platform, 'http://localhost', {
         regionSlug: 'tokyo',
         type: 'saikyoi',
       });
-      const requests: URL[] = [];
+      const requests: RecordedRequest[] = [];
       await load(
-        buildEvent({fetch: fakeFetch({entries: ENTRIES, requests}), platform}),
+        buildEvent({fetch: fakeApi({entries: ENTRIES, requests}), platform}),
       );
 
       expect(requests).toHaveLength(1);

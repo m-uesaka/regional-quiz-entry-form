@@ -31,11 +31,64 @@ describe('TournamentCreateInputSchema', () => {
   });
 });
 
+describe('TournamentCreateInputSchema questionSet', () => {
+  const parse = (questionSet: unknown) =>
+    TournamentCreateInputSchema.safeParse({...CREATE_INPUT, questionSet});
+
+  it('takes a missing, null or blank question set as the common questions', () => {
+    expect(TournamentCreateInputSchema.parse(CREATE_INPUT).questionSet).toBe(
+      null,
+    );
+    expect(parse(null).data?.questionSet).toBe(null);
+    expect(parse(' 　').data?.questionSet).toBe(null);
+  });
+
+  it('folds full-width characters and trims the ends', () => {
+    expect(parse('　宮崎Ａ１ ').data?.questionSet).toBe('宮崎A1');
+  });
+
+  it('refuses a space inside the name, full-width included', () => {
+    expect(parse('宮 崎').success).toBe(false);
+    expect(parse('宮　崎').success).toBe(false);
+  });
+
+  it('refuses a name over the length the database takes, in code points', () => {
+    expect(parse('あ'.repeat(101)).success).toBe(false);
+    expect(parse('あ'.repeat(100)).success).toBe(true);
+    // 100 characters, 200 UTF-16 units.
+    expect(parse('𠮷'.repeat(100)).success).toBe(true);
+  });
+
+  it('drops format characters a pasted name carries', () => {
+    expect(parse('宮崎\u200b').data?.questionSet).toBe('宮崎');
+    expect(parse('\ufeff宮\u2060崎').data?.questionSet).toBe('宮崎');
+    expect(parse('\u200b').data?.questionSet).toBe(null);
+  });
+
+  it('stores half-width katakana as the full-width the database keeps', () => {
+    expect(parse('ﾐﾔｻﾞｷ').data?.questionSet).toBe('ミヤザキ');
+  });
+
+  // The edit form sends the stored name back on every save.
+  it('leaves a name it stored as it is', () => {
+    for (const name of ['宮崎A', 'ミヤザキ', '鹿児島']) {
+      expect(parse(name).data?.questionSet).toBe(name);
+    }
+  });
+});
+
 describe('TournamentUpdateInputSchema', () => {
   it('leaves an omitted name out, so the stored one is kept', () => {
     expect(TournamentUpdateInputSchema.parse({capacity: 10})).toEqual({
       capacity: 10,
     });
+  });
+
+  it('leaves an omitted question set out, and keeps an explicit null', () => {
+    expect('questionSet' in TournamentUpdateInputSchema.parse({})).toBe(false);
+    expect(
+      TournamentUpdateInputSchema.parse({questionSet: null}).questionSet,
+    ).toBe(null);
   });
 });
 

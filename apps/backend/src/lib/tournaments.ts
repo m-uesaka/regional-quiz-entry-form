@@ -5,35 +5,44 @@ import {
   type TournamentType,
 } from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
-import {createDbClient} from './db';
+import {createDbClient, type Tables} from './db';
 import {internalError} from './errors';
 
-/** Shape of a `tournaments` row as returned by Supabase (snake_case). */
-export interface TournamentRow {
-  id: string;
-  region_id: string;
-  type: TournamentType;
-  /** What staff typed in 大会名, or null when they left it blank (0024). */
-  name: string | null;
-  capacity: number | null;
-  entry_opens_at: string;
-  entry_closes_at: string;
-  entries_paused: boolean;
+/**
+ * Shape of a `tournaments` row as returned by Supabase (snake_case). `name`
+ * is what staff typed in 大会名, or null when they left it blank (0024).
+ */
+export interface TournamentRow extends Pick<
+  Tables<'tournaments'>,
+  | 'id'
+  | 'region_id'
+  | 'type'
+  | 'name'
+  | 'capacity'
+  | 'entry_opens_at'
+  | 'entry_closes_at'
+  | 'entries_paused'
+  | 'question_set'
+> {
   // A to-one embed on a not-null foreign key, so always the region itself.
   // Read for its name, which a blank 大会名 is made from.
-  regions: {name: string};
+  regions: Pick<Tables<'regions'>, 'name'>;
 }
 
-/** The columns of `tournaments` itself that `TournamentRow` carries. */
+/**
+ * The columns of `tournaments` itself that `TournamentRow` carries. Kept a
+ * string literal type (as are the selects built from it below) so the
+ * Supabase client can infer the rows they read.
+ */
 const TOURNAMENT_OWN_COLUMNS =
-  'id, region_id, type, name, capacity, entry_opens_at, entry_closes_at, ' +
-  'entries_paused';
+  'id, region_id, type, name, capacity, entry_opens_at, entry_closes_at, entries_paused, question_set';
 
 /**
  * The select that reads a `TournamentRow`, for every read of one -- and for
  * the rows an insert or update hands back.
  */
-export const TOURNAMENT_COLUMNS = `${TOURNAMENT_OWN_COLUMNS}, regions(name)`;
+export const TOURNAMENT_COLUMNS =
+  `${TOURNAMENT_OWN_COLUMNS}, regions(name)` as const;
 
 /**
  * The name a tournament is shown under: what staff typed in 大会名, or
@@ -64,6 +73,7 @@ export function rowToTournament(row: TournamentRow): Tournament {
     entryOpensAt: row.entry_opens_at,
     entryClosesAt: row.entry_closes_at,
     entriesPaused: row.entries_paused,
+    questionSet: row.question_set,
   });
 }
 
@@ -109,7 +119,6 @@ export async function fetchTournamentById(
     .from('tournaments')
     .select(TOURNAMENT_COLUMNS)
     .eq('id', tournamentId)
-    .returns<TournamentRow[]>()
     .maybeSingle();
   if (error) {
     throw new TournamentLookupError(error);
@@ -136,15 +145,14 @@ export async function fetchTournamentById(
 export async function fetchTournamentBySlug(
   env: Bindings,
   regionSlug: string,
-  tournamentSlug: string,
+  tournamentSlug: TournamentType,
 ): Promise<TournamentRow | null> {
   const db = createDbClient(env);
   const {data, error} = await db
     .from('tournaments')
-    .select(`${TOURNAMENT_OWN_COLUMNS}, regions!inner(name)`)
+    .select(`${TOURNAMENT_OWN_COLUMNS}, regions!inner(name)` as const)
     .eq('regions.slug', regionSlug)
     .eq('type', tournamentSlug)
-    .returns<TournamentRow[]>()
     .maybeSingle();
   if (error) {
     throw new TournamentLookupError(error);

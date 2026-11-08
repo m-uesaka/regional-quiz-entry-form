@@ -1,6 +1,10 @@
 import {describe, expect, it} from 'vitest';
 import type {Redirect} from '@sveltejs/kit';
 import type {ParticipantClaims} from '@regional-quiz/shared';
+import {
+  fakeFetch,
+  type RecordedRequest,
+} from '../../../test-support/fake-fetch';
 import {actions, load} from './+page.server';
 
 const CLAIMS: ParticipantClaims = {
@@ -18,18 +22,25 @@ function buildLoadEvent(
   } as Parameters<typeof load>[0];
 }
 
-/** Builds a fake `fetch` answering the login POST with the given status. */
+/**
+ * Builds a fake `fetch` answering the login POST with the given status.
+ * @param requests Collects the requests sent.
+ */
 function fakeLoginFetch(
   status: number,
-  log: {bodies: unknown[]} = {bodies: []},
+  requests?: RecordedRequest[],
 ): typeof fetch {
-  return (async (input: RequestInfo | URL, init?: RequestInit) => {
-    log.bodies.push(JSON.parse(String(init?.body)));
-    return new Response(status === 200 ? JSON.stringify({ok: true}) : '{}', {
-      status,
-      headers: {'Content-Type': 'application/json'},
-    });
-  }) as typeof fetch;
+  return fakeFetch(
+    [
+      {
+        method: 'POST',
+        url: '/api/auth/participant/login',
+        status,
+        body: status === 200 ? {ok: true} : {},
+      },
+    ],
+    requests,
+  );
 }
 
 /** Builds the partial `RequestEvent` the login action needs. */
@@ -124,22 +135,29 @@ describe('participant login +page.server action', () => {
   });
 
   it('posts the credentials and redirects to mypage', async () => {
-    const log = {bodies: [] as unknown[]};
-    const event = buildActionEvent(fakeLoginFetch(200, log), credentials());
+    const requests: RecordedRequest[] = [];
+    const event = buildActionEvent(
+      fakeLoginFetch(200, requests),
+      credentials(),
+    );
 
     await expect(actions.default(event)).rejects.toMatchObject({
       status: 303,
       location: '/mypage',
     } satisfies Partial<Redirect>);
-    expect(log.bodies).toEqual([
-      {email: 'sanka@example.com', password: 'password1'},
+    expect(requests).toEqual([
+      {
+        method: 'POST',
+        url: '/api/auth/participant/login',
+        body: {email: 'sanka@example.com', password: 'password1'},
+      },
     ]);
   });
 
   it('fails with 400 without calling the API when the email is malformed', async () => {
-    const log = {bodies: [] as unknown[]};
+    const requests: RecordedRequest[] = [];
     const event = buildActionEvent(
-      fakeLoginFetch(200, log),
+      fakeLoginFetch(200, requests),
       credentials('not-an-email'),
     );
 
@@ -147,7 +165,7 @@ describe('participant login +page.server action', () => {
       status: 400,
       data: {email: 'not-an-email'},
     });
-    expect(log.bodies).toEqual([]);
+    expect(requests).toEqual([]);
   });
 
   it('reports a rejected login without saying which half was wrong', async () => {

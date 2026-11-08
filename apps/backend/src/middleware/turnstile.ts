@@ -1,4 +1,5 @@
 import {createMiddleware} from 'hono/factory';
+import {ENTRY_ERROR_CODES} from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {verifyTurnstile} from '../lib/turnstile';
 
@@ -33,11 +34,11 @@ export const TURNSTILE_TOKEN_HEADER = 'cf-turnstile-response';
 export function requireTurnstile() {
   return createMiddleware<Env>(async (c, next) => {
     const token = c.req.header(TURNSTILE_TOKEN_HEADER);
-    if (!token) {
-      return c.json({error: 'turnstile verification failed'}, 400);
-    }
-    if (!(await verifyTurnstile(c.env.TURNSTILE_SECRET_KEY, token))) {
-      return c.json({error: 'turnstile verification failed'}, 400);
+    if (!token || !(await verifyTurnstile(c.env.TURNSTILE_SECRET_KEY, token))) {
+      return c.json(
+        {error: ENTRY_ERROR_CODES.TURNSTILE_VERIFICATION_FAILED},
+        400,
+      );
     }
     await next();
   });

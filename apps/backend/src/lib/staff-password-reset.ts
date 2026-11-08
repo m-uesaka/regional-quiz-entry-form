@@ -1,20 +1,20 @@
-import type {
-  StaffLoginScope,
-  StaffRole,
-  TournamentType,
-} from '@regional-quiz/shared';
+import type {StaffLoginScope} from '@regional-quiz/shared';
 import type {StaffPasswordResetConfirmInput} from '@regional-quiz/shared/password-policy';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import {findStaffAccountByScope} from './staff-account-lookup';
 import {createMailSender} from './mailer';
-import {hashPassword} from './password';
+import {STAFF_ACCOUNT_DISABLED_SQLSTATE} from './pg-errors';
 import {
   buildSystemMail,
   describeLinkLifetime,
   systemMailSubject,
 } from './system-mail';
 import {generateToken, hashToken} from './token';
+import {
+  confirmTokenPasswordReset,
+  type TokenPasswordResetResult,
+} from './token-password-reset';
 import {tournamentDisplayName} from './tournaments';
 
 // Longer than the participant reset link's hour. A staff link is normally an
@@ -41,49 +41,12 @@ const REQUESTED_TOKEN_TTL_MS = 60 * 60 * 1000;
 export type StaffPasswordLinkKind = 'issued' | 'requested';
 
 /**
- * The SQLSTATE `reset_staff_password` (defined by
- * `supabase/migrations/0015_staff_accounts_scope_and_password_reset.sql`)
- * raises when the token is unknown, already used, or expired.
- */
-const INVALID_TOKEN_SQLSTATE = 'P0003';
-
-/**
- * The SQLSTATE `issue_staff_password_link` (defined by
- * `supabase/migrations/0027_staff_account_enable_and_link_locking.sql`) and
- * `add_staff_password_link` (`0031_add_staff_password_link_fn.sql`) raise
- * when the account is disabled (#156).
- */
-const ACCOUNT_DISABLED_SQLSTATE = 'P0005';
-
-/**
  * The outcome of issuing a link. A failure carries the underlying message for
  * the caller's log, never for the response body. `disabled` says the account
  * was disabled when the link was about to be written, so none was.
  */
 export type StaffPasswordLinkResult =
   {ok: true} | {ok: false; disabled: boolean; error: string};
-
-export type StaffPasswordResetResult =
-  {ok: true} | {ok: false; status: 400 | 500; error: string};
-
-interface ResetTokenRow {
-  id: string;
-}
-
-/**
- * The scope of a staff account, as the setup mail names it. The region's
- * tournaments are embedded whole because `staff_accounts` has no foreign
- * key to `tournaments`; the one of the account's type is picked out below.
- */
-interface StaffAccountScopeRow {
-  role: StaffRole;
-  tournament_type: TournamentType | null;
-  // Null for `general` staff, who have no region.
-  regions: {
-    name: string;
-    tournaments: Array<{name: string | null; type: TournamentType}>;
-  } | null;
-}
 
 /**
  * Names the account a setup mail is for. One address may hold a 最強位 and a
@@ -102,11 +65,14 @@ async function describeStaffAccount(
   env: Bindings,
   staffAccountId: string,
 ): Promise<{ok: true; label: string} | {ok: false; error: string}> {
+  // The scope of the account, as the setup mail names it. The region's
+  // tournaments are embedded whole because `staff_accounts` has no foreign
+  // key to `tournaments`; the one of the account's type is picked out below.
+  // `regions` is null for `general` staff, who have no region.
   const {data, error} = await createDbClient(env)
     .from('staff_accounts')
     .select('role, tournament_type, regions(name, tournaments(name, type))')
     .eq('id', staffAccountId)
-    .returns<StaffAccountScopeRow[]>()
     .maybeSingle();
   if (error) {
     return {ok: false, error: error.message};
@@ -190,7 +156,7 @@ export async function sendStaffPasswordLink(
     // click through to a token that can never be found.
     return {
       ok: false,
-      disabled: issueError.code === ACCOUNT_DISABLED_SQLSTATE,
+      disabled: issueError.code === STAFF_ACCOUNT_DISABLED_SQLSTATE,
       error: issueError.message,
     };
   }
@@ -255,11 +221,6 @@ export function staffPasswordMailSubject(
   );
 }
 
-/** Shape of the account lookup in `requestStaffPasswordReset()`. */
-interface StaffAccountIdRow {
-  id: string;
-}
-
 /**
  * Mails a reset link to the staff account named by `email` and `scope`,
  * for a staff member who forgot their password (#175).
@@ -287,13 +248,12 @@ export async function requestStaffPasswordReset(
   email: string,
   scope: StaffLoginScope,
 ): Promise<void> {
-  const {data: account, error} =
-    await findStaffAccountByScope<StaffAccountIdRow>(
-      createDbClient(env),
-      email,
-      scope,
-      'id',
-    );
+  const {data: account, error} = await findStaffAccountByScope(
+    createDbClient(env),
+    email,
+    scope,
+    'id',
+  );
   if (error) {
     console.error('failed to look up the staff account to reset', {
       error: error.message,
@@ -321,54 +281,18 @@ export async function requestStaffPasswordReset(
 /**
  * Sets the password a staff member chose from their invite (or reset) link
  * and burns the link, along with every other one outstanding for the same
- * account.
- *
- * The token check, the password update and that burning all happen inside
- * `reset_staff_password`, so they commit or roll back together and two links
- * for the same account can't be redeemed at once; see the migration for the
- * locking order.
+ * account. The token check, the update and the locking are
+ * `confirmTokenPasswordReset()`'s.
  * @param env The Worker bindings.
  * @param input The validated raw token and the password to set.
  */
 export async function confirmStaffPasswordReset(
   env: Bindings,
   input: StaffPasswordResetConfirmInput,
-): Promise<StaffPasswordResetResult> {
-  const db = createDbClient(env);
-  const tokenHash = await hashToken(input.token);
-
-  // A cheap look at the token before the password is hashed: PBKDF2 is
-  // deliberately expensive (see `./password`), and hashing up front would let
-  // anyone spend that work by posting tokens that were never going to be
-  // valid. Nothing is decided here — the row can still be consumed or expire
-  // between this read and the call below, which is why `reset_staff_password`
-  // re-checks it under the account lock.
-  const {data: candidate, error} = await db
-    .from('staff_password_reset_tokens')
-    .select('id')
-    .eq('token_hash', tokenHash)
-    .is('used_at', null)
-    .gt('expires_at', new Date().toISOString())
-    .returns<ResetTokenRow[]>()
-    .maybeSingle();
-  // A failed read must not be reported as a bad token: that would tell the
-  // staff member their link had expired when the database was simply down.
-  if (error) {
-    return {ok: false, status: 500, error: error.message};
-  }
-  if (!candidate) {
-    return {ok: false, status: 400, error: 'invalid or expired token'};
-  }
-
-  const {error: resetError} = await db.rpc('reset_staff_password', {
-    p_token_hash: tokenHash,
-    p_password_hash: await hashPassword(input.newPassword),
-  });
-  if (resetError) {
-    if (resetError.code === INVALID_TOKEN_SQLSTATE) {
-      return {ok: false, status: 400, error: 'invalid or expired token'};
-    }
-    return {ok: false, status: 500, error: resetError.message};
-  }
-  return {ok: true};
+): Promise<TokenPasswordResetResult> {
+  return confirmTokenPasswordReset(
+    env,
+    {tokenTable: 'staff_password_reset_tokens', rpc: 'reset_staff_password'},
+    input,
+  );
 }

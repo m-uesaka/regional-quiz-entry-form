@@ -70,6 +70,28 @@ describe('DynamicFormField (server-rendered)', () => {
     expect(renderToHtml(field, '')).toContain('required');
   });
 
+  it.each(['textarea', 'textfield'] as const)(
+    'wires the message to a %s control',
+    type => {
+      // Server-rendered too, as a rejection reaches a visitor with JS off as
+      // a whole new page.
+      const html = render(DynamicFormField, {
+        props: {
+          field: {type, key: 'note', label: '備考', required: false},
+          value: '入力済み',
+          error: '長すぎます',
+        },
+      }).body;
+
+      expect(html).toContain('入力済み');
+      expect(html).toContain('aria-describedby="custom.note-error"');
+      expect(html).toContain('aria-invalid="true"');
+      expect(html).toMatch(
+        /<p[^>]*id="custom\.note-error"[^>]*>長すぎます<\/p>/,
+      );
+    },
+  );
+
   it('renders the message the action rejected the answer with', () => {
     const field: FormFieldDefYaml = {
       type: 'checkbox',

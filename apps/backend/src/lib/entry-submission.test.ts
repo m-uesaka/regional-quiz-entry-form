@@ -1,54 +1,35 @@
 import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
 import type {EntryInput, TournamentType} from '@regional-quiz/shared';
-import type {Bindings} from '../types/env';
 import {
-  cancelOwnEntry,
   checkEntrySubmission,
   createEntry,
+  createEntryForParticipant,
   createEntryUnauthenticated,
-  updateOwnEntry,
-} from './entries';
+} from './entry-submission';
 import {hashPassword, verifyPassword} from './password';
-import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {testBindings} from '../test-support/bindings';
+import {
+  DB_URL,
+  isDbReachable,
+  SUPABASE_SECRET_KEY,
+  SUPABASE_URL,
+} from '../test-support/db';
+import {
+  deleteTestRegionRows,
+  type TournamentFixture,
+} from '../test-support/db-fixtures';
 
-// Local Supabase Postgres connection (`supabase start` default), same
-// convention as `lib/db-schema.test.ts`. Skipped automatically when one
-// isn't reachable, e.g. in CI.
-const DB_URL =
-  process.env.SUPABASE_DB_URL ??
-  'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
-const SUPABASE_URL = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
-// Publicly documented local-dev demo key for Supabase CLI's default stack,
-// same as `routes/tournaments.test.ts` — not a real credential.
-const SUPABASE_SECRET_KEY =
-  process.env.SUPABASE_SECRET_KEY ??
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
-
-async function isDbReachable(): Promise<boolean> {
-  const probe = new SQL(DB_URL);
-  try {
-    await probe`select 1`;
-    return true;
-  } catch {
-    return false;
-  } finally {
-    await probe.close();
-  }
-}
-
-const env: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
+const env = testBindings({
   SUPABASE_URL,
   SUPABASE_SECRET_KEY,
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL: 'https://entry.example.com',
-  SESSION_SECRET: 'test-session-secret',
-};
+});
 
-describe.skipIf(!(await isDbReachable()))(
+// Probed once for the whole file, so a run without a database pays for one
+// failed connection rather than one per block.
+const dbReachable = await isDbReachable();
+
+describe.skipIf(!dbReachable)(
   'createEntry (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);
@@ -75,42 +56,12 @@ describe.skipIf(!(await isDbReachable()))(
 
     afterAll(async () => {
       globalThis.fetch = originalFetch;
-      await sql`delete from email_verification_tokens where entry_id in (
-        select id from entries where tournament_id in (
-          select id from tournaments where region_id in (
-            select id from regions where slug like ${testRegionSlug + '%'}
-          )
-        )
-      )`;
-      await sql`delete from form_field_defs where tournament_id in (
-        select id from tournaments where region_id in (
-          select id from regions where slug like ${testRegionSlug + '%'}
-        )
-      )`;
-      await sql`delete from entries where tournament_id in (
-        select id from tournaments where region_id in (
-          select id from regions where slug like ${testRegionSlug + '%'}
-        )
-      )`;
-      await sql`delete from participants where email like ${'%@' + testEmailDomain}`;
-      await sql`delete from regulations where tournament_id in (
-        select id from tournaments where region_id in (
-          select id from regions where slug like ${testRegionSlug + '%'}
-        )
-      )`;
-      await sql`delete from tournaments where region_id in (
-        select id from regions where slug like ${testRegionSlug + '%'}
-      )`;
-      await sql`delete from regions where slug like ${testRegionSlug + '%'}`;
+      await deleteTestRegionRows(sql, testRegionSlug, testEmailDomain);
       await sql.close();
     });
 
-    interface TournamentFixture {
-      regionId: string;
-      tournamentId: string;
-      regulationId: string;
-    }
-
+    // Richer than `createTournamentAndRegulation()`: the submission tests
+    // need the entry period, capacity, priority window and region varied.
     async function createFixture(
       suffix: string,
       options: {
@@ -220,6 +171,13 @@ describe.skipIf(!(await isDbReachable()))(
         select id, ${tournamentId}, '山田太郎', 'ヤマダタロウ', '太郎', ${status}::entry_status
           from participants where email = ${email}
       `;
+    }
+
+    async function participantIdOf(email: string): Promise<string> {
+      const [participant] = await sql`
+        select id from participants where email = ${email}
+      `;
+      return participant.id;
     }
 
     /**
@@ -381,11 +339,11 @@ describe.skipIf(!(await isDbReachable()))(
       );
 
       expect(result.ok).toBe(false);
-      // Refused by `isRegulationSelectionAllowed()`, which only knows this
+      // Refused by `regulationSelectionRefusal()`, which only knows this
       // tournament's regulations — before any row is written. The DB-level
       // guarantee behind it (the shared `tournament_id` on both composite
       // foreign keys) is covered in `db-schema.test.ts`.
-      expect(!result.ok && result.status).toBe(403);
+      expect(!result.ok && result.status).toBe(409);
       // Nothing is left behind.
       const [{count}] = await sql`
         select count(*)::int as count from entries
@@ -885,6 +843,252 @@ describe.skipIf(!(await isDbReachable()))(
       expect(rows.length).toBe(0);
     });
 
+    it('createEntryUnauthenticated notifies by mail instead of failing for dual entry', async () => {
+      const {saikyoi, shinjinou} = await createRegionPair(
+        'unauth-dual-off',
+        false,
+      );
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      const firstResult = await createEntry(
+        env,
+        saikyoi.tournamentId,
+        validInput({email, regulationIds: [saikyoi.regulationId]}),
+      );
+      expect(firstResult.ok).toBe(true);
+      await verifyAddress(email);
+      mailSendCount = 0;
+
+      const outcome = await enterUnauthenticated(
+        shinjinou.tournamentId,
+        validInput({email, regulationIds: [shinjinou.regulationId]}),
+      );
+
+      expect(outcome).toEqual({kind: 'notified', reason: 'dual-entry'});
+      expect(mailSendCount).toBe(1);
+      const rows = await sql`
+        select id from entries where tournament_id = ${shinjinou.tournamentId}
+      `;
+      expect(rows.length).toBe(0);
+    });
+
+    it('refuses a logged-in participant a second tournament for dual entry', async () => {
+      const {saikyoi, shinjinou} = await createRegionPair(
+        'session-dual-off',
+        false,
+      );
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      const firstResult = await createEntry(
+        env,
+        saikyoi.tournamentId,
+        validInput({email, regulationIds: [saikyoi.regulationId]}),
+      );
+      expect(firstResult.ok).toBe(true);
+      await verifyAddress(email);
+      mailSendCount = 0;
+
+      const result = await createEntryForParticipant(
+        env,
+        shinjinou.tournamentId,
+        await participantIdOf(email),
+        validInput({regulationIds: [shinjinou.regulationId]}),
+      );
+
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.status).toBe(409);
+      expect(!result.ok && result.error).toBe(
+        'already entered another tournament in this region',
+      );
+      expect(mailSendCount).toBe(0);
+    });
+
+    describe('re-entering a tournament while holding the other one', () => {
+      /**
+       * A participant whose entry for the region's 最強位 tournament was
+       * cancelled and who then entered its 新人王 tournament, so re-entering
+       * the first is refused by `check_entry_seat()` at the write.
+       * @param suffix The region slug suffix, as in `createFixture()`.
+       * @param options.verified Whether the address has been verified.
+       */
+      async function holdOtherTournament(
+        suffix: string,
+        {verified = true} = {},
+      ) {
+        const {saikyoi, shinjinou} = await createRegionPair(suffix, false);
+        const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+        const input = validInput({
+          email,
+          regulationIds: [saikyoi.regulationId],
+        });
+        const cancelled = await createEntry(env, saikyoi.tournamentId, input);
+        if (!cancelled.ok) throw new Error(cancelled.error);
+        if (verified) {
+          await verifyAddress(email);
+        }
+        await sql`
+          update entries set status = 'cancelled', cancelled_at = now()
+          where id = ${cancelled.entry.id}
+        `;
+        await sql`
+          update email_verification_tokens set used_at = now()
+          where entry_id = ${cancelled.entry.id}
+        `;
+        await sql`
+          insert into email_verification_tokens (entry_id, token_hash, expires_at)
+          values
+            (${cancelled.entry.id}, ${crypto.randomUUID()}, now() - interval '1 hour'),
+            (${cancelled.entry.id}, ${'live-' + crypto.randomUUID()}, now() + interval '1 hour')
+        `;
+        const held = await createEntry(env, shinjinou.tournamentId, {
+          ...input,
+          regulationIds: [shinjinou.regulationId],
+        });
+        if (!held.ok) throw new Error(held.error);
+        mailSendCount = 0;
+        return {
+          input,
+          regionId: saikyoi.regionId,
+          tournamentId: saikyoi.tournamentId,
+          cancelledEntryId: cancelled.entry.id,
+          heldEntryId: held.entry.id,
+        };
+      }
+
+      /**
+       * What a refused re-entry must leave as it found it.
+       * @param entryId The cancelled entry.
+       * @param email The participant's address.
+       */
+      async function readState(entryId: string, email: string) {
+        const [entry] = await sql`select * from entries where id = ${entryId}`;
+        const regulations = await sql`
+          select regulation_id from entry_regulations
+          where entry_id = ${entryId} order by regulation_id
+        `;
+        const [participant] = await sql`
+          select region_id, password_hash, email_verified_at
+          from participants where email = ${email}
+        `;
+        return {entry, regulations: [...regulations], participant};
+      }
+
+      /**
+       * The token hashes left on an entry.
+       * @param entryId The entry.
+       */
+      async function tokenHashes(entryId: string): Promise<string[]> {
+        const rows = await sql`
+          select token_hash from email_verification_tokens
+          where entry_id = ${entryId}
+        `;
+        return rows.map((row: {token_hash: string}) => row.token_hash);
+      }
+
+      it('changes nothing, the tokens included', async () => {
+        const seat = await holdOtherTournament('re-entry-dual-off');
+        const before = await readState(seat.cancelledEntryId, seat.input.email);
+
+        const result = await createEntry(env, seat.tournamentId, {
+          ...seat.input,
+          displayName: '再エントリー太郎',
+        });
+
+        expect(result.ok).toBe(false);
+        expect(!result.ok && result.status).toBe(409);
+        expect(!result.ok && result.error).toBe(
+          'already entered another tournament in this region',
+        );
+        expect(
+          await readState(seat.cancelledEntryId, seat.input.email),
+        ).toEqual(before);
+        expect(before.participant.region_id).toBe(seat.regionId);
+        expect(mailSendCount).toBe(0);
+        // The token cleanup is rolled back with the refused write.
+        expect(await tokenHashes(seat.cancelledEntryId)).toHaveLength(3);
+      });
+
+      it('leaves an unverified account as it was', async () => {
+        const seat = await holdOtherTournament('re-entry-dual-off-unverified', {
+          verified: false,
+        });
+        const before = await readState(seat.cancelledEntryId, seat.input.email);
+
+        const result = await createEntry(env, seat.tournamentId, seat.input);
+
+        expect(!result.ok && result.error).toBe(
+          'already entered another tournament in this region',
+        );
+        expect(
+          await readState(seat.cancelledEntryId, seat.input.email),
+        ).toEqual(before);
+        expect(mailSendCount).toBe(0);
+      });
+
+      it('createEntryUnauthenticated notifies by mail', async () => {
+        const seat = await holdOtherTournament('re-entry-dual-off-unauth');
+        const before = await readState(seat.cancelledEntryId, seat.input.email);
+
+        const outcome = await enterUnauthenticated(
+          seat.tournamentId,
+          seat.input,
+        );
+
+        expect(outcome).toEqual({kind: 'notified', reason: 'dual-entry'});
+        expect(mailSendCount).toBe(1);
+        expect(
+          await readState(seat.cancelledEntryId, seat.input.email),
+        ).toEqual(before);
+      });
+
+      it('answers a logged-in participant 409', async () => {
+        const seat = await holdOtherTournament('re-entry-dual-off-session');
+        const before = await readState(seat.cancelledEntryId, seat.input.email);
+
+        const result = await createEntryForParticipant(
+          env,
+          seat.tournamentId,
+          await participantIdOf(seat.input.email),
+          seat.input,
+        );
+
+        expect(result.ok).toBe(false);
+        expect(!result.ok && result.status).toBe(409);
+        expect(!result.ok && result.error).toBe(
+          'already entered another tournament in this region',
+        );
+        expect(mailSendCount).toBe(0);
+        expect(
+          await readState(seat.cancelledEntryId, seat.input.email),
+        ).toEqual(before);
+      });
+
+      it('goes through with a fresh link once the other entry is cancelled', async () => {
+        const seat = await holdOtherTournament('re-entry-dual-off-retry');
+        const refused = await createEntry(env, seat.tournamentId, seat.input);
+        const before = await tokenHashes(seat.cancelledEntryId);
+        await sql`
+          update entries set status = 'cancelled', cancelled_at = now()
+          where id = ${seat.heldEntryId}
+        `;
+        mailSendCount = 0;
+
+        const result = await createEntry(env, seat.tournamentId, seat.input);
+
+        expect(refused.ok).toBe(false);
+        expect(result.ok).toBe(true);
+        expect(result.ok && result.entry.id).toBe(seat.cancelledEntryId);
+        expect(mailSendCount).toBe(1);
+        // The used token and the expired one went, the live one stayed, and
+        // the link just mailed was added.
+        const after = await tokenHashes(seat.cancelledEntryId);
+        const fresh = after.filter(hash => !before.includes(hash));
+        const kept = after.filter(hash => before.includes(hash));
+        expect(before).toHaveLength(3);
+        expect(fresh).toHaveLength(1);
+        expect(kept).toHaveLength(1);
+        expect(kept[0]).toStartWith('live-');
+      });
+    });
+
     it('allows a second tournament when the region allows dual entry', async () => {
       const {saikyoi, shinjinou} = await createRegionPair('dual-on', true);
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
@@ -1282,7 +1486,10 @@ describe.skipIf(!(await isDbReachable()))(
       ]);
     });
 
-    it('takes an unverified account over for its own password in another region', async () => {
+    // Its own password makes it the same submitter, so nothing is taken over:
+    // a takeover would delete its entries, including any the new tournament
+    // doesn't conflict with. It is refused like a verified account.
+    it('refuses an unverified account its own password in another region on the same question set', async () => {
       const far = await createFixture('same-password-far');
       const near = await createFixture('same-password-near');
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
@@ -1299,14 +1506,52 @@ describe.skipIf(!(await isDbReachable()))(
         validInput({email, regulationIds: [near.regulationId]}),
       );
 
+      expect(second).toEqual({
+        ok: false,
+        status: 409,
+        error: 'already registered in another region',
+      });
+      const after = await readParticipant(email);
+      expect(after.region_id).toBe(far.regionId);
+      const rows = await sql`
+        select tournament_id from entries where participant_id = ${after.id}
+      `;
+      expect(
+        rows.map((row: {tournament_id: string}) => row.tournament_id),
+      ).toEqual([far.tournamentId]);
+    });
+
+    it('adds an entry for an unverified account in another region on a different question set', async () => {
+      const far = await createFixture('own-set-far');
+      const near = await createFixture('own-set-near');
+      await sql`
+        update tournaments set question_set = '宮崎'
+        where id = ${near.tournamentId}
+      `;
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      expect(
+        (
+          await createEntry(
+            env,
+            far.tournamentId,
+            validInput({email, regulationIds: [far.regulationId]}),
+          )
+        ).ok,
+      ).toBe(true);
+
+      const second = await createEntry(
+        env,
+        near.tournamentId,
+        validInput({email, regulationIds: [near.regulationId]}),
+      );
+
       expect(second.ok).toBe(true);
       const after = await readParticipant(email);
-      expect(after.region_id).toBe(near.regionId);
       const [{count}] = await sql`
         select count(*)::int as count from entries
-        where participant_id = ${after.id}
+        where participant_id = ${after.id} and status = 'pending_verification'
       `;
-      expect(count).toBe(1);
+      expect(count).toBe(2);
     });
 
     it('createEntryUnauthenticated takes an unverified account over without a notice', async () => {
@@ -1633,503 +1878,6 @@ describe.skipIf(!(await isDbReachable()))(
 
       expect(result.ok).toBe(true);
       expect(result.ok && result.entry.id).toBe(firstResult.entry.id);
-    });
-  },
-);
-
-describe.skipIf(!(await isDbReachable()))(
-  'updateOwnEntry (local Supabase integration)',
-  () => {
-    const sql = new SQL(DB_URL);
-    const testRegionSlug = 'entries-update-test-region';
-    const testEmailDomain = 'entries-update-test.example.com';
-
-    afterAll(async () => {
-      await sql`delete from form_field_defs where tournament_id in (
-        select id from tournaments where region_id in (
-          select id from regions where slug like ${testRegionSlug + '%'}
-        )
-      )`;
-      await sql`delete from entries where tournament_id in (
-        select id from tournaments where region_id in (
-          select id from regions where slug like ${testRegionSlug + '%'}
-        )
-      )`;
-      await sql`delete from participants where email like ${'%@' + testEmailDomain}`;
-      await sql`delete from regulations where tournament_id in (
-        select id from tournaments where region_id in (
-          select id from regions where slug like ${testRegionSlug + '%'}
-        )
-      )`;
-      await sql`delete from tournaments where region_id in (
-        select id from regions where slug like ${testRegionSlug + '%'}
-      )`;
-      await sql`delete from regions where slug like ${testRegionSlug + '%'}`;
-      await sql.close();
-    });
-
-    interface EntryFixture {
-      participantId: string;
-      entryId: string;
-    }
-
-    /**
-     * Creates a region, tournament (with one `t_shirt_size` custom field),
-     * regulation, participant and entry, and returns the ids needed to
-     * exercise `updateOwnEntry()` against them.
-     */
-    async function createEntryFixture(
-      suffix: string,
-      options: {
-        entryOpensAt?: string;
-        entryClosesAt?: string;
-        status?: string;
-      } = {},
-    ): Promise<EntryFixture> {
-      const [region] = await sql`
-        insert into regions (slug, name)
-        values (${testRegionSlug + '-' + suffix}, 'テスト地域')
-        returning id
-      `;
-      const [tournament] = await sql`
-        insert into tournaments (
-          region_id, type, name, entry_opens_at, entry_closes_at
-        ) values (
-          ${region.id}, 'saikyoi', 'テスト大会',
-          ${options.entryOpensAt ?? '2020-01-01T00:00:00Z'},
-          ${options.entryClosesAt ?? '2099-01-01T00:00:00Z'}
-        )
-        returning id
-      `;
-      const [regulation] = await sql`
-        insert into regulations (tournament_id, label)
-        values (${tournament.id}, 'テストレギュレーション')
-        returning id
-      `;
-      await sql`
-        insert into form_field_defs (
-          tournament_id, field_key, label, field_type, required, options,
-          display_order
-        ) values (
-          ${tournament.id}, 't_shirt_size', 'Tシャツサイズ', 'radio', false,
-          ${['S', 'M', 'L']}::jsonb, 0
-        )
-      `;
-      const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
-        values (
-          ${region.id},
-          ${`update-${crypto.randomUUID()}@${testEmailDomain}`},
-          'hash'
-        )
-        returning id
-      `;
-      const [entry] = await sql`
-        insert into entries (
-          participant_id, tournament_id, name, furigana, display_name,
-          free_text, custom_field_values, status
-        ) values (
-          ${participant.id}, ${tournament.id}, '山田太郎', 'ヤマダタロウ', '太郎',
-          '元の自由記述', ${{t_shirt_size: 'M'}},
-          ${options.status ?? 'confirmed'}
-        )
-        returning id
-      `;
-      await sql`
-        insert into entry_regulations (entry_id, regulation_id, tournament_id)
-        values (${entry.id}, ${regulation.id}, ${tournament.id})
-      `;
-      return {
-        participantId: participant.id as string,
-        entryId: entry.id as string,
-      };
-    }
-
-    const patch = {
-      name: '山田花子',
-      furigana: 'ヤマダハナコ',
-      displayName: '花子',
-      freeText: '更新後の自由記述',
-      customFieldValues: {t_shirt_size: 'L'},
-    };
-
-    it('updates the entry within the entry period', async () => {
-      const fixture = await createEntryFixture('open');
-
-      const result = await updateOwnEntry(
-        env,
-        fixture.participantId,
-        fixture.entryId,
-        patch,
-      );
-
-      expect(result.ok).toBe(true);
-      const [row] = await sql`
-        select name, furigana, display_name, free_text, custom_field_values
-        from entries where id = ${fixture.entryId}
-      `;
-      expect(row.name).toBe('山田花子');
-      expect(row.furigana).toBe('ヤマダハナコ');
-      expect(row.display_name).toBe('花子');
-      expect(row.free_text).toBe('更新後の自由記述');
-      expect(row.custom_field_values).toEqual({t_shirt_size: 'L'});
-    });
-
-    it('rejects updates outside the entry period', async () => {
-      const fixture = await createEntryFixture('closed', {
-        entryOpensAt: '2020-01-01T00:00:00Z',
-        entryClosesAt: '2020-01-02T00:00:00Z',
-      });
-
-      const result = await updateOwnEntry(
-        env,
-        fixture.participantId,
-        fixture.entryId,
-        patch,
-      );
-
-      expect(result.ok).toBe(false);
-      expect(!result.ok && result.status).toBe(403);
-      const [row] = await sql`
-        select name from entries where id = ${fixture.entryId}
-      `;
-      expect(row.name).toBe('山田太郎');
-    });
-
-    it("rejects updating another participant's entry", async () => {
-      const fixture = await createEntryFixture('owner');
-      const other = await createEntryFixture('other');
-
-      const result = await updateOwnEntry(
-        env,
-        other.participantId,
-        fixture.entryId,
-        patch,
-      );
-
-      expect(result.ok).toBe(false);
-      expect(!result.ok && result.status).toBe(404);
-      const [row] = await sql`
-        select name from entries where id = ${fixture.entryId}
-      `;
-      expect(row.name).toBe('山田太郎');
-    });
-
-    it('rejects updating a cancelled entry', async () => {
-      const fixture = await createEntryFixture('cancelled', {
-        status: 'cancelled',
-      });
-
-      const result = await updateOwnEntry(
-        env,
-        fixture.participantId,
-        fixture.entryId,
-        patch,
-      );
-
-      expect(result.ok).toBe(false);
-      expect(!result.ok && result.status).toBe(403);
-      const [row] = await sql`
-        select name from entries where id = ${fixture.entryId}
-      `;
-      expect(row.name).toBe('山田太郎');
-    });
-
-    it('rejects custom field answers the tournament does not define', async () => {
-      const fixture = await createEntryFixture('unknown-field');
-
-      const result = await updateOwnEntry(
-        env,
-        fixture.participantId,
-        fixture.entryId,
-        {...patch, customFieldValues: {...patch.customFieldValues, junk: 'x'}},
-      );
-
-      expect(result.ok).toBe(false);
-      expect(!result.ok && result.status).toBe(400);
-      const [row] = await sql`
-        select name from entries where id = ${fixture.entryId}
-      `;
-      expect(row.name).toBe('山田太郎');
-    });
-
-    it('rejects an answer outside the field definition options', async () => {
-      const fixture = await createEntryFixture('unknown-option');
-
-      const result = await updateOwnEntry(
-        env,
-        fixture.participantId,
-        fixture.entryId,
-        {...patch, customFieldValues: {t_shirt_size: 'XXL'}},
-      );
-
-      expect(result.ok).toBe(false);
-      expect(!result.ok && result.status).toBe(400);
-    });
-  },
-);
-
-describe.skipIf(!(await isDbReachable()))(
-  'cancelOwnEntry (local Supabase integration)',
-  () => {
-    const sql = new SQL(DB_URL);
-    const testRegionSlug = 'entries-cancel-test-region';
-    const testEmailDomain = 'entries-cancel-test.example.com';
-    const originalFetch = globalThis.fetch;
-    let mailSendCount = 0;
-
-    beforeAll(() => {
-      // The Supabase client also runs on `fetch`, so only intercept the
-      // outbound Resend call and pass everything else through untouched.
-      globalThis.fetch = (async (
-        input: RequestInfo | URL,
-        init?: RequestInit,
-      ) => {
-        const url = typeof input === 'string' ? input : input.toString();
-        if (url.startsWith('https://api.resend.com/')) {
-          mailSendCount++;
-          return new Response(null, {status: 200});
-        }
-        return originalFetch(input, init);
-      }) as typeof fetch;
-    });
-
-    afterAll(async () => {
-      globalThis.fetch = originalFetch;
-      await sql`delete from email_verification_tokens where entry_id in (
-        select id from entries where tournament_id in (
-          select id from tournaments where region_id in (
-            select id from regions where slug like ${testRegionSlug + '%'}
-          )
-        )
-      )`;
-      await sql`delete from entries where tournament_id in (
-        select id from tournaments where region_id in (
-          select id from regions where slug like ${testRegionSlug + '%'}
-        )
-      )`;
-      await sql`delete from participants where email like ${'%@' + testEmailDomain}`;
-      await sql`delete from regulations where tournament_id in (
-        select id from tournaments where region_id in (
-          select id from regions where slug like ${testRegionSlug + '%'}
-        )
-      )`;
-      await sql`delete from tournaments where region_id in (
-        select id from regions where slug like ${testRegionSlug + '%'}
-      )`;
-      await sql`delete from regions where slug like ${testRegionSlug + '%'}`;
-      await sql.close();
-    });
-
-    interface CancelFixture {
-      regionId: string;
-      tournamentId: string;
-      regulationId: string;
-    }
-
-    async function createFixture(suffix: string): Promise<CancelFixture> {
-      const [region] = await sql`
-        insert into regions (slug, name)
-        values (${testRegionSlug + '-' + suffix}, 'テスト地域')
-        returning id
-      `;
-      const [tournament] = await sql`
-        insert into tournaments (
-          region_id, type, name, capacity, entry_opens_at, entry_closes_at
-        ) values (
-          ${region.id}, 'saikyoi', 'テスト大会', 1,
-          '2020-01-01T00:00:00Z', '2099-01-01T00:00:00Z'
-        )
-        returning id
-      `;
-      const [regulation] = await sql`
-        insert into regulations (tournament_id, label)
-        values (${tournament.id}, 'テストレギュレーション')
-        returning id
-      `;
-      return {
-        regionId: region.id as string,
-        tournamentId: tournament.id as string,
-        regulationId: regulation.id as string,
-      };
-    }
-
-    interface EntryFixture {
-      participantId: string;
-      entryId: string;
-    }
-
-    async function createEntryRow(
-      fixture: CancelFixture,
-      status: 'pending_verification' | 'confirmed' | 'waitlisted',
-      waitlistPosition: number | null = null,
-    ): Promise<EntryFixture> {
-      const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
-        values (
-          ${fixture.regionId},
-          ${`cancel-${crypto.randomUUID()}@${testEmailDomain}`},
-          'hash'
-        )
-        returning id
-      `;
-      const [entry] = await sql`
-        insert into entries (
-          participant_id, tournament_id, name, furigana, display_name,
-          status, waitlist_position
-        ) values (
-          ${participant.id}, ${fixture.tournamentId}, '山田太郎', 'ヤマダタロウ',
-          '太郎', ${status}, ${waitlistPosition}
-        )
-        returning id
-      `;
-      await sql`
-        insert into entry_regulations (entry_id, regulation_id, tournament_id)
-        values (${entry.id}, ${fixture.regulationId}, ${fixture.tournamentId})
-      `;
-      return {
-        participantId: participant.id as string,
-        entryId: entry.id as string,
-      };
-    }
-
-    it('cancels a confirmed entry and promotes the next waitlisted entry', async () => {
-      const fixture = await createFixture('confirmed');
-      const confirmed = await createEntryRow(fixture, 'confirmed');
-      const firstWaiting = await createEntryRow(fixture, 'waitlisted', 1);
-      const secondWaiting = await createEntryRow(fixture, 'waitlisted', 2);
-      mailSendCount = 0;
-
-      const result = await cancelOwnEntry(
-        env,
-        confirmed.participantId,
-        confirmed.entryId,
-      );
-
-      expect(result.ok).toBe(true);
-      const [cancelledRow] = await sql`
-        select status, cancelled_at, waitlist_position
-        from entries where id = ${confirmed.entryId}
-      `;
-      expect(cancelledRow.status).toBe('cancelled');
-      expect(cancelledRow.cancelled_at).not.toBeNull();
-      const [promotedRow] = await sql`
-        select status from entries where id = ${firstWaiting.entryId}
-      `;
-      expect(promotedRow.status).toBe('confirmed');
-      const [stillWaitingRow] = await sql`
-        select status from entries where id = ${secondWaiting.entryId}
-      `;
-      expect(stillWaitingRow.status).toBe('waitlisted');
-      expect(mailSendCount).toBe(1);
-    });
-
-    it('cancels a waitlisted entry without promoting anyone', async () => {
-      const fixture = await createFixture('waitlisted');
-      const confirmed = await createEntryRow(fixture, 'confirmed');
-      const firstWaiting = await createEntryRow(fixture, 'waitlisted', 1);
-      const secondWaiting = await createEntryRow(fixture, 'waitlisted', 2);
-      mailSendCount = 0;
-
-      const result = await cancelOwnEntry(
-        env,
-        firstWaiting.participantId,
-        firstWaiting.entryId,
-      );
-
-      expect(result.ok).toBe(true);
-      const [cancelledRow] = await sql`
-        select status, waitlist_position
-        from entries where id = ${firstWaiting.entryId}
-      `;
-      expect(cancelledRow.status).toBe('cancelled');
-      expect(cancelledRow.waitlist_position).toBeNull();
-      const [confirmedRow] = await sql`
-        select status from entries where id = ${confirmed.entryId}
-      `;
-      expect(confirmedRow.status).toBe('confirmed');
-      // Nobody was promoted, and the entry behind the cancelled one moved up
-      // one place instead of being left with a gap in front of it.
-      const [stillWaitingRow] = await sql`
-        select status, waitlist_position
-        from entries where id = ${secondWaiting.entryId}
-      `;
-      expect(stillWaitingRow.status).toBe('waitlisted');
-      expect(stillWaitingRow.waitlist_position).toBe(1);
-      expect(mailSendCount).toBe(0);
-    });
-
-    it("returns 404 for another participant's entry", async () => {
-      const fixture = await createFixture('other-participant');
-      const owner = await createEntryRow(fixture, 'confirmed');
-      const intruder = await createEntryRow(fixture, 'waitlisted', 1);
-
-      const result = await cancelOwnEntry(
-        env,
-        intruder.participantId,
-        owner.entryId,
-      );
-
-      expect(result.ok).toBe(false);
-      expect(!result.ok && result.status).toBe(404);
-      const [row] = await sql`
-        select status from entries where id = ${owner.entryId}
-      `;
-      expect(row.status).toBe('confirmed');
-    });
-
-    it('burns the verification token of an entry cancelled before it was verified', async () => {
-      const fixture = await createFixture('unverified');
-      const unverified = await createEntryRow(fixture, 'pending_verification');
-      await sql`
-        insert into email_verification_tokens (
-          entry_id, token_hash, expires_at
-        ) values (
-          ${unverified.entryId},
-          ${`cancel-token-${crypto.randomUUID()}`},
-          '2099-01-01T00:00:00Z'
-        )
-      `;
-
-      const result = await cancelOwnEntry(
-        env,
-        unverified.participantId,
-        unverified.entryId,
-      );
-
-      expect(result.ok).toBe(true);
-      // The verification link mailed out before the cancellation must not
-      // still be able to confirm the entry afterwards.
-      const [tokenRow] = await sql`
-        select used_at from email_verification_tokens
-        where entry_id = ${unverified.entryId}
-      `;
-      expect(tokenRow.used_at).not.toBeNull();
-    });
-
-    it('leaves an already-cancelled entry alone without promoting anyone', async () => {
-      const fixture = await createFixture('already-cancelled');
-      const confirmed = await createEntryRow(fixture, 'confirmed');
-      const waiting = await createEntryRow(fixture, 'waitlisted', 1);
-      await cancelOwnEntry(env, confirmed.participantId, confirmed.entryId);
-      const [promotedRow] = await sql`
-        select status from entries where id = ${waiting.entryId}
-      `;
-      expect(promotedRow.status).toBe('confirmed');
-      mailSendCount = 0;
-
-      const result = await cancelOwnEntry(
-        env,
-        confirmed.participantId,
-        confirmed.entryId,
-      );
-
-      expect(result.ok).toBe(true);
-      const [stillConfirmedRow] = await sql`
-        select status from entries where id = ${waiting.entryId}
-      `;
-      expect(stillConfirmedRow.status).toBe('confirmed');
-      expect(mailSendCount).toBe(0);
     });
   },
 );

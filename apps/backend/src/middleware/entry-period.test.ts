@@ -2,7 +2,8 @@ import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
 import {Hono} from 'hono';
 import {sign} from 'hono/jwt';
 import type {StaffClaims} from '@regional-quiz/shared';
-import type {Bindings, Env} from '../types/env';
+import type {Env} from '../types/env';
+import {testBindings} from '../test-support/bindings';
 import type {TournamentRow} from '../lib/tournaments';
 import {
   closedEntryPeriodTournament,
@@ -21,11 +22,7 @@ const OTHER_REGION_ID = '77777777-7777-7777-7777-777777777777';
 // The gate resolves the tournament itself, so a resolver handed the row
 // outright is all these need, and no route to mount under. Supabase is only
 // reached for the staff session check, which `fetch` is stubbed to answer.
-const env = {
-  SESSION_SECRET,
-  SUPABASE_URL: 'https://example.supabase.co',
-  SUPABASE_SECRET_KEY: 'dummy-service-role-key',
-} as Bindings;
+const env = testBindings({SESSION_SECRET});
 
 const originalFetch = globalThis.fetch;
 

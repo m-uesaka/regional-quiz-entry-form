@@ -1,18 +1,12 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {z} from 'zod';
 import {TournamentEntryPauseInputSchema} from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireStaffForTournament} from '../middleware/staff-auth';
 import {createDbClient} from '../lib/db';
 import {internalError} from '../lib/errors';
-import {
-  rowToTournament,
-  TOURNAMENT_COLUMNS,
-  type TournamentRow,
-} from '../lib/tournaments';
-
-const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
+import {rowToTournament, TOURNAMENT_COLUMNS} from '../lib/tournaments';
+import {TournamentIdParamSchema} from './params';
 
 // Pauses or resumes taking entries for one tournament (0039). Open to the
 // tournament's own 地域スタッフ as well as 統括スタッフ, unlike the rest of
@@ -32,7 +26,6 @@ export const staffEntryPauseRoute = new Hono<StaffEnv>().put(
       .update({entries_paused: c.req.valid('json').paused})
       .eq('id', c.req.valid('param').tournamentId)
       .select(TOURNAMENT_COLUMNS)
-      .returns<TournamentRow[]>()
       .maybeSingle();
     if (error) {
       return c.json(

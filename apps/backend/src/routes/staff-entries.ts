@@ -1,25 +1,20 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {z} from 'zod';
 import {
+  COMMON_ERROR_CODES,
   ENTRY_STATUS_LABELS,
   EntrySchema,
   StaffEntryDetailSchema,
   StaffEntryListQuerySchema,
   type Entry,
-  type EntryStatus,
 } from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {
   requireStaffForEntry,
   requireStaffForTournament,
 } from '../middleware/staff-auth';
-import {createDbClient} from '../lib/db';
-import {
-  FORM_FIELD_DEF_COLUMNS,
-  toFormFieldDef,
-  type FormFieldDefRow,
-} from '../lib/form-field-defs';
+import {createDbClient, type DbClient, type Tables} from '../lib/db';
+import {fetchFormFieldDefs} from '../lib/form-field-defs';
 import {buildEntriesCsv} from '../lib/entries-csv';
 import {
   ENTRY_REGULATIONS_COLUMNS,
@@ -34,25 +29,24 @@ import {
   type AllRowsResult,
 } from '../lib/paged-select';
 import {internalError} from '../lib/errors';
+import {TournamentIdParamSchema, EntryIdParamSchema} from './params';
 
-const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
-const EntryIdParamSchema = z.object({entryId: z.string().uuid()});
-
-const ENTRY_COLUMNS =
-  'id, tournament_id, name, furigana, display_name, ' +
-  'free_text, custom_field_values, status, waitlist_position, ' +
-  'participants(email), ' +
-  // An entry may claim several regulations, so they come through the
-  // `entry_regulations` join table rather than off the entry itself.
-  ENTRY_REGULATIONS_COLUMNS;
+// An entry may claim several regulations, so they come through the
+// `entry_regulations` join table rather than off the entry itself.
+const ENTRY_COLUMNS = `
+  id, tournament_id, name, furigana, display_name,
+  free_text, custom_field_values, status, waitlist_position,
+  participants(email),
+  ${ENTRY_REGULATIONS_COLUMNS}
+` as const;
 
 // Everything the list reads, and when the entry was made: the export is
 // the list's rows in full (#178), so it is built from the same select and
 // can't fall behind it when the entry gains a field.
-const ENTRY_CSV_COLUMNS = `${ENTRY_COLUMNS}, created_at`;
+const ENTRY_CSV_COLUMNS = `${ENTRY_COLUMNS}, created_at` as const;
 
 /** Shape of an `entries` row as selected for the CSV export. */
-type EntryCsvRow = EntryRow & {created_at: string};
+interface EntryCsvRow extends EntryRow, Pick<Tables<'entries'>, 'created_at'> {}
 
 // Excel on Windows reads a BOM-less file as the system's legacy encoding,
 // which turns every Japanese cell into mojibake, so the export is served
@@ -69,7 +63,7 @@ const UTF8_BOM = '\uFEFF';
  * @param tournamentId The tournament whose entries are exported.
  */
 function fetchAllEntryCsvRows(
-  db: ReturnType<typeof createDbClient>,
+  db: DbClient,
   tournamentId: string,
 ): Promise<AllRowsResult<EntryCsvRow>> {
   return fetchAllRows<EntryCsvRow>((from, to) =>
@@ -79,25 +73,26 @@ function fetchAllEntryCsvRows(
       .eq('tournament_id', tournamentId)
       .order('created_at', {ascending: true})
       .order('id', {ascending: true})
-      .range(from, to)
-      .returns<EntryCsvRow[]>(),
+      .range(from, to),
   );
 }
 
 /** Shape of an `entries` row as selected above (snake_case). */
-interface EntryRow {
-  id: string;
-  tournament_id: string;
-  name: string;
-  furigana: string;
-  display_name: string;
-  free_text: string | null;
-  custom_field_values: Record<string, string | string[]>;
-  status: EntryStatus;
-  waitlist_position: number | null;
+interface EntryRow extends Pick<
+  Tables<'entries'>,
+  | 'id'
+  | 'tournament_id'
+  | 'name'
+  | 'furigana'
+  | 'display_name'
+  | 'free_text'
+  | 'status'
+  | 'waitlist_position'
+  | 'custom_field_values'
+> {
   // To-one and always there: `entries.participant_id` is a not-null
   // foreign key.
-  participants: {email: string};
+  participants: Pick<Tables<'participants'>, 'email'>;
   entry_regulations: EntryRegulationRow[];
 }
 
@@ -147,8 +142,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
         return query
           .order('created_at', {ascending: true})
           .order('id', {ascending: true})
-          .range(from, to)
-          .returns<EntryRow[]>();
+          .range(from, to);
       }, page);
       if (error) {
         return c.json(internalError('failed to read the entries', error), 500);
@@ -177,12 +171,10 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
       // The tournament's custom form fields become the CSV's trailing
       // columns, headed by their `label` in `display_order` — the raw
       // `custom_field_values` keys would be meaningless to staff.
-      const {data: formFieldDefRows, error: formFieldDefsError} = await db
-        .from('form_field_defs')
-        .select(FORM_FIELD_DEF_COLUMNS)
-        .eq('tournament_id', tournamentId)
-        .order('display_order', {ascending: true})
-        .returns<FormFieldDefRow[]>();
+      const {fieldDefs, error: formFieldDefsError} = await fetchFormFieldDefs(
+        db,
+        tournamentId,
+      );
       if (formFieldDefsError) {
         return c.json(
           internalError(
@@ -194,7 +186,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
       }
 
       const csv = buildEntriesCsv(
-        (formFieldDefRows ?? []).map(toFormFieldDef),
+        fieldDefs,
         entryRows.map(row => ({
           name: row.name,
           furigana: row.furigana,
@@ -228,25 +220,22 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
         .from('entries')
         .select(ENTRY_COLUMNS)
         .eq('id', c.req.valid('param').entryId)
-        .returns<EntryRow[]>()
         .maybeSingle();
       if (error) {
         return c.json(internalError('failed to read the entry', error), 500);
       }
       if (!data) {
-        return c.json({error: 'entry not found'}, 404);
+        return c.json({error: COMMON_ERROR_CODES.ENTRY_NOT_FOUND}, 404);
       }
 
       // The ordered custom form field definitions for the entry's
       // tournament, so the staff UI can render each `customFieldValues`
       // entry under its human-readable label instead of the raw storage
       // key.
-      const {data: formFieldDefRows, error: formFieldDefsError} = await db
-        .from('form_field_defs')
-        .select(FORM_FIELD_DEF_COLUMNS)
-        .eq('tournament_id', data.tournament_id)
-        .order('display_order', {ascending: true})
-        .returns<FormFieldDefRow[]>();
+      const {fieldDefs, error: formFieldDefsError} = await fetchFormFieldDefs(
+        db,
+        data.tournament_id,
+      );
       if (formFieldDefsError) {
         return c.json(
           internalError(
@@ -260,7 +249,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
       return c.json(
         StaffEntryDetailSchema.parse({
           ...rowToEntry(data),
-          formFieldDefs: (formFieldDefRows ?? []).map(toFormFieldDef),
+          formFieldDefs: fieldDefs,
         }),
       );
     },

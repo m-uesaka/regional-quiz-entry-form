@@ -6,20 +6,20 @@
   import {toTournamentFormValues} from '$lib/tournament-form';
   import {promotionNotice} from '$lib/waitlist-promotion';
   import type {
-    Tournament,
     Region,
+    TournamentDetail,
     WaitlistPromotion,
   } from '@regional-quiz/shared';
   import type {TournamentFormValues} from '$lib/types/tournament-form';
 
-  interface Props {
-    tournament: Tournament;
-    /** The 大会名 as staff typed it, or null when it was left blank. */
-    customName: string | null;
+  // `tournament` and `customName` as `GET /api/tournaments/:id` answers them.
+  interface Props extends Pick<TournamentDetail, 'tournament' | 'customName'> {
     /** The tournament's stored form definition, written out as YAML. */
     formDefinitionYaml: string;
     /** Passed straight through to the form's region select. */
     regions: Region[];
+    /** Passed straight through to the form's 問題セット suggestions. */
+    questionSets: string[];
     /** What the page's `update` action last answered with, if anything. */
     result: {
       saved: boolean;
@@ -30,8 +30,14 @@
     } | null;
   }
 
-  const {tournament, customName, formDefinitionYaml, regions, result}: Props =
-    $props();
+  const {
+    tournament,
+    customName,
+    formDefinitionYaml,
+    regions,
+    questionSets,
+    result,
+  }: Props = $props();
 
   // A refused save re-renders what was submitted; anything else shows the
   // stored tournament, which `load` re-reads after every successful save.
@@ -62,7 +68,13 @@
     </Message>
   {/if}
 
-  <TournamentForm {regions} {values} submitLabel="更新" action="?/update" />
+  <TournamentForm
+    {regions}
+    {values}
+    {questionSets}
+    submitLabel="更新"
+    action="?/update"
+  />
 </Card>
 
 <!-- The YAML carries the tournament's type as its `tournamentSlug`, so a

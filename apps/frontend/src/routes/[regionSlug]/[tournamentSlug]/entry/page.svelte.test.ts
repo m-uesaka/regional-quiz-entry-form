@@ -14,6 +14,7 @@ const TOURNAMENT: Tournament = {
   entryOpensAt: '2020-01-01T00:00:00.000Z',
   entryClosesAt: '2099-01-01T00:00:00.000Z',
   entriesPaused: false,
+  questionSet: null,
 };
 
 /** A second tournament, reached by a link that only changes the slug. */
@@ -26,6 +27,7 @@ const REGULATIONS: Regulation[] = [
     label: '一般の部',
     priorityStartsAt: null,
     priorityEndsAt: null,
+    closesWithPriority: false,
     displayOrder: 0,
   },
   {
@@ -34,6 +36,7 @@ const REGULATIONS: Regulation[] = [
     label: '学生の部',
     priorityStartsAt: null,
     priorityEndsAt: null,
+    closesWithPriority: false,
     displayOrder: 1,
   },
 ];

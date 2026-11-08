@@ -9,6 +9,10 @@
 // tests run without any per-developer setup. `supabase status -o env`
 // remains the source of truth: CI exports the key from it, and so can a
 // developer whose CLI issues a different one.
+//
+// The backend's integration tests hold the same default in
+// `apps/backend/src/test-support/db.ts`. It is not imported from there: that
+// module imports `bun`, and Playwright runs this file on Node.
 const LOCAL_SUPABASE_SECRET_KEY =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.' +
   'eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.' +

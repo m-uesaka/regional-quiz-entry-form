@@ -37,6 +37,7 @@
             <TableHead size="small">地域</TableHead>
             <TableHead size="small">種別</TableHead>
             <TableHead size="small">大会名</TableHead>
+            <TableHead size="small">問題セット</TableHead>
             <TableHead size="small">エントリー期間 (JST)</TableHead>
             <TableHead size="small"><span class="sr-only">操作</span></TableHead>
           </tr>
@@ -49,6 +50,13 @@
                 {TOURNAMENT_TYPE_LABELS[tournament.type]}
               </TableData>
               <TableData size="small">{tournament.name}</TableData>
+              <TableData size="small">
+                {#if tournament.questionSet === null}
+                  <span class="text-muted-foreground">共通</span>
+                {:else}
+                  {tournament.questionSet}
+                {/if}
+              </TableData>
               <TableData size="small">
                 {formatJstDateTime(tournament.entryOpensAt)}〜{formatJstDateTime(
                   tournament.entryClosesAt,

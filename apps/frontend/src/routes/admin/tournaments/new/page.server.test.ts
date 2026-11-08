@@ -1,6 +1,11 @@
 import {describe, expect, it} from 'vitest';
-import type {Cookies, HttpError} from '@sveltejs/kit';
+import type {HttpError} from '@sveltejs/kit';
 import type {Region, Tournament} from '@regional-quiz/shared';
+import {fakeCookies} from '../../../../test-support/fake-cookies';
+import {
+  fakeFetch,
+  type RecordedRequest,
+} from '../../../../test-support/fake-fetch';
 import {actions, load} from './+page.server';
 
 const TOKYO: Region = {
@@ -19,60 +24,32 @@ const CREATED: Tournament = {
   entryOpensAt: '2026-01-01T00:00:00.000Z',
   entryClosesAt: '2026-02-01T00:00:00.000Z',
   entriesPaused: false,
+  questionSet: null,
 };
-
-/** One request an action put on the wire. */
-interface ApiCall {
-  method: string;
-  url: string;
-  body: unknown;
-}
 
 /**
  * Builds a fake `fetch` answering the regions and tournaments APIs.
  * @param options.status The status to answer a POST with.
  * @param options.error The `{error}` message to answer a refusal with.
- * @param options.calls Collects the recorded requests.
+ * @param options.calls Collects the requests sent.
  */
-function fakeFetch(
-  options: {status?: number; error?: string; calls?: ApiCall[]} = {},
+function fakeApi(
+  options: {status?: number; error?: string; calls?: RecordedRequest[]} = {},
 ): typeof fetch {
-  return (async (input, init) => {
-    const method = init?.method ?? 'GET';
-    options.calls?.push({
-      method,
-      url: String(input),
-      body:
-        init?.body === undefined
-          ? undefined
-          : (JSON.parse(String(init.body)) as unknown),
-    });
-    if (method === 'GET') return jsonResponse([TOKYO]);
-    const status = options.status ?? 201;
-    return status >= 400
-      ? jsonResponse({error: options.error ?? 'nope'}, status)
-      : jsonResponse(CREATED, status);
-  }) as typeof fetch;
-}
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {'Content-Type': 'application/json'},
-  });
-}
-
-/**
- * A stand-in for `event.cookies`, recording the names deleted on it: a
- * session the API refuses is dropped on the way to the login screen.
- * @param deleted Collects the deleted cookie names.
- */
-function fakeCookies(deleted: string[] = []): Cookies {
-  return {
-    delete: (name: string) => {
-      deleted.push(name);
-    },
-  } as unknown as Cookies;
+  const status = options.status ?? 201;
+  return fakeFetch(
+    [
+      {method: 'GET', url: '/api/regions', body: [TOKYO]},
+      {method: 'GET', url: '/api/tournaments/question-sets', body: ['宮崎']},
+      {
+        method: 'POST',
+        url: /^\/api\/tournaments$/,
+        status,
+        body: status >= 400 ? {error: options.error ?? 'nope'} : CREATED,
+      },
+    ],
+    options.calls,
+  );
 }
 
 function buildLoadEvent(fetchImpl: typeof fetch): Parameters<typeof load>[0] {
@@ -110,15 +87,48 @@ function createFormData(overrides: Record<string, string> = {}): FormData {
 }
 
 describe('admin tournament create +page.server load', () => {
-  it('returns the regions the form offers', async () => {
-    await expect(load(buildLoadEvent(fakeFetch()))).resolves.toEqual({
+  it('returns the regions and question sets the form offers', async () => {
+    await expect(load(buildLoadEvent(fakeApi()))).resolves.toEqual({
       regions: [TOKYO],
+      questionSets: ['宮崎'],
+    });
+  });
+
+  // Only suggestions: the form works without them.
+  it('leaves the question sets out when they could not be read', async () => {
+    const failing = fakeFetch([
+      {method: 'GET', url: '/api/regions', body: [TOKYO]},
+      {
+        method: 'GET',
+        url: '/api/tournaments/question-sets',
+        status: 500,
+        body: {error: 'boom'},
+      },
+    ]);
+
+    await expect(load(buildLoadEvent(failing))).resolves.toEqual({
+      regions: [TOKYO],
+      questionSets: [],
+    });
+  });
+
+  it('leaves the question sets out when their request fails outright', async () => {
+    const regionsOnly = fakeFetch([
+      {method: 'GET', url: '/api/regions', body: [TOKYO]},
+    ]);
+    // `fakeFetch` throws for a request it has no route for, as a network
+    // failure would.
+    await expect(load(buildLoadEvent(regionsOnly))).resolves.toEqual({
+      regions: [TOKYO],
+      questionSets: [],
     });
   });
 
   it('reports a failed read as a bad gateway', async () => {
-    const failing = (async () =>
-      jsonResponse({error: 'boom'}, 500)) as typeof fetch;
+    const failing = fakeFetch([
+      {method: 'GET', url: '/api/regions', status: 500, body: {error: 'boom'}},
+      {method: 'GET', url: '/api/tournaments/question-sets', body: ['宮崎']},
+    ]);
 
     await expect(load(buildLoadEvent(failing))).rejects.toMatchObject({
       status: 502,
@@ -131,8 +141,8 @@ describe('admin tournament create action', () => {
   // backend Worker for requests the frontend makes itself, so a client-side
   // POST 404s in production.
   it('creates the tournament, reading the entry window as JST', async () => {
-    const calls: ApiCall[] = [];
-    const event = buildActionEvent(fakeFetch({calls}), createFormData());
+    const calls: RecordedRequest[] = [];
+    const event = buildActionEvent(fakeApi({calls}), createFormData());
 
     await expect(actions.default(event)).rejects.toMatchObject({
       status: 303,
@@ -149,15 +159,41 @@ describe('admin tournament create action', () => {
           capacity: 64,
           entryOpensAt: '2026-01-01T00:00:00.000Z',
           entryClosesAt: '2026-02-01T00:00:00.000Z',
+          questionSet: null,
         },
       },
     ]);
   });
 
-  it('takes a blank capacity as no limit', async () => {
-    const calls: ApiCall[] = [];
+  it('sends the 問題セット typed, folded and trimmed', async () => {
+    const calls: RecordedRequest[] = [];
     const event = buildActionEvent(
-      fakeFetch({calls}),
+      fakeApi({calls}),
+      createFormData({questionSet: '　宮崎 '}),
+    );
+
+    await expect(actions.default(event)).rejects.toMatchObject({status: 303});
+    expect(calls[0]?.body).toMatchObject({questionSet: '宮崎'});
+  });
+
+  it('names a space inside the 問題セット rather than refusing the form at large', async () => {
+    const calls: RecordedRequest[] = [];
+    const event = buildActionEvent(
+      fakeApi({calls}),
+      createFormData({questionSet: '宮　崎'}),
+    );
+
+    await expect(actions.default(event)).resolves.toMatchObject({
+      status: 400,
+      data: {error: '問題セットに空白は使えません'},
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it('takes a blank capacity as no limit', async () => {
+    const calls: RecordedRequest[] = [];
+    const event = buildActionEvent(
+      fakeApi({calls}),
       createFormData({capacity: ''}),
     );
 
@@ -168,9 +204,9 @@ describe('admin tournament create action', () => {
   // 大会名 is optional: the API names the tournament after its region and
   // type when it is left blank.
   it('passes a blank name on for the API to fill in', async () => {
-    const calls: ApiCall[] = [];
+    const calls: RecordedRequest[] = [];
     const event = buildActionEvent(
-      fakeFetch({calls}),
+      fakeApi({calls}),
       createFormData({name: ''}),
     );
 
@@ -179,9 +215,9 @@ describe('admin tournament create action', () => {
   });
 
   it('refuses a form the API would reject, without asking it', async () => {
-    const calls: ApiCall[] = [];
+    const calls: RecordedRequest[] = [];
     const event = buildActionEvent(
-      fakeFetch({calls}),
+      fakeApi({calls}),
       createFormData({regionId: ''}),
     );
 
@@ -194,7 +230,7 @@ describe('admin tournament create action', () => {
 
   it("surfaces the API's own refusal and re-renders what was typed", async () => {
     const event = buildActionEvent(
-      fakeFetch({status: 400, error: 'insert or update violates foreign key'}),
+      fakeApi({status: 400, error: 'insert or update violates foreign key'}),
       createFormData({name: '書きかけの大会名'}),
     );
 
@@ -202,6 +238,24 @@ describe('admin tournament create action', () => {
       status: 400,
       data: {
         error: 'insert or update violates foreign key',
+        values: {name: '書きかけの大会名'},
+      },
+    });
+  });
+
+  it('surfaces a duplicate tournament, which the API answers with 409', async () => {
+    const event = buildActionEvent(
+      fakeApi({
+        status: 409,
+        error: 'この地域には同じ種別の大会がすでにあります',
+      }),
+      createFormData({name: '書きかけの大会名'}),
+    );
+
+    await expect(actions.default(event)).resolves.toMatchObject({
+      status: 409,
+      data: {
+        error: 'この地域には同じ種別の大会がすでにあります',
         values: {name: '書きかけの大会名'},
       },
     });

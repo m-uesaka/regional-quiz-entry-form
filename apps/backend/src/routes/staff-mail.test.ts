@@ -3,10 +3,7 @@ import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
 import {app} from '../index';
 import type {BulkMailMessage} from '../lib/bulk-mail-queue';
-import {
-  PERMISSIVE_PLATFORM_BINDINGS,
-  RecordingQueue,
-} from '../test-support/bindings';
+import {testBindings, RecordingQueue} from '../test-support/bindings';
 import {ENQUEUE_BATCH_SIZE} from './staff-mail';
 import {
   staffSessionAwareFetch,
@@ -69,17 +66,10 @@ async function generalStaffCookie(): Promise<string> {
 let queue = new RecordingQueue<BulkMailMessage>();
 
 function env(): Bindings {
-  return {
-    ...PERMISSIVE_PLATFORM_BINDINGS,
-    SUPABASE_URL: 'https://example.supabase.co',
-    SUPABASE_SECRET_KEY: 'dummy-service-role-key',
-    MAIL_API_KEY: 'dummy-mail-api-key',
-    GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-    MAIL_FROM_ADDRESS: 'entry@example.com',
-    FRONTEND_URL: 'https://entry.example.com',
+  return testBindings({
     SESSION_SECRET,
     BULK_MAIL_QUEUE: queue,
-  };
+  });
 }
 
 const EXECUTION_CTX = {

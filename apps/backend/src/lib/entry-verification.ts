@@ -1,10 +1,7 @@
-import {
-  ENTRY_VERIFICATION_TOKEN_TTL_MS,
-  type EntryStatus,
-  type TournamentType,
-} from '@regional-quiz/shared';
+import {ENTRY_VERIFICATION_TOKEN_TTL_MS} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
-import {createDbClient} from './db';
+import {createDbClient, type Tables} from './db';
+import type {InternalResult} from './errors';
 import {createMailSender, type SendMailInput} from './mailer';
 import {fetchAllRows} from './paged-select';
 import {
@@ -14,8 +11,6 @@ import {
 } from './system-mail';
 import {generateToken, hashToken} from './token';
 import {tournamentDisplayName} from './tournaments';
-
-type Result<T> = {ok: true; value: T} | {ok: false; error: string};
 
 /**
  * Issues a one-time email verification token for `entryId` and mails a
@@ -83,7 +78,7 @@ async function issueVerificationMail(
       ).toISOString(),
     })
     .select('id')
-    .single<{id: string}>();
+    .single();
   if (error) {
     // Don't send a link whose token was never persisted -- the recipient
     // would click through to a token that can never be found.
@@ -128,21 +123,21 @@ async function issueVerificationMail(
 export async function discardVerificationToken(
   env: Bindings,
   tokenId: string,
-): Promise<Result<void>> {
+): Promise<InternalResult<void>> {
   const {error} = await createDbClient(env)
     .from('email_verification_tokens')
     .delete()
     .eq('id', tokenId);
   return error
-    ? {ok: false, error: error.message}
+    ? {ok: false, status: 500, error: error.message}
     : {ok: true, value: undefined};
 }
 
 /** The columns of a verification token that say whether it still works. */
-interface TokenStateRow {
-  expires_at: string;
-  used_at: string | null;
-}
+type TokenStateRow = Pick<
+  Tables<'email_verification_tokens'>,
+  'expires_at' | 'used_at'
+>;
 
 /**
  * Whether any of an entry's verification tokens can still confirm it --
@@ -155,12 +150,6 @@ function hasLiveToken(tokens: readonly TokenStateRow[], now: Date): boolean {
   return tokens.some(
     token => token.used_at === null && new Date(token.expires_at) >= now,
   );
-}
-
-/** Shape of the `entries` rows `fetchResendableEntryIds()` reads. */
-interface PendingEntryRow {
-  id: string;
-  email_verification_tokens: TokenStateRow[];
 }
 
 /**
@@ -178,20 +167,19 @@ interface PendingEntryRow {
 export async function fetchResendableEntryIds(
   env: Bindings,
   tournamentId: string,
-): Promise<Result<string[]>> {
+): Promise<InternalResult<string[]>> {
   const db = createDbClient(env);
-  const result = await fetchAllRows<PendingEntryRow>((from, to) =>
+  const result = await fetchAllRows((from, to) =>
     db
       .from('entries')
       .select('id, email_verification_tokens(expires_at, used_at)')
       .eq('tournament_id', tournamentId)
       .eq('status', 'pending_verification')
       .order('id', {ascending: true})
-      .range(from, to)
-      .returns<PendingEntryRow[]>(),
+      .range(from, to),
   );
   if (result.error) {
-    return {ok: false, error: result.error.message};
+    return {ok: false, status: 500, error: result.error.message};
   }
   const now = new Date();
   return {
@@ -200,20 +188,6 @@ export async function fetchResendableEntryIds(
       .filter(row => !hasLiveToken(row.email_verification_tokens, now))
       .map(row => row.id),
   };
-}
-
-/** Shape of the `entries` row `prepareVerificationResend()` reads. */
-interface ResendEntryRow {
-  id: string;
-  status: EntryStatus;
-  participants: {email: string};
-  tournaments: {
-    name: string | null;
-    type: TournamentType;
-    capacity: number | null;
-    regions: {name: string};
-  };
-  email_verification_tokens: TokenStateRow[];
 }
 
 /**
@@ -234,20 +208,21 @@ interface ResendEntryRow {
 export async function prepareVerificationResend(
   env: Bindings,
   entryId: string,
-): Promise<Result<IssuedVerificationMail | null>> {
+): Promise<InternalResult<IssuedVerificationMail | null>> {
   const db = createDbClient(env);
   const {data, error} = await db
     .from('entries')
     .select(
-      'id, status, participants!inner(email), ' +
-        'tournaments!inner(name, type, capacity, regions!inner(name)), ' +
-        'email_verification_tokens(expires_at, used_at)',
+      `
+        id, status, participants!inner(email),
+        tournaments!inner(name, type, capacity, regions!inner(name)),
+        email_verification_tokens(expires_at, used_at)
+      `,
     )
     .eq('id', entryId)
-    .returns<ResendEntryRow[]>()
     .maybeSingle();
   if (error) {
-    return {ok: false, error: error.message};
+    return {ok: false, status: 500, error: error.message};
   }
   if (
     !data ||
@@ -274,6 +249,7 @@ export async function prepareVerificationResend(
   } catch (issueError) {
     return {
       ok: false,
+      status: 500,
       error:
         issueError instanceof Error ? issueError.message : String(issueError),
     };

@@ -1,14 +1,13 @@
 <script lang="ts">
-  import type {EntryPeriod, Regulation} from '@regional-quiz/shared';
+  import type {Regulation} from '@regional-quiz/shared';
   import {
-    isRegulationSelectionAllowed,
+    activePriorityRegulations,
+    regulationSelectionRefusal,
     selectableRegulations,
   } from '@regional-quiz/shared';
 
   interface Props {
     regulations: Regulation[];
-    /** The tournament's entry period. */
-    entryPeriod: EntryPeriod;
     /**
      * The chosen regulations' ids. Bound, so checking one writes it back to
      * the caller — see "Form controls are bound, not rendered from an
@@ -19,17 +18,12 @@
     now: Date;
   }
 
-  let {
-    regulations,
-    entryPeriod,
-    value = $bindable(),
-    now,
-  }: Props = $props();
+  let {regulations, value = $bindable(), now}: Props = $props();
 
   // Only what is on offer, in order. `regulations` itself stays the whole
   // list for the checks below, which need the phases that are over.
   const ordered = $derived(
-    selectableRegulations(regulations, now, entryPeriod).sort(
+    selectableRegulations(regulations, now).sort(
       (a, b) => a.displayOrder - b.displayOrder,
     ),
   );
@@ -46,21 +40,19 @@
   // reported instead.
   const priorityIds = $derived(
     new Set(
-      ordered
-        .filter(regulation =>
-          isRegulationSelectionAllowed(
-            regulations,
-            [regulation.id],
-            now,
-            entryPeriod,
-          ),
-        )
-        .map(regulation => regulation.id),
+      activePriorityRegulations(regulations, now).map(
+        regulation => regulation.id,
+      ),
     ),
   );
-  const hasPriorityWindow = $derived(priorityIds.size < ordered.length);
-  const selectionAllowed = $derived(
-    isRegulationSelectionAllowed(regulations, chosen, now, entryPeriod),
+  // Whether the window narrows anything: with every regulation on offer inside
+  // it, there is nothing to tell apart and nothing to ask for.
+  const hasPriorityWindow = $derived(
+    priorityIds.size > 0 && priorityIds.size < ordered.length,
+  );
+  const needsPriority = $derived(
+    regulationSelectionRefusal(regulations, chosen, now) ===
+      'needs-priority',
   );
 
   // A checkbox group has no native "at least one checked", so every box
@@ -110,7 +102,7 @@
       {/if}
     </label>
   {/each}
-  {#if !selectionAllowed && chosen.length > 0}
+  {#if needsPriority}
     <p class="text-sm text-destructive">
       現在は優先期間中のため、優先対象のレギュレーションを1つ以上選択してください
     </p>

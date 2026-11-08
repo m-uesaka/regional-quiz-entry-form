@@ -1,6 +1,5 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {z} from 'zod';
 import {
   FormDefinitionUploadSchema,
   parseFormDefinitionYaml,
@@ -18,13 +17,8 @@ import {
   TournamentNotFoundError,
   TournamentSlugMismatchError,
 } from '../lib/form-definitions';
-import {
-  FORM_FIELD_DEF_COLUMNS,
-  toFormFieldDef,
-  type FormFieldDefRow,
-} from '../lib/form-field-defs';
-
-const TournamentIdParamSchema = z.object({tournamentId: z.string().uuid()});
+import {fetchFormFieldDefs} from '../lib/form-field-defs';
+import {TournamentIdParamSchema} from './params';
 
 // The staff-only upload gets `requireGeneralStaff()` attached per-route
 // rather than through `.use('*', ...)`, because the read below is public
@@ -40,19 +34,17 @@ export const formDefinitionsRoute = new Hono<StaffEnv>()
     requireOpenEntryPeriodOrStaff(byTournamentIdParam),
     async c => {
       const db = createDbClient(c.env);
-      const {data, error} = await db
-        .from('form_field_defs')
-        .select(FORM_FIELD_DEF_COLUMNS)
-        .eq('tournament_id', c.req.valid('param').tournamentId)
-        .order('display_order', {ascending: true})
-        .returns<FormFieldDefRow[]>();
+      const {fieldDefs, error} = await fetchFormFieldDefs(
+        db,
+        c.req.valid('param').tournamentId,
+      );
       if (error) {
         return c.json(
           internalError('failed to read the form field defs', error),
           500,
         );
       }
-      return c.json(data.map(toFormFieldDef));
+      return c.json(fieldDefs);
     },
   )
   .put(

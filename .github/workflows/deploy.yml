@@ -60,8 +60,8 @@ jobs:
       - run: bun run test
 
       # Built here rather than next to the Pages upload it feeds, because
-      # nothing else ever runs it: `ci.yml` covers typecheck/lint/test/e2e but
-      # not `build`, so this job is the first place `vite build` (and the
+      # nothing else ever runs it: `ci.yml` covers
+      # typecheck/lint/test/integration/e2e but not `build`, so this job is the first place `vite build` (and the
       # `wrangler types --check` the frontend's `build` script gates on) is
       # exercised at all. Left in its natural position it would run *after* the
       # migrations and the Worker had already gone out, and a build failure
@@ -76,8 +76,8 @@ jobs:
       # `bun install`) rather than from `supabase/setup-cli`, so the binary
       # that touches a real project is the one pinned in `bun.lock` — the same
       # one `bun run db:migrate:remote` gives a developer locally. `ci.yml`'s
-      # e2e job installs the CLI through the action instead and pins it to the
-      # same version by hand; there the stack is a throwaway container, here it
+      # e2e and integration jobs install the CLI through the action instead and
+      # pin it to the same version by hand; there the stack is a throwaway container, here it
       # is production, so this side takes the lockfile as the single source.
       #
       # `link` writes the project ref (and the DB password `db push` connects

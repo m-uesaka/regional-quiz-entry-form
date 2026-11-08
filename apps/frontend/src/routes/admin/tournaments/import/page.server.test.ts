@@ -1,9 +1,14 @@
 import {describe, expect, it} from 'vitest';
-import type {Cookies, Redirect} from '@sveltejs/kit';
+import type {Redirect} from '@sveltejs/kit';
 import type {
   TournamentImportPreviewRow,
   TournamentImportResult,
 } from '@regional-quiz/shared';
+import {fakeCookies} from '../../../../test-support/fake-cookies';
+import {
+  fakeFetch,
+  type RecordedRequest,
+} from '../../../../test-support/fake-fetch';
 import {actions} from './+page.server';
 
 const CREATED: TournamentImportResult = {
@@ -42,25 +47,31 @@ const SELECTION = {
   fingerprint: 'fp-1',
 };
 
-/** One request the action put on the wire. */
-interface ApiCall {
-  url: string;
-  body: unknown;
-}
-
-function fakeFetch(
-  options: {status?: number; body?: unknown; calls?: ApiCall[]} = {},
+/**
+ * Builds a fake `fetch` answering the sheet-import API.
+ * @param options.status The status to answer with.
+ * @param options.body The body to answer with.
+ * @param options.calls Collects the requests sent.
+ */
+function fakeApi(
+  options: {status?: number; body?: unknown; calls?: RecordedRequest[]} = {},
 ): typeof fetch {
-  return (async (input, init) => {
-    options.calls?.push({
-      url: String(input),
-      body: JSON.parse(String(init?.body)) as unknown,
-    });
-    return new Response(JSON.stringify(options.body ?? {results: [CREATED]}), {
-      status: options.status ?? 200,
-      headers: {'Content-Type': 'application/json'},
-    });
-  }) as typeof fetch;
+  const answer = {
+    status: options.status ?? 200,
+    body: options.body ?? {results: [CREATED]},
+  };
+  // The preview and the registration answer alike.
+  return fakeFetch(
+    [
+      {
+        method: 'POST',
+        url: '/api/sheet-import/tournaments/preview',
+        ...answer,
+      },
+      {method: 'POST', url: /^\/api\/sheet-import\/tournaments$/, ...answer},
+    ],
+    options.calls,
+  );
 }
 
 type ActionEvent = Parameters<typeof actions.preview>[0];
@@ -78,11 +89,7 @@ function buildEvent(
   }
   return {
     fetch: fetchImpl,
-    cookies: {
-      delete: (name: string) => {
-        deletedCookies.push(name);
-      },
-    } as unknown as Cookies,
+    cookies: fakeCookies(deletedCookies),
     url: new URL('http://localhost/admin/tournaments/import'),
     request: {formData: async () => formData},
   } as ActionEvent;
@@ -90,12 +97,12 @@ function buildEvent(
 
 describe('admin tournament import preview action', () => {
   it('sends the ID out of a pasted URL and hands back every row', async () => {
-    const calls: ApiCall[] = [];
+    const calls: RecordedRequest[] = [];
     const url = 'https://docs.google.com/spreadsheets/d/abc123/edit#gid=0';
 
     await expect(
       actions.preview(
-        buildEvent(fakeFetch({calls, body: {rows: [PREVIEW_ROW]}}), url),
+        buildEvent(fakeApi({calls, body: {rows: [PREVIEW_ROW]}}), url),
       ),
     ).resolves.toEqual({
       spreadsheetId: url,
@@ -105,6 +112,7 @@ describe('admin tournament import preview action', () => {
     });
     expect(calls).toEqual([
       {
+        method: 'POST',
         url: '/api/sheet-import/tournaments/preview',
         body: {spreadsheetId: 'abc123'},
       },
@@ -112,10 +120,10 @@ describe('admin tournament import preview action', () => {
   });
 
   it('refuses an empty field without asking the API', async () => {
-    const calls: ApiCall[] = [];
+    const calls: RecordedRequest[] = [];
 
     await expect(
-      actions.preview(buildEvent(fakeFetch({calls}), '  ')),
+      actions.preview(buildEvent(fakeApi({calls}), '  ')),
     ).resolves.toMatchObject({
       status: 400,
       data: {error: 'スプレッドシートの ID または URL を入力してください'},
@@ -125,7 +133,7 @@ describe('admin tournament import preview action', () => {
 
   it("shows the API's reason when the sheet can't be used", async () => {
     const event = buildEvent(
-      fakeFetch({
+      fakeApi({
         status: 400,
         body: {error: '1行目に「定員」の列が見つかりません'},
       }),
@@ -146,7 +154,7 @@ describe('admin tournament import preview action', () => {
   it('sends an expired session to the login form', async () => {
     const deleted: string[] = [];
     const event = buildEvent(
-      fakeFetch({status: 401, body: {error: 'unauthorized'}}),
+      fakeApi({status: 401, body: {error: 'unauthorized'}}),
       'abc123',
       deleted,
     );
@@ -161,16 +169,11 @@ describe('admin tournament import preview action', () => {
 
 describe('admin tournament import execute action', () => {
   it('sends the chosen tournaments and hands back the results', async () => {
-    const calls: ApiCall[] = [];
+    const calls: RecordedRequest[] = [];
 
     await expect(
       actions.execute(
-        buildEvent(
-          fakeFetch({calls}),
-          'abc123',
-          [],
-          [JSON.stringify(SELECTION)],
-        ),
+        buildEvent(fakeApi({calls}), 'abc123', [], [JSON.stringify(SELECTION)]),
       ),
     ).resolves.toEqual({
       spreadsheetId: 'abc123',
@@ -180,6 +183,7 @@ describe('admin tournament import execute action', () => {
     });
     expect(calls).toEqual([
       {
+        method: 'POST',
         url: '/api/sheet-import/tournaments',
         body: {spreadsheetId: 'abc123', selections: [SELECTION]},
       },
@@ -187,10 +191,10 @@ describe('admin tournament import execute action', () => {
   });
 
   it('refuses to register nothing without asking the API', async () => {
-    const calls: ApiCall[] = [];
+    const calls: RecordedRequest[] = [];
 
     await expect(
-      actions.execute(buildEvent(fakeFetch({calls}), 'abc123')),
+      actions.execute(buildEvent(fakeApi({calls}), 'abc123')),
     ).resolves.toMatchObject({
       status: 400,
       data: {error: '登録する大会を選んでください'},
@@ -199,12 +203,12 @@ describe('admin tournament import execute action', () => {
   });
 
   it('refuses a selection that was tampered with', async () => {
-    const calls: ApiCall[] = [];
+    const calls: RecordedRequest[] = [];
 
     await expect(
       actions.execute(
         buildEvent(
-          fakeFetch({calls}),
+          fakeApi({calls}),
           'abc123',
           [],
           [JSON.stringify({...SELECTION, action: 'delete'})],
@@ -216,7 +220,7 @@ describe('admin tournament import execute action', () => {
 
   it("says the choice was refused when the API's validation rejects it", async () => {
     const event = buildEvent(
-      fakeFetch({status: 400, body: {success: false, error: {issues: []}}}),
+      fakeApi({status: 400, body: {success: false, error: {issues: []}}}),
       'abc123',
       [],
       [JSON.stringify(SELECTION)],
@@ -232,7 +236,7 @@ describe('admin tournament import execute action', () => {
 
   it('reports an internal failure as one to retry', async () => {
     const event = buildEvent(
-      fakeFetch({status: 500, body: {error: 'internal server error'}}),
+      fakeApi({status: 500, body: {error: 'internal server error'}}),
       'abc123',
       [],
       [JSON.stringify(SELECTION)],

@@ -6,7 +6,7 @@ import {
 } from '@regional-quiz/shared';
 import {PasswordResetConfirmInputSchema} from '@regional-quiz/shared/password-policy';
 import type {Env} from '../types/env';
-import {internalError} from '../lib/errors';
+import {respondFailure} from '../lib/errors';
 import {
   confirmPasswordReset,
   requestPasswordReset,
@@ -59,13 +59,11 @@ export const passwordResetRoute = new Hono<Env>()
     async c => {
       const result = await confirmPasswordReset(c.env, c.req.valid('json'));
       if (!result.ok) {
-        if (result.status === 500) {
-          return c.json(
-            internalError('failed to confirm the password reset', result.error),
-            500,
-          );
-        }
-        return c.json({error: result.error}, result.status);
+        return respondFailure(
+          c,
+          result,
+          'failed to confirm the password reset',
+        );
       }
       return c.json({ok: true});
     },

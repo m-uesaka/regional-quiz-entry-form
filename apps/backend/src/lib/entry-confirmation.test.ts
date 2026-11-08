@@ -1,44 +1,27 @@
 import {afterAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
-import type {Bindings} from '../types/env';
+import {COMMON_ERROR_CODES} from '@regional-quiz/shared';
 import {confirmEntryByToken} from './entry-confirmation';
 import {generateToken, hashToken} from './token';
-import {hashPassword} from './password';
-import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {testBindings} from '../test-support/bindings';
+import {
+  DB_URL,
+  isDbReachable,
+  SUPABASE_SECRET_KEY,
+  SUPABASE_URL,
+} from '../test-support/db';
+import {
+  createEntryRow,
+  createTournamentAndRegulation,
+  deleteTestRegionRows,
+  type EntryRowStatus,
+  type TournamentFixture,
+} from '../test-support/db-fixtures';
 
-// Local Supabase Postgres connection (`supabase start` default), same
-// convention as `lib/db-schema.test.ts`. Skipped automatically when one
-// isn't reachable, e.g. in CI.
-const DB_URL =
-  process.env.SUPABASE_DB_URL ??
-  'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
-const SUPABASE_URL = process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321';
-const SUPABASE_SECRET_KEY =
-  process.env.SUPABASE_SECRET_KEY ??
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
-
-async function isDbReachable(): Promise<boolean> {
-  const probe = new SQL(DB_URL);
-  try {
-    await probe`select 1`;
-    return true;
-  } catch {
-    return false;
-  } finally {
-    await probe.close();
-  }
-}
-
-const env: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
+const env = testBindings({
   SUPABASE_URL,
   SUPABASE_SECRET_KEY,
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL: 'https://entry.example.com',
-  SESSION_SECRET: 'test-session-secret',
-};
+});
 
 describe.skipIf(!(await isDbReachable()))(
   'confirmEntryByToken (local Supabase integration)',
@@ -48,90 +31,27 @@ describe.skipIf(!(await isDbReachable()))(
     const testEmailDomain = 'entry-confirmation-test.example.com';
 
     afterAll(async () => {
-      await sql`delete from email_verification_tokens where entry_id in (
-        select id from entries where tournament_id in (
-          select id from tournaments where region_id in (
-            select id from regions where slug like ${testRegionSlug + '%'}
-          )
-        )
-      )`;
-      await sql`delete from entries where tournament_id in (
-        select id from tournaments where region_id in (
-          select id from regions where slug like ${testRegionSlug + '%'}
-        )
-      )`;
-      await sql`delete from participants where email like ${'%@' + testEmailDomain}`;
-      await sql`delete from regulations where tournament_id in (
-        select id from tournaments where region_id in (
-          select id from regions where slug like ${testRegionSlug + '%'}
-        )
-      )`;
-      await sql`delete from tournaments where region_id in (
-        select id from regions where slug like ${testRegionSlug + '%'}
-      )`;
-      await sql`delete from regions where slug like ${testRegionSlug + '%'}`;
+      await deleteTestRegionRows(sql, testRegionSlug, testEmailDomain);
       await sql.close();
     });
 
-    async function createTournamentAndRegulation(
+    async function createFixture(
       suffix: string,
       capacity: number | null,
-    ): Promise<{regionId: string; tournamentId: string; regulationId: string}> {
-      const [region] = await sql`
-        insert into regions (slug, name)
-        values (${testRegionSlug + '-' + suffix}, 'テスト地域')
-        returning id
-      `;
-      const [tournament] = await sql`
-        insert into tournaments (
-          region_id, type, name, capacity, entry_opens_at, entry_closes_at
-        ) values (
-          ${region.id}, 'saikyoi', 'テスト大会', ${capacity},
-          '2020-01-01T00:00:00Z', '2099-01-01T00:00:00Z'
-        )
-        returning id
-      `;
-      const [regulation] = await sql`
-        insert into regulations (tournament_id, label)
-        values (${tournament.id}, 'テストレギュレーション')
-        returning id
-      `;
-      return {
-        regionId: region.id as string,
-        tournamentId: tournament.id as string,
-        regulationId: regulation.id as string,
-      };
+    ): Promise<TournamentFixture> {
+      return createTournamentAndRegulation(sql, `${testRegionSlug}-${suffix}`, {
+        capacity,
+      });
     }
 
     async function createEntryFixture(
-      regionId: string,
-      tournamentId: string,
-      regulationId: string,
-      status:
-        | 'pending_verification'
-        | 'confirmed'
-        | 'cancelled' = 'pending_verification',
+      fixture: TournamentFixture,
+      status: EntryRowStatus = 'pending_verification',
     ): Promise<string> {
-      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
-      const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${regionId}, ${email}, ${await hashPassword('quiz-entry-pass1')})
-        returning id
-      `;
-      const [entry] = await sql`
-        insert into entries (
-          participant_id, tournament_id, name, furigana, display_name, status
-        ) values (
-          ${participant.id}, ${tournamentId}, '山田太郎', 'ヤマダタロウ', '太郎',
-          ${status}
-        )
-        returning id
-      `;
-      await sql`
-        insert into entry_regulations (entry_id, regulation_id, tournament_id)
-        values (${entry.id}, ${regulationId}, ${tournamentId})
-      `;
-      return entry.id as string;
+      const {entryId} = await createEntryRow(sql, fixture, testEmailDomain, {
+        status,
+      });
+      return entryId;
     }
 
     async function createTokenFixture(
@@ -152,19 +72,15 @@ describe.skipIf(!(await isDbReachable()))(
     }
 
     it('confirms a valid, unused token', async () => {
-      const fixture = await createTournamentAndRegulation('confirm', null);
-      const entryId = await createEntryFixture(
-        fixture.regionId,
-        fixture.tournamentId,
-        fixture.regulationId,
-      );
+      const fixture = await createFixture('confirm', null);
+      const entryId = await createEntryFixture(fixture);
       const token = await createTokenFixture(entryId);
 
       const result = await confirmEntryByToken(env, token);
 
       expect(result).toEqual({
         ok: true,
-        status: 'confirmed',
+        entryStatus: 'confirmed',
         // What the frontend needs to drop the list from its cache (#125).
         tournament: {regionSlug: `${testRegionSlug}-confirm`, type: 'saikyoi'},
       });
@@ -178,15 +94,8 @@ describe.skipIf(!(await isDbReachable()))(
     // Following the link proves the address, and the link belongs to a
     // submission made with the account's current password and region (#189).
     it('marks the participant verified, keeping the first verification time', async () => {
-      const fixture = await createTournamentAndRegulation(
-        'verify-account',
-        null,
-      );
-      const entryId = await createEntryFixture(
-        fixture.regionId,
-        fixture.tournamentId,
-        fixture.regulationId,
-      );
+      const fixture = await createFixture('verify-account', null);
+      const entryId = await createEntryFixture(fixture);
       const [{participant_id: participantId}] = await sql`
         select participant_id from entries where id = ${entryId}
       `;
@@ -205,13 +114,12 @@ describe.skipIf(!(await isDbReachable()))(
       expect(after.email_verified_at).not.toBeNull();
 
       // A later confirmation of another entry leaves the original time alone.
-      const otherFixture = await createTournamentAndRegulation(
-        'verify-account-again',
-        null,
-      );
+      // The other region uses questions of its own, so the first entry, now
+      // confirmed, doesn't rule it out (0043).
+      const otherFixture = await createFixture('verify-account-again', null);
       await sql`
-        update participants set region_id = ${otherFixture.regionId}
-        where id = ${participantId}
+        update tournaments set question_set = '独自'
+        where id = ${otherFixture.tournamentId}
       `;
       const [otherEntry] = await sql`
         insert into entries (
@@ -232,15 +140,8 @@ describe.skipIf(!(await isDbReachable()))(
     });
 
     it('leaves the participant unverified when the token is refused', async () => {
-      const fixture = await createTournamentAndRegulation(
-        'verify-account-refused',
-        null,
-      );
-      const entryId = await createEntryFixture(
-        fixture.regionId,
-        fixture.tournamentId,
-        fixture.regulationId,
-      );
+      const fixture = await createFixture('verify-account-refused', null);
+      const entryId = await createEntryFixture(fixture);
       const token = await createTokenFixture(entryId, {
         expiresAt: '2020-01-01T00:00:00Z',
       });
@@ -256,25 +157,16 @@ describe.skipIf(!(await isDbReachable()))(
     });
 
     it('waitlists an entry when capacity is full', async () => {
-      const fixture = await createTournamentAndRegulation('capacity', 1);
-      await createEntryFixture(
-        fixture.regionId,
-        fixture.tournamentId,
-        fixture.regulationId,
-        'confirmed',
-      );
-      const entryId = await createEntryFixture(
-        fixture.regionId,
-        fixture.tournamentId,
-        fixture.regulationId,
-      );
+      const fixture = await createFixture('capacity', 1);
+      await createEntryFixture(fixture, 'confirmed');
+      const entryId = await createEntryFixture(fixture);
       const token = await createTokenFixture(entryId);
 
       const result = await confirmEntryByToken(env, token);
 
       expect(result).toEqual({
         ok: true,
-        status: 'waitlisted',
+        entryStatus: 'waitlisted',
         tournament: {
           regionSlug: `${testRegionSlug}-capacity`,
           type: 'saikyoi',
@@ -288,50 +180,49 @@ describe.skipIf(!(await isDbReachable()))(
     });
 
     it('rejects an expired token', async () => {
-      const fixture = await createTournamentAndRegulation('expired', null);
-      const entryId = await createEntryFixture(
-        fixture.regionId,
-        fixture.tournamentId,
-        fixture.regulationId,
-      );
+      const fixture = await createFixture('expired', null);
+      const entryId = await createEntryFixture(fixture);
       const token = await createTokenFixture(entryId, {
         expiresAt: '2020-01-01T00:00:00Z',
       });
 
       const result = await confirmEntryByToken(env, token);
 
-      expect(result).toMatchObject({ok: false, reason: 'invalid_token'});
+      expect(result).toEqual({
+        ok: false,
+        status: 400,
+        error: COMMON_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
+      });
     });
 
     it('rejects an already-used token', async () => {
-      const fixture = await createTournamentAndRegulation('used', null);
-      const entryId = await createEntryFixture(
-        fixture.regionId,
-        fixture.tournamentId,
-        fixture.regulationId,
-      );
+      const fixture = await createFixture('used', null);
+      const entryId = await createEntryFixture(fixture);
       const token = await createTokenFixture(entryId, {used: true});
 
       const result = await confirmEntryByToken(env, token);
 
-      expect(result).toMatchObject({ok: false, reason: 'invalid_token'});
+      expect(result).toEqual({
+        ok: false,
+        status: 400,
+        error: COMMON_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
+      });
     });
 
     it('rejects a valid token whose entry is no longer pending', async () => {
-      const fixture = await createTournamentAndRegulation('cancelled', null);
-      const entryId = await createEntryFixture(
-        fixture.regionId,
-        fixture.tournamentId,
-        fixture.regulationId,
-        'cancelled',
-      );
+      const fixture = await createFixture('cancelled', null);
+      const entryId = await createEntryFixture(fixture, 'cancelled');
       // A token a re-entry inserted while the cancellation was running: the
       // cancellation never saw it, so it is still unused and unexpired.
       const token = await createTokenFixture(entryId);
 
       const result = await confirmEntryByToken(env, token);
 
-      expect(result).toMatchObject({ok: false, reason: 'invalid_token'});
+      expect(result).toEqual({
+        ok: false,
+        status: 400,
+        error: COMMON_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
+      });
       const [entryRow] = await sql`
         select status from entries where id = ${entryId}
       `;
@@ -341,7 +232,11 @@ describe.skipIf(!(await isDbReachable()))(
     it('rejects an unknown token', async () => {
       const result = await confirmEntryByToken(env, generateToken());
 
-      expect(result).toMatchObject({ok: false, reason: 'invalid_token'});
+      expect(result).toEqual({
+        ok: false,
+        status: 400,
+        error: COMMON_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
+      });
     });
   },
 );

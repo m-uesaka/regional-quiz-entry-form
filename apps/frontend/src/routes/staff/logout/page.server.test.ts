@@ -1,5 +1,9 @@
 import {describe, expect, it} from 'vitest';
 import type {Cookies, Redirect} from '@sveltejs/kit';
+import {
+  fakeFetch,
+  type RecordedRequest,
+} from '../../../test-support/fake-fetch';
 import {actions, load} from './+page.server';
 
 /** A cookie written back on the response, as `Cookies.set()` took it. */
@@ -36,13 +40,25 @@ function buildEvent(
   } as Parameters<typeof actions.default>[0];
 }
 
-/** Builds a fake `fetch` answering the logout call with the given status. */
-function fakeLogoutFetch(status: number): typeof fetch {
-  return (async () =>
-    new Response(JSON.stringify({ok: status === 200}), {
-      status,
-      headers: {'Content-Type': 'application/json'},
-    })) as typeof fetch;
+/**
+ * Builds a fake `fetch` answering the logout call with the given status.
+ * @param requests Collects the requests sent.
+ */
+function fakeLogoutFetch(
+  status: number,
+  requests?: RecordedRequest[],
+): typeof fetch {
+  return fakeFetch(
+    [
+      {
+        method: 'POST',
+        url: '/api/auth/staff/logout',
+        status,
+        body: {ok: status === 200},
+      },
+    ],
+    requests,
+  );
 }
 
 describe('staff logout +page.server load', () => {
@@ -58,24 +74,20 @@ describe('staff logout +page.server load', () => {
 
 describe('staff logout +page.server action', () => {
   it('asks the API to end the session, then redirects to the login page', async () => {
-    let requested: {url: string; method?: string} | undefined;
-    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      requested = {url: String(input), method: init?.method};
-      return fakeLogoutFetch(200)(input, init);
-    }) as typeof fetch;
-
+    const requests: RecordedRequest[] = [];
     const set: SetCookie[] = [];
     const deleted: string[] = [];
 
     await expect(
-      actions.default(buildEvent(fetchImpl, set, deleted)),
+      actions.default(buildEvent(fakeLogoutFetch(200, requests), set, deleted)),
     ).rejects.toMatchObject({
       status: 303,
       location: '/staff/login',
     } satisfies Partial<Redirect>);
 
-    expect(requested?.method).toBe('POST');
-    expect(requested?.url).toContain('/api/auth/staff/logout');
+    expect(requests).toEqual([
+      {method: 'POST', url: '/api/auth/staff/logout', body: undefined},
+    ]);
     // The deletion `Set-Cookie` rides back through `handleFetch`, not
     // through this action, so nothing is touched here on success.
     expect(set).toEqual([]);
@@ -88,9 +100,15 @@ describe('staff logout +page.server action', () => {
     // A rejected fetch (unset `BACKEND_URL`, unreachable Worker) has no
     // status to branch on, and must not surface as a 500 with the session
     // left standing.
-    const rejecting = (async () => {
-      throw new Error('BACKEND_URL is not set');
-    }) as typeof fetch;
+    const rejecting = fakeFetch([
+      {
+        method: 'POST',
+        url: '/api/auth/staff/logout',
+        respond: () => {
+          throw new Error('BACKEND_URL is not set');
+        },
+      },
+    ]);
 
     await expect(
       actions.default(buildEvent(rejecting, set, deleted)),

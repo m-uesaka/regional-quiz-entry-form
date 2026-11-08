@@ -1,5 +1,5 @@
 import type {StaffLoginScope} from '@regional-quiz/shared';
-import type {createDbClient} from './db';
+import type {DbClient} from './db';
 
 /**
  * Looks up the enabled staff account an address and a scope name, the way
@@ -17,14 +17,15 @@ import type {createDbClient} from './db';
  * @param db The Supabase client to read with.
  * @param email The address, already lowercased by the request schema.
  * @param scope Which of the address's accounts.
- * @param columns The `select` to read the account with.
+ * @param columns The `select` to read the account with. A string literal,
+ *     so the row it reads is inferred from it.
  */
-export async function findStaffAccountByScope<Row>(
-  db: ReturnType<typeof createDbClient>,
+export async function findStaffAccountByScope<Columns extends string>(
+  db: DbClient,
   email: string,
   scope: StaffLoginScope,
-  columns: string,
-): Promise<{data: Row | null; error: {message: string} | null}> {
+  columns: Columns,
+) {
   const query = db
     .from('staff_accounts')
     .select(columns)
@@ -34,7 +35,5 @@ export async function findStaffAccountByScope<Row>(
     scope === 'general'
       ? query.is('tournament_type', null)
       : query.eq('tournament_type', scope)
-  )
-    .returns<Row[]>()
-    .maybeSingle();
+  ).maybeSingle();
 }

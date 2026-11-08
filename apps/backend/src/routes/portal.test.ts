@@ -1,18 +1,8 @@
 import {afterEach, describe, expect, it} from 'bun:test';
-import type {Bindings} from '../types/env';
 import {app} from '../index';
-import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {testBindings} from '../test-support/bindings';
 
-const env: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
-  SUPABASE_URL: 'http://127.0.0.1:54321',
-  SUPABASE_SECRET_KEY: 'dummy-secret-key',
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL: 'https://entry.example.com',
-  SESSION_SECRET: 'test-session-secret',
-};
+const env = testBindings();
 
 /** A `tournaments` row with its region embedded, as the route selects it. */
 function row(
@@ -47,8 +37,14 @@ const PRIORITY_REGULATIONS = [
     label: '開催地域に在住の方',
     priority_starts_at: '2026-11-01T00:00:00+00:00',
     priority_ends_at: '2026-11-05T00:00:00+00:00',
+    closes_with_priority: true,
   },
-  {label: 'どなたでも', priority_starts_at: null, priority_ends_at: null},
+  {
+    label: 'どなたでも',
+    priority_starts_at: null,
+    priority_ends_at: null,
+    closes_with_priority: false,
+  },
 ];
 
 // Mocks the `fetch` call `@supabase/supabase-js` makes for the select (same
@@ -171,6 +167,7 @@ describe('GET /portal/tournaments (mocked Supabase)', () => {
         label: '開催地域に在住の方',
         priorityStartsAt: '2026-11-01T00:00:00+00:00',
         priorityEndsAt: '2026-11-05T00:00:00+00:00',
+        closesWithPriority: true,
       },
     ]);
   });

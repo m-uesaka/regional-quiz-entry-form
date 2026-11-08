@@ -3,6 +3,50 @@ import {z} from 'zod';
 export const TournamentTypeSchema = z.enum(['saikyoi', 'shinjinou']);
 export type TournamentType = z.infer<typeof TournamentTypeSchema>;
 
+// The longest question set name `tournaments_question_set_format` (0043)
+// accepts, in code points as its `char_length` counts them.
+export const QUESTION_SET_MAX_LENGTH = 100;
+
+// What 問題セット takes in the admin form (0043). A name differing by a
+// single character counts as another question set, which lets through the
+// cross-region entries it should refuse, so the differences nobody sees are
+// taken out before it is stored, the same way 0044 made the database store
+// them: format characters (a zero-width space pasted along with a name) are
+// dropped, NFKC folds full-width letters and digits into the ones staff type
+// elsewhere, and the ends are trimmed (full-width spaces included). A space
+// left inside is refused, as the database refuses it. Blank means the
+// common questions, stored as null.
+//
+// What this stores is already in that form, so sending a stored name back
+// unchanged -- as the edit form does on every save -- stores it unchanged.
+export const QuestionSetInputSchema = z
+  .string()
+  .transform(value =>
+    value
+      .replace(/\p{Cf}/gu, '')
+      .normalize('NFKC')
+      .trim(),
+  )
+  .pipe(
+    z
+      .string()
+      // Code points, not the UTF-16 units `.max()` counts: a kanji outside
+      // the BMP (𠮷) is one character to the database.
+      .refine(value => [...value].length <= QUESTION_SET_MAX_LENGTH, {
+        message: `問題セットは${QUESTION_SET_MAX_LENGTH}文字以内で入力してください`,
+      })
+      .refine(value => !/\s/.test(value), {
+        message: '問題セットに空白は使えません',
+      }),
+  )
+  .transform(value => (value === '' ? null : value))
+  .nullable();
+
+// Response body of `GET /api/tournaments/question-sets`: the names
+// tournaments use, distinct and sorted.
+export const QuestionSetListSchema = z.array(z.string());
+export type QuestionSetList = z.infer<typeof QuestionSetListSchema>;
+
 export const TournamentSchema = z.object({
   id: z.string().uuid(),
   regionId: z.string().uuid(),
@@ -14,6 +58,11 @@ export const TournamentSchema = z.object({
   // Staff paused taking entries (0039): within the period or not, no new
   // entry is accepted and the form is staff-only, as outside the period.
   entriesPaused: z.boolean(),
+  // The question set the tournament uses (0043), or null for the common
+  // questions of its type. Two tournaments of different regions can't both
+  // be entered when this is the same name, or null for both and the same
+  // type (0046): 最強位 and 新人王 don't share their common questions.
+  questionSet: z.string().nullable(),
 });
 export type Tournament = z.infer<typeof TournamentSchema>;
 
@@ -30,7 +79,10 @@ export const TournamentCreateInputSchema = TournamentSchema.omit({
   // Switched by staff on its own (`TournamentEntryPauseInputSchema`), not
   // with the rest of the tournament's settings.
   entriesPaused: true,
-}).extend({name: z.string().trim().default('')});
+}).extend({
+  name: z.string().trim().default(''),
+  questionSet: QuestionSetInputSchema.default(null),
+});
 export type TournamentCreateInput = z.infer<typeof TournamentCreateInputSchema>;
 
 // Request body of `PATCH /api/tournaments/:id`. Every field is optional

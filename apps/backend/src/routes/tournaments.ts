@@ -1,13 +1,15 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {z} from 'zod';
 import {
+  QuestionSetListSchema,
   TournamentCreateInputSchema,
+  TournamentDetailSchema,
   TournamentOrderInputSchema,
   TournamentResetInputSchema,
+  type TournamentCreateInput,
   type TournamentResetResponse,
-  TournamentTypeSchema,
   TournamentUpdateInputSchema,
+  type TournamentUpdateInput,
   type TournamentUpdateResponse,
   type WaitlistPromotion,
 } from '@regional-quiz/shared';
@@ -17,92 +19,99 @@ import {
   byTournamentSlugParams,
   requireOpenEntryPeriodOrStaff,
 } from '../middleware/entry-period';
-import {createDbClient} from '../lib/db';
+import {createDbClient, type TablesInsert, type TablesUpdate} from '../lib/db';
 import {internalError} from '../lib/errors';
+import {FORM_FIELD_DEF_COLUMNS, toFormFieldDef} from '../lib/form-field-defs';
 import {
-  FORM_FIELD_DEF_COLUMNS,
-  toFormFieldDef,
-  type FormFieldDefRow,
-} from '../lib/form-field-defs';
-import {
-  rowToTournament,
-  TOURNAMENT_COLUMNS,
-  type TournamentRow,
-} from '../lib/tournaments';
+  DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
+  DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE,
+  duplicate,
+  ENTRY_PERIOD_OPEN_SQLSTATE,
+  FOREIGN_KEY_VIOLATION_SQLSTATE,
+  mapPgError,
+  missingReference,
+  NO_ROW_PGRST_CODE,
+  noRow,
+  type PgErrorTable,
+  stillReferenced,
+  TOURNAMENT_IDS_MISMATCH_SQLSTATE,
+  UNIQUE_VIOLATION_SQLSTATE,
+} from '../lib/pg-errors';
+import {rowToTournament, TOURNAMENT_COLUMNS} from '../lib/tournaments';
 import {promoteWaitlistedEntries} from '../lib/waitlist';
-
-const TournamentIdParamSchema = z.object({id: z.string().uuid()});
-
-/**
- * Raised by `reorder_tournaments()` (0032) when the ids it is given aren't
- * exactly the tournaments there are.
- */
-const TOURNAMENT_IDS_MISMATCH_SQLSTATE = 'P0003';
+import {IdParamSchema, TournamentBySlugParamSchema} from './params';
 
 /**
- * The constraint violations a tournament write can run into that the staff
- * UI can act on, keyed by SQLSTATE, each with the Japanese message shown
- * above the form.
+ * The constraint violations a tournament insert or update can run into that
+ * the staff UI can act on, each with the Japanese message shown above the
+ * form.
  *
  * Postgres's own messages name tables, columns and constraints, so they are
  * never passed through (#122): a violation listed here is answered with its
  * own wording, and anything else is an internal error.
  */
-const TOURNAMENT_CONSTRAINT_MESSAGES: Readonly<Record<string, string>> = {
-  // unique_violation: `unique (region_id, type)`.
-  '23505': 'この地域には同じ種別の大会がすでにあります',
-  // foreign_key_violation: `region_id` names no region.
-  '23503': '指定された地域が存在しません',
-};
+const TOURNAMENT_WRITE_ERRORS = {
+  // `unique (region_id, type)`.
+  [UNIQUE_VIOLATION_SQLSTATE]: duplicate(
+    'この地域には同じ種別の大会がすでにあります',
+  ),
+  // `region_id` names no region.
+  [FOREIGN_KEY_VIOLATION_SQLSTATE]:
+    missingReference('指定された地域が存在しません'),
+  // The other tournament of a region allowing dual entry has the same
+  // question set (0045).
+  [DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE]: {
+    status: 409,
+    error: DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
+  },
+} as const satisfies PgErrorTable<400 | 409>;
 
 /**
- * The response body and status for a failed tournament insert or update.
- * @param context What was being attempted, for the log line.
- * @param error The error supabase-js returned.
+ * The order `/question-sets` lists names in: Japanese collation (kana in
+ * 五十音 order, kanji by code rather than by reading). Made once rather than
+ * per comparison, as `localeCompare()` would.
  */
-function tournamentWriteError(
-  context: string,
-  error: {code?: string},
-): {body: {error: string}; status: 400 | 500} {
-  const message =
-    error.code === undefined
-      ? undefined
-      : TOURNAMENT_CONSTRAINT_MESSAGES[error.code];
-  if (message !== undefined) {
-    return {body: {error: message}, status: 400};
-  }
-  return {body: internalError(context, error), status: 500};
-}
-/**
- * Raised by `reset_tournament_entries()` (0038) when the tournament's entry
- * period is open, so nothing was deleted.
- */
-const ENTRY_PERIOD_OPEN_SQLSTATE = 'P0007';
+const QUESTION_SET_ORDER = new Intl.Collator('ja');
 
 /** What a tournament delete answers when entries still point at it. */
 const TOURNAMENT_HAS_ENTRIES_MESSAGE = 'エントリーがある大会は削除できません';
 
-/** The one row `reset_tournament_entries()` (0038) returns. */
-interface ResetTournamentEntriesRow {
-  deleted_entry_count: number;
-  deleted_participant_count: number;
-  kept_participant_count: number;
+/**
+ * How a tournament name the client sent is stored: blank is stored as null,
+ * which reads back as the default name for the tournament's region and type
+ * at the time (0024).
+ */
+function storedTournamentName(name: string): string | null {
+  return name === '' ? null : name;
 }
 
-const TournamentBySlugParamSchema = z.object({
-  regionSlug: z.string(),
-  tournamentSlug: TournamentTypeSchema,
-});
+/**
+ * Maps a create body to the snake_case columns `tournaments` has. Every
+ * column is listed, so the return type checks that each one an insert
+ * requires is set.
+ */
+function toTournamentInsert(
+  input: TournamentCreateInput,
+): TablesInsert<'tournaments'> {
+  return {
+    region_id: input.regionId,
+    type: input.type,
+    name: storedTournamentName(input.name),
+    capacity: input.capacity,
+    entry_opens_at: input.entryOpensAt,
+    entry_closes_at: input.entryClosesAt,
+    question_set: input.questionSet,
+  };
+}
 
 /**
- * Maps the camelCase fields the client sends to the snake_case columns
- * `tournaments` actually has. Used for both create (all fields present) and
- * update (only the fields the caller chose to change).
+ * Maps a PATCH body to the snake_case columns `tournaments` has, leaving out
+ * every field the caller did not send so the update changes only those.
  */
-function toTournamentRow(
-  input: Partial<z.infer<typeof TournamentCreateInputSchema>>,
-): Record<string, unknown> {
-  const row: Record<string, unknown> = {};
+function toTournamentUpdate(
+  input: TournamentUpdateInput,
+): TablesUpdate<'tournaments'> {
+  const row: TablesUpdate<'tournaments'> = {};
   if (input.regionId !== undefined) {
     row.region_id = input.regionId;
   }
@@ -110,9 +119,7 @@ function toTournamentRow(
     row.type = input.type;
   }
   if (input.name !== undefined) {
-    // Blank is stored as null, which reads back as the default name for the
-    // tournament's region and type at the time (0024).
-    row.name = input.name === '' ? null : input.name;
+    row.name = storedTournamentName(input.name);
   }
   if (input.capacity !== undefined) {
     row.capacity = input.capacity;
@@ -122,6 +129,10 @@ function toTournamentRow(
   }
   if (input.entryClosesAt !== undefined) {
     row.entry_closes_at = input.entryClosesAt;
+  }
+  // Null is sent, not left out, to go back to the common questions.
+  if (input.questionSet !== undefined) {
+    row.question_set = input.questionSet;
   }
   return row;
 }
@@ -141,8 +152,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
       .select(TOURNAMENT_COLUMNS)
       // The order general staff set with `PUT /order` below.
       .order('display_order', {ascending: true})
-      .order('id', {ascending: true})
-      .returns<TournamentRow[]>();
+      .order('id', {ascending: true});
     if (error) {
       return c.json(
         internalError('failed to read the tournaments', error),
@@ -170,23 +180,49 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         p_tournament_ids: c.req.valid('json').tournamentIds,
       });
       if (error) {
-        if (error.code === TOURNAMENT_IDS_MISMATCH_SQLSTATE) {
-          return c.json(
-            {
+        const {body, status} = mapPgError(
+          error,
+          {
+            [TOURNAMENT_IDS_MISMATCH_SQLSTATE]: {
+              status: 409,
               error:
                 '並べ替えの間に大会が追加または削除されました。ページを読み込み直してから、もう一度並べ替えてください',
             },
-            409,
-          );
-        }
-        return c.json(
-          internalError('failed to reorder the tournaments', error),
-          500,
+          },
+          'failed to reorder the tournaments',
         );
+        return c.json(body, status);
       }
       return c.body(null, 204);
     },
   )
+  // The question set names tournaments use (0043), distinct and sorted, for
+  // the create and edit forms to suggest: a name typed slightly differently
+  // counts as another question set. Its own read rather than the list above,
+  // which the edit screen stopped fetching (#123). Registered before `/:id`,
+  // which would otherwise take `question-sets` for an id and refuse it.
+  .get('/question-sets', requireGeneralStaff(), async c => {
+    const {data, error} = await createDbClient(c.env)
+      .from('tournaments')
+      .select('question_set')
+      .not('question_set', 'is', null);
+    if (error) {
+      return c.json(
+        internalError('failed to read the question sets', error),
+        500,
+      );
+    }
+    // `.not('is', null)` above keeps nulls out; the filter is only for the
+    // column's nullable type.
+    const names = new Set(
+      data.flatMap(row =>
+        row.question_set === null ? [] : [row.question_set],
+      ),
+    );
+    return c.json(
+      QuestionSetListSchema.parse([...names].sort(QUESTION_SET_ORDER.compare)),
+    );
+  })
   // For the edit screen, which used to fetch the whole list above just to
   // `find` one tournament in it (#123). One segment, so it can't collide
   // with the two-segment `/:regionSlug/:tournamentSlug` read below, nor with
@@ -200,20 +236,19 @@ export const tournamentsRoute = new Hono<StaffEnv>()
   .get(
     '/:id',
     requireGeneralStaff(),
-    zValidator('param', TournamentIdParamSchema),
+    zValidator('param', IdParamSchema),
     async c => {
       const db = createDbClient(c.env);
       const {data, error} = await db
         .from('tournaments')
         .select(
-          `${TOURNAMENT_COLUMNS}, form_field_defs(${FORM_FIELD_DEF_COLUMNS})`,
+          `${TOURNAMENT_COLUMNS}, form_field_defs(${FORM_FIELD_DEF_COLUMNS})` as const,
         )
         .eq('id', c.req.valid('param').id)
         .order('display_order', {
           referencedTable: 'form_field_defs',
           ascending: true,
         })
-        .returns<(TournamentRow & {form_field_defs: FormFieldDefRow[]})[]>()
         .maybeSingle();
       if (error) {
         return c.json(
@@ -224,11 +259,13 @@ export const tournamentsRoute = new Hono<StaffEnv>()
       if (!data) {
         return c.json({error: 'tournament not found'}, 404);
       }
-      return c.json({
-        tournament: rowToTournament(data),
-        customName: data.name,
-        formFieldDefs: data.form_field_defs.map(toFormFieldDef),
-      });
+      return c.json(
+        TournamentDetailSchema.parse({
+          tournament: rowToTournament(data),
+          customName: data.name,
+          formFieldDefs: data.form_field_defs.map(toFormFieldDef),
+        }),
+      );
     },
   )
   .post(
@@ -239,14 +276,14 @@ export const tournamentsRoute = new Hono<StaffEnv>()
       const db = createDbClient(c.env);
       const {data, error} = await db
         .from('tournaments')
-        .insert(toTournamentRow(c.req.valid('json')))
+        .insert(toTournamentInsert(c.req.valid('json')))
         .select(TOURNAMENT_COLUMNS)
-        .returns<TournamentRow[]>()
         .single();
       if (error) {
-        const {body, status} = tournamentWriteError(
-          'failed to create the tournament',
+        const {body, status} = mapPgError(
           error,
+          TOURNAMENT_WRITE_ERRORS,
+          'failed to create the tournament',
         );
         return c.json(body, status);
       }
@@ -256,7 +293,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
   .patch(
     '/:id',
     requireGeneralStaff(),
-    zValidator('param', TournamentIdParamSchema),
+    zValidator('param', IdParamSchema),
     zValidator('json', TournamentUpdateInputSchema),
     async c => {
       const db = createDbClient(c.env);
@@ -264,21 +301,21 @@ export const tournamentsRoute = new Hono<StaffEnv>()
       const input = c.req.valid('json');
       const {data, error} = await db
         .from('tournaments')
-        .update(toTournamentRow(input))
+        .update(toTournamentUpdate(input))
         .eq('id', id)
         .select(TOURNAMENT_COLUMNS)
-        .returns<TournamentRow[]>()
         .single();
       if (error) {
-        // PGRST116: `.single()` found no matching row to update. Its
-        // message is about the query shape, so it's replaced with the same
-        // wording the reads above use for a missing tournament.
-        if (error.code === 'PGRST116') {
-          return c.json({error: 'tournament not found'}, 404);
-        }
-        const {body, status} = tournamentWriteError(
-          'failed to update the tournament',
+        // `.single()` found no matching row to update. Its message is about
+        // the query shape, so it's replaced with the same wording the reads
+        // above use for a missing tournament.
+        const {body, status} = mapPgError(
           error,
+          {
+            ...TOURNAMENT_WRITE_ERRORS,
+            [NO_ROW_PGRST_CODE]: noRow('tournament not found'),
+          },
+          'failed to update the tournament',
         );
         return c.json(body, status);
       }
@@ -318,7 +355,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
   .delete(
     '/:id',
     requireGeneralStaff(),
-    zValidator('param', TournamentIdParamSchema),
+    zValidator('param', IdParamSchema),
     async c => {
       const db = createDbClient(c.env);
       const {data, error} = await db
@@ -327,14 +364,17 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         .eq('id', c.req.valid('param').id)
         .select('id');
       if (error) {
-        // foreign_key_violation: `entries.tournament_id` still points here.
-        if (error.code === '23503') {
-          return c.json({error: TOURNAMENT_HAS_ENTRIES_MESSAGE}, 409);
-        }
-        return c.json(
-          internalError('failed to delete the tournament', error),
-          500,
+        const {body, status} = mapPgError(
+          error,
+          {
+            // `entries.tournament_id` still points here.
+            [FOREIGN_KEY_VIOLATION_SQLSTATE]: stillReferenced(
+              TOURNAMENT_HAS_ENTRIES_MESSAGE,
+            ),
+          },
+          'failed to delete the tournament',
         );
+        return c.json(body, status);
       }
       if (data.length === 0) {
         return c.json({error: 'tournament not found'}, 404);
@@ -356,7 +396,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
   .post(
     '/:id/reset',
     requireGeneralStaff(),
-    zValidator('param', TournamentIdParamSchema),
+    zValidator('param', IdParamSchema),
     zValidator('json', TournamentResetInputSchema),
     async c => {
       const {data, error} = await createDbClient(c.env).rpc(
@@ -367,20 +407,19 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         },
       );
       if (error) {
-        if (error.code === ENTRY_PERIOD_OPEN_SQLSTATE) {
-          return c.json(
-            {error: 'エントリー期間中の大会はリセットできません'},
-            409,
-          );
-        }
-        return c.json(
-          internalError('failed to reset the tournament entries', error),
-          500,
+        const {body, status} = mapPgError(
+          error,
+          {
+            [ENTRY_PERIOD_OPEN_SQLSTATE]: {
+              status: 409,
+              error: 'エントリー期間中の大会はリセットできません',
+            },
+          },
+          'failed to reset the tournament entries',
         );
+        return c.json(body, status);
       }
-      // Cast rather than `.returns()`, for the reason `lib/waitlist.ts`
-      // gives: the client isn't built with generated Database types.
-      const [row] = (data as ResetTournamentEntriesRow[] | null) ?? [];
+      const [row] = data ?? [];
       if (!row) {
         return c.json({error: 'tournament not found'}, 404);
       }

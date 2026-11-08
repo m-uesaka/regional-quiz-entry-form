@@ -194,6 +194,30 @@ if ('yaml' in body) {
 }
 ```
 
+#### DB エラーとステータスの対応
+
+Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts` にまとめています(#199)。ルートは `mapPgError(error, table, context)` に「このルートで名前を付けられるコード → `{status, error}`」の表を渡し、表に無いコードは `internalError()` でログに送って定型文の 500 にします。Postgres の元のメッセージ(テーブル名・制約名を含む)は応答に載せません。
+
+`mapPgError()` を使う管理 API(`routes/tournaments.ts`・`routes/regions.ts`・`routes/staff-accounts.ts`)では、同じ種類の違反は、どのルートでも同じステータスで返します。
+
+| コード | 意味 | ステータス |
+| --- | --- | --- |
+| `23505`(`unique_violation`) | 既にある行と重複する(slug・メールアドレス・地域内の同じ種別の大会など) | `409` |
+| `23503`(`foreign_key_violation`)— insert / update | リクエストが存在しない行を指している(存在しない `regionId` など) | `400` |
+| `23503`(`foreign_key_violation`)— delete | 削除しようとした行がまだ参照されている(エントリーがある大会、使用中のレギュレーション) | `409` |
+| `PGRST116` | `.single()` の更新対象が無い | `404` |
+
+この対応は `PgErrorTable` の型で固定しています。表のこれらのコードに別のステータスを書くとコンパイルエラーになります(`23503` だけは文によって `400` か `409` のどちらか)。
+
+参加者のエントリー送信(`apps/backend/src/lib/entry-submission.ts`)は `mapPgError()` を使わず、同時操作による競合を参加者が対処できる 409 として返すため、この表とは次の点で異なります。
+
+- 再エントリー時に `.single()` が `PGRST116` を返した場合(取り消し済みの行を同時の送信が先に取得・削除した)は、`404` ではなく `409` の `concurrent submission` を返します
+- エントリーの保存後にレギュレーションの選択を書き込む際の `23503` は、同時の `sync_regulations()` によるレギュレーションの削除を意味するため、`400` ではなく `409` の `regulation no longer available` を返します(エントリーはロールバックします)
+
+`P0002` 以降の独自コードは Postgres 関数ごとに意味が違う(例: `P0003` は無効なトークン・未知のレギュレーション・大会 ID の不一致のいずれか)ため、`pg-errors.ts` では意味ごとに別名の定数(`INVALID_TOKEN_SQLSTATE`、`UNKNOWN_REGULATION_SQLSTATE` など)を定義し、呼び出した関数に対応する定数とだけ比べます。
+
+`error` の文字列は、フロントエンドがコードとして照合して自前の文言に置き換えるもの(`slug already in use` など英語の定型文)と、スタッフ画面がそのまま表示する日本語の文言(大会・レギュレーションの制約違反など)の2種類です。前者の値を変えるときはフロントエンドの照合も同時に直してください。
+
 ## 2. エンドポイント一覧
 
 「認可」列が「なし」(または「期間中はなし」)で始まる行は、無認証で到達できるルートです。この表は登録済みのルート、および `apps/backend/src/routes-authz.test.ts` の認可方針(`ROUTE_POLICIES`)と**一致することをテストで確かめています**(「なし」→ 公開、「期間中はなし」→ 期間ゲート、「統括スタッフ」「スタッフ(担当範囲)」「参加者」→ それぞれのガード)。ルートを足したら、この表にも行を足してください(理由は [`database-schema.md`](./database-schema.md) 4 章)。
@@ -218,6 +242,7 @@ if ('yaml' in body) {
 | PATCH | `/api/tournaments/:id` | 統括スタッフ |
 | DELETE | `/api/tournaments/:id` | 統括スタッフ |
 | PUT | `/api/tournaments/order` | 統括スタッフ |
+| GET | `/api/tournaments/question-sets` | 統括スタッフ |
 | POST | `/api/tournaments/:id/reset` | 統括スタッフ |
 | GET | `/api/tournaments/:regionSlug/:tournamentSlug` | 期間中はなし / 期間外は担当スタッフ |
 | GET | `/api/tournaments/:tournamentId/regulations` | 期間中はなし / 期間外は担当スタッフ |
@@ -397,6 +422,7 @@ if ('yaml' in body) {
 - `200`: 更新後の `Region`
 - `400`: バリデーション違反(`zValidator`)
 - `404`: `{"error": "region not found"}`(Supabase の `PGRST116` を変換)
+- `409`: `{"error": "重複エントリーを認める地域では、最強位と新人王に同じ問題セットを設定できません"}` — 最強位と新人王に同じ問題セット(名前を設定したもの)が付いている地域で、`allowsDualEntry` を `true` にしようとした(SQLSTATE `P0010`、`0045`)。管理画面はこの文言をそのまま表示します
 - `401` / `403`
 - `500`: `{"error": "internal server error"}` — 作成時と同じ理由で、対象が無い以外の更新失敗はサーバ側の失敗として扱います
 
@@ -431,20 +457,23 @@ if ('yaml' in body) {
 
 ### `POST /api/tournaments`
 
-- リクエスト: `TournamentCreateInputSchema` — `{regionId, type, name, capacity, entryOpensAt, entryClosesAt}`
+- リクエスト: `TournamentCreateInputSchema` — `{regionId, type, name, capacity, entryOpensAt, entryClosesAt, questionSet}`
+  - `questionSet` は**任意**(`0043`)。省略・`null`・空白のみは共通問題(`null`)。`QuestionSetInputSchema` が書式文字(ゼロ幅スペースなど)の除去、NFKC 正規化(全角英数字を半角に、半角カナを全角に)、前後の空白除去(全角空白を含む)をし(DB も `0044` からこの形の値しか受け付けないので、保存済みの名前を送り直しても変わりません)、途中に空白を含む名前と 100 文字(コードポイント数)を超える名前は 400 で断ります。PATCH では省略すると今の値を保ち、`null` を送ると共通問題に戻します
   - `name` は**任意**(#164)。省略・空文字・空白のみのときは `null` を保存し、応答では地域名と種別のラベルをつないだ `defaultTournamentName()`(`packages/shared`、例: `東京最強位`)を返します。既定名は**読むたびに**その時点の地域名・種別から作る(`lib/tournaments.ts` の `tournamentDisplayName()`、`0024`)ので、地域名を変えたり大会の地域・種別を直したりすると大会名も追従します。
   - `capacity` は `null` 可(定員無制限)。
   - `entryOpensAt` / `entryClosesAt` はオフセット付き ISO 8601 文字列。
 - `201`: 作成された `Tournament`
-- `400`: `{"error": ...}` — Zod のバリデーションエラー、または DB が拒否した既知の制約違反(下記)
+- `400`: `{"error": ...}` — Zod のバリデーションエラー、または存在しない地域(下記)
+- `409`: `{"error": ...}` — 同じ地域に同じ種別の大会がすでにある(下記)
 - `500`: `{"error": "internal server error"}` — それ以外の DB エラー
 
-DB の制約違反は、Postgres のメッセージ(テーブル名・列名・制約名を含む)をそのまま返さず、**既知のものだけを日本語に置き換えて** 400 で返します(#122)。管理画面はこの文言をフォームの上にそのまま表示します。
+DB の制約違反は、Postgres のメッセージ(テーブル名・列名・制約名を含む)をそのまま返さず、**既知のものだけを日本語に置き換えて**返します(#122)。管理画面はこの文言をフォームの上にそのまま表示します。ステータスは「DB エラーとステータスの対応」の表に従います(#199 で重複を 400 から 409 に変更)。
 
-| SQLSTATE | `error` | 条件 |
-| --- | --- | --- |
-| `23505` | `この地域には同じ種別の大会がすでにあります` | `unique (region_id, type)` 違反 |
-| `23503` | `指定された地域が存在しません` | `regionId` の地域が存在しない |
+| SQLSTATE | ステータス | `error` | 条件 |
+| --- | --- | --- | --- |
+| `23505` | `409` | `この地域には同じ種別の大会がすでにあります` | `unique (region_id, type)` 違反 |
+| `23503` | `400` | `指定された地域が存在しません` | `regionId` の地域が存在しない |
+| `P0010` | `409` | `重複エントリーを認める地域では、最強位と新人王に同じ問題セットを設定できません` | 重複エントリーを認める地域で、もう一方の大会と同じ問題セットにしようとした(`0045`) |
 
 それ以外は `internalError()` でログに送り、定型文の 500 にします。
 
@@ -457,7 +486,8 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 - `capacity` を送った場合は、更新後にキャンセル待ちの繰り上げ(`promote_waitlisted_entries()`、`0037`)を行い、繰り上げた参加者に通知メールを送ります(#223)。定員を増やした・空欄(定員なし)にしたとき、または以前の繰り上げの失敗で空席が残っていたときに、空いた席の数だけキャンセル待ちの先頭から確定にします。空きが無ければ何もしません(定員を減らしても確定済みはそのまま)
 - `200` の本文は `TournamentUpdateResponse` — 更新後の `Tournament` に `promotion` を加えたもの。`promotion` は `{promotedCount, mailFailedCount}`(繰り上げた件数と、通知メールを送れなかった件数。`capacity` を送らなかった場合は両方 `0`)、繰り上げ自体に失敗した場合は `null`。更新はコミット済みなので失敗でも `200` を返し、ログに残します(定員を保存し直すと再実行されます)。大会編集画面はこれを「キャンセル待ち N 件を繰り上げ、通知メールを送りました」などと表示します
 - `404`: 対象が存在しない(Supabase の `PGRST116` を 404 に変換)
-- `400`: Zod のバリデーションエラー、または上の `POST` と同じ既知の制約違反(日本語の `error`)
+- `400`: Zod のバリデーションエラー、または上の `POST` と同じ存在しない地域(日本語の `error`)
+- `409`: 上の `POST` と同じ、同じ地域に同じ種別の大会がすでにある(日本語の `error`)
 - `500`: それ以外の更新失敗(`{"error": "internal server error"}`)
 
 ### `DELETE /api/tournaments/:id`
@@ -504,6 +534,13 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 - `409`: `{"error": "並べ替えの間に大会が追加または削除されました。ページを読み込み直してから、もう一度並べ替えてください"}` — SQLSTATE `P0003`
 - `500`: `{"error": "internal server error"}`
 
+### `GET /api/tournaments/question-sets`
+
+大会が使っている問題セット(`tournaments.question_set`、`0043`)の名前を、重複を除いて並べて返します。共通問題(`null`)は含みません。大会の作成・編集画面が「問題セット」欄の候補に使います。名前が 1 文字でも違うと別の問題セットになり、断るべき地域をまたいだエントリーが通ってしまうので、既にある名前を選べるようにしています。編集画面は大会一覧を読まない(#123)ので、一覧ではなくこの小さな読み取りを使います。`/:id` より先に登録しているので、`question-sets` が id として扱われることはありません。
+
+- `200`: `QuestionSetList` — `string[]`(`Intl.Collator('ja')` の順。かなは五十音順だが、漢字は読みではなく文字コードの順)
+- `500`: `{"error": "internal server error"}`
+
 ### `GET /api/tournaments/:regionSlug/:tournamentSlug`
 
 エントリー期間中は公開、期間外は担当スタッフのみ(`requireOpenEntryPeriodOrStaff()`、§1「認可ミドルウェア」)。地域スラッグと大会種別スラッグの組から大会を1件引きます。`tournaments` に列を返さない空の埋め込み `regions!inner()` を付け、`regions.slug` と `type` で絞る**1回のクエリ**です(#123。以前は `regions` → `tournaments` の2段階でした)。内部結合なので地域が無い場合も「該当行なし」になります。クエリはミドルウェアが行い、ハンドラはその結果を返すだけです。
@@ -521,7 +558,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 
 エントリー期間中は公開、期間外は担当スタッフのみ(`requireOpenEntryPeriodOrStaff()`)。大会に紐づくレギュレーションを `display_order` 昇順で返します。期間中に認証を課さないのは、エントリーフォームが未ログインの訪問者にも選択肢を出す必要があり、レギュレーションが個人情報を含まない(ラベルと優先期間だけ)ためです。期間外はこれ自体が未公開フォームの中身なので、大会取得 API と同じゲートが掛かります。
 
-- `200`: `Regulation[]` — `{id, tournamentId, label, priorityStartsAt, priorityEndsAt, displayOrder}`
+- `200`: `Regulation[]` — `{id, tournamentId, label, priorityStartsAt, priorityEndsAt, closesWithPriority, displayOrder}`
 - `400`: `:tournamentId` が UUID でない
 - `401`: `{"error": "staff session expired"}` — `staff_session` はあるが検証できない(期限切れ等)
 - `403`: `{"error": "entry period closed"}` — 期間外で、担当スタッフのセッションが無い
@@ -541,14 +578,16 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
   | `label` | string | 1〜400文字(`REGULATION_LABEL_MAX_LENGTH`) |
   | `priorityStartsAt` | string(datetime) \| null | 省略時は `null` |
   | `priorityEndsAt` | string(datetime) \| null | 省略時は `null` |
+  | `closesWithPriority` | boolean | 優先期間の終了後に選択肢から外すか。**省略すると、既存行は今の値を保ち、新しい行は `false`**。`true` には優先期間が必要 |
 - `displayOrder` は送りません。**配列の並び順がそのまま `display_order`** になるので、並べ替えは配列を並べ替えるだけです。
 - 優先期間は「両方 null」か「両方指定(開始 < 終了)」のみ許容します(Zod と `regulations` の check 制約 `regulations_priority_window_complete` の両方で担保)。
-- 大会を「優先枠 → 一般枠」の順に開くために、一般向けのレギュレーションへ締切までの期間を設定している場合、優先枠の終了後は優先エントリーではなく通常エントリーとして扱います(#235)。優先対象の選択を求めず、ポータルとエントリーフォームにも優先エントリーの案内を出しません。終わった優先枠のレギュレーションは選択肢から外れ、送信も断ります。条件は [`database-schema.md`](./database-schema.md) の `regulations` を参照してください。
+- `closesWithPriority` の枠の優先期間がすべて終わり、どの優先期間も始まった後は、その枠が選択肢から外れて送信も断られ、外す枠の終了後に始まった他の優先期間は制限でなくなります(#243)。優先対象の選択を求めず、ポータルとエントリーフォームにも優先エントリーの案内を出しません。詳細は [`database-schema.md`](./database-schema.md) の `regulations` を参照してください。
 - 配列に含まれなかった既存行は削除されますが、**エントリーから参照されている行は削除できません**。`entry_regulations` が複合外部キー `(regulation_id, tournament_id)` で参照しているため、フォーム定義のような delete → insert は使えず、id 指定は update・id 無しは insert・消えた行は「参照が無ければ delete」という差分同期になっています。
 - `regulations` は1件以上必要です(エントリーは必ず1つ以上選ぶため、0件の大会はエントリー不可になる)。
+- 保存後に `closesWithPriority` でない行が1件以上必要です。すべて外れる設定だと、外れた後に選べる枠が無くなるためです。送った値だけでなく、省略して保たれた値も含めて判定します。
 
 - `200`: `{"ok": true}`
-- `400`: `:tournamentId` が UUID でない / リクエストが `RegulationSyncInputSchema` に合わない / `id` がこの大会のレギュレーションでない(`この大会に存在しないレギュレーションが指定されています: ...`)
+- `400`: `:tournamentId` が UUID でない / リクエストが `RegulationSyncInputSchema` に合わない / `id` がこの大会のレギュレーションでない(`この大会に存在しないレギュレーションが指定されています: ...`)/ 保存後にすべての行が `closesWithPriority`(`優先期間の終了後も選択肢に残るレギュレーションが1つ以上必要です`)
 - `401`: スタッフセッションが無い
 - `403`: 地域スタッフ
 - `404`: `{"error": "tournament not found"}`
@@ -559,7 +598,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 
 ### `POST /api/tournaments/:tournamentId/entries`
 
-未ログインでのエントリー登録。処理の本体は `apps/backend/src/lib/entries.ts` の `checkEntrySubmission()` と `createEntryUnauthenticated()` です。
+未ログインでのエントリー登録。処理の本体は `apps/backend/src/lib/entry-submission.ts` の `checkEntrySubmission()` と `createEntryUnauthenticated()` です。
 
 **応答はメールアドレスの状態によらず同じです**(#117)。「登録済みのアドレスか」「どの地域で登録済みか」が応答から読めると、この API がアドレスの登録有無を調べる手段になってしまうためです(ログインとパスワード再設定要求は既に同じ対策をしています)。そこで:
 
@@ -574,9 +613,10 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 | 未登録 | アカウントとエントリーを作成 | 確認メール |
 | 確認済み + パスワード一致 | エントリーを作成(アカウントの地域もこの大会の地域に移す) | 確認メール |
 | 確認済み + パスワード不一致 | 作らない | 「登録済みのパスワードでログインしてからエントリーしてください」 |
-| 確認済み + パスワード一致 + 別の地域に参加中、または受付終了後にキャンセルしたエントリーあり | 作らない | 「別の地域の大会にエントリーしている。受付終了後にキャンセルしたものでなければ、キャンセルするとエントリーできる」 |
-| 未確認 + パスワード一致 + 同じ地域 | エントリーを作成(先のエントリーも残す) | 確認メール |
-| 未確認 + それ以外(パスワード不一致、または別の地域) | アカウントのパスワードと地域をこの送信のもので上書きし、先の送信が作ったエントリーと確認トークンを削除してから、エントリーを作成 | 確認メール |
+| 確認済み + パスワード一致 + 同じ問題セットの別の地域に参加中、または受付終了後にキャンセルしたエントリーあり | 作らない | 「別の地域の大会にエントリーしている。受付終了後にキャンセルしたものでなければ、キャンセルするとエントリーできる」 |
+| 未確認 + パスワード一致 + 問題セットが同じ別の地域の枠を持たない(期限切れの確定待ちは先に取り消してから判定) | エントリーを作成(先のエントリーも残す) | 確認メール |
+| 未確認 + パスワード一致 + 問題セットが同じ別の地域の枠あり | 作らない(上書きもしない。先のエントリーは残す) | 確認済みの場合と同じ「別の地域の大会にエントリーしている」案内 |
+| 未確認 + パスワード不一致 | アカウントのパスワードと地域をこの送信のもので上書きし、先の送信が作ったエントリーと確認トークンを削除してから、エントリーを作成 | 確認メール |
 | 未登録 / 未確認の上書き + よく使われるパスワード | 作らない | 「よく使われているパスワードのため登録できませんでした」 |
 | 同じ大会にエントリー済み | 作らない | 「既にエントリー済み」 |
 | 同一地域の別大会にエントリー済み(重複不可の地域) | 作らない | 「どちらか一方にのみエントリーできます」 |
@@ -622,8 +662,8 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 | 400 | `invalid tournament` | `:tournamentId` の大会が存在しない |
 | 400 | `unknown custom field: ...` 等 | `customFieldValues` が大会の `form_field_defs` と一致しない(メッセージは [`form-generation.md`](./form-generation.md) の一覧を参照) |
 | 403 | `entry period closed` | エントリー期間外 |
-| 403 | `regulation not eligible in priority window` | `regulationIds` が空、この大会のものでない id を含む、または優先期間中に優先対象を1つも選んでいない(一般枠の段階は優先期間中として扱わない。`database-schema.md` の `regulations` を参照) |
-| 409 | `regulation no longer available` | 一般枠の段階に入り、選択肢から外れた優先枠のレギュレーションを含む(フォームを開いたまま優先枠が終わった場合) |
+| 403 | `regulation not eligible in priority window` | `regulationIds` が空、または優先期間中に優先対象を1つも選んでいない(一般枠の段階は優先期間中として扱わない。`database-schema.md` の `regulations` を参照) |
+| 409 | `regulation no longer available` | この大会のものでない id か、一般枠の段階に入って選択肢から外れた優先枠のレギュレーションを含む(フォームを開いたまま、レギュレーションが削除された場合や優先枠が終わった場合)。エントリーフォームはレギュレーションを読み直す |
 | 500 | `internal server error` | 大会や `form_field_defs` の取得に失敗 |
 
 ### `POST /api/tournaments/:tournamentId/entries/session`
@@ -639,7 +679,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 | ステータス | `error` | 条件 |
 | --- | --- | --- |
 | 401 | `unauthorized` | セッションが無い / 無効 |
-| 400 / 403 / 409 | (上と同じ) | 大会・期間・優先期間・追加項目の検証。409 は `regulation no longer available`(一般枠の段階に入り、選択肢から外れたレギュレーションを含む) |
+| 400 / 403 / 409 | (上と同じ) | 大会・期間・優先期間・追加項目の検証。409 は `regulation no longer available`(選択肢に無いレギュレーションを含む) |
 | 409 | `already registered in another region` | 別の地域の大会に参加中のエントリーがある、または受付終了後にキャンセルした確定済みのエントリーがある(#236) |
 | 409 | `already entered` | 同じ大会に確定済み・キャンセル待ちのエントリーが既にある |
 | 409 | `entry pending verification` | 同じ大会に確定待ちのエントリーがあり、その確認リンクがまだ有効(#172) |
@@ -655,23 +695,23 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 2. その大会の `form_field_defs` を取得し、`customFieldValues` を `findCustomFieldValuesError()` で照合(未定義キー、選択肢にない値、必須項目の空欄、型の不一致を 400 で弾く)。
 3. 未ログインならメールアドレスから participant を検索し、既存なら**パスワード照合**、無ければ新規作成(PBKDF2 でハッシュ化)。ログイン中ならセッションの participant を使う。
 4. その participant の確定待ちエントリーのうち、**確認リンクの期限が切れたもの**を `cancelled` にする(DB 関数 `lapse_expired_pending_entries()`、#172。後述)。
-5. 同じ大会の既存エントリーを確認。`cancelled` なら**その行を再利用**して上書き(`unique (participant_id, tournament_id)` があるため2行目は作れない)、確認リンクが有効な確定待ちなら `entry pending verification`、それ以外なら `already entered` で 409。
-6. 確認済みの participant なら、DB 関数 `claim_participant_region()` で地域をこの大会の地域に移す(#236。後述)。移せなければ `already registered in another region` で 409。
-7. 地域が重複参加を許していなければ(`regions.allows_dual_entry` が false)、同一地域の**別**大会に有効なエントリーが無いことを確認。
+5. 同じ大会の既存エントリーを確認。`cancelled` なら**その行を再利用**して上書き(`unique (participant_id, tournament_id)` があるため2行目は作れない。書き込みは DB 関数 `reenter_cancelled_entry()`)、確認リンクが有効な確定待ちなら `entry pending verification`、それ以外なら `already entered` で 409。
+6. 確認済みの participant なら、DB 関数 `claim_participant_region_for_tournament()` で地域をこの大会の地域に移す(#236。後述)。断るのは、この大会と問題セット(`tournaments.question_set`、`0043`)が同じ別の地域の枠があるときだけ。移せなければ `already registered in another region` で 409。
+7. エントリーを書き込む。地域が重複参加を許していなければ(`regions.allows_dual_entry` が false)、同一地域の**別**大会に有効なエントリーがあるときはトリガ `check_entry_seat()` が断り(`P0005`)、`already entered another tournament in this region` で 409。同じ問題セットの別の地域の大会に枠を押さえるエントリーがあれば(6. の後に同時の送信が取った場合など)、トリガは `P0008` で断り、`already registered in another region` の 409(未認証の経路では案内メール `other-region`)になります。`0043` 以降の `P0008` は実際にその枠があることを意味し、やり直しても通らないので、`concurrent submission` にはしません。
 8. 確認メールを送信。
 
 `customFieldValues` の照合を participant の検索・作成より前に置いているのは、フォームからは生成し得ない回答を弾いた結果としてアカウントだけが作られる、という副作用を残さないためです。編集 API(`PATCH /api/mypage/entries/:entryId`)と同じ `findCustomFieldValuesError()` を使うので、新規と編集で通る回答は一致します。
 
 重複参加の判定で数えるのは `pending_verification` / `confirmed` / `waitlisted` で、**`cancelled` は数えません**。キャンセルしたなら他方に出られるべきだからです。逆に `pending_verification` を数えるのは、メール確認前の枠取りで両方を押さえるのを防ぐためです。判定対象から**この大会自身は除いて**いるので、キャンセル後に同じ大会へ再エントリーする経路(上の 5.)はそのまま通ります。
 
-**地域の移動(#236)。** 断るのは「別の地域に参加している」ときで、「別の地域で登録した」ときではありません。`participants.region_id` は、別の地域に次のエントリーが無ければ、次のエントリーで移ります。
+**地域の移動(#236)。** 断るのは「同じ問題セットの別の地域に参加している」ときで、「別の地域で登録した」ときではありません。問題セットが違う大会(例: 独自の問題を使う宮崎と鹿児島)なら、地域をまたいでも断りません(`0043`)。共通問題(`null`)は最強位用と新人王用で別の問題セットなので、別の地域の最強位と新人王も断りません(`0046`)。`participants.region_id` は、別の地域に次のエントリーが無ければ、次のエントリーで移ります。
 
 - `cancelled` 以外のエントリー
 - その大会の受付終了より後にキャンセルした、確定済みだったエントリー
 
 後者を残すのは、キャンセルに期限が無いためです。これを数えないと、ある地域の大会に出た後でキャンセルして別の地域の大会に出られてしまいます。受付中のキャンセルと、確定しないまま取り消されたエントリー(期限切れを含む)は地域を押さえません。期限切れの確定待ちは 4. で `cancelled` になっています。
 
-地域を移すのは確認済みの参加者を、パスワードかセッションで本人と確かめた後だけです。この順にしたため、パスワードが違えば別の地域に参加中でも不受理通知は `password-mismatch` になります。未確認のアカウントの地域はアカウントの作成時と上書き時に決まるので、6. は行いません。確認からエントリーの書き込みまでの間に別の送信が地域を移すと、`check_participant_region()` トリガ(`0040`)が書き込みを断り、`concurrent submission` で 409 を返します。
+地域を移すのは確認済みの参加者を、パスワードかセッションで本人と確かめた後だけです。この順にしたため、パスワードが違えば別の地域に参加中でも不受理通知は `password-mismatch` になります。未確認のアカウントの地域はアカウントの作成時と上書き時に決まるので、6. は行いません。確認からエントリーの書き込みまでの間に別の送信が同じ問題セットの別の地域の枠を取ると、`check_entry_seat()` トリガが書き込みを断り、`already registered in another region` で 409 を返します。
 
 **確認メールの期限切れ(#172)。** 確認リンク(24 時間)を開かないまま期限が切れたエントリーは、もう確定できないのに `pending_verification` のまま残り、同じ大会への再エントリーを `already entered` で、重複参加を許さない地域ではもう一方の大会へのエントリーも断っていました。そこで 4. で、その参加者の確定待ちエントリーのうち**確認トークンが 1 つ以上あり、そのどれもが使用済みか期限切れのもの**を `cancelled` にし(残っていたトークンも使用済みにする)、以後は参加者自身のキャンセルと同じ扱いにしています。同じ大会なら行が再利用されて新しい確認メールが届き、もう一方の大会の枠も空きます。リンクがまだ有効な確定待ちは今までどおり断り、未ログインの経路では不受理通知(`pending-verification`)で「確認メールのリンクを開く / 見当たらなければマイページでキャンセルしてから再エントリー」を案内します。
 
@@ -775,22 +815,22 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 | ステータス | 条件 |
 | --- | --- |
-| 400 | スプレッドシート ID が不正・シートにアクセスできない(Google からの 4xx)、行データが `FormFieldDefYamlSchema` に合わない、`type` 列が既定のラベルでない、`options` 列に重複がある |
+| 400 | スプレッドシート ID が不正・シートにアクセスできない(Google からの 4xx)、行データが `FormFieldDefYamlSchema` に合わない、`type` 列が既定のラベルでない、`options` 列に重複がある、`key` が複数の行で使われている |
 | 502 | Google への接続失敗(ネットワークエラー)または Google からの 5xx |
 | 503 | Google からのレート制限(429) |
 
-詳細は [`google-sheets-integration.md`](./google-sheets-integration.md) を参照。
+シートの内容に起因する 400 の `error` は、大会一覧からの一括登録(`POST /api/sheet-import/tournaments/preview`)の行ごとのエラーと同じ文言で、`フォーム定義 3行目: C列(type)「プルダウン」はチェックボックス・ラジオボタン・自由記述・自由記述（一行）のいずれでもありません` のようにシートの行と列を含みます(`key` の重複は `フォーム定義 2行目と5行目: A列(key)「notes」が複数の行で使われています`)。詳細は [`google-sheets-integration.md`](./google-sheets-integration.md) を参照。
 
 ### `POST /api/sheet-import/regulations/preview`
 
 同じスプレッドシートの「レギュレーション」シート(`REGULATION_SHEET_NAME`)を読み取り、レギュレーションの配列にして返します。**この時点では DB に何も書き込みません。** 保存はレギュレーション管理画面から `PUT /api/tournaments/:tournamentId/regulations` を別途呼びます。大会には依存しないので、リクエストに大会 ID はありません。
 
 - リクエスト: `RegulationSheetImportRequestSchema` — `{spreadsheetId: string}`
-- `200`: `{"regulations": [{label, priorityStartsAt, priorityEndsAt}, ...]}` — シートの行順。`id` は付きません(シートは保存済みの行を知らないため。保存済みの行との突き合わせは呼び出し側が行います)。優先期間はシート上の日時を日本時間として読んだ ISO 8601 文字列、未設定なら `null`。
+- `200`: `{"regulations": [{label, priorityStartsAt, priorityEndsAt, closesWithPriority}, ...]}` — シートの行順。`closesWithPriority` はD列が `外す` なら `true`、`残す` なら `false`、空欄なら付きません。`id` は付きません(シートは保存済みの行を知らないため。保存済みの行との突き合わせは呼び出し側が行います)。優先期間はシート上の日時を日本時間として読んだ ISO 8601 文字列、未設定なら `null`。
 
 | ステータス | 条件 |
 | --- | --- |
-| 400 | 「レギュレーション」シートが無い・スプレッドシート ID が不正・シートにアクセスできない(429 を除く Google からの 4xx)、レギュレーション名が空または重複、優先期間を日時として読めない、優先期間が片方だけ・終了が開始以前、レギュレーションが1件も無い |
+| 400 | 「レギュレーション」シートが無い・スプレッドシート ID が不正・シートにアクセスできない(429 を除く Google からの 4xx)、レギュレーション名が空または重複、優先期間を日時として読めない、優先期間が片方だけ・終了が開始以前、D列が `外す` / `残す` 以外、優先期間が無いのに `外す`、レギュレーションが1件も無い |
 | 502 | Google への接続失敗(ネットワークエラー)または Google からの 5xx |
 | 503 | Google からのレート制限(429) |
 
@@ -1178,7 +1218,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 ### `PATCH /api/mypage/entries/:entryId`
 
-参加者自身による編集。処理の本体は `lib/entries.ts` の `updateOwnEntry()`。
+参加者自身による編集。処理の本体は `lib/own-entries.ts` の `updateOwnEntry()`。
 
 - リクエスト: `EntryEditInputSchema` — `{name, furigana, displayName, freeText?, customFieldValues}`
 - `200`: `{"ok": true}`
@@ -1197,7 +1237,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 ### `DELETE /api/mypage/entries/:entryId`
 
-参加者自身によるキャンセル。処理の本体は `lib/entries.ts` の `cancelOwnEntry()` で、DB 関数 `cancel_own_entry()` を呼びます。
+参加者自身によるキャンセル。処理の本体は `lib/own-entries.ts` の `cancelOwnEntry()` で、DB 関数 `cancel_own_entry()` を呼びます。
 
 - `200`: `{"ok": true}`
 - `404`: `{"error": "entry not found"}`

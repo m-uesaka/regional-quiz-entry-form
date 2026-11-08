@@ -8,11 +8,11 @@ import {
   it,
 } from 'bun:test';
 import {SQL} from 'bun';
+import {NO_LASTING_REGULATION_MESSAGE} from '@regional-quiz/shared';
 import {sign} from 'hono/jwt';
-import type {Bindings} from '../types/env';
 import type {TournamentRow} from '../lib/tournaments';
 import {app} from '../index';
-import {PERMISSIVE_PLATFORM_BINDINGS} from '../test-support/bindings';
+import {testBindings} from '../test-support/bindings';
 import {
   closedEntryPeriodTournament,
   openEntryPeriodTournament,
@@ -23,6 +23,12 @@ import {
   staffSessionAwareFetch,
   TEST_SESSIONS_VALID_FROM_MS,
 } from '../test-support/staff-session';
+import {
+  DB_URL,
+  isDbReachable,
+  SUPABASE_SECRET_KEY,
+  SUPABASE_URL,
+} from '../test-support/db';
 
 // Every staff guard checks the session against
 // `staff_accounts.sessions_valid_from` before the handler runs; answer that
@@ -37,44 +43,13 @@ afterEach(() => {
   globalThis.fetch = fetchWithoutSessionStub;
 });
 
-// Local Supabase stack (`supabase start`), same convention as
-// `routes/form-definitions.test.ts`. The integration block below is skipped
-// automatically when it isn't reachable, e.g. in CI.
-const DB_URL =
-  process.env.SUPABASE_DB_URL ??
-  'postgresql://postgres:postgres@127.0.0.1:54322/postgres';
-
-async function isDbReachable(): Promise<boolean> {
-  const probe = new SQL(DB_URL);
-  try {
-    await probe`select 1`;
-    return true;
-  } catch {
-    return false;
-  } finally {
-    await probe.close();
-  }
-}
-
-// Publicly documented local-dev demo key for Supabase CLI's default stack
-// (fixed `super-secret-jwt-token-with-at-least-32-characters-long` JWT
-// secret) — not a real credential, safe to commit.
-const SUPABASE_SECRET_KEY =
-  process.env.SUPABASE_SECRET_KEY ??
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU';
-
 const SESSION_SECRET = 'test-session-secret';
 
-const env: Bindings = {
-  ...PERMISSIVE_PLATFORM_BINDINGS,
-  SUPABASE_URL: process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321',
+const env = testBindings({
+  SUPABASE_URL,
   SUPABASE_SECRET_KEY,
-  MAIL_API_KEY: 'dummy-mail-api-key',
-  GOOGLE_SHEETS_API_KEY: 'dummy-google-sheets-api-key',
-  MAIL_FROM_ADDRESS: 'entry@example.com',
-  FRONTEND_URL: 'https://entry.example.com',
   SESSION_SECRET,
-};
+});
 
 async function staffCookie(role: 'general' | 'regional'): Promise<string> {
   const token = await sign(
@@ -151,6 +126,7 @@ describe('GET /tournaments/:tournamentId/regulations (mocked Supabase)', () => {
         label: '一般の部',
         priority_starts_at: '2026-01-01T00:00:00+00:00',
         priority_ends_at: '2026-01-08T00:00:00+00:00',
+        closes_with_priority: true,
         display_order: 0,
       },
       {
@@ -159,6 +135,7 @@ describe('GET /tournaments/:tournamentId/regulations (mocked Supabase)', () => {
         label: '学生の部',
         priority_starts_at: null,
         priority_ends_at: null,
+        closes_with_priority: false,
         display_order: 1,
       },
     ]);
@@ -178,6 +155,7 @@ describe('GET /tournaments/:tournamentId/regulations (mocked Supabase)', () => {
       label: '一般の部',
       priorityStartsAt: '2026-01-01T00:00:00+00:00',
       priorityEndsAt: '2026-01-08T00:00:00+00:00',
+      closesWithPriority: true,
       displayOrder: 0,
     });
     expect(body[1].priorityStartsAt).toBeNull();
@@ -498,6 +476,31 @@ describe.skipIf(!(await isDbReachable()))(
       expect(res.status).toBe(200);
       expect((await regulationsOf(tournamentId)).map(row => row.label)).toEqual(
         ['残る'],
+      );
+    });
+
+    // The schema passes it: the omitted value keeps the stored true.
+    it('returns 400 when every regulation would close once saved', async () => {
+      const {tournamentId} = await createTestTournament('all-close');
+      const window = {
+        priorityStartsAt: '2026-11-01T00:00:00Z',
+        priorityEndsAt: '2026-11-05T00:00:00Z',
+      };
+      await put(tournamentId, [
+        {label: '優先', ...window, closesWithPriority: true},
+        {label: '一般'},
+      ]);
+      const [closing] = await regulationsOf(tournamentId);
+
+      const res = await put(tournamentId, [
+        {id: closing.id, label: '優先', ...window},
+      ]);
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body.error).toBe(NO_LASTING_REGULATION_MESSAGE);
+      expect((await regulationsOf(tournamentId)).map(row => row.label)).toEqual(
+        ['優先', '一般'],
       );
     });
 

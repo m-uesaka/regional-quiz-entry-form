@@ -1,6 +1,6 @@
 import {afterEach, describe, expect, it} from 'bun:test';
 import {MAIL_SENDER_DOMAIN} from '@regional-quiz/shared';
-import type {Bindings} from '../types/env';
+import {testBindings} from '../test-support/bindings';
 import {MailSendError, ResendMailSender, createMailSender} from './mailer';
 
 describe('ResendMailSender', () => {
@@ -82,11 +82,9 @@ describe('createMailSender', () => {
       return Promise.resolve(new Response(null, {status: 200}));
     }) as unknown as typeof fetch;
 
-    const mailer = createMailSender({
-      MAIL_API_KEY: 'test-api-key',
-      MAIL_FROM_ADDRESS: 'entry@example.com',
-      MAIL_API_BASE_URL: mailApiBaseUrl,
-    } as Bindings);
+    const mailer = createMailSender(
+      testBindings({MAIL_API_BASE_URL: mailApiBaseUrl}),
+    );
     await mailer.send({
       to: 'user@example.com',
       subject: 'Hi',
@@ -122,10 +120,7 @@ describe('createMailSender', () => {
       return Promise.resolve(new Response(null, {status: 200}));
     }) as unknown as typeof fetch;
 
-    await createMailSender({
-      MAIL_API_KEY: 'test-api-key',
-      MAIL_FROM_ADDRESS: 'entry@example.com',
-    } as Bindings).send({
+    await createMailSender(testBindings()).send({
       to: 'user@example.com',
       subject: 'Hi',
       html: '<p>Hi</p>',

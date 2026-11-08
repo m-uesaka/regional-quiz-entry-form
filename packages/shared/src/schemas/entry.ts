@@ -157,6 +157,27 @@ export type EntryVerificationInput = z.infer<
   typeof EntryVerificationInputSchema
 >;
 
+// The tournament a confirmed entry belongs to, as the public list page's URL
+// names it, so the frontend can drop that list from its cache (#125).
+export const EntryVerificationTournamentSchema = z.object({
+  regionSlug: z.string(),
+  type: TournamentTypeSchema,
+});
+export type EntryVerificationTournament = z.infer<
+  typeof EntryVerificationTournamentSchema
+>;
+
+// Response body of a successful `POST /api/entries/verify`: what the entry
+// became, and its tournament -- null when that could not be read back, in
+// which case the list catches up when its cached copy expires.
+export const EntryVerificationResponseSchema = z.object({
+  status: z.enum(['confirmed', 'waitlisted']),
+  tournament: EntryVerificationTournamentSchema.nullable(),
+});
+export type EntryVerificationResponse = z.infer<
+  typeof EntryVerificationResponseSchema
+>;
+
 export const EntryStatusSchema = z.enum([
   'pending_verification',
   'confirmed',
@@ -269,11 +290,28 @@ export const ENTRY_STATUS_LABELS: Record<EntryStatus, string> = {
 
 // Statuses a participant may still edit. A cancelled entry is read-only:
 // re-entering is Task 5-4's flow, not an edit.
-export const EDITABLE_ENTRY_STATUSES: readonly EntryStatus[] = [
+export const EDITABLE_ENTRY_STATUSES = [
   'pending_verification',
   'confirmed',
   'waitlisted',
-];
+] as const satisfies readonly EntryStatus[];
+
+/** A status a participant may still edit an entry in. */
+export type EditableEntryStatus = (typeof EDITABLE_ENTRY_STATUSES)[number];
+
+/** A status an edit is refused for. */
+export type NonEditableEntryStatus = Exclude<EntryStatus, EditableEntryStatus>;
+
+/**
+ * Whether a participant may still edit an entry in `status`. A guard, so the
+ * other branch knows which status refused the edit.
+ * @param status The entry's status.
+ */
+export function isEditableEntryStatus(
+  status: EntryStatus,
+): status is EditableEntryStatus {
+  return (EDITABLE_ENTRY_STATUSES as readonly EntryStatus[]).includes(status);
+}
 
 /**
  * Determines whether a participant may still edit one of their entries:
@@ -292,7 +330,7 @@ export function isEntryEditable(
   now: Date = new Date(),
 ): boolean {
   return (
-    EDITABLE_ENTRY_STATUSES.includes(entry.status) &&
+    isEditableEntryStatus(entry.status) &&
     isWithinEntryPeriod(
       entry.tournament.entryOpensAt,
       entry.tournament.entryClosesAt,
