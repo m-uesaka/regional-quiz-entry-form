@@ -31,26 +31,55 @@ export interface MailSender {
 }
 
 /**
- * A send the mail provider rejected, carrying the provider's own answer so
- * callers can tell a retryable throttle (HTTP 429) from a permanent
- * rejection such as an invalid address.
+ * A send that did not go through: either the mail provider rejected it, in
+ * which case `status` carries the provider's own answer, or the request got
+ * no answer at all (a network error), in which case `status` is `undefined`
+ * and the error `fetch` threw is the `cause`.
+ *
+ * Callers use it to tell a failure worth trying again later
+ * (`isTransient()`) from a permanent rejection such as an invalid address.
  */
 export class MailSendError extends Error {
   constructor(
-    readonly status: number,
+    /** The provider's HTTP status, or `undefined` for a network error. */
+    readonly status: number | undefined,
     /**
      * How long the provider asked us to wait before retrying, in
      * milliseconds, or `undefined` when it said nothing.
      */
     readonly retryAfterMs?: number,
+    options?: ErrorOptions,
   ) {
-    super(`Failed to send mail: ${status}`);
+    super(
+      status === undefined
+        ? 'Failed to send mail: network error'
+        : `Failed to send mail: ${status}`,
+      options,
+    );
     this.name = 'MailSendError';
   }
 
   /** Whether the provider throttled us, i.e. a retry may still succeed. */
   isRateLimited(): boolean {
     return this.status === 429;
+  }
+
+  /**
+   * Whether the failure says nothing about the message itself, so the same
+   * send may succeed later: a throttle (429), a fault on the provider's side
+   * (5xx), or a request that got no answer. Anything else -- an address or
+   * a body the provider refuses -- would only be refused again.
+   *
+   * A 5xx or a network error does not prove the mail was *not* accepted
+   * (the answer may have been lost on its way back), so a caller that tries
+   * one again accepts that the recipient may, rarely, get it twice.
+   */
+  isTransient(): boolean {
+    return (
+      this.status === undefined ||
+      this.isRateLimited() ||
+      (this.status >= 500 && this.status <= 599)
+    );
   }
 }
 
@@ -109,14 +138,22 @@ export class ResendMailSender implements MailSender {
   }
 
   async send(input: SendMailInput): Promise<void> {
-    const res = await fetch(`${this.baseUrl}/emails`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({from: this.fromAddress, ...input}),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/emails`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({from: this.fromAddress, ...input}),
+      });
+    } catch (error) {
+      // `fetch` rejects (typically with a `TypeError`) when no answer came
+      // back at all. Wrapped so that every failed send reaches the caller as
+      // the one error type, which can tell this outage from a rejection.
+      throw new MailSendError(undefined, undefined, {cause: error});
+    }
     if (!res.ok) {
       throw new MailSendError(res.status, parseRetryAfterMs(res.headers));
     }

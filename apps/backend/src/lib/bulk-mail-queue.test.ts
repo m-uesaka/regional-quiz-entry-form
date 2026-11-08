@@ -3,6 +3,7 @@ import {testBindings} from '../test-support/bindings';
 import {MAIL_FROM_NAME} from './mailer';
 import {
   MAIL_QUEUE_MAX_ATTEMPTS,
+  MAIL_QUEUE_RETRY_DELAY_SECONDS,
   handleBulkMailQueue,
   type BulkMailMessage,
 } from './bulk-mail-queue';
@@ -105,8 +106,9 @@ function pendingEntryRow(overrides: Record<string, unknown> = {}) {
  * Mocks both `fetch` targets the consumer talks to: Supabase, which
  * answers the `mail_jobs` lookups from `jobRows` and records the progress
  * calls, and the Resend API, whose sends are recorded and answered with a
- * success unless the address is listed in `rejected` (a permanent refusal)
- * or `throttled` (a 429).
+ * success unless the address is listed in `rejected` (a permanent refusal),
+ * `throttled` (a 429), `unavailable` (a 503) or `unreachable` (the request
+ * gets no answer and `fetch` rejects).
  * @param jobRows The rows the content lookup finds, or a ready-made
  *     `Response` to simulate a failing query.
  */
@@ -115,10 +117,14 @@ function mockFetch(
   {
     rejected = [],
     throttled = [],
+    unavailable = [],
+    unreachable = [],
     entries = [],
   }: {
     rejected?: readonly string[];
     throttled?: readonly string[];
+    unavailable?: readonly string[];
+    unreachable?: readonly string[];
     /** The `entries` rows a verification resend reads, or a failure. */
     entries?: unknown[] | Response;
   } = {},
@@ -147,6 +153,12 @@ function mockFetch(
       }
       if (rejected.includes(mail.to)) {
         return Promise.resolve(new Response(null, {status: 422}));
+      }
+      if (unavailable.includes(mail.to)) {
+        return Promise.resolve(new Response(null, {status: 503}));
+      }
+      if (unreachable.includes(mail.to)) {
+        return Promise.reject(new TypeError('Network connection lost.'));
       }
       return Promise.resolve(Response.json({id: 'mail-id'}));
     }
@@ -309,6 +321,96 @@ describe('handleBulkMailQueue', () => {
     expect(log.progress).toEqual([{p_job_id: JOB_ID, p_sent: 0, p_failed: 1}]);
   });
 
+  it('retries a message the provider failed on with a 5xx', async () => {
+    const log = mockFetch([jobRow(JOB_ID)], {
+      unavailable: ['taro@example.com'],
+    });
+    const messages = [
+      new FakeMessage({jobId: JOB_ID, to: 'taro@example.com'}),
+      new FakeMessage({jobId: JOB_ID, to: 'hanako@example.com'}),
+    ];
+
+    await handleBulkMailQueue(batchOf(messages), ENV, NO_RETRIES);
+
+    // A fault on the provider's side says nothing about the address.
+    expect(messages[0].acked).toBe(false);
+    expect(messages[0].retriedWith).toEqual({
+      delaySeconds: MAIL_QUEUE_RETRY_DELAY_SECONDS,
+    });
+    // The delivered recipient is acked on its own, so the redelivery
+    // carries only the one that failed, and nothing is counted as failed
+    // yet.
+    expect(messages[1].acked).toBe(true);
+    expect(messages[1].retried).toBe(false);
+    expect(log.progress).toEqual([{p_job_id: JOB_ID, p_sent: 1, p_failed: 0}]);
+  });
+
+  it('retries a message whose send got no answer', async () => {
+    const log = mockFetch([jobRow(JOB_ID)], {
+      unreachable: ['taro@example.com'],
+    });
+    const messages = [new FakeMessage({jobId: JOB_ID, to: 'taro@example.com'})];
+
+    await handleBulkMailQueue(batchOf(messages), ENV, NO_RETRIES);
+
+    expect(messages[0].acked).toBe(false);
+    expect(messages[0].retried).toBe(true);
+    expect(log.progress).toEqual([]);
+  });
+
+  it('counts a recipient once when its redelivery goes through', async () => {
+    const first = mockFetch([jobRow(JOB_ID)], {
+      unavailable: ['taro@example.com'],
+    });
+    const failed = new FakeMessage({jobId: JOB_ID, to: 'taro@example.com'});
+    const delivered = new FakeMessage({
+      jobId: JOB_ID,
+      to: 'hanako@example.com',
+    });
+
+    await handleBulkMailQueue(batchOf([failed, delivered]), ENV, NO_RETRIES);
+    expect(failed.retried).toBe(true);
+
+    // The platform redelivers only the message that was sent back.
+    const second = mockFetch([jobRow(JOB_ID)]);
+    const redelivered = new FakeMessage(failed.body, failed.attempts + 1);
+    await handleBulkMailQueue(batchOf([redelivered]), ENV, NO_RETRIES);
+
+    expect(redelivered.acked).toBe(true);
+    // Hanako is not mailed again, and the two batches add up to the job's
+    // two recipients with no failure left over from the first attempt.
+    expect(second.mails.map(mail => mail.to)).toEqual(['taro@example.com']);
+    expect([...first.progress, ...second.progress]).toEqual([
+      {p_job_id: JOB_ID, p_sent: 1, p_failed: 0},
+      {p_job_id: JOB_ID, p_sent: 1, p_failed: 0},
+    ]);
+  });
+
+  it('gives up on a 5xx or a network error on its last delivery', async () => {
+    const log = mockFetch([jobRow(JOB_ID)], {
+      unavailable: ['taro@example.com'],
+      unreachable: ['hanako@example.com'],
+    });
+    const messages = [
+      new FakeMessage(
+        {jobId: JOB_ID, to: 'taro@example.com'},
+        MAIL_QUEUE_MAX_ATTEMPTS,
+      ),
+      new FakeMessage(
+        {jobId: JOB_ID, to: 'hanako@example.com'},
+        MAIL_QUEUE_MAX_ATTEMPTS,
+      ),
+    ];
+
+    await handleBulkMailQueue(batchOf(messages), ENV, NO_RETRIES);
+
+    // As with a throttle: a retry now would only dead-letter them and
+    // leave the job short of its total.
+    expect(messages.map(message => message.acked)).toEqual([true, true]);
+    expect(messages.map(message => message.retried)).toEqual([false, false]);
+    expect(log.progress).toEqual([{p_job_id: JOB_ID, p_sent: 0, p_failed: 2}]);
+  });
+
   it("records the job's progress so the staff screen can read it", async () => {
     const log = mockFetch([jobRow(JOB_ID)], {rejected: ['hanako@example.com']});
     const messages = [
@@ -460,6 +562,22 @@ describe('handleBulkMailQueue', () => {
       expect(log.tokenDeletes).toHaveLength(1);
       expect(log.tokenDeletes[0]).toContain(`id=eq.${TOKEN_ID}`);
       expect(messages[0].retried).toBe(true);
+    });
+
+    it('discards the link of a reminder the provider failed on and retries it', async () => {
+      const log = mockFetch([resendJob()], {
+        entries: [pendingEntryRow()],
+        unavailable: ['hanako@example.com'],
+      });
+      const messages = [new FakeMessage({jobId: JOB_ID, entryId: ENTRY_ID})];
+
+      await handleBulkMailQueue(batchOf(messages), ENV, NO_RETRIES);
+
+      // Not written off: the redelivery issues a fresh link and sends it.
+      expect(log.tokenDeletes).toHaveLength(1);
+      expect(messages[0].acked).toBe(false);
+      expect(messages[0].retried).toBe(true);
+      expect(log.progress).toEqual([]);
     });
 
     it('retries a reminder whose entry cannot be read', async () => {

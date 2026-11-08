@@ -49,10 +49,10 @@ export interface PacedMailOptions {
  * What became of one message.
  *
  * A failure carries the provider's own rejection rather than just a flag,
- * because the caller has to tell the two kinds apart: a throttle
- * (`MailSendError.isRateLimited()`) says nothing about the address and is
- * worth another delivery, while a rejection of the address itself would
- * only be rejected again.
+ * because the caller has to tell the two kinds apart: a transient failure
+ * (`MailSendError.isTransient()` -- a throttle, a provider fault, a network
+ * error) says nothing about the address and is worth another delivery,
+ * while a rejection of the address itself would only be rejected again.
  */
 export type PacedMailOutcome = {ok: true} | {ok: false; error: unknown};
 
@@ -80,6 +80,12 @@ function retryDelayMs(
   attempt: number,
   baseDelayMs: number,
 ): number | null {
+  // Only a throttle is retried on the spot. A 5xx or a network error is
+  // transient too, but it is left to the caller (the queue consumer sends
+  // the message back for a later delivery): an outage seldom clears within
+  // these few seconds, retrying would hold the rest of the batch behind it,
+  // and each attempt at a send whose answer was lost is one more chance of
+  // the recipient getting the mail twice.
   if (!(error instanceof MailSendError) || !error.isRateLimited()) {
     return null;
   }
@@ -141,7 +147,8 @@ async function sendWithRetry(
  * (HTTP 429) is retried with backoff first, since that says nothing about
  * the address; only if the retries run out does it come back as a failed
  * outcome -- still carrying the throttle, for a caller that can have it
- * delivered again later.
+ * delivered again later. Any other failure, including a provider fault or
+ * a network error, comes back straight away for the caller to judge.
  * @param mailer The mail sender to send through.
  * @param messages The messages to send, in order; duplicates are sent
  *     twice, so de-duplicate the recipients before calling.

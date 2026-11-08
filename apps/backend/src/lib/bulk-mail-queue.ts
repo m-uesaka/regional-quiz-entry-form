@@ -97,17 +97,18 @@ function tallyOf(
 }
 
 /**
- * Whether `error` is the provider throttling us rather than refusing the
+ * Whether `error` is a failure of this attempt rather than a refusal of the
  * address.
  *
- * A throttle says nothing about the recipient, so the message goes back to
- * the queue; anything else -- an address the provider rejects, a body it
- * will not accept -- would be rejected again just the same on every
- * redelivery, so it is given up on instead of being retried until the dead
- * letter queue catches it.
+ * A throttle, a fault on the provider's side (5xx) or a send that got no
+ * answer says nothing about the recipient, so the message goes back to the
+ * queue; anything else -- an address the provider rejects, a body it will
+ * not accept -- would be rejected again just the same on every redelivery,
+ * so it is given up on instead of being retried until the dead letter queue
+ * catches it.
  */
 function isRetryable(error: unknown): boolean {
-  return error instanceof MailSendError && error.isRateLimited();
+  return error instanceof MailSendError && error.isTransient();
 }
 
 /**
@@ -167,10 +168,11 @@ async function fetchBatchJobs(
  *
  * Every message is settled explicitly rather than by letting the handler
  * return: delivered and permanently rejected messages are acked -- the
- * rejected ones counted as failures on their job -- while a message the
- * provider merely throttled is sent back for another delivery. Acking the
- * batch as a whole would either re-send the delivered messages along with
- * the throttled ones or drop the throttled ones with the rest.
+ * rejected ones counted as failures on their job -- while a message whose
+ * send failed only for now (a throttle, a provider fault, a network error)
+ * is sent back for another delivery. Acking the batch as a whole would
+ * either re-send the delivered messages along with the failed ones or drop
+ * the failed ones with the rest.
  * @param batch The messages the queue delivered.
  * @param env The Worker bindings.
  * @param options Overrides for the pacing, for tests.
@@ -191,14 +193,14 @@ export async function handleBulkMailQueue(
   const issuedTokens = new Map<number, string>();
   const progress = new Map<string, JobProgress>();
 
-  // A message whose content could not be put together this time -- its
-  // job's row or its entry could not be read -- is a fault of this attempt
-  // rather than of the message, so it is tried again later. On the last
-  // delivery a retry would hand it to the dead letter queue with nothing
-  // added to either counter, and the job would read as still sending for
-  // good (`attempts` counts this delivery). An outage long enough to burn
-  // every delivery is one the recipient is not going to survive anyway, so
-  // it is closed out as failed instead.
+  // A message that failed for a reason of this attempt rather than of the
+  // message -- its job's row or its entry could not be read, or the send
+  // met a throttle, a provider fault or a network error -- is tried again
+  // later. On the last delivery a retry would hand it to the dead letter
+  // queue with nothing added to either counter, and the job would read as
+  // still sending for good (`attempts` counts this delivery). An outage
+  // long enough to burn every delivery is one the recipient is not going to
+  // survive anyway, so it is closed out as failed instead.
   const retryOrFail = (message: Message<BulkMailMessage>) => {
     if (message.attempts < MAIL_QUEUE_MAX_ATTEMPTS) {
       message.retry({delaySeconds: MAIL_QUEUE_RETRY_DELAY_SECONDS});
@@ -280,16 +282,14 @@ export async function handleBulkMailQueue(
       message.ack();
       return;
     }
-    // `attempts` counts this delivery, so on the last one a retry would
-    // hand the message to the dead letter queue and leave the job's
-    // counters short of `total` for good. Record it as failed instead:
-    // the message is no better off going round again, and the staff screen
-    // gets a job that adds up.
-    if (
-      isRetryable(outcome.error) &&
-      message.attempts < MAIL_QUEUE_MAX_ATTEMPTS
-    ) {
-      message.retry({delaySeconds: MAIL_QUEUE_RETRY_DELAY_SECONDS});
+    // Only this message goes back: the rest of the batch is acked on its
+    // own outcome, so a redelivery neither re-sends to the recipients that
+    // were mailed nor counts a failure twice -- a retried message adds to
+    // neither counter until a later delivery settles it. On the last
+    // delivery `retryOrFail()` closes it out as failed rather than leaving
+    // the job short of `total` in the dead letter queue.
+    if (isRetryable(outcome.error)) {
+      retryOrFail(message);
       return;
     }
     tally.failed++;

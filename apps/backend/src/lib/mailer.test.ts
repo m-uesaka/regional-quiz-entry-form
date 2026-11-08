@@ -61,6 +61,64 @@ describe('ResendMailSender', () => {
 
     expect((error as MailSendError).retryAfterMs).toBeUndefined();
   });
+
+  it('reports a provider fault as transient', async () => {
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        new Response(null, {status: 503}),
+      )) as unknown as typeof fetch;
+
+    const sender = new ResendMailSender('test-api-key', 'entry@example.com');
+
+    const error = await sender
+      .send({to: 'user@example.com', subject: 'Hi', html: '<p>Hi</p>'})
+      .then(
+        () => null,
+        (thrown: unknown) => thrown,
+      );
+
+    expect(error).toBeInstanceOf(MailSendError);
+    const mailError = error as MailSendError;
+    expect(mailError.status).toBe(503);
+    expect(mailError.isTransient()).toBe(true);
+    // Not a throttle, so `sendPacedMail()` leaves it to the caller.
+    expect(mailError.isRateLimited()).toBe(false);
+  });
+
+  it('wraps a network error so the caller can tell it is transient', async () => {
+    const networkError = new TypeError('Network connection lost.');
+    globalThis.fetch = (() =>
+      Promise.reject(networkError)) as unknown as typeof fetch;
+
+    const sender = new ResendMailSender('test-api-key', 'entry@example.com');
+
+    const error = await sender
+      .send({to: 'user@example.com', subject: 'Hi', html: '<p>Hi</p>'})
+      .then(
+        () => null,
+        (thrown: unknown) => thrown,
+      );
+
+    expect(error).toBeInstanceOf(MailSendError);
+    const mailError = error as MailSendError;
+    expect(mailError.status).toBeUndefined();
+    expect(mailError.cause).toBe(networkError);
+    expect(mailError.isTransient()).toBe(true);
+  });
+});
+
+describe('MailSendError.isTransient', () => {
+  it('holds for a throttle, a provider fault, or no answer at all', () => {
+    for (const status of [undefined, 429, 500, 502, 503, 504]) {
+      expect(new MailSendError(status).isTransient()).toBe(true);
+    }
+  });
+
+  it('does not hold for a rejection of the message itself', () => {
+    for (const status of [400, 401, 403, 404, 409, 422]) {
+      expect(new MailSendError(status).isTransient()).toBe(false);
+    }
+  });
 });
 
 describe('createMailSender', () => {
