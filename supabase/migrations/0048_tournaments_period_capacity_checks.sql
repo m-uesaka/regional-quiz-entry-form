@@ -1,0 +1,58 @@
+-- 大会の受付期間の前後関係と定員を DB 側でも検査する(#285)。
+--
+-- これまで「エントリー開始 < エントリー終了」を検査していたのは一括登録
+-- (`lib/tournament-bulk-import.ts`)だけで、管理画面からの作成・更新
+-- (`POST` / `PATCH /api/tournaments`)は通していた。終了が開始以前の大会は
+-- `entryAvailability()` が一度も open にならず、誰もエントリーできないのに
+-- スタッフは気付けない。`PATCH` は部分更新なので、片方だけを送られると
+-- Zod スキーマ(`TournamentUpdateInputSchema`)では保存済みのもう片方と
+-- 比べられない。そこで `regulations` の優先期間(0014)と同じく、SQL で
+-- 直接編集する運用も含めて DB 側に CHECK を持つ。
+--
+-- - `tournaments_entry_period_ordered`: 開始が終了より厳密に前。開始と
+--   終了が同じ時刻の期間も一度も open にならないので断る。
+-- - `tournaments_capacity_positive`: 定員は null(定員なし)か 1 以上。0 以下
+--   だと全員がキャンセル待ちになるか、`promote_waitlisted_entries()`(0037)
+--   の空き数が負になる。API の Zod スキーマ(`.positive()`)と一括登録は
+--   すでに 1 以上しか通さないので、これは SQL での直接編集に対する備え。
+--
+-- 違反した書き込みは `check_violation`(23514)になる。API は
+-- `TOURNAMENT_WRITE_ERRORS`(`routes/tournaments.ts`)で、エラーが
+-- `tournaments_entry_period_ordered` を名指ししているときだけ 400 と
+-- `ENTRY_PERIOD_ORDER_MESSAGE`(`packages/shared`)に対応付け、ほかの CHECK
+-- 違反(定員を含む。リクエストのスキーマが先に弾くので API からは起きない)は
+-- 500 にする。
+--
+-- 既存の行の扱い: どちらの制約も `not valid` で追加する。新しい INSERT と
+-- UPDATE は検査されるが、追加の時点では既存の行を検査しない。`develop` /
+-- `main` への merge で staging / production に自動でデプロイされる
+-- (`.github/workflows/deploy-*.yml`)ので、違反した古い行が 1 件でもあると
+-- マイグレーションが失敗し、デプロイが止まるのを避けるため。違反した行を
+-- 勝手に直すこともしない。受付期間や定員をどう直すべきかは大会ごとに
+-- スタッフが決めることで、`regulations` の優先期間(0014)のように
+-- 「無かったことにしても振る舞いが変わらない」値への置き換えがないため。
+--
+-- `not valid` でも、既存の行を UPDATE すると更新後の行が検査される。違反
+-- した大会は、期間や定員を直すまで、どの列の更新も断られる。管理画面の
+-- 編集フォームは期間の両端と定員を毎回送るので、正しい期間と定員を入れて
+-- 保存すれば直り、期間を直さずに保存したスタッフには
+-- `ENTRY_PERIOD_ORDER_MESSAGE` が表示されるので、これで足りるとする。
+-- ただし、その大会の行も書き換える受付の一時停止(`staff-entry-pause.ts`)と
+-- 全大会の並べ替え(`reorder_tournaments()`、0032)も、直すまでは 500 で
+-- 失敗する。
+--
+-- 違反した行は次のクエリで探す:
+--
+--   select id, region_id, type, capacity, entry_opens_at, entry_closes_at
+--     from tournaments
+--     where entry_opens_at >= entry_closes_at
+--        or capacity <= 0;
+--
+-- 該当する行を直したあと、後続(follow-up)のマイグレーションで
+-- `alter table tournaments validate constraint ...` を実行し、既存の行も
+-- 制約を満たすことを DB に保証させる。
+alter table tournaments
+  add constraint tournaments_entry_period_ordered
+    check (entry_opens_at < entry_closes_at) not valid,
+  add constraint tournaments_capacity_positive
+    check (capacity is null or capacity > 0) not valid;
