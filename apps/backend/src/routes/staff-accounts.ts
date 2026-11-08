@@ -10,11 +10,11 @@ import {createDbClient, type Tables} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {isPasswordHashUsable, UNUSABLE_PASSWORD_HASH} from '../lib/password';
 import {
+  badRequest,
   duplicate,
   FOREIGN_KEY_VIOLATION_SQLSTATE,
   LAST_GENERAL_STAFF_SQLSTATE,
   mapPgError,
-  missingReference,
   type PgErrorTable,
   STAFF_ACCOUNT_NOT_FOUND_SQLSTATE,
   UNIQUE_VIOLATION_SQLSTATE,
@@ -134,8 +134,7 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
           error,
           {
             [UNIQUE_VIOLATION_SQLSTATE]: duplicate('email already in use'),
-            [FOREIGN_KEY_VIOLATION_SQLSTATE]:
-              missingReference('unknown region'),
+            [FOREIGN_KEY_VIOLATION_SQLSTATE]: badRequest('unknown region'),
           },
           'failed to create the staff account',
         );

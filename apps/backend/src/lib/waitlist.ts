@@ -14,8 +14,10 @@ const MAIL_CONCURRENCY = 5;
  * Promotes as many waitlisted entries for `tournamentId` as there are free
  * seats -- every one of them when the tournament has no capacity -- and
  * mails each participant that their entry is confirmed. Called after a
- * confirmed entry is cancelled, and after staff save a capacity (#223).
- * Does nothing when there is no free seat or nobody waiting.
+ * confirmed or waitlisted entry is cancelled, and after staff save a
+ * capacity (#223). Does nothing when there is no free seat or nobody
+ * waiting. (A confirmation that was queued goes through
+ * `promoteAfterWaitlistedConfirmation()` instead.)
  *
  * The promotion is the `promote_waitlisted_entries` Postgres function
  * (0037). It locks the tournament row, counts the confirmed entries only
@@ -44,6 +46,64 @@ export async function promoteWaitlistedEntries(
     tournamentName?: string;
   } = {},
 ): Promise<WaitlistPromotion> {
+  const {promotedEntryIds, mailFailedCount} = await promoteAndNotify(
+    env,
+    tournamentId,
+    options,
+  );
+  return {promotedCount: promotedEntryIds.length, mailFailedCount};
+}
+
+/**
+ * Runs the promotion after `confirm_entry_by_token` queued an entry, which
+ * it does whenever anyone is already waiting, even with a seat free (0047,
+ * #283). Without this, a seat an earlier, failed promotion left empty would
+ * stay empty -- and every newcomer queue up behind it -- until the next
+ * cancellation or capacity save.
+ *
+ * Everyone ahead of the queued entry is promoted first and mailed as usual.
+ * The queued entry itself, now at the tail, is promoted too when the seats
+ * reach that far (always, without a capacity), but is not mailed: its
+ * participant is on the verification page this request answers, which
+ * reports it as confirmed, the same as a confirmation that went straight
+ * into a seat (and that sends no mail either).
+ * @param env The Worker bindings.
+ * @param tournamentId The queued entry's tournament.
+ * @param entryId The entry that was just queued.
+ * @return Whether `entryId` itself was promoted.
+ * @throws {Error} If the promotion itself fails.
+ */
+export async function promoteAfterWaitlistedConfirmation(
+  env: Bindings,
+  tournamentId: string,
+  entryId: string,
+): Promise<boolean> {
+  const {promotedEntryIds} = await promoteAndNotify(env, tournamentId, {
+    unmailedEntryId: entryId,
+  });
+  return promotedEntryIds.includes(entryId);
+}
+
+/**
+ * The promotion both of the above run.
+ * @param env The Worker bindings.
+ * @param tournamentId The tournament to promote in.
+ * @param options A client to reuse, the tournament's display name if
+ *     known, and an entry whose participant is told some other way and is
+ *     not mailed if it is promoted.
+ * @return The promoted entries, in waitlist order, and how many of the
+ *     mails sent could not be.
+ * @throws {Error} If the promotion itself fails.
+ */
+async function promoteAndNotify(
+  env: Bindings,
+  tournamentId: string,
+  options: {
+    db?: DbClient;
+    tournamentName?: string;
+    unmailedEntryId?: string;
+  },
+): Promise<{promotedEntryIds: string[]; mailFailedCount: number}> {
   const db = options.db ?? createDbClient(env);
   const {data, error} = await db.rpc('promote_waitlisted_entries', {
     p_tournament_id: tournamentId,
@@ -52,16 +112,20 @@ export async function promoteWaitlistedEntries(
     throw new Error(error.message);
   }
   const promoted = data ?? [];
-  if (promoted.length === 0) {
-    return {promotedCount: 0, mailFailedCount: 0};
+  const promotedEntryIds = promoted.map(entry => entry.entry_id);
+  const toMail = promoted.filter(
+    entry => entry.entry_id !== options.unmailedEntryId,
+  );
+  if (toMail.length === 0) {
+    return {promotedEntryIds, mailFailedCount: 0};
   }
 
   const tournamentName =
     options.tournamentName ?? (await readTournamentName(db, tournamentId));
   const mailer = createMailSender(env);
   let mailFailedCount = 0;
-  for (let i = 0; i < promoted.length; i += MAIL_CONCURRENCY) {
-    const batch = promoted.slice(i, i + MAIL_CONCURRENCY);
+  for (let i = 0; i < toMail.length; i += MAIL_CONCURRENCY) {
+    const batch = toMail.slice(i, i + MAIL_CONCURRENCY);
     const sent = await Promise.allSettled(
       batch.map(entry =>
         mailer.send(
@@ -80,7 +144,7 @@ export async function promoteWaitlistedEntries(
       }
     });
   }
-  return {promotedCount: promoted.length, mailFailedCount};
+  return {promotedEntryIds, mailFailedCount};
 }
 
 /**

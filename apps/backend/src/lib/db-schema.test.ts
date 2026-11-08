@@ -55,7 +55,7 @@ describe.skipIf(!dbReachable)(
         insert into tournaments (
           region_id, type, name, entry_opens_at, entry_closes_at
         ) values (
-          ${region.id}, 'saikyoi', 'テスト大会', now(), now()
+          ${region.id}, 'saikyoi', 'テスト大会', now() - interval '1 day', now()
         )
         returning id
       `;
@@ -145,7 +145,7 @@ describe.skipIf(!dbReachable)(
           insert into tournaments (
             region_id, type, name, entry_opens_at, entry_closes_at
           ) values (
-            ${region.id}, ${type}, ${'テスト' + type}, now(), now()
+            ${region.id}, ${type}, ${'テスト' + type}, now() - interval '1 day', now()
           )
           returning id
         `;
@@ -225,7 +225,7 @@ describe.skipIf(!dbReachable)(
         insert into tournaments (
           region_id, type, name, entry_opens_at, entry_closes_at, question_set
         ) values (
-          ${region.id}, ${type}, '別のテスト大会', now(), now(),
+          ${region.id}, ${type}, '別のテスト大会', now() - interval '1 day', now(),
           ${questionSet}
         )
         returning id
@@ -1160,7 +1160,7 @@ describe.skipIf(!dbReachable)(
           insert into tournaments (
             region_id, type, name, entry_opens_at, entry_closes_at, question_set
           ) values (
-            ${region.id}, ${type}, ${type}, now(), now(), ${questionSet}
+            ${region.id}, ${type}, ${type}, now() - interval '1 day', now(), ${questionSet}
           )
           returning id
         `;
@@ -1204,7 +1204,7 @@ describe.skipIf(!dbReachable)(
         insert into tournaments (
           region_id, type, name, entry_opens_at, entry_closes_at, question_set
         ) values (
-          ${regionId}, 'shinjinou', '新人王', now(), now(), '宮崎'
+          ${regionId}, 'shinjinou', '新人王', now() - interval '1 day', now(), '宮崎'
         )
       `);
 
@@ -1305,7 +1305,7 @@ describe.skipIf(!dbReachable)(
           region_id, type, name, entry_opens_at, entry_closes_at, question_set
         ) values (
           '00000000-0000-0000-0000-0000000000ff', 'saikyoi', '存在しない地域',
-          now(), now(), '宮崎'
+          now() - interval '1 day', now(), '宮崎'
         )
       `);
 
@@ -1356,7 +1356,7 @@ describe.skipIf(!dbReachable)(
   },
 );
 
-// 0049, #284: a tournament's entries were accepted under the dual-entry
+// 0050, #284: a tournament's entries were accepted under the dual-entry
 // checks of its region and type, so neither may change while it has any.
 describe.skipIf(!dbReachable)(
   'region and type of a tournament with entries (local Supabase integration)',
@@ -1560,7 +1560,7 @@ describe.skipIf(!dbReachable)(
           region_id, type, name, capacity, entry_opens_at, entry_closes_at
         ) values (
           ${region.id}, 'saikyoi', ${regionName + '大会'}, ${capacity},
-          now(), now()
+          now() - interval '1 day', now()
         )
         returning id
       `;
@@ -1781,7 +1781,7 @@ describe.skipIf(!dbReachable)(
       await sql`delete from regions where slug = ${testRegionSlug}`;
     }
 
-    beforeAll(deleteTestRegion);
+    beforeEach(deleteTestRegion);
 
     afterAll(async () => {
       await deleteTestRegion();
@@ -1797,12 +1797,91 @@ describe.skipIf(!dbReachable)(
         insert into tournaments (
           region_id, type, name, entry_opens_at, entry_closes_at
         ) values (
-          ${region.id}, 'saikyoi', 'テスト大会', now(), now()
+          ${region.id}, 'saikyoi', 'テスト大会', now() - interval '1 day', now()
         )
         returning id
       `;
       return tournament.id as string;
     }
+
+    // 0048, #285: held in the table too, for writes made straight through
+    // SQL and for a PATCH that sends one end of the period.
+    it('refuses a tournament whose entry period or capacity can never work', async () => {
+      const tournamentId = await createTournament();
+      const codes = [];
+      for (const statement of [
+        sql`update tournaments set entry_closes_at = entry_opens_at
+            where id = ${tournamentId}`,
+        sql`update tournaments
+            set entry_closes_at = entry_opens_at - interval '1 second'
+            where id = ${tournamentId}`,
+        sql`update tournaments set capacity = 0 where id = ${tournamentId}`,
+        sql`update tournaments set capacity = -1 where id = ${tournamentId}`,
+      ]) {
+        try {
+          await statement;
+          codes.push(undefined);
+        } catch (error) {
+          codes.push((error as {errno?: string}).errno);
+        }
+      }
+
+      expect(codes).toEqual(Array(4).fill('23514'));
+      // A capacity of 1, or none at all, goes in.
+      await sql`update tournaments set capacity = 1 where id = ${tournamentId}`;
+      await sql`
+        update tournaments set capacity = null where id = ${tournamentId}
+      `;
+    });
+
+    // 0048 adds both `not valid`, so a tournament stored out of order
+    // before it doesn't stop the deploy; 0049 validates them once no such
+    // row is left, so the rows already there are held to them as well.
+    it('validates the period and capacity checks for the rows already there', async () => {
+      const rows = await sql`
+        select conname, convalidated from pg_constraint
+          where conrelid = 'tournaments'::regclass
+            and conname in (
+              'tournaments_entry_period_ordered',
+              'tournaments_capacity_positive'
+            )
+          order by conname
+      `;
+
+      expect([...rows]).toEqual([
+        {conname: 'tournaments_capacity_positive', convalidated: true},
+        {conname: 'tournaments_entry_period_ordered', convalidated: true},
+      ]);
+    });
+
+    it('refuses a new tournament whose entry period or capacity can never work', async () => {
+      const [region] = await sql`
+        insert into regions (slug, name) values (${testRegionSlug}, 'テスト地域')
+        returning id
+      `;
+      const codes = [];
+      for (const [opensAt, closesAt, capacity] of [
+        ['2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', null],
+        ['2026-01-02T00:00:00Z', '2026-01-01T00:00:00Z', null],
+        ['2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z', 0],
+      ] as const) {
+        try {
+          await sql`
+            insert into tournaments (
+              region_id, type, name, capacity, entry_opens_at, entry_closes_at
+            ) values (
+              ${region.id}, 'saikyoi', 'テスト大会', ${capacity}, ${opensAt},
+              ${closesAt}
+            )
+          `;
+          codes.push(undefined);
+        } catch (error) {
+          codes.push((error as {errno?: string}).errno);
+        }
+      }
+
+      expect(codes).toEqual(Array(3).fill('23514'));
+    });
 
     it('rejects a half-open priority window', async () => {
       const tournamentId = await createTournament();
@@ -1907,7 +1986,7 @@ describe.skipIf(!dbReachable)(
         insert into tournaments (
           region_id, type, name, entry_opens_at, entry_closes_at
         ) values (
-          ${region.id}, 'saikyoi', 'テスト大会', now(), now()
+          ${region.id}, 'saikyoi', 'テスト大会', now() - interval '1 day', now()
         )
         returning id
       `;
@@ -2052,7 +2131,7 @@ describe.skipIf(!dbReachable)(
         insert into tournaments (
           region_id, type, name, entry_opens_at, entry_closes_at
         ) values (
-          ${region.id}, 'saikyoi', 'テスト大会', now(), now()
+          ${region.id}, 'saikyoi', 'テスト大会', now() - interval '1 day', now()
         )
         returning id
       `;
@@ -2359,7 +2438,7 @@ describe.skipIf(!dbReachable)(
       const [tournament] = await sql`
         insert into tournaments (
           region_id, type, name, entry_opens_at, entry_closes_at
-        ) values (${region.id}, 'saikyoi', 'テスト大会', now(), now())
+        ) values (${region.id}, 'saikyoi', 'テスト大会', now() - interval '1 day', now())
         returning id
       `;
       const [participant] = await sql`

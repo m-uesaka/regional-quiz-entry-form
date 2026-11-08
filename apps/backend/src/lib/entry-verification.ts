@@ -20,7 +20,10 @@ import {tournamentDisplayName} from './tournaments';
  * @param email The address to send the verification link to.
  * @param tournamentName The display name of the tournament being entered.
  * @param capped Whether the tournament has a capacity, i.e. whether the
- *     entry could end up waitlisted.
+ *     entry could end up waitlisted. (An uncapped tournament queues an
+ *     entry only while a failed promotion has left someone waiting, and
+ *     the promotion after its confirmation confirms it straight away, so
+ *     its mail doesn't mention a waitlist.)
  * @param withdrawnTournaments The display names of the tournaments whose
  *     pending entries this submission withdrew by taking the unverified
  *     account over (#189), or omit when it withdrew none. Empty when the
@@ -94,7 +97,7 @@ async function issueVerificationMail(
     // fetching it must not confirm anything (#190).
     '下のリンクを開き、表示されるページのボタンを押してエントリーを確定してください。' +
       (capped
-        ? '定員に達している場合は、キャンセル待ちとして受け付けます。'
+        ? '定員に空きがない場合は、キャンセル待ちとして受け付けます(すでにキャンセル待ちの方がいる場合は、その後ろに並びます)。'
         : ''),
     {
       label: 'エントリーを確定する',
