@@ -121,6 +121,82 @@ describe('POST /tournaments/:tournamentId/entries (request validation)', () => {
     expect(body).toEqual({error: 'too many requests'});
   });
 
+  it('counts the per-address limit under a key naming this endpoint', async () => {
+    const keys: string[] = [];
+    const recording: RateLimit = {
+      limit: ({key}) => {
+        keys.push(key ?? '');
+        return Promise.resolve({success: true});
+      },
+    };
+    // Past the limiter the route looks the tournament up; finding none, it
+    // answers 400 rather than reaching the stub that throws.
+    globalThis.fetch = turnstileAwareFetch((() =>
+      Promise.resolve(Response.json([]))) as unknown as typeof fetch);
+
+    await postEntry(
+      TOURNAMENT_PATH,
+      {...validBody, email: 'Shared@Example.com'},
+      {env: {...env, MAIL_TRIGGER_EMAIL_RATE_LIMITER: recording}},
+    );
+
+    expect(keys).toEqual(['entry:email:shared@example.com']);
+  });
+
+  it('is not refused for an address whose reset requests used up their budget', async () => {
+    // The attack in #295: three reset requests a minute with the victim's
+    // address, so that the victim's entry is refused when entries open. The
+    // two endpoints share the limiter, so this one counts like the real
+    // binding -- a budget per key -- rather than recording or refusing.
+    const budget = 3;
+    const spent = new Map<string, number>();
+    const counting: RateLimit = {
+      limit: ({key}) => {
+        const used = (spent.get(key ?? '') ?? 0) + 1;
+        spent.set(key ?? '', used);
+        return Promise.resolve({success: used <= budget});
+      },
+    };
+    const bindings = {...env, MAIL_TRIGGER_EMAIL_RATE_LIMITER: counting};
+    // No participant and no tournament: the reset request then has nothing
+    // to mail, and the entry is answered with the unknown tournament's 400.
+    globalThis.fetch = turnstileAwareFetch((() =>
+      Promise.resolve(Response.json([]))) as unknown as typeof fetch);
+    const background: Array<Promise<unknown>> = [];
+    const executionCtx = {
+      waitUntil(promise: Promise<unknown>): void {
+        background.push(promise);
+      },
+      passThroughOnException(): void {},
+    } as unknown as ExecutionContext;
+
+    const resetStatuses: number[] = [];
+    for (let i = 0; i <= budget; i++) {
+      const res = await app.request(
+        '/api/auth/participant/password-reset/request',
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            [TURNSTILE_TOKEN_HEADER]: TURNSTILE_TEST_TOKEN,
+          },
+          body: JSON.stringify({email: validBody.email}),
+        },
+        bindings,
+        executionCtx,
+      );
+      resetStatuses.push(res.status);
+    }
+    await Promise.all(background);
+    const entry = await postEntry(TOURNAMENT_PATH, validBody, {env: bindings});
+
+    // The reset endpoint's own budget is used up...
+    expect(resetStatuses).toEqual([200, 200, 200, 429]);
+    // ...and the entry form's is untouched.
+    expect(entry.status).not.toBe(429);
+    expect(spent.get(`entry:email:${validBody.email}`)).toBe(1);
+  });
+
   it('returns 400 when the Turnstile token is missing', async () => {
     const res = await postEntry(TOURNAMENT_PATH, validBody, {
       turnstileToken: null,

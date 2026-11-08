@@ -147,6 +147,29 @@ describe('POST /request', () => {
     expect(requestedUrls).toEqual([]);
   });
 
+  it('counts the per-address limit under a key naming this endpoint', async () => {
+    // Named, so that requests here cannot spend the entry form's budget for
+    // the same address and keep its owner from entering (#295).
+    mockFetch({participants: []});
+    const keys: string[] = [];
+    const recording: RateLimit = {
+      limit: ({key}) => {
+        keys.push(key ?? '');
+        return Promise.resolve({success: true});
+      },
+    };
+
+    await post(
+      '/request',
+      {email: 'Shared@Example.com'},
+      {env: {...ENV, MAIL_TRIGGER_EMAIL_RATE_LIMITER: recording}},
+    );
+
+    expect(keys).toEqual([
+      'participant-password-reset:email:shared@example.com',
+    ]);
+  });
+
   it('returns 400 when the Turnstile token is missing', async () => {
     mockFetch({participants: [{id: PARTICIPANT_ID}]});
 

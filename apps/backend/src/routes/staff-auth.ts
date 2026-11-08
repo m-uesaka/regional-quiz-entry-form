@@ -63,7 +63,7 @@ export const staffAuthRoute = new Hono<Env>()
     zValidator('json', StaffLoginInputSchema),
     rateLimit<{out: {json: StaffLoginInput}}>(
       env => env.LOGIN_EMAIL_RATE_LIMITER,
-      c => `staff-login:${emailKey(c.req.valid('json').email)}`,
+      c => emailKey('staff-login', c.req.valid('json').email),
       LOGIN_LIMIT_PERIOD_SECONDS,
     ),
     async c => {
@@ -157,7 +157,7 @@ export const staffAuthRoute = new Hono<Env>()
     zValidator('json', StaffPasswordResetRequestInputSchema),
     rateLimit<{out: {json: StaffPasswordResetRequestInput}}>(
       env => env.MAIL_TRIGGER_EMAIL_RATE_LIMITER,
-      c => `staff-password-reset:${emailKey(c.req.valid('json').email)}`,
+      c => emailKey('staff-password-reset', c.req.valid('json').email),
       MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
     ),
     c => {

@@ -215,8 +215,28 @@ describe('emailKey', () => {
     // One mailbox, so one bucket. Counted as submitted, the two spellings
     // would give a caller twice the budget the endpoint advertises -- and as
     // many times again as they care to vary the capitalization.
-    expect(emailKey('Victim@Example.com')).toBe(emailKey('victim@example.com'));
-    expect(emailKey('Victim@Example.com')).toBe('email:victim@example.com');
+    expect(emailKey('entry', 'Victim@Example.com')).toBe(
+      emailKey('entry', 'victim@example.com'),
+    );
+    expect(emailKey('entry', 'Victim@Example.com')).toBe(
+      'entry:email:victim@example.com',
+    );
+  });
+
+  it('gives each endpoint a bucket of its own for one address', () => {
+    // The endpoints share their limiters, so a key that named only the
+    // address would let requests to one of them refuse the address on
+    // another (#295).
+    const keys = (
+      [
+        'entry',
+        'participant-login',
+        'participant-password-reset',
+        'staff-login',
+        'staff-password-reset',
+      ] as const
+    ).map(endpoint => emailKey(endpoint, 'victim@example.com'));
+    expect(new Set(keys).size).toBe(keys.length);
   });
 });
 
