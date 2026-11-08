@@ -48,7 +48,7 @@ flowchart LR
 基本となるデータモデルの前提は次の通りです。
 
 - **地域(region)** の下に **大会(tournament)** があり、大会は「地域 × 大会種別(最強位 / 新人王)」の組で一意に決まる(`unique (region_id, type)`)。
-- **参加者アカウント(participant)** はメールアドレスで一意。**同じ問題セット(`tournaments.question_set`)の大会**には、地域をまたいで参加できない(`0043`)。既定(`null`)はすべての大会が共通問題なので、何も設定しなければ地域をまたいだ参加はできない。独自の問題を使う大会(例: 宮崎と鹿児島)に問題セット名を設定すると、問題セットが違う大会どうしは地域をまたいで参加できる。別の地域のエントリーを受付中にキャンセルしていれば、その地域にも制限はかからない(#236)。`participants.region_id` は最後にエントリーした地域の記録で、判定には使わない。
+- **参加者アカウント(participant)** はメールアドレスで一意。**同じ問題セット(`tournaments.question_set`)の大会**には、地域をまたいで参加できない(`0043`)。既定(`null`)は種別ごとの共通問題なので、何も設定しなければ、地域をまたいで同じ種別の大会(最強位どうし・新人王どうし)には参加できない。別の地域の最強位と新人王には参加できる(`0046`)。独自の問題を使う大会(例: 宮崎と鹿児島)に問題セット名を設定すると、問題セットが違う大会どうしは地域をまたいで参加できる。別の地域のエントリーを受付中にキャンセルしていれば、その地域にも制限はかからない(#236)。`participants.region_id` は最後にエントリーした地域の記録で、判定には使わない。
 - **エントリー(entry)** は「participant × tournament」の組ごとに1件のみ(`unique (participant_id, tournament_id)`)。同じ participant が同じ地域の最強位・新人王の両方に entry を持てるかは、地域ごとの設定(`regions.allows_dual_entry`、既定 `false`)で決まる。
 - **フォーム項目定義(form_field_defs)** は大会ごとに YAML から展開して保存する。フロントエンドはこれを読んでフォームを動的生成する。
 
@@ -121,7 +121,7 @@ flowchart TB
 | `capacity` | integer | nullable | 定員。**`null` は「定員無制限」を意味する**(0 ではない) |
 | `entry_opens_at` | timestamptz | not null | エントリー開始日時 |
 | `entry_closes_at` | timestamptz | not null | エントリー終了日時 |
-| `question_set` | text | null 可、1〜100 文字・空白(全角空白を含む)と書式文字(ゼロ幅スペースなど)なし・NFKC 正規化済み(`tournaments_question_set_format`、`0043` → `0044`) | 使用する問題セットの名前(`0043`)。**`null` は共通問題**。地域をまたいだ参加を断るのは、問題セットが同じ(`null` どうしを含む)大会どうしだけ。同じ地域の最強位・新人王の組は `regions.allows_dual_entry` だけで決まり、この列は見ない。統括スタッフが管理画面の大会作成・編集画面の「問題セット」欄で設定する(`POST` / `PATCH /api/tournaments` の `questionSet`。空欄は `null`)。名前が 1 文字違うだけで別の問題セットになり、断るべきエントリーが通ってしまうので、入力は `packages/shared` の `QuestionSetInputSchema` が書式文字の除去・NFKC 正規化・前後の空白除去をし、途中の空白を拒否する。DB も `0044` から同じ形(NFKC 正規化済み・書式文字なし)の値しか受け付けないので、保存済みの名前を画面が送り直しても値は変わらない。画面は既にある名前を候補(`GET /api/tournaments/question-sets`)として出し、大会一覧にも列を表示する(異体字は制約では防げないので、候補から選ぶ)。スプレッドシートからの一括登録では設定せず、既存の値も変えない。設定を変えても既に受け付けたエントリーは検査し直さない |
+| `question_set` | text | null 可、1〜100 文字・空白(全角空白を含む)と書式文字(ゼロ幅スペースなど)なし・NFKC 正規化済み(`tournaments_question_set_format`、`0043` → `0044`) | 使用する問題セットの名前(`0043`)。**`null` は共通問題**。地域をまたいだ参加を断るのは、問題セットが同じ大会どうしだけ。`null` は**種別ごとの**共通問題で、`null` どうしは同じ種別(最強位どうし・新人王どうし)のときだけ同じ問題セットとして扱う(`0046`。最強位と新人王は基本的に問題を共通にしない)。名前を設定した問題セットは種別に関係なく名前だけで比べる。同じ地域の最強位・新人王の組は `regions.allows_dual_entry` だけで決まり、この列は見ない。統括スタッフが管理画面の大会作成・編集画面の「問題セット」欄で設定する(`POST` / `PATCH /api/tournaments` の `questionSet`。空欄は `null`)。名前が 1 文字違うだけで別の問題セットになり、断るべきエントリーが通ってしまうので、入力は `packages/shared` の `QuestionSetInputSchema` が書式文字の除去・NFKC 正規化・前後の空白除去をし、途中の空白を拒否する。DB も `0044` から同じ形(NFKC 正規化済み・書式文字なし)の値しか受け付けないので、保存済みの名前を画面が送り直しても値は変わらない。画面は既にある名前を候補(`GET /api/tournaments/question-sets`)として出し、大会一覧にも列を表示する(異体字は制約では防げないので、候補から選ぶ)。スプレッドシートからの一括登録では設定せず、既存の値も変えない。設定を変えても既に受け付けたエントリーは検査し直さない |
 | `entries_paused` | boolean | not null, default `false` | エントリー受付の一時中断(`0039`)。`true` の間は期間内でも新しいエントリーを受け付けず、フォームは担当スタッフにしか開けない。統括スタッフと担当の地域スタッフが `PUT /api/staff/tournaments/:tournamentId/entry-pause` で切り替える |
 | `created_at` | timestamptz | not null, default `now()` | |
 
@@ -697,3 +697,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0043_tournament_question_set.sql` | `tournaments.question_set`。地域をまたいだ参加を、問題セットが同じ大会どうしだけ断るように `check_entry_seat()` を再定義し、`participant_holds_conflicting_region()` / `claim_participant_region_for_tournament()` を追加 |
 | `0044_question_set_normalized.sql` | 既存の `question_set` を書式文字の除去と NFKC 正規化で揃え、揃っていない値を `tournaments_question_set_format` で拒否する(#271) |
 | `0045_dual_entry_question_sets.sql` | 重複エントリーを認める地域で、最強位と新人王に同じ問題セットを設定できないようにするトリガ 2 つ。既に矛盾している地域があれば適用を止める |
+| `0046_common_question_sets_per_type.sql` | `participant_holds_conflicting_region()` を再定義し、共通問題(`null`)を最強位用と新人王用で別の問題セットとして比べる |

@@ -206,12 +206,14 @@ describe.skipIf(!dbReachable)(
      * regions. `cleanup()` removes it with the rest.
      * @param suffix Makes the region's slug unique within the test.
      * @param questionSet The tournament's question set (`null`: the common
-     *     one).
+     *     one of its type).
+     * @param type The tournament's type.
      * @return The tournament's id.
      */
     async function seedOtherRegionTournament(
       suffix: string,
       questionSet: string | null = null,
+      type: 'saikyoi' | 'shinjinou' = 'saikyoi',
     ): Promise<string> {
       const [region] = await sql`
         insert into regions (slug, name, allows_dual_entry)
@@ -222,7 +224,7 @@ describe.skipIf(!dbReachable)(
         insert into tournaments (
           region_id, type, name, entry_opens_at, entry_closes_at, question_set
         ) values (
-          ${region.id}, 'saikyoi', '別のテスト大会', now(), now(),
+          ${region.id}, ${type}, '別のテスト大会', now(), now(),
           ${questionSet}
         )
         returning id
@@ -351,7 +353,13 @@ describe.skipIf(!dbReachable)(
 
     it('checks the region before the other tournament', async () => {
       const {entryFor} = await seedRegion(false);
-      const otherTournamentId = await seedOtherRegionTournament('order');
+      // A 新人王, so that the 新人王 entered below shares its common
+      // questions (0046).
+      const otherTournamentId = await seedOtherRegionTournament(
+        'order',
+        null,
+        'shinjinou',
+      );
       await sql`insert into entries ${sql({
         ...entryFor('saikyoi'),
         tournament_id: otherTournamentId,
@@ -825,8 +833,12 @@ describe.skipIf(!dbReachable)(
         update tournaments set question_set = '宮崎'
         where id = ${entryFor('saikyoi').tournament_id}
       `;
-      const otherTournamentId =
-        await seedOtherRegionTournament('per-tournament');
+      // A 新人王 on the common questions, as this region's 新人王 is.
+      const otherTournamentId = await seedOtherRegionTournament(
+        'per-tournament',
+        null,
+        'shinjinou',
+      );
       await sql`insert into entries ${sql(entryFor('saikyoi'))}`;
       await sql`insert into entries ${sql({
         ...entryFor('saikyoi'),
@@ -838,6 +850,48 @@ describe.skipIf(!dbReachable)(
       );
 
       expect(code).toBe(PARTICIPANT_REGION_SQLSTATE);
+    });
+
+    // 0046: the common questions are one set per type -- 最強位 and 新人王 don't
+    // share their questions -- while a name is compared as it is, whatever
+    // the type.
+    it('compares the common questions within a type only', async () => {
+      const {entryFor} = await seedRegion(false);
+      const otherShinjinou = await seedOtherRegionTournament(
+        'common-shinjinou',
+        null,
+        'shinjinou',
+      );
+      const otherSaikyoi = await seedOtherRegionTournament('common-saikyoi');
+      await sql`insert into entries ${sql(entryFor('saikyoi'))}`;
+
+      const acrossTypes = await refusalOf(
+        sql`insert into entries ${sql({
+          ...entryFor('saikyoi'),
+          tournament_id: otherShinjinou,
+        })}`,
+      );
+      await sql`delete from entries where tournament_id = ${otherShinjinou}`;
+      const sameType = await refusalOf(
+        sql`insert into entries ${sql({
+          ...entryFor('saikyoi'),
+          tournament_id: otherSaikyoi,
+        })}`,
+      );
+      await sql`
+        update tournaments set question_set = '同名'
+        where id in (${entryFor('saikyoi').tournament_id}, ${otherShinjinou})
+      `;
+      const sameNameAcrossTypes = await refusalOf(
+        sql`insert into entries ${sql({
+          ...entryFor('saikyoi'),
+          tournament_id: otherShinjinou,
+        })}`,
+      );
+
+      expect(acrossTypes).toBeUndefined();
+      expect(sameType).toBe(PARTICIPANT_REGION_SQLSTATE);
+      expect(sameNameAcrossTypes).toBe(PARTICIPANT_REGION_SQLSTATE);
     });
 
     // A name that differs only in spacing would silently count as another

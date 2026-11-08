@@ -59,8 +59,9 @@ export const TournamentSchema = z.object({
   // entry is accepted and the form is staff-only, as outside the period.
   entriesPaused: z.boolean(),
   // The question set the tournament uses (0043), or null for the common
-  // questions. Two tournaments of different regions can't both be entered
-  // when this is the same, null included.
+  // questions of its type. Two tournaments of different regions can't both
+  // be entered when this is the same name, or null for both and the same
+  // type (0046): 最強位 and 新人王 don't share their common questions.
   questionSet: z.string().nullable(),
 });
 export type Tournament = z.infer<typeof TournamentSchema>;
