@@ -5,7 +5,8 @@
 -- 最強位(共通問題)と地域 B の新人王(共通問題)も同じ問題セットとして
 -- 断っていた。最強位と新人王は基本的に問題を共通にしないので、共通問題は
 -- 種別ごとに別物であり、この組み合わせは地域をまたいでもエントリーできる。
--- 0045 も null どうしを同じとは扱っておらず、それと揃う。
+-- 判定は 0045 の `same_question_set()` に任せ、同じ地域の 2 大会の検査と
+-- 同じ規則にする。
 --
 -- 名前を設定した問題セットは今までどおり名前だけで比べる。最強位と新人王に
 -- 同じ名前を付ければ、同じ問題を使うものとして断る。
@@ -29,13 +30,8 @@ as $$
       join tournaments t on t.id = e.tournament_id
       where target.id = p_tournament_id
         and t.region_id <> target.region_id
-        and (
-          t.question_set = target.question_set
-          or (
-            t.question_set is null
-            and target.question_set is null
-            and t.type = target.type
-          )
+        and same_question_set(
+          t.question_set, t.type, target.question_set, target.type
         )
         and (
           e.status <> 'cancelled'

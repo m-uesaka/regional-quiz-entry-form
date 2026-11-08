@@ -636,10 +636,12 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 `0045` の 2 つのトリガで、重複エントリーを認める地域(`regions.allows_dual_entry = true`)の最強位と新人王に同じ問題セットが付くのを防ぎます。両方に出られる 2 大会が同じ問題を使うと、片方で見た問題がもう片方でも出るためです。重複エントリーを認めない地域は、どのみち片方にしか出られないので制限しません。
 
-- `tournaments_check_question_set_for_dual_entry`(`tournaments` の before insert / update of `region_id`, `type`, `question_set`): 名前の付いた問題セットが、重複エントリーを認める同じ地域のもう一方の大会と同じなら、SQLSTATE `P0010` で断ります
+- `tournaments_check_question_set_for_dual_entry`(`tournaments` の before insert / update of `region_id`, `question_set`): 名前の付いた問題セットが、重複エントリーを認める同じ地域のもう一方の大会と同じなら、SQLSTATE `P0010` で断ります。編集画面は保存のたびに全項目を送るので、問題セットも地域も変わらない UPDATE では地域行を取らずに抜けます。種別は判定を変えないので見ません(同じ地域の 2 大会は必ず種別が違う)
 - `regions_check_dual_entry_question_sets`(`regions` の before update of `allows_dual_entry`): `false` → `true` にするとき、地域の大会に同じ問題セット(名前の付いたもの)があれば `P0010` で断ります
 
-比べるのは名前を付けた問題セットどうしだけで、`null`(共通問題)どうしは同じと扱いません。既存の地域はすべて両方とも `null` のまま重複エントリーを認めているためです(共通問題は最強位用と新人王用で別の問題)。
+「同じ問題セットか」は `same_question_set(set_a, type_a, set_b, type_b)` の 1 か所で決め、この 2 つのトリガ、`0045` の適用前の検査(`region_has_shared_question_set()`)、地域をまたいだ判定(`0046` の `participant_holds_conflicting_region()`)がすべてこれを呼びます。名前を付けた問題セットは名前で比べ、`null`(共通問題)は種別ごとに別の問題セットとします(最強位と新人王は基本的に問題を共通にしない)。同じ地域の 2 大会は種別が違うので、`null` どうしがここで同じになることはなく、両方 `null` のまま重複エントリーを認めている既存の地域はそのまま通ります。
+
+最強位と新人王の問題セットを入れ替えるには、先に片方を空欄にして保存します。1 大会ずつ保存するので、いきなり入れ替えるともう一方とぶつかって断られます。
 
 同じ地域の 2 大会への同時の変更や、地域の設定と大会の変更が同時に来ても検査をすり抜けないよう、大会側のトリガは地域行を `for no key update` で取ってから、別の文でもう一方の大会を読みます。`regions` の UPDATE は自分で同じ行ロックを取ります。地域行を取るのはこの 2 つだけで、エントリーまわりのロック順には関わりません。API は `P0010` を 409 と日本語の文言にします(`POST` / `PATCH /api/tournaments`、`PATCH /api/regions/:id`)。
 
@@ -696,5 +698,5 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0042_regulations_closes_with_priority.sql` | `regulations.closes_with_priority`(#243)。旧来の推定で枠が外れていた行のバックフィル。`sync_regulations()` を、キーが無ければ今の値を保つよう再定義 |
 | `0043_tournament_question_set.sql` | `tournaments.question_set`。地域をまたいだ参加を、問題セットが同じ大会どうしだけ断るように `check_entry_seat()` を再定義し、`participant_holds_conflicting_region()` / `claim_participant_region_for_tournament()` を追加 |
 | `0044_question_set_normalized.sql` | 既存の `question_set` を書式文字の除去と NFKC 正規化で揃え、揃っていない値を `tournaments_question_set_format` で拒否する(#271) |
-| `0045_dual_entry_question_sets.sql` | 重複エントリーを認める地域で、最強位と新人王に同じ問題セットを設定できないようにするトリガ 2 つ。既に矛盾している地域があれば適用を止める |
-| `0046_common_question_sets_per_type.sql` | `participant_holds_conflicting_region()` を再定義し、共通問題(`null`)を最強位用と新人王用で別の問題セットとして比べる |
+| `0045_dual_entry_question_sets.sql` | 問題セットの比較 `same_question_set()` と、重複エントリーを認める地域で最強位と新人王に同じ問題セットを設定できないようにするトリガ 2 つ。既に矛盾している地域があれば適用を止める |
+| `0046_common_question_sets_per_type.sql` | `participant_holds_conflicting_region()` を `same_question_set()` で再定義し、共通問題(`null`)を最強位用と新人王用で別の問題セットとして比べる |

@@ -1249,6 +1249,68 @@ describe.skipIf(!dbReachable)(
       expect(renamed).toBeUndefined();
     });
 
+    it('compares named sets by name and the common questions within a type', async () => {
+      const [row] = await sql`
+        select
+          same_question_set('A', 'saikyoi', 'A', 'shinjinou') as named_across,
+          same_question_set('A', 'saikyoi', 'B', 'saikyoi') as named_differ,
+          same_question_set(null, 'saikyoi', null, 'saikyoi') as common_same,
+          same_question_set(null, 'saikyoi', null, 'shinjinou') as common_across,
+          same_question_set('A', 'saikyoi', null, 'saikyoi') as named_common
+      `;
+
+      expect(row).toEqual({
+        named_across: true,
+        named_differ: false,
+        common_same: true,
+        common_across: false,
+        named_common: false,
+      });
+    });
+
+    // The edit form sends every field on each save: a save that changes
+    // neither the question set nor the region must not wait on the region.
+    it('takes the region row only when the question set or the region changes', async () => {
+      const {regionId, saikyoiId} = await seed(true, '宮崎', null);
+      const holder = await sql.reserve();
+      const writer = await sql.reserve();
+      try {
+        await holder`begin`;
+        await holder`select 1 from regions where id = ${regionId} for no key update`;
+        await writer`set lock_timeout = '500ms'`;
+
+        const renamed = await refusalOf(writer`
+          update tournaments set name = '改名', question_set = '宮崎'
+          where id = ${saikyoiId}
+        `);
+        const changed = await refusalOf(writer`
+          update tournaments set question_set = '宮崎2' where id = ${saikyoiId}
+        `);
+
+        expect(renamed).toBeUndefined();
+        // 55P03: lock_not_available, i.e. it did wait on the region row.
+        expect(changed).toBe('55P03');
+      } finally {
+        await holder`rollback`;
+        await writer`set lock_timeout = 0`;
+        holder.release();
+        writer.release();
+      }
+    });
+
+    it('leaves a region that does not exist to the foreign key', async () => {
+      const code = await refusalOf(sql`
+        insert into tournaments (
+          region_id, type, name, entry_opens_at, entry_closes_at, question_set
+        ) values (
+          '00000000-0000-0000-0000-0000000000ff', 'saikyoi', '存在しない地域',
+          now(), now(), '宮崎'
+        )
+      `);
+
+      expect(code).toBe('23503');
+    });
+
     // Both triggers take the region row before reading the other side, so
     // two changes that are each fine alone can't both commit.
     it('never lets concurrent changes leave both on one question set', async () => {

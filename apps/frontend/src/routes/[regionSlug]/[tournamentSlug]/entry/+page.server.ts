@@ -108,7 +108,7 @@ const ENTRY_ERROR_MESSAGES: Record<AnsweredEntryErrorCode, string> = {
   // the same whatever the address, and the reason goes to its owner by mail
   // (#117).
   [ENTRY_ERROR_CODES.ALREADY_REGISTERED_IN_ANOTHER_REGION]:
-    '別の地域の大会にエントリーしているため、この大会にはエントリーできません。この大会にエントリーするには、マイページで別の地域の大会のエントリーをキャンセルしてください。受付終了後にキャンセルした大会がある場合は、別の地域の大会にはエントリーできません',
+    'この大会と同じ問題を使う別の地域の大会にエントリーしているため、この大会にはエントリーできません。この大会にエントリーするには、マイページでその大会のエントリーをキャンセルしてください。同じ問題を使う別の地域の大会を受付終了後にキャンセルしている場合は、この大会にはエントリーできません',
   [ENTRY_ERROR_CODES.ALREADY_ENTERED]: 'この大会には既にエントリー済みです',
   // An earlier entry whose verification link is still valid (#172). Once
   // that link expires, entering again goes through.

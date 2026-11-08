@@ -7,14 +7,19 @@
 -- ならない。重複エントリーを認めない地域では、どのみち片方にしか出られない
 -- ので制限しない。
 --
--- 比べるのは名前を設定した問題セット(null 以外)どうしだけ。null は共通問題
--- で、既存の地域はすべて最強位・新人王とも null のまま重複エントリーを
--- 認めているので、null どうしは同じ問題セットとは扱わない(共通問題は
--- 最強位用と新人王用で別の問題を使う)。
+-- 「同じ問題セットか」は `same_question_set()` の 1 か所で決め、ここの
+-- トリガと検査、地域をまたいだ判定(0046 の
+-- `participant_holds_conflicting_region()`)がすべてこれを呼ぶ。名前を設定した
+-- 問題セットは名前で比べ、null(共通問題)は種別ごとに別の問題セットとする
+-- (最強位と新人王は基本的に問題を共通にしない)。同じ地域の 2 大会は種別が
+-- 違うので、共通問題どうしがここで同じになることはない。既存の地域はすべて
+-- 最強位・新人王とも null のまま重複エントリーを認めているが、それは
+-- そのまま通る。
 --
 -- 検査は 2 か所で行い、どちらも SQLSTATE `P0010` で断る。
 --
--- - 大会の問題セット・地域・種別が変わるとき(`tournaments` のトリガ)
+-- - 大会の問題セットか地域が変わるとき(`tournaments` のトリガ)。種別は
+--   判定を変えないので見ない(同じ地域の 2 大会は必ず種別が違う)
 -- - 地域が重複エントリーを認めるように変わるとき(`regions` のトリガ)
 --
 -- 同じ地域の 2 大会への同時の変更や、地域の設定の変更と大会の変更が
@@ -23,7 +28,34 @@
 -- UPDATE は自分で同じ行ロックを取るので、トリガの中では取り直さない。
 -- 大会の INSERT が地域行に取る外部キー検査の `for key share` とは衝突しない。
 -- 地域行を取る経路はこの 2 つだけで、エントリーまわりのロック順
--- (参加者行・トークン行・大会行・`entries` 行)には関わらない。
+-- (参加者行・トークン行・大会行・`entries` 行)には関わらない。編集画面は
+-- 保存のたびに全項目を送るので、問題セットも地域も変わらない UPDATE では
+-- 地域行を取らずに抜ける。
+
+create function same_question_set(
+  p_question_set_a text,
+  p_type_a tournament_type,
+  p_question_set_b text,
+  p_type_b tournament_type
+)
+returns boolean
+language sql
+immutable
+as $$
+  select coalesce(p_question_set_a = p_question_set_b, false)
+    or (
+      p_question_set_a is null
+      and p_question_set_b is null
+      and p_type_a = p_type_b
+    );
+$$;
+
+revoke all on function same_question_set(
+  text, tournament_type, text, tournament_type
+) from public;
+grant execute on function same_question_set(
+  text, tournament_type, text, tournament_type
+) to service_role;
 
 create function check_tournament_question_set_for_dual_entry()
 returns trigger
@@ -35,13 +67,20 @@ begin
   if new.question_set is null then
     return new;
   end if;
+  if tg_op = 'UPDATE'
+    and new.question_set is not distinct from old.question_set
+    and new.region_id = old.region_id
+  then
+    return new;
+  end if;
 
   select r.allows_dual_entry into v_allows_dual_entry
     from regions r
     where r.id = new.region_id
     for no key update;
 
-  if not v_allows_dual_entry then
+  -- No row: the region doesn't exist, which the foreign key refuses next.
+  if v_allows_dual_entry is not true then
     return new;
   end if;
 
@@ -49,7 +88,7 @@ begin
     select 1 from tournaments t
       where t.region_id = new.region_id
         and t.id <> new.id
-        and t.question_set = new.question_set
+        and same_question_set(t.question_set, t.type, new.question_set, new.type)
   ) then
     raise exception 'dual entry tournaments share a question set'
       using errcode = 'P0010';
@@ -60,9 +99,28 @@ end;
 $$;
 
 create trigger tournaments_check_question_set_for_dual_entry
-  before insert or update of region_id, type, question_set on tournaments
+  before insert or update of region_id, question_set on tournaments
   for each row
   execute function check_tournament_question_set_for_dual_entry();
+
+-- `p_region_id` の大会のうち、同じ問題セットの組があるか。
+create function region_has_shared_question_set(p_region_id uuid)
+returns boolean
+language sql
+stable
+as $$
+  select exists (
+    select 1
+      from tournaments a
+      join tournaments b on b.region_id = a.region_id and b.id > a.id
+      where a.region_id = p_region_id
+        and same_question_set(a.question_set, a.type, b.question_set, b.type)
+  );
+$$;
+
+revoke all on function region_has_shared_question_set(uuid) from public;
+grant execute on function region_has_shared_question_set(uuid)
+  to service_role;
 
 create function check_region_dual_entry_question_sets()
 returns trigger
@@ -73,13 +131,7 @@ begin
     return new;
   end if;
 
-  if exists (
-    select 1 from tournaments t
-      where t.region_id = new.id
-        and t.question_set is not null
-      group by t.question_set
-      having count(*) > 1
-  ) then
+  if region_has_shared_question_set(new.id) then
     raise exception 'dual entry tournaments share a question set'
       using errcode = 'P0010';
   end if;
@@ -98,18 +150,11 @@ do $$
 declare
   v_regions text;
 begin
-  select string_agg(distinct r.name, ', ')
+  select string_agg(r.name, ', ' order by r.name)
     into v_regions
     from regions r
-    join tournaments t on t.region_id = r.id
     where r.allows_dual_entry
-      and t.question_set is not null
-      and exists (
-        select 1 from tournaments other
-          where other.region_id = t.region_id
-            and other.id <> t.id
-            and other.question_set = t.question_set
-      );
+      and region_has_shared_question_set(r.id);
   if v_regions is not null then
     raise exception
       'regions allowing dual entry already share a question set: %',

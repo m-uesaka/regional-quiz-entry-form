@@ -49,6 +49,16 @@ describe('admin regions +page.svelte', () => {
     expect(within(rowOf('osaka')).getByRole('checkbox')).toBeChecked();
   });
 
+  // 0045: allowing dual entry is refused while both tournaments share a
+  // question set, which is changed on the tournament screen.
+  it('explains the question set rule next to the dual-entry box', () => {
+    renderPage([TOKYO]);
+
+    expect(
+      within(rowOf('tokyo')).getByRole('checkbox'),
+    ).toHaveAccessibleDescription(/同じ問題セット.*大会の編集画面/);
+  });
+
   it('carries the region id the row form saves to', () => {
     renderPage([TOKYO]);
 
