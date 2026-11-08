@@ -20,8 +20,8 @@ Claude Code がファイルの種類やタスク内容に応じて自動的に�
 
 | 名前 | 用途 | 管理方法 |
 | --- | --- | --- |
-| [`bun`](./.claude/skills/bun/SKILL.md) | Bun でのスクリプト実行・依存管理・バンドル・テストに関する知識 | CLI管理 (`skills-lock.json`, 由来: `flora131/atomic`) |
-| [`hono`](./.claude/skills/hono/SKILL.md) | Hono のルーティング・ミドルウェア・バリデーション・RPC クライアント等の API リファレンス | CLI管理 (`skills-lock.json`, 由来: `yusukebe/hono-skill`) |
+| [`bun-runtime`](./.claude/skills/bun-runtime/SKILL.md) | Bun でのスクリプト実行・依存管理・workspaces・バンドル・テストに関する知識(Vercel 向けの記述はこのプロジェクトには当てはまらない) | CLI管理 (`skills-lock.json`, 由来: `affaan-m/ECC`。Bun 公式のユーザー向けスキルは存在しない) |
+| [`hono`](./.claude/skills/hono/SKILL.md) | Hono のルーティング・ミドルウェア・バリデーション・RPC クライアント等の API リファレンス | CLI管理 (`skills-lock.json`, 由来: 公式 `honojs/skills`) |
 | [`svelte-code-writer`](./.claude/skills/svelte-code-writer/SKILL.md) | Svelte 5 のドキュメント参照・コード解析用 CLI ツール。`.svelte` / `.svelte.ts` 編集時に必須 | CLI管理 (`skills-lock.json`, 由来: 公式 `sveltejs/ai-tools`) |
 | [`svelte-core-bestpractices`](./.claude/skills/svelte-core-bestpractices/SKILL.md) | Svelte 5 のリアクティビティ・イベント処理・スタイリング等のベストプラクティス | CLI管理 (`skills-lock.json`, 由来: 公式 `sveltejs/ai-tools`) |
 | [`typescript`](./.claude/skills/typescript/SKILL.md) | TypeScript の型定義・ベストプラクティス(型推論、型ガード、tsconfig、ユーティリティ型 等) | 手動管理。元は `dalestudy/skills@typescript`(韓国語)だが全文英訳し、`skills-lock.json` から外して個別に追跡している |

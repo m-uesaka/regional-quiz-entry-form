@@ -35,6 +35,10 @@ sketch
 
 # wrangler dev's local state (build cache, generated self-signed cert)
 .wrangler
+# Local Worker secrets read by `wrangler dev` and the Hono CLI (SUPABASE_SECRET_KEY etc.)
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
 
 # Playwright (apps/e2e)
 test-results
