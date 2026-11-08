@@ -219,8 +219,10 @@ interface MockSupabase {
   mails: SentMail[];
   /** The arguments each `take_over_unverified_participant()` call got. */
   takeOvers: Array<Record<string, unknown>>;
-  /** The arguments each `claim_participant_region()` call got. */
+  /** The arguments each `claim_participant_region_for_tournament()` call got. */
   regionClaims: Array<Record<string, unknown>>;
+  /** The arguments each `participant_holds_conflicting_region()` call got. */
+  conflictChecks: Array<Record<string, unknown>>;
   /** The arguments each `reenter_cancelled_entry()` call got. */
   reentries: Array<Record<string, unknown>>;
 }
@@ -252,8 +254,10 @@ function mockSupabase(options: {
    */
   verifiedMeanwhile?: Record<string, unknown>;
   /**
-   * Makes `claim_participant_region()` refuse: the participant has an entry
-   * in another region that isn't cancelled.
+   * Makes `claim_participant_region_for_tournament()` refuse and
+   * `participant_holds_conflicting_region()` answer true: the participant
+   * has an entry in another region on the same question set that isn't
+   * cancelled.
    */
   activeElsewhere?: boolean;
   /** The SQLSTATE the entry write is refused with, if it is. */
@@ -268,6 +272,7 @@ function mockSupabase(options: {
     mails: [],
     takeOvers: [],
     regionClaims: [],
+    conflictChecks: [],
     reentries: [],
   };
   const tournament = options.tournament ?? tournamentRow();
@@ -344,10 +349,15 @@ function mockSupabase(options: {
       // Nothing of this participant's has a lapsed verification link.
       case 'POST rpc/lapse_expired_pending_entries':
         return Response.json([]);
-      case 'POST rpc/claim_participant_region': {
+      case 'POST rpc/claim_participant_region_for_tournament': {
         const args = JSON.parse(String(init?.body)) as Record<string, unknown>;
         recorded.regionClaims.push(args);
         return Response.json(!options.activeElsewhere);
+      }
+      case 'POST rpc/participant_holds_conflicting_region': {
+        const args = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        recorded.conflictChecks.push(args);
+        return Response.json(Boolean(options.activeElsewhere));
       }
       case 'GET entries':
         return rows(options.cancelledEntry ? [options.cancelledEntry] : []);
@@ -523,7 +533,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     await settleBackgroundWork();
 
     expect(recorded.regionClaims).toEqual([
-      {p_participant_id: PARTICIPANT_ID, p_region_id: REGION_ID},
+      {p_participant_id: PARTICIPANT_ID, p_tournament_id: TOURNAMENT_ID},
     ]);
     expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
     expect(recorded.mails[0].subject).toBe(
@@ -756,10 +766,71 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     await settleBackgroundWork();
 
     expect(recorded.takeOvers).toHaveLength(0);
+    // Asked even in its own region: question sets are per tournament, so
+    // the account's own region can conflict too.
+    expect(recorded.conflictChecks).toHaveLength(1);
     expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
     expect(recorded.mails[0].subject).toBe(
       verificationMailSubject(TOURNAMENT_NAME),
     );
+  });
+
+  // Regions using different question sets (宮崎 and 鹿児島) can be entered
+  // together: a second entry before following the first link is a further
+  // entry, not a takeover that would withdraw the first.
+  it('enters an unverified account under its own password in a region it may also enter', async () => {
+    const recorded = mockSupabase({
+      participant: await registeredParticipant({
+        regionId: OTHER_REGION_ID,
+        verified: false,
+      }),
+    });
+
+    await postWithContext(TOURNAMENT_PATH, validBody);
+    await settleBackgroundWork();
+
+    expect(recorded.conflictChecks).toEqual([
+      {p_participant_id: PARTICIPANT_ID, p_tournament_id: TOURNAMENT_ID},
+    ]);
+    // Lapsed first, so a pending entry whose link expired doesn't count.
+    const tables = recorded.calls.map(call => call.table);
+    expect(tables.indexOf('rpc/lapse_expired_pending_entries')).toBeLessThan(
+      tables.indexOf('rpc/participant_holds_conflicting_region'),
+    );
+    expect(recorded.takeOvers).toHaveLength(0);
+    expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
+    expect(recorded.mails[0].subject).toBe(
+      verificationMailSubject(TOURNAMENT_NAME),
+    );
+  });
+
+  // A takeover would delete every entry of the account, including those
+  // this tournament doesn't conflict with: refused instead, like a verified
+  // account would be.
+  it('refuses an unverified account under its own password in a region on the same question set', async () => {
+    const recorded = mockSupabase({
+      participant: await registeredParticipant({
+        regionId: OTHER_REGION_ID,
+        verified: false,
+      }),
+      activeElsewhere: true,
+    });
+
+    const res = await observable(
+      await postWithContext(TOURNAMENT_PATH, validBody),
+    );
+    await settleBackgroundWork();
+
+    expect(res).toEqual({status: 202, body: JSON.stringify({ok: true})});
+    expect(recorded.conflictChecks).toHaveLength(1);
+    expect(recorded.takeOvers).toHaveLength(0);
+    expect(recorded.calls).not.toContainEqual({
+      table: 'entries',
+      method: 'POST',
+    });
+    expect(recorded.mails).toHaveLength(1);
+    expect(recorded.mails[0].subject).toBe(entryNoticeSubject(TOURNAMENT_NAME));
+    expect(recorded.mails[0].html).toContain('同じ問題を使う別の地域の大会');
   });
 
   it('holds a takeover to the rules for setting a password', async () => {
@@ -1146,7 +1217,7 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
 
     expect(res.status).toBe(201);
     expect(recorded.regionClaims).toEqual([
-      {p_participant_id: PARTICIPANT_ID, p_region_id: REGION_ID},
+      {p_participant_id: PARTICIPANT_ID, p_tournament_id: TOURNAMENT_ID},
     ]);
     expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
   });
@@ -1224,7 +1295,7 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
         REGION_DUAL_ENTRY_SQLSTATE,
         'already entered another tournament in this region',
       ],
-      [PARTICIPANT_REGION_SQLSTATE, 'concurrent submission'],
+      [PARTICIPANT_REGION_SQLSTATE, 'already registered in another region'],
     ])(
       'answers %s from the trigger like a first entry',
       async (code, error) => {
@@ -1265,7 +1336,9 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
     });
   });
 
-  it('answers a concurrent move of the region as a concurrent submission', async () => {
+  // Since 0043 the trigger refuses for a seat that is really held in another
+  // region on the same question set: retrying won't help.
+  it('answers P0008 from the trigger as taking part in another region', async () => {
     mockSupabase({
       participant: await registeredParticipant(),
       entryWriteErrorCode: PARTICIPANT_REGION_SQLSTATE,
@@ -1279,7 +1352,7 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
 
     expect(res.status).toBe(409);
     expect((await res.json()) as unknown).toEqual({
-      error: 'concurrent submission',
+      error: 'already registered in another region',
     });
   });
 

@@ -1486,7 +1486,10 @@ describe.skipIf(!dbReachable)(
       ]);
     });
 
-    it('takes an unverified account over for its own password in another region', async () => {
+    // Its own password makes it the same submitter, so nothing is taken over:
+    // a takeover would delete its entries, including any the new tournament
+    // doesn't conflict with. It is refused like a verified account.
+    it('refuses an unverified account its own password in another region on the same question set', async () => {
       const far = await createFixture('same-password-far');
       const near = await createFixture('same-password-near');
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
@@ -1503,14 +1506,52 @@ describe.skipIf(!dbReachable)(
         validInput({email, regulationIds: [near.regulationId]}),
       );
 
+      expect(second).toEqual({
+        ok: false,
+        status: 409,
+        error: 'already registered in another region',
+      });
+      const after = await readParticipant(email);
+      expect(after.region_id).toBe(far.regionId);
+      const rows = await sql`
+        select tournament_id from entries where participant_id = ${after.id}
+      `;
+      expect(
+        rows.map((row: {tournament_id: string}) => row.tournament_id),
+      ).toEqual([far.tournamentId]);
+    });
+
+    it('adds an entry for an unverified account in another region on a different question set', async () => {
+      const far = await createFixture('own-set-far');
+      const near = await createFixture('own-set-near');
+      await sql`
+        update tournaments set question_set = '宮崎'
+        where id = ${near.tournamentId}
+      `;
+      const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
+      expect(
+        (
+          await createEntry(
+            env,
+            far.tournamentId,
+            validInput({email, regulationIds: [far.regulationId]}),
+          )
+        ).ok,
+      ).toBe(true);
+
+      const second = await createEntry(
+        env,
+        near.tournamentId,
+        validInput({email, regulationIds: [near.regulationId]}),
+      );
+
       expect(second.ok).toBe(true);
       const after = await readParticipant(email);
-      expect(after.region_id).toBe(near.regionId);
       const [{count}] = await sql`
         select count(*)::int as count from entries
-        where participant_id = ${after.id}
+        where participant_id = ${after.id} and status = 'pending_verification'
       `;
-      expect(count).toBe(1);
+      expect(count).toBe(2);
     });
 
     it('createEntryUnauthenticated takes an unverified account over without a notice', async () => {
