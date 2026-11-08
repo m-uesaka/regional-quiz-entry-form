@@ -18,12 +18,18 @@
      * refused save — what was submitted.
      */
     values: TournamentFormValues;
+    /**
+     * The 問題セット names tournaments already use, suggested so a name
+     * isn't typed slightly differently: that would count as another set.
+     */
+    questionSets: string[];
     submitLabel: string;
     /** The named action to post to, or undefined for the page's default. */
     action?: string;
   }
 
-  const {regions, values, submitLabel, action}: Props = $props();
+  const {regions, values, questionSets, submitLabel, action}: Props =
+    $props();
 </script>
 
 <!-- Posted to a form action rather than sent from the browser: `/api/*` is
@@ -93,6 +99,39 @@
       min="1"
       value={values.capacity}
     />
+  </div>
+
+  <div class="flex flex-col gap-1.5">
+    <Label for="tournament-question-set">問題セット(任意)</Label>
+    <!-- Free text with suggestions rather than a select: a new set is named
+         here the first time a tournament uses it. -->
+    <Input
+      id="tournament-question-set"
+      class="w-full sm:w-64"
+      type="text"
+      name="questionSet"
+      value={values.questionSet}
+      list="tournament-question-set-options"
+      autocomplete="off"
+      aria-describedby="tournament-question-set-hint"
+    />
+    <datalist id="tournament-question-set-options">
+      {#each questionSets as questionSet (questionSet)}
+        <option value={questionSet}></option>
+      {/each}
+    </datalist>
+    <div id="tournament-question-set-hint" class="text-sm text-muted-foreground">
+      <p>
+        共通問題を使う大会は空欄のままにしてください。独自の問題を使う大会(例:
+        宮崎、鹿児島)には、その問題セットの名前を入力します。
+      </p>
+      <p>
+        問題セットが同じ大会(空欄どうしを含む)には、地域をまたいでエントリーできません。問題セットが違えば、地域をまたいでエントリーできます。名前が1文字でも違うと別の問題セットになるので、既にある名前は候補から選んでください。
+      </p>
+      <p>
+        変更しても、既に受け付けたエントリーは確認し直されません。エントリーの受付が始まった後に変更すると、新しい設定ではエントリーできない組み合わせのエントリーも残ります。
+      </p>
+    </div>
   </div>
 
   <!-- The step only drops to a second for a stored instant that falls

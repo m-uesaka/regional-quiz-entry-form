@@ -18,6 +18,8 @@
     formDefinitionYaml: string;
     /** Passed straight through to the form's region select. */
     regions: Region[];
+    /** Passed straight through to the form's 問題セット suggestions. */
+    questionSets: string[];
     /** What the page's `update` action last answered with, if anything. */
     result: {
       saved: boolean;
@@ -28,8 +30,14 @@
     } | null;
   }
 
-  const {tournament, customName, formDefinitionYaml, regions, result}: Props =
-    $props();
+  const {
+    tournament,
+    customName,
+    formDefinitionYaml,
+    regions,
+    questionSets,
+    result,
+  }: Props = $props();
 
   // A refused save re-renders what was submitted; anything else shows the
   // stored tournament, which `load` re-reads after every successful save.
@@ -60,7 +68,13 @@
     </Message>
   {/if}
 
-  <TournamentForm {regions} {values} submitLabel="更新" action="?/update" />
+  <TournamentForm
+    {regions}
+    {values}
+    {questionSets}
+    submitLabel="更新"
+    action="?/update"
+  />
 </Card>
 
 <!-- The YAML carries the tournament's type as its `tournamentSlug`, so a

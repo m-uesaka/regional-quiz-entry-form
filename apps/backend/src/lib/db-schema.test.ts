@@ -841,10 +841,21 @@ describe.skipIf(!dbReachable)(
 
     // A name that differs only in spacing would silently count as another
     // question set, letting through what it should refuse.
-    it('refuses question set names with spaces, full-width ones included', async () => {
+    // 0044 adds format characters and names not NFKC-normalized: both look
+    // the same as another name, and would count as another question set.
+    it('refuses question set names that would look like another', async () => {
       await seedRegion(false);
       const codes = [];
-      for (const name of ['宮崎　', ' 宮崎', '宮 崎', '']) {
+      for (const name of [
+        '宮崎　',
+        ' 宮崎',
+        '宮 崎',
+        '',
+        '宮崎\u200b',
+        '\ufeff宮崎',
+        '宮崎Ａ',
+        'ﾐﾔｻﾞｷ',
+      ]) {
         codes.push(
           await refusalOf(sql`
             update tournaments set question_set = ${name}
@@ -853,7 +864,14 @@ describe.skipIf(!dbReachable)(
         );
       }
 
-      expect(codes).toEqual(['23514', '23514', '23514', '23514']);
+      expect(codes).toEqual(Array(8).fill('23514'));
+      // The form the admin screen stores is accepted.
+      expect(
+        await refusalOf(sql`
+          update tournaments set question_set = '宮崎A'
+          where region_id = (select id from regions where slug = ${testRegionSlug})
+        `),
+      ).toBeUndefined();
     });
 
     it('claims a region by tournament, refusing only the same question set', async () => {

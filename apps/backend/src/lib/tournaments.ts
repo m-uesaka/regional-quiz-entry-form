@@ -22,6 +22,7 @@ export interface TournamentRow extends Pick<
   | 'entry_opens_at'
   | 'entry_closes_at'
   | 'entries_paused'
+  | 'question_set'
 > {
   // A to-one embed on a not-null foreign key, so always the region itself.
   // Read for its name, which a blank 大会名 is made from.
@@ -34,7 +35,7 @@ export interface TournamentRow extends Pick<
  * Supabase client can infer the rows they read.
  */
 const TOURNAMENT_OWN_COLUMNS =
-  'id, region_id, type, name, capacity, entry_opens_at, entry_closes_at, entries_paused';
+  'id, region_id, type, name, capacity, entry_opens_at, entry_closes_at, entries_paused, question_set';
 
 /**
  * The select that reads a `TournamentRow`, for every read of one -- and for
@@ -72,6 +73,7 @@ export function rowToTournament(row: TournamentRow): Tournament {
     entryOpensAt: row.entry_opens_at,
     entryClosesAt: row.entry_closes_at,
     entriesPaused: row.entries_paused,
+    questionSet: row.question_set,
   });
 }
 

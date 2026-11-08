@@ -34,6 +34,7 @@ export function openEntryPeriodTournament(
     entry_opens_at: new Date(now - DAY_MS).toISOString(),
     entry_closes_at: new Date(now + DAY_MS).toISOString(),
     entries_paused: false,
+    question_set: null,
     regions: {name: 'テスト地域'},
     ...overrides,
   };
