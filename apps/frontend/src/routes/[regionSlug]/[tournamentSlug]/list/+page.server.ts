@@ -1,17 +1,12 @@
 import {error} from '@sveltejs/kit';
-import {TournamentTypeSchema} from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
 import {readPageOffset} from '$lib/pagination';
 import {cachedEntryListPage} from '$lib/server/entry-list-cache';
+import {parseTournamentSlug} from '$lib/server/tournament-by-slug';
 import type {PageServerLoad} from './$types';
 
 export const load: PageServerLoad = async ({params, fetch, platform, url}) => {
-  // Same slug-narrowing rationale as the entry route's `load`: the RPC
-  // client expects the literal tournament-type union, not a bare `string`.
-  const parsedType = TournamentTypeSchema.safeParse(params.tournamentSlug);
-  if (!parsedType.success) {
-    throw error(404, '大会が見つかりません');
-  }
+  const tournamentSlug = parseTournamentSlug(params.tournamentSlug);
   const offset = readPageOffset(url.searchParams);
 
   // Served from the Cloudflare cache when it can be (#125); see
@@ -20,7 +15,7 @@ export const load: PageServerLoad = async ({params, fetch, platform, url}) => {
   const {items, ...paging} = await cachedEntryListPage(
     platform,
     url.origin,
-    {regionSlug: params.regionSlug, type: parsedType.data},
+    {regionSlug: params.regionSlug, type: tournamentSlug},
     offset,
     async () => {
       const api = createApiClient(fetch);
@@ -34,7 +29,7 @@ export const load: PageServerLoad = async ({params, fetch, platform, url}) => {
       ].$get({
         param: {
           regionSlug: params.regionSlug,
-          tournamentSlug: parsedType.data,
+          tournamentSlug,
         },
         // One page at a time, so the SSR'd HTML stays the same size however
         // many have entered. The backend's default page size applies.
