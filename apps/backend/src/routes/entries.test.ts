@@ -766,8 +766,9 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     await settleBackgroundWork();
 
     expect(recorded.takeOvers).toHaveLength(0);
-    // Its own region: nothing to look up.
-    expect(recorded.conflictChecks).toHaveLength(0);
+    // Asked even in its own region: question sets are per tournament, so
+    // the account's own region can conflict too.
+    expect(recorded.conflictChecks).toHaveLength(1);
     expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
     expect(recorded.mails[0].subject).toBe(
       verificationMailSubject(TOURNAMENT_NAME),
@@ -791,6 +792,11 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     expect(recorded.conflictChecks).toEqual([
       {p_participant_id: PARTICIPANT_ID, p_tournament_id: TOURNAMENT_ID},
     ]);
+    // Lapsed first, so a pending entry whose link expired doesn't count.
+    const tables = recorded.calls.map(call => call.table);
+    expect(tables.indexOf('rpc/lapse_expired_pending_entries')).toBeLessThan(
+      tables.indexOf('rpc/participant_holds_conflicting_region'),
+    );
     expect(recorded.takeOvers).toHaveLength(0);
     expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
     expect(recorded.mails[0].subject).toBe(
@@ -798,7 +804,10 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     );
   });
 
-  it('takes over an unverified account under its own password in a region on the same question set', async () => {
+  // A takeover would delete every entry of the account, including those
+  // this tournament doesn't conflict with: refused instead, like a verified
+  // account would be.
+  it('refuses an unverified account under its own password in a region on the same question set', async () => {
     const recorded = mockSupabase({
       participant: await registeredParticipant({
         regionId: OTHER_REGION_ID,
@@ -807,12 +816,21 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
       activeElsewhere: true,
     });
 
-    await postWithContext(TOURNAMENT_PATH, validBody);
+    const res = await observable(
+      await postWithContext(TOURNAMENT_PATH, validBody),
+    );
     await settleBackgroundWork();
 
+    expect(res).toEqual({status: 202, body: JSON.stringify({ok: true})});
     expect(recorded.conflictChecks).toHaveLength(1);
-    expect(recorded.takeOvers).toHaveLength(1);
-    expect(recorded.takeOvers[0].p_region_id).toBe(REGION_ID);
+    expect(recorded.takeOvers).toHaveLength(0);
+    expect(recorded.calls).not.toContainEqual({
+      table: 'entries',
+      method: 'POST',
+    });
+    expect(recorded.mails).toHaveLength(1);
+    expect(recorded.mails[0].subject).toBe(entryNoticeSubject(TOURNAMENT_NAME));
+    expect(recorded.mails[0].html).toContain('同じ問題を使う別の地域の大会');
   });
 
   it('holds a takeover to the rules for setting a password', async () => {
@@ -1277,7 +1295,7 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
         REGION_DUAL_ENTRY_SQLSTATE,
         'already entered another tournament in this region',
       ],
-      [PARTICIPANT_REGION_SQLSTATE, 'concurrent submission'],
+      [PARTICIPANT_REGION_SQLSTATE, 'already registered in another region'],
     ])(
       'answers %s from the trigger like a first entry',
       async (code, error) => {
@@ -1318,7 +1336,9 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
     });
   });
 
-  it('answers a concurrent move of the region as a concurrent submission', async () => {
+  // Since 0043 the trigger refuses for a seat that is really held in another
+  // region on the same question set: retrying won't help.
+  it('answers P0008 from the trigger as taking part in another region', async () => {
     mockSupabase({
       participant: await registeredParticipant(),
       entryWriteErrorCode: PARTICIPANT_REGION_SQLSTATE,
@@ -1332,7 +1352,7 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
 
     expect(res.status).toBe(409);
     expect((await res.json()) as unknown).toEqual({
-      error: 'concurrent submission',
+      error: 'already registered in another region',
     });
   });
 

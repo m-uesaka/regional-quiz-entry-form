@@ -10,7 +10,8 @@
 -- マイグレーションだけでは挙動は変わらない(どの 2 地域の大会も同じ問題
 -- セットとして断られる)。独自の問題を使う大会には、統括スタッフが名前を
 -- 設定する(例: `宮崎`)。名前が同じ大会どうしは同じ問題を使うものとして
--- 扱う。同じ地域の最強位・新人王の組は今までどおり `regions.allows_dual_entry`
+-- 扱う。設定を変えても、既に受け付けたエントリーは検査し直さない(別の
+-- 問題セットだった 2 大会を同じにしても、両方のエントリーはそのまま残る)。同じ地域の最強位・新人王の組は今までどおり `regions.allows_dual_entry`
 -- だけで決まり、問題セットは見ない。
 --
 -- 何が地域を押さえるかは 0040 と同じ(参加中のエントリーと、受付終了より後に
@@ -33,11 +34,16 @@
 -- 次のマイグレーションで消す。
 alter table tournaments
   add column question_set text,
+  -- 名前が 1 文字でも違えば別の問題セットになり、断るべきエントリーが
+  -- 通ってしまう(誤りが緩い側に倒れる)。見分けにくい違いのうち機械的に
+  -- 弾けるもの、つまり前後の空白(全角空白 U+3000 を含む)と途中の空白を
+  -- 拒否する。異体字(「崎」と「﨑」など)は弾けないので、設定は既存の
+  -- 名前を確かめてから行う。
   add constraint tournaments_question_set_format check (
     question_set is null
     or (
-      question_set = btrim(question_set)
-      and char_length(question_set) between 1 and 100
+      char_length(question_set) between 1 and 100
+      and question_set !~ '[[:space:]\u3000]'
     )
   );
 

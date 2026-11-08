@@ -816,6 +816,46 @@ describe.skipIf(!dbReachable)(
       expect(otherSet).toBeUndefined();
     });
 
+    // Question sets are per tournament: the region a participant already
+    // takes part in can still hold a tournament that conflicts elsewhere.
+    it("checks each tournament's question set, not the region's", async () => {
+      const {entryFor} = await seedRegion(true);
+      await sql`
+        update tournaments set question_set = '宮崎'
+        where id = ${entryFor('saikyoi').tournament_id}
+      `;
+      const otherTournamentId =
+        await seedOtherRegionTournament('per-tournament');
+      await sql`insert into entries ${sql(entryFor('saikyoi'))}`;
+      await sql`insert into entries ${sql({
+        ...entryFor('saikyoi'),
+        tournament_id: otherTournamentId,
+      })}`;
+
+      const code = await refusalOf(
+        sql`insert into entries ${sql(entryFor('shinjinou'))}`,
+      );
+
+      expect(code).toBe(PARTICIPANT_REGION_SQLSTATE);
+    });
+
+    // A name that differs only in spacing would silently count as another
+    // question set, letting through what it should refuse.
+    it('refuses question set names with spaces, full-width ones included', async () => {
+      await seedRegion(false);
+      const codes = [];
+      for (const name of ['宮崎　', ' 宮崎', '宮 崎', '']) {
+        codes.push(
+          await refusalOf(sql`
+            update tournaments set question_set = ${name}
+            where region_id = (select id from regions where slug = ${testRegionSlug})
+          `),
+        );
+      }
+
+      expect(codes).toEqual(['23514', '23514', '23514', '23514']);
+    });
+
     it('claims a region by tournament, refusing only the same question set', async () => {
       const {participantId, entryFor} = await seedRegion(false);
       await sql`insert into entries ${sql(entryFor('saikyoi'))}`;

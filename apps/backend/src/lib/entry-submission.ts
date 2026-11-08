@@ -27,7 +27,7 @@ import {
 } from './db';
 import {sendEntryNoticeEmail, type EntryNoticeReason} from './entry-notice';
 import {sendVerificationEmail} from './entry-verification';
-import type {InternalFailure, InternalResult, LibFailure} from './errors';
+import type {InternalFailure, LibFailure} from './errors';
 import {validateCustomFieldValues} from './form-field-defs';
 import {hashPassword, verifyPassword} from './password';
 import {
@@ -416,14 +416,15 @@ export async function checkEntrySubmission(
  * the address belongs to and enters them.
  *
  * A participant whose address has been verified must prove ownership by
- * password, and can't enter across regions. One whose address
- * never was (#189) is taken over instead: the account was made by a
- * submission nobody has confirmed, possibly from someone who typed another
- * person's address to lock them into a far region, so its password and
- * region carry no weight. The submission at hand replaces them, the same
- * way it would have created the account had it come first -- unless it
- * comes with the account's own password for the account's own region, which
- * makes it a further entry from whoever made the account.
+ * password, and can't enter tournaments of two regions using the same
+ * question set. One whose address never was (#189) is taken over instead:
+ * the account was made by a submission nobody has confirmed, possibly from
+ * someone who typed another person's address to lock them into a far
+ * region, so its password and region carry no weight. The submission at
+ * hand replaces them, the same way it would have created the account had it
+ * come first -- unless it comes with the account's own password, which
+ * makes it a further entry from whoever made the account, held to the same
+ * rules as a verified one (see `enterUnverifiedAccountAgain()`).
  * @param env The Worker bindings.
  * @param tournament The checked tournament.
  * @param input The validated entry form submission.
@@ -448,32 +449,13 @@ async function createEntryAfterCheck(
     existingParticipant?.email_verified_at === null &&
     (await isUnverifiedAccountPassword(existingParticipant, input.password))
   ) {
-    const furtherEntry = await isFurtherEntryOfUnverifiedAccount(
+    return enterUnverifiedAccountAgain(
+      env,
       db,
-      existingParticipant,
       tournament,
+      existingParticipant,
+      input,
     );
-    if (!furtherEntry.ok) {
-      return furtherEntry;
-    }
-    if (furtherEntry.value) {
-      // Whoever made the account is still the one submitting, for a
-      // tournament its entries leave open: nothing to take over, and the
-      // entries they made earlier stand -- a participant entering both of a
-      // region's tournaments, or tournaments of two regions using different
-      // question sets, before following any link keeps them all (or is
-      // refused the second, where the region allows only one). Every link of
-      // the account still belongs to a submission made with its current
-      // password.
-      return enterTournament(
-        env,
-        tournament,
-        existingParticipant.id,
-        input.email,
-        input,
-        {passwordHash: existingParticipant.password_hash},
-      );
-    }
   }
 
   if (!existingParticipant || existingParticipant.email_verified_at === null) {
@@ -517,8 +499,7 @@ async function createEntryAfterCheck(
         passwordHash,
       });
     }
-    // A different password, or a tournament the account's entries rule out
-    // (another region using the same question set): the account is handed to
+    // A different password: the account is handed to
     // this submission, and what the earlier ones made goes with the old
     // password (see the migration for why it is deleted rather than kept).
     const {data: withdrawn, error: takeOverError} = await db.rpc(
@@ -639,23 +620,40 @@ async function isUnverifiedAccountPassword(
 }
 
 /**
- * Whether an unverified account's own password, submitted again, makes a
- * further entry rather than a takeover: the tournament is in the account's
- * region, or nothing the account holds in another region shares its
- * question set (`participant_holds_conflicting_region()`). Read without the
- * participant's lock; `check_entry_seat()` decides again under it, so a
- * concurrent submission at worst gets the 409 of a concurrent one.
- * @param db The Supabase client to read with.
- * @param account The unverified account.
+ * Enters an unverified account submitted again with its own password:
+ * whoever made the account is still the one submitting, so there is nothing
+ * to take over, and the entries they made earlier stand -- a participant
+ * entering both of a region's tournaments, or tournaments of two regions
+ * using different question sets, before following any link keeps them all.
+ * Every link of the account still belongs to a submission made with its
+ * current password.
+ *
+ * A tournament the account's entries rule out -- another region's on the
+ * same question set (`participant_holds_conflicting_region()`) -- is refused
+ * as it would be for a verified account, rather than taken over: a takeover
+ * would delete the account's other entries too, including those this
+ * tournament doesn't conflict with. The check is the database's own, asked
+ * whatever the region (question sets are per tournament, so the account's
+ * own region can conflict too), and after expired links are lapsed, as
+ * `enterTournament()` would, so that an entry that can never be confirmed
+ * doesn't count. It is read without the participant's lock;
+ * `check_entry_seat()` decides again under it.
+ * @param env The Worker bindings.
+ * @param db The Supabase client to use.
  * @param tournament The checked tournament.
+ * @param account The unverified account.
+ * @param input The validated entry form submission.
  */
-async function isFurtherEntryOfUnverifiedAccount(
+async function enterUnverifiedAccountAgain(
+  env: Bindings,
   db: DbClient,
-  account: ParticipantRow,
   tournament: EntryTournamentRow,
-): Promise<InternalResult<boolean>> {
-  if (account.region_id === tournament.region_id) {
-    return {ok: true, value: true};
+  account: ParticipantRow,
+  input: EntryInput,
+): Promise<CreateEntryResult> {
+  const lapsed = await lapseExpiredPendingEntries(db, account.id);
+  if (!lapsed.ok) {
+    return lapsed;
   }
   const {data: conflicting, error} = await db.rpc(
     'participant_holds_conflicting_region',
@@ -664,7 +662,16 @@ async function isFurtherEntryOfUnverifiedAccount(
   if (error) {
     return {ok: false, status: 500, error: error.message};
   }
-  return {ok: true, value: !conflicting};
+  if (conflicting) {
+    return {
+      ok: false,
+      status: 409,
+      error: ENTRY_ERROR_CODES.ALREADY_REGISTERED_IN_ANOTHER_REGION,
+    };
+  }
+  return enterTournament(env, tournament, account.id, input.email, input, {
+    passwordHash: account.password_hash,
+  });
 }
 
 /**
@@ -1060,13 +1067,22 @@ async function writeEntry(
       error: ENTRY_ERROR_CODES.ALREADY_ENTERED_ANOTHER_TOURNAMENT,
     };
   }
-  // A concurrent submission got there first: it moved the participant to
-  // another region after this one last looked (nothing need stand in the
-  // other region, so this isn't answered as taking part there), inserted
-  // the same entry, or -- on a re-entry -- took or deleted the cancelled
-  // row `.single()` was looking for.
+  // The participant holds a seat in another region on the same question set
+  // (0043): one a concurrent submission took after this one last looked, or
+  // one no check ahead of the write could see. Either way the seat is really
+  // there, and retrying won't change that, so it is answered as taking part
+  // there rather than as a concurrent submission.
+  if (error?.code === PARTICIPANT_REGION_SQLSTATE) {
+    return {
+      ok: false,
+      status: 409,
+      error: ENTRY_ERROR_CODES.ALREADY_REGISTERED_IN_ANOTHER_REGION,
+    };
+  }
+  // A concurrent submission got there first: it inserted the same entry, or
+  // -- on a re-entry -- took or deleted the cancelled row `.single()` was
+  // looking for.
   if (
-    error?.code === PARTICIPANT_REGION_SQLSTATE ||
     error?.code === UNIQUE_VIOLATION_SQLSTATE ||
     (existingEntry && error?.code === NO_ROW_PGRST_CODE)
   ) {
@@ -1251,7 +1267,7 @@ const ENTRY_NOTICE_REASONS: Partial<Record<EntryErrorCode, EntryNoticeReason>> =
  * - A registered address that was never verified has its account taken
  *   over -- password and region replaced, earlier submissions' entries
  *   dropped -- and gets the entry (#189). With the account's own password
- *   and region it is simply entered, like a verified one.
+ *   it is entered under the same rules as a verified one, in any region.
  * - A verified address with the matching password gets the entry.
  * - Anything about the address's own account that would otherwise have
  *   been an error -- a wrong password, taking part in another region, an
