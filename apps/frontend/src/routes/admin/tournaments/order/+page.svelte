@@ -12,6 +12,7 @@
   import Message from '$lib/components/ui/items/Message.svelte';
   import {tick} from 'svelte';
   import {dragReorder, moveItem, renumberRows} from '$lib/drag-reorder';
+  import {Hydrated} from '$lib/hydrated.svelte';
   import type {PageProps} from './$types';
 
   const {data, form}: PageProps = $props();
@@ -24,10 +25,7 @@
   let announcement = $state('');
   // The handles and buttons need scripting, so they only appear once it
   // runs; without it the numbers below still reorder the tournaments.
-  let hydrated = $state(false);
-  $effect(() => {
-    hydrated = true;
-  });
+  const hydrated = new Hydrated();
 
   /**
    * Moves a tournament to another position, then numbers every row by
@@ -75,7 +73,7 @@
         <Table class="w-full">
           <thead>
             <tr class="border-b border-border">
-              {#if hydrated}
+              {#if hydrated.current}
                 <TableHead size="small">
                   <span class="sr-only">並べ替え</span>
                 </TableHead>
@@ -94,7 +92,7 @@
                 data-drag-item
                 class="border-b border-border bg-surface data-dragging:relative data-dragging:z-10 data-dragging:bg-accent data-dragging:shadow-md"
               >
-                {#if hydrated}
+                {#if hydrated.current}
                   <TableData size="small">
                     <ReorderControls
                       label={tournament.name}

@@ -14,6 +14,7 @@
   import Link from '$lib/components/ui/atoms/Link.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
   import {dragReorder, moveItem, renumberRows} from '$lib/drag-reorder';
+  import {Hydrated} from '$lib/hydrated.svelte';
   import {datetimeLocalStep} from '$lib/jst-datetime';
   import {
     emptyRegulationRow,
@@ -64,10 +65,7 @@
   let announcement = $state('');
   // The handles and buttons need scripting, so they only appear once it
   // runs; without it the "表示順" numbers still reorder the rows.
-  let hydrated = $state(false);
-  $effect(() => {
-    hydrated = true;
-  });
+  const hydrated = new Hydrated();
 
   /**
    * What a row is called where it is announced or labelled: by position,
@@ -168,7 +166,7 @@
         >
           <legend class="px-1 text-sm font-bold">{index + 1} 番目</legend>
 
-          {#if hydrated}
+          {#if hydrated.current}
             <div class="sm:col-span-2">
               <ReorderControls
                 label={rowName(index)}
