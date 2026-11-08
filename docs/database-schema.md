@@ -119,7 +119,7 @@ flowchart TB
 | `capacity` | integer | nullable | 定員。**`null` は「定員無制限」を意味する**(0 ではない) |
 | `entry_opens_at` | timestamptz | not null | エントリー開始日時 |
 | `entry_closes_at` | timestamptz | not null | エントリー終了日時 |
-| `question_set` | text | null 可、1〜100 文字・空白(全角空白を含む)なし(`tournaments_question_set_format`) | 使用する問題セットの名前(`0043`)。**`null` は共通問題**。地域をまたいだ参加を断るのは、問題セットが同じ(`null` どうしを含む)大会どうしだけ。同じ地域の最強位・新人王の組は `regions.allows_dual_entry` だけで決まり、この列は見ない。今のところ API・管理画面からは設定できず、統括スタッフが SQL で設定する(例: `update tournaments set question_set = '宮崎' where id = '...'`)。名前が 1 文字違うだけで別の問題セットになり、断るべきエントリーが通ってしまうので、設定前に `select distinct question_set from tournaments` で既存の名前を確かめる(異体字は制約では防げない)。設定を変えても既に受け付けたエントリーは検査し直さない |
+| `question_set` | text | null 可、1〜100 文字・空白(全角空白を含む)なし(`tournaments_question_set_format`) | 使用する問題セットの名前(`0043`)。**`null` は共通問題**。地域をまたいだ参加を断るのは、問題セットが同じ(`null` どうしを含む)大会どうしだけ。同じ地域の最強位・新人王の組は `regions.allows_dual_entry` だけで決まり、この列は見ない。統括スタッフが管理画面の大会作成・編集画面の「問題セット」欄で設定する(`POST` / `PATCH /api/tournaments` の `questionSet`。空欄は `null`)。名前が 1 文字違うだけで別の問題セットになり、断るべきエントリーが通ってしまうので、入力は `packages/shared` の `QuestionSetInputSchema` が NFKC 正規化と前後の空白除去をし、途中の空白を拒否する。画面は既にある名前を候補(`GET /api/tournaments/question-sets`)として出し、大会一覧にも列を表示する(異体字は制約では防げないので、候補から選ぶ)。スプレッドシートからの一括登録では設定せず、既存の値も変えない。設定を変えても既に受け付けたエントリーは検査し直さない |
 | `entries_paused` | boolean | not null, default `false` | エントリー受付の一時中断(`0039`)。`true` の間は期間内でも新しいエントリーを受け付けず、フォームは担当スタッフにしか開けない。統括スタッフと担当の地域スタッフが `PUT /api/staff/tournaments/:tournamentId/entry-pause` で切り替える |
 | `created_at` | timestamptz | not null, default `now()` | |
 

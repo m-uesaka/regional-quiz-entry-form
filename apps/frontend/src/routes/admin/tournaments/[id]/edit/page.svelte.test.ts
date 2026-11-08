@@ -13,7 +13,11 @@ const TOURNAMENT: Tournament = {
   entryOpensAt: '2026-01-01T00:00:00.000Z',
   entryClosesAt: '2026-02-01T00:00:00.000Z',
   entriesPaused: false,
+  questionSet: null,
 };
+
+// The 問題セット names other tournaments use, suggested by the form.
+const QUESTION_SETS = ['宮崎', '鹿児島'];
 
 const REGIONS: Region[] = [
   {
@@ -52,6 +56,7 @@ const OTHER_TOURNAMENT: Tournament = {
   entryOpensAt: '2026-03-01T00:00:00.000Z',
   entryClosesAt: '2026-04-01T00:00:00.000Z',
   entriesPaused: false,
+  questionSet: null,
 };
 
 function renderPage(
@@ -67,6 +72,7 @@ function renderPage(
         tournament,
         customName,
         regions: REGIONS,
+        questionSets: QUESTION_SETS,
         formDefinitionYaml: FORM_DEFINITION_YAML,
       },
       form,
@@ -88,6 +94,25 @@ describe('admin tournament edit +page.svelte', () => {
   // A 大会名 left blank is answered as the default name (東京最強位), which
   // must not come back as a typed one: a region fixed on this form would
   // then keep the old region's name.
+  it('shows the stored 問題セット, suggesting the names already in use', () => {
+    renderPage({...TOURNAMENT, questionSet: '宮崎'});
+
+    const input = screen.getByLabelText(/問題セット/);
+    expect(input).toHaveValue('宮崎');
+    const options = document.querySelectorAll(
+      `#${input.getAttribute('list')} option`,
+    );
+    expect([...options].map(option => option.getAttribute('value'))).toEqual(
+      QUESTION_SETS,
+    );
+  });
+
+  it('leaves the 問題セット of a tournament on the common questions blank', () => {
+    renderPage(TOURNAMENT);
+
+    expect(screen.getByLabelText(/問題セット/)).toHaveValue('');
+  });
+
   it('leaves a blank 大会名 blank rather than showing the default name', () => {
     renderPage({...TOURNAMENT, name: '東京最強位'}, null, null);
 
@@ -176,11 +201,13 @@ describe('admin tournament edit +page.svelte', () => {
         capacity: '',
         entryOpensAt: '2026-01-01T09:00',
         entryClosesAt: '2026-02-01T09:00',
+        questionSet: '宮 崎',
       },
     });
 
     expect(screen.getByRole('alert')).toHaveTextContent('regionId が不正です');
     expect(screen.getByLabelText(/大会名/)).toHaveValue('書きかけの大会名');
+    expect(screen.getByLabelText(/問題セット/)).toHaveValue('宮 崎');
     expect(screen.getByLabelText('地域')).toHaveValue(REGIONS[1].id);
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
@@ -200,6 +227,7 @@ describe('admin tournament edit +page.svelte', () => {
         tournament: {...TOURNAMENT, type: 'shinjinou'},
         customName: TOURNAMENT.name,
         regions: REGIONS,
+        questionSets: QUESTION_SETS,
         formDefinitionYaml: 'tournamentSlug: shinjinou\nfields: []\n',
       },
       form: {
@@ -231,6 +259,7 @@ describe('admin tournament edit +page.svelte', () => {
         tournament: OTHER_TOURNAMENT,
         customName: OTHER_TOURNAMENT.name,
         regions: REGIONS,
+        questionSets: QUESTION_SETS,
         formDefinitionYaml: 'tournamentSlug: shinjinou\nfields: []\n',
       },
       form: null,

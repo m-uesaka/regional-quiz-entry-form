@@ -63,6 +63,7 @@
       customName={data.customName}
       formDefinitionYaml={data.formDefinitionYaml}
       regions={data.regions}
+      questionSets={data.questionSets}
       result={updateResult}
     />
   {/key}

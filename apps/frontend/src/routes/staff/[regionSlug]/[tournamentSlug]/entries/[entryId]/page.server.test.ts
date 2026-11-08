@@ -22,6 +22,7 @@ const TOURNAMENT: Tournament = {
   entryOpensAt: '2020-01-01T00:00:00.000Z',
   entryClosesAt: '2099-01-01T00:00:00.000Z',
   entriesPaused: false,
+  questionSet: null,
 };
 
 const ENTRY: StaffEntryDetail = {

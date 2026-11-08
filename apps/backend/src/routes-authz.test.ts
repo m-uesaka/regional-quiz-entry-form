@@ -99,6 +99,7 @@ const ROUTE_POLICIES: Readonly<Record<string, Policy>> = {
   'PATCH /api/tournaments/:id': {access: 'general-staff'},
   'DELETE /api/tournaments/:id': {access: 'general-staff'},
   'PUT /api/tournaments/order': {access: 'general-staff'},
+  'GET /api/tournaments/question-sets': {access: 'general-staff'},
   'POST /api/tournaments/:id/reset': {access: 'general-staff'},
   'GET /api/tournaments/:regionSlug/:tournamentSlug': {access: 'entry-period'},
   'GET /api/tournaments/:tournamentId/regulations': {access: 'entry-period'},
@@ -295,12 +296,13 @@ const CLOSED_TOURNAMENT = {
   entry_opens_at: '2020-01-01T00:00:00.000Z',
   entry_closes_at: '2020-01-31T00:00:00.000Z',
   entries_paused: false,
+  question_set: null,
   regions: {name: 'テスト地域'},
 };
 
 /** The columns `lib/tournaments.ts` selects, as they appear in the URL. */
 const TOURNAMENT_SELECT =
-  'id,region_id,type,name,capacity,entry_opens_at,entry_closes_at,entries_paused';
+  'id,region_id,type,name,capacity,entry_opens_at,entry_closes_at,entries_paused,question_set';
 
 /** A read a guard makes on its way to refusing, and what it is answered. */
 interface GuardRead {

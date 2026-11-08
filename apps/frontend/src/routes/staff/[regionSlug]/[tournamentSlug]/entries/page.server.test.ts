@@ -24,6 +24,7 @@ const TOURNAMENT: Tournament = {
   entryOpensAt: '2020-01-01T00:00:00.000Z',
   entryClosesAt: '2099-01-01T00:00:00.000Z',
   entriesPaused: false,
+  questionSet: null,
 };
 
 const ENTRIES: Entry[] = [
@@ -275,6 +276,7 @@ describe('staff entries pause action', () => {
               jsonResponse({
                 ...TOURNAMENT,
                 entriesPaused: (body as {paused: boolean}).paused,
+                questionSet: null,
               }),
           };
     return fakeFetch([answer], options.sent);

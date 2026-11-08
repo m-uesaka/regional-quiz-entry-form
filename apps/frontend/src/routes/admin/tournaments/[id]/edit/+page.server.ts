@@ -9,6 +9,7 @@ import {
 import {createApiClient, isUnauthorized, readErrorMessage} from '$lib/api';
 import {
   parseTournamentFormValues,
+  questionSetError,
   readTournamentFormValues,
   isResetConfirmation,
   RESET_CONFIRMATION_WORD,
@@ -69,9 +70,13 @@ export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
   // (#123). Its form fields come in the same response rather than from
   // `GET /api/form-definitions/:tournamentId`, whose entry-period gate would
   // read the tournament a second time.
-  const [tournamentRes, regionsRes] = await Promise.all([
+  // The 問題セット names already in use come from their own small read, not
+  // the list, which the form suggests so a name isn't typed slightly
+  // differently (0043).
+  const [tournamentRes, regionsRes, questionSetsRes] = await Promise.all([
     api.api.tournaments[':id'].$get({param: {id: params.id}}),
     api.api.regions.$get(),
+    api.api.tournaments['question-sets'].$get(),
   ]);
   if (isUnauthorized(tournamentRes) || isUnauthorized(regionsRes)) {
     redirectToStaffLogin(cookies, url);
@@ -88,6 +93,8 @@ export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
     tournament,
     customName,
     regions: await regionsRes.json(),
+    // Only suggestions: a failed read leaves them out rather than the page.
+    questionSets: questionSetsRes.ok ? await questionSetsRes.json() : [],
     // Written out as the YAML the editor works on, so editing starts from
     // what is stored rather than from a blank page or the spreadsheet.
     formDefinitionYaml: formFieldDefsToYaml(tournament.type, formFieldDefs),
@@ -99,7 +106,11 @@ export const actions = {
     const values = readTournamentFormValues(await request.formData());
     const input = parseTournamentFormValues(values);
     if (!input) {
-      return updateFailure(400, values, INVALID_INPUT_MESSAGE);
+      return updateFailure(
+        400,
+        values,
+        questionSetError(values) ?? INVALID_INPUT_MESSAGE,
+      );
     }
 
     const res = await createApiClient(fetch).api.tournaments[':id'].$patch({

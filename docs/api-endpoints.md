@@ -242,6 +242,7 @@ Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts
 | PATCH | `/api/tournaments/:id` | 統括スタッフ |
 | DELETE | `/api/tournaments/:id` | 統括スタッフ |
 | PUT | `/api/tournaments/order` | 統括スタッフ |
+| GET | `/api/tournaments/question-sets` | 統括スタッフ |
 | POST | `/api/tournaments/:id/reset` | 統括スタッフ |
 | GET | `/api/tournaments/:regionSlug/:tournamentSlug` | 期間中はなし / 期間外は担当スタッフ |
 | GET | `/api/tournaments/:tournamentId/regulations` | 期間中はなし / 期間外は担当スタッフ |
@@ -455,7 +456,8 @@ Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts
 
 ### `POST /api/tournaments`
 
-- リクエスト: `TournamentCreateInputSchema` — `{regionId, type, name, capacity, entryOpensAt, entryClosesAt}`
+- リクエスト: `TournamentCreateInputSchema` — `{regionId, type, name, capacity, entryOpensAt, entryClosesAt, questionSet}`
+  - `questionSet` は**任意**(`0043`)。省略・`null`・空白のみは共通問題(`null`)。`QuestionSetInputSchema` が NFKC 正規化(全角英数字を半角に)と前後の空白除去(全角空白を含む)をし、途中に空白を含む名前と 100 文字を超える名前は 400 で断ります。PATCH では省略すると今の値を保ち、`null` を送ると共通問題に戻します
   - `name` は**任意**(#164)。省略・空文字・空白のみのときは `null` を保存し、応答では地域名と種別のラベルをつないだ `defaultTournamentName()`(`packages/shared`、例: `東京最強位`)を返します。既定名は**読むたびに**その時点の地域名・種別から作る(`lib/tournaments.ts` の `tournamentDisplayName()`、`0024`)ので、地域名を変えたり大会の地域・種別を直したりすると大会名も追従します。
   - `capacity` は `null` 可(定員無制限)。
   - `entryOpensAt` / `entryClosesAt` はオフセット付き ISO 8601 文字列。
@@ -528,6 +530,13 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 - `204`: 保存した
 - `400`: Zod のバリデーションエラー
 - `409`: `{"error": "並べ替えの間に大会が追加または削除されました。ページを読み込み直してから、もう一度並べ替えてください"}` — SQLSTATE `P0003`
+- `500`: `{"error": "internal server error"}`
+
+### `GET /api/tournaments/question-sets`
+
+大会が使っている問題セット(`tournaments.question_set`、`0043`)の名前を、重複を除いて並べて返します。共通問題(`null`)は含みません。大会の作成・編集画面が「問題セット」欄の候補に使います。名前が 1 文字でも違うと別の問題セットになり、断るべき地域をまたいだエントリーが通ってしまうので、既にある名前を選べるようにしています。編集画面は大会一覧を読まない(#123)ので、一覧ではなくこの小さな読み取りを使います。`/:id` より先に登録しているので、`question-sets` が id として扱われることはありません。
+
+- `200`: `QuestionSetList` — `string[]`(五十音順)
 - `500`: `{"error": "internal server error"}`
 
 ### `GET /api/tournaments/:regionSlug/:tournamentSlug`

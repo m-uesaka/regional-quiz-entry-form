@@ -31,6 +31,7 @@ const OUT_OF_PERIOD_TOURNAMENT: Tournament = {
   entryOpensAt: '2020-01-01T00:00:00.000Z',
   entryClosesAt: '2020-02-01T00:00:00.000Z',
   entriesPaused: false,
+  questionSet: null,
 };
 
 const OPEN_TOURNAMENT: Tournament = {

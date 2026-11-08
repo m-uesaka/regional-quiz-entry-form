@@ -24,6 +24,7 @@ const CREATED: Tournament = {
   entryOpensAt: '2026-01-01T00:00:00.000Z',
   entryClosesAt: '2026-02-01T00:00:00.000Z',
   entriesPaused: false,
+  questionSet: null,
 };
 
 /**
@@ -39,6 +40,7 @@ function fakeApi(
   return fakeFetch(
     [
       {method: 'GET', url: '/api/regions', body: [TOKYO]},
+      {method: 'GET', url: '/api/tournaments/question-sets', body: ['宮崎']},
       {
         method: 'POST',
         url: /^\/api\/tournaments$/,
@@ -85,15 +87,35 @@ function createFormData(overrides: Record<string, string> = {}): FormData {
 }
 
 describe('admin tournament create +page.server load', () => {
-  it('returns the regions the form offers', async () => {
+  it('returns the regions and question sets the form offers', async () => {
     await expect(load(buildLoadEvent(fakeApi()))).resolves.toEqual({
       regions: [TOKYO],
+      questionSets: ['宮崎'],
+    });
+  });
+
+  // Only suggestions: the form works without them.
+  it('leaves the question sets out when they could not be read', async () => {
+    const failing = fakeFetch([
+      {method: 'GET', url: '/api/regions', body: [TOKYO]},
+      {
+        method: 'GET',
+        url: '/api/tournaments/question-sets',
+        status: 500,
+        body: {error: 'boom'},
+      },
+    ]);
+
+    await expect(load(buildLoadEvent(failing))).resolves.toEqual({
+      regions: [TOKYO],
+      questionSets: [],
     });
   });
 
   it('reports a failed read as a bad gateway', async () => {
     const failing = fakeFetch([
       {method: 'GET', url: '/api/regions', status: 500, body: {error: 'boom'}},
+      {method: 'GET', url: '/api/tournaments/question-sets', body: ['宮崎']},
     ]);
 
     await expect(load(buildLoadEvent(failing))).rejects.toMatchObject({
@@ -125,9 +147,35 @@ describe('admin tournament create action', () => {
           capacity: 64,
           entryOpensAt: '2026-01-01T00:00:00.000Z',
           entryClosesAt: '2026-02-01T00:00:00.000Z',
+          questionSet: null,
         },
       },
     ]);
+  });
+
+  it('sends the 問題セット typed, folded and trimmed', async () => {
+    const calls: RecordedRequest[] = [];
+    const event = buildActionEvent(
+      fakeApi({calls}),
+      createFormData({questionSet: '　宮崎 '}),
+    );
+
+    await expect(actions.default(event)).rejects.toMatchObject({status: 303});
+    expect(calls[0]?.body).toMatchObject({questionSet: '宮崎'});
+  });
+
+  it('names a space inside the 問題セット rather than refusing the form at large', async () => {
+    const calls: RecordedRequest[] = [];
+    const event = buildActionEvent(
+      fakeApi({calls}),
+      createFormData({questionSet: '宮　崎'}),
+    );
+
+    await expect(actions.default(event)).resolves.toMatchObject({
+      status: 400,
+      data: {error: '問題セットに空白は使えません'},
+    });
+    expect(calls).toEqual([]);
   });
 
   it('takes a blank capacity as no limit', async () => {

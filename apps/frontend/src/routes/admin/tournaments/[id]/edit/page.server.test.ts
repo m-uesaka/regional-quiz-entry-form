@@ -26,6 +26,7 @@ const TOURNAMENT: Tournament = {
   entryOpensAt: '2026-01-01T00:00:00.000Z',
   entryClosesAt: '2026-02-01T00:00:00.000Z',
   entriesPaused: false,
+  questionSet: null,
 };
 
 const FORM_FIELD_DEFS: FormFieldDef[] = [
@@ -67,6 +68,8 @@ function fakeApi(
   const tournaments = options.tournaments ?? [TOURNAMENT];
   const reads: FakeRoute[] = [
     {method: 'GET', url: /^\/api\/regions$/, body: [TOKYO]},
+    // Before the `:id` read, whose pattern this path matches too.
+    {method: 'GET', url: '/api/tournaments/question-sets', body: ['宮崎']},
     {
       method: 'GET',
       url: /^\/api\/tournaments\/[^/]+$/,
@@ -152,6 +155,7 @@ describe('admin tournament edit +page.server load', () => {
       tournament: TOURNAMENT,
       customName: TOURNAMENT.name,
       regions: [TOKYO],
+      questionSets: ['宮崎'],
       formDefinitionYaml:
         'tournamentSlug: saikyoi\n' +
         'fields:\n' +
@@ -164,6 +168,7 @@ describe('admin tournament edit +page.server load', () => {
 
   // Not the whole list to `find` the one being edited in (#123), and its
   // form fields with it rather than through the entry-period-gated read.
+  // The 問題セット suggestions come from their own read, not the list.
   it('load fetches only the tournament it needs', async () => {
     const calls: RecordedRequest[] = [];
 
@@ -172,6 +177,7 @@ describe('admin tournament edit +page.server load', () => {
     expect(calls.map(call => `${call.method} ${call.url}`).sort()).toEqual([
       'GET /api/regions',
       `GET /api/tournaments/${TOURNAMENT.id}`,
+      'GET /api/tournaments/question-sets',
     ]);
   });
 
@@ -191,6 +197,7 @@ describe('admin tournament edit +page.server load', () => {
   it('does not mistake another refusal of the API for a missing tournament', async () => {
     const failing = fakeFetch([
       {method: 'GET', url: '/api/regions', body: [TOKYO]},
+      {method: 'GET', url: '/api/tournaments/question-sets', body: []},
       {
         method: 'GET',
         url: `/api/tournaments/${TOURNAMENT.id}`,
@@ -238,9 +245,45 @@ describe('admin tournament update action', () => {
           capacity: 64,
           entryOpensAt: '2026-01-01T00:00:00.000Z',
           entryClosesAt: '2026-02-01T00:00:00.000Z',
+          questionSet: null,
         },
       },
     ]);
+  });
+
+  it('saves the 問題セット typed, and a blank one as the common questions', async () => {
+    const calls: RecordedRequest[] = [];
+
+    await actions.update(
+      buildActionEvent(
+        fakeApi({calls}),
+        updateFormData({questionSet: '鹿児島'}),
+      ),
+    );
+    await actions.update(
+      buildActionEvent(fakeApi({calls}), updateFormData({questionSet: ' '})),
+    );
+
+    expect(
+      calls.map(call => (call.body as {questionSet: unknown}).questionSet),
+    ).toEqual(['鹿児島', null]);
+  });
+
+  it('names a space inside the 問題セット, re-rendering what was typed', async () => {
+    const calls: RecordedRequest[] = [];
+    const event = buildActionEvent(
+      fakeApi({calls}),
+      updateFormData({questionSet: '宮 崎'}),
+    );
+
+    await expect(actions.update(event)).resolves.toMatchObject({
+      status: 400,
+      data: {
+        error: '問題セットに空白は使えません',
+        values: {questionSet: '宮 崎'},
+      },
+    });
+    expect(calls).toEqual([]);
   });
 
   it('refuses a form the API would reject, without asking it', async () => {

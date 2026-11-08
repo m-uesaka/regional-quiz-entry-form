@@ -285,6 +285,7 @@ describe('PATCH /tournaments/:id (waitlist promotion, mocked Supabase)', () => {
     entry_opens_at: '2026-01-01T00:00:00+09:00',
     entry_closes_at: '2026-01-31T00:00:00+09:00',
     entries_paused: false,
+    question_set: null,
     regions: {name: 'テスト地域'},
   };
 
@@ -589,6 +590,7 @@ describe('GET /tournaments/:id and /:regionSlug/:tournamentSlug (queries)', () =
         entryOpensAt: tournament.entry_opens_at,
         entryClosesAt: tournament.entry_closes_at,
         entriesPaused: false,
+        questionSet: null,
       },
       customName: tournament.name,
       formFieldDefs: [],
@@ -948,6 +950,76 @@ describe.skipIf(!dbReachable)(
       expect(body.regionId).toBe(regionId);
       expect(body.name).toBe('テスト大会');
       expect(typeof body.id).toBe('string');
+    });
+
+    // 0043: set on create, changed and cleared by PATCH, and suggested by
+    // `/question-sets` -- distinct, without the common questions' null.
+    it('stores the question set and lists the names in use', async () => {
+      const regionId = await createTestRegion('question-set');
+      const cookie = await generalStaffCookie();
+      const send = (method: string, path: string, body: unknown) =>
+        app.request(
+          path,
+          {
+            method,
+            headers: {cookie, 'content-type': 'application/json'},
+            body: JSON.stringify(body),
+          },
+          env,
+        );
+      const tournament = {
+        regionId,
+        name: '',
+        capacity: null,
+        entryOpensAt: '2026-01-01T00:00:00+09:00',
+        entryClosesAt: '2026-01-31T00:00:00+09:00',
+      };
+      const created = (await (
+        await send('POST', '/api/tournaments', {
+          ...tournament,
+          type: 'saikyoi',
+          questionSet: '　問題セットテストＡ ',
+        })
+      ).json()) as {id: string; questionSet: string | null};
+      await send('POST', '/api/tournaments', {
+        ...tournament,
+        type: 'shinjinou',
+        questionSet: '問題セットテストA',
+      });
+      const listed = (await (
+        await app.request(
+          '/api/tournaments/question-sets',
+          {headers: {cookie}},
+          env,
+        )
+      ).json()) as string[];
+
+      const refused = await send('PATCH', `/api/tournaments/${created.id}`, {
+        questionSet: '問題 セット',
+      });
+      const cleared = (await (
+        await send('PATCH', `/api/tournaments/${created.id}`, {
+          questionSet: null,
+        })
+      ).json()) as {questionSet: string | null};
+
+      expect(created.questionSet).toBe('問題セットテストA');
+      expect(listed.filter(name => name === '問題セットテストA')).toHaveLength(
+        1,
+      );
+      expect(listed).not.toContain(null);
+      expect(refused.status).toBe(400);
+      expect(cleared.questionSet).toBeNull();
+    });
+
+    it('lists the question sets for general staff only', async () => {
+      const res = await app.request(
+        '/api/tournaments/question-sets',
+        {headers: {cookie: await regionalStaffCookie(TEST_REGION_ID)}},
+        env,
+      );
+
+      expect(res.status).toBe(403);
     });
 
     it('lists tournaments for general staff', async () => {

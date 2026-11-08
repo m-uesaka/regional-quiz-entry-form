@@ -13,4 +13,6 @@ export interface TournamentFormValues {
   capacity: string;
   entryOpensAt: string;
   entryClosesAt: string;
+  /** 問題セット: blank for the common questions. */
+  questionSet: string;
 }

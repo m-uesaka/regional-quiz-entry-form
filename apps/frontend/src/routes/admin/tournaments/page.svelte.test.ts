@@ -21,6 +21,7 @@ const TOURNAMENT = {
   entryOpensAt: '2026-01-01T00:00:00.000Z',
   entryClosesAt: '2026-02-01T00:00:00.000Z',
   entriesPaused: false,
+  questionSet: null,
 };
 
 describe('admin tournament list +page.svelte', () => {
@@ -39,6 +40,36 @@ describe('admin tournament list +page.svelte', () => {
     );
     expect(screen.getByText('最強位')).toBeInTheDocument();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it("shows each tournament's 問題セット, the common one as 共通", () => {
+    render(Page, {
+      props: {
+        params: {},
+        data: {
+          staff: STAFF,
+          tournaments: [
+            TOURNAMENT,
+            {
+              ...TOURNAMENT,
+              id: '00000000-0000-0000-0000-000000000002',
+              regionName: '宮崎',
+              name: '宮崎最強位',
+              questionSet: '宮崎',
+            },
+          ],
+          deleted: false,
+        },
+        form: null,
+      },
+    });
+
+    expect(
+      screen.getByRole('columnheader', {name: '問題セット'}),
+    ).toBeInTheDocument();
+    const rows = screen.getAllByRole('row').slice(1);
+    expect(rows[0]).toHaveTextContent('共通');
+    expect(rows[1]).toHaveTextContent(/宮崎最強位\s*宮崎/);
   });
 
   it('confirms a delete and says when there are no tournaments', () => {
