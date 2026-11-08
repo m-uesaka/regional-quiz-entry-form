@@ -101,9 +101,11 @@ export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
   // whose save is the first thing to fail. The tournament itself is read
   // alongside it (`GET /api/tournaments/:id`, #123) as the check that
   // survives the gate ever being lifted off the regulations endpoint, and
-  // because that gate lets anyone through while the entry period is open,
-  // so only this staff-only read is sure to answer an expired session with
-  // the 401 a login redirect needs.
+  // for the session: while the entry period is open the gate lets anyone
+  // through without looking at the cookie, so only this staff-only read
+  // answers an expired session then. Outside the period (or while the
+  // tournament is paused) the gate answers an expired or revoked session
+  // with 401 itself, so either response can be the one that reports it.
   const [tournamentRes, regulationsRes] = await Promise.all([
     api.api.tournaments[':id'].$get({param: {id: params.id}}),
     api.api.tournaments[':tournamentId'].regulations.$get({
@@ -115,6 +117,9 @@ export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
   if (isUnauthorized(tournamentRes) || isUnauthorized(regulationsRes)) {
     redirectToStaffLogin(cookies, url);
   }
+  // A 404 from either read wins over a failure of the other: an id one of
+  // them knows nothing of names no tournament this page can edit, whatever
+  // the other answered. The edit page orders its checks the same way.
   if (isNotFound(tournamentRes) || isNotFound(regulationsRes)) {
     error(404, '大会が見つかりません');
   }

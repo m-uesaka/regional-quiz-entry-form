@@ -115,7 +115,9 @@ function fakeApi(
     },
     {
       method: 'GET',
-      url: `/api/tournaments/${TOURNAMENT_ID}`,
+      // Anchored: a plain string matches as a substring, and would also
+      // answer the regulations read whenever this row came first.
+      url: new RegExp(`^/api/tournaments/${TOURNAMENT_ID}$`),
       status: tournamentStatus,
       body:
         tournamentStatus < 400
@@ -241,6 +243,20 @@ describe('admin regulations +page.server load', () => {
     ).rejects.toMatchObject({status: 404} satisfies Partial<HttpError>);
   });
 
+  // An id either read knows nothing of names no tournament, so its 404 wins
+  // over the other read failing outright.
+  it.each([
+    {tournamentStatus: 404, regulationsStatus: 500},
+    {tournamentStatus: 500, regulationsStatus: 404},
+  ])(
+    'reports a 404 alongside a failed read as not found (%o)',
+    async statuses => {
+      await expect(
+        load(buildLoadEvent(fakeApi(statuses))),
+      ).rejects.toMatchObject({status: 404} satisfies Partial<HttpError>);
+    },
+  );
+
   it('reports an id that is not a UUID as not found, without asking the API', async () => {
     const calls: RecordedRequest[] = [];
     const fetchImpl = fakeFetch([], calls);
@@ -262,7 +278,7 @@ describe('admin regulations +page.server load', () => {
         },
         {
           method: 'GET',
-          url: `/api/tournaments/${TOURNAMENT_ID}`,
+          url: new RegExp(`^/api/tournaments/${TOURNAMENT_ID}$`),
           body: {tournament: TOURNAMENT, customName: null, formFieldDefs: []},
         },
       ],
@@ -282,6 +298,15 @@ describe('admin regulations +page.server load', () => {
   it('sends an expired session to the login page', async () => {
     await expect(
       load(buildLoadEvent(fakeApi({tournamentStatus: 401}))),
+    ).rejects.toMatchObject({status: 303});
+  });
+
+  // Outside the entry period the gate answers an expired session with 401
+  // itself, and it can be the only read that does: the session can expire
+  // between the two requests, which run side by side.
+  it('sends a session the regulations gate refuses to the login page', async () => {
+    await expect(
+      load(buildLoadEvent(fakeApi({regulationsStatus: 401}))),
     ).rejects.toMatchObject({status: 303});
   });
 });
