@@ -84,6 +84,29 @@ describe('TournamentCreateInputSchema entry period', () => {
   }
 });
 
+describe('TournamentCreateInputSchema entry period beside a bad date-time', () => {
+  // Zod still runs the object's refinement when a field only failed its own
+  // check, so without a guard the period would be reported out of order on
+  // top of the date-time that couldn't be read.
+  for (const [entryOpensAt, entryClosesAt, field] of [
+    ['not a date', CREATE_INPUT.entryClosesAt, 'entryOpensAt'],
+    [CREATE_INPUT.entryOpensAt, 'not a date', 'entryClosesAt'],
+    // Readable by `Date.parse()`, and before the start, but no date-time.
+    [CREATE_INPUT.entryOpensAt, '2025-12-31', 'entryClosesAt'],
+  ] as const) {
+    it(`reports only the bad date-time for ${entryOpensAt} - ${entryClosesAt}`, () => {
+      const parsed = TournamentCreateInputSchema.safeParse({
+        ...CREATE_INPUT,
+        entryOpensAt,
+        entryClosesAt,
+      });
+      expect(parsed.error?.issues).toEqual([
+        expect.objectContaining({path: [field], code: 'invalid_string'}),
+      ]);
+    });
+  }
+});
+
 describe('TournamentCreateInputSchema questionSet', () => {
   const parse = (questionSet: unknown) =>
     TournamentCreateInputSchema.safeParse({...CREATE_INPUT, questionSet});
@@ -155,6 +178,19 @@ describe('TournamentUpdateInputSchema entry period', () => {
       expect.objectContaining({
         path: ['entryClosesAt'],
         message: ENTRY_PERIOD_ORDER_MESSAGE,
+      }),
+    ]);
+  });
+
+  it('reports only the bad date-time when one end is not one', () => {
+    const parsed = TournamentUpdateInputSchema.safeParse({
+      entryOpensAt: CREATE_INPUT.entryOpensAt,
+      entryClosesAt: 'not a date',
+    });
+    expect(parsed.error?.issues).toEqual([
+      expect.objectContaining({
+        path: ['entryClosesAt'],
+        code: 'invalid_string',
       }),
     ]);
   });

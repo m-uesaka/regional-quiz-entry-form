@@ -1676,6 +1676,55 @@ describe.skipIf(!dbReachable)(
       `;
     });
 
+    // 0048 adds both `not valid`, so a tournament stored out of order
+    // before it doesn't stop the deploy; a later migration validates them
+    // once those are fixed. New writes are checked all the same (above).
+    it('adds the period and capacity checks without validating the rows already there', async () => {
+      const rows = await sql`
+        select conname, convalidated from pg_constraint
+          where conrelid = 'tournaments'::regclass
+            and conname in (
+              'tournaments_entry_period_ordered',
+              'tournaments_capacity_positive'
+            )
+          order by conname
+      `;
+
+      expect([...rows]).toEqual([
+        {conname: 'tournaments_capacity_positive', convalidated: false},
+        {conname: 'tournaments_entry_period_ordered', convalidated: false},
+      ]);
+    });
+
+    it('refuses a new tournament whose entry period or capacity can never work', async () => {
+      const [region] = await sql`
+        insert into regions (slug, name) values (${testRegionSlug}, 'テスト地域')
+        returning id
+      `;
+      const codes = [];
+      for (const [opensAt, closesAt, capacity] of [
+        ['2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', null],
+        ['2026-01-02T00:00:00Z', '2026-01-01T00:00:00Z', null],
+        ['2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z', 0],
+      ] as const) {
+        try {
+          await sql`
+            insert into tournaments (
+              region_id, type, name, capacity, entry_opens_at, entry_closes_at
+            ) values (
+              ${region.id}, 'saikyoi', 'テスト大会', ${capacity}, ${opensAt},
+              ${closesAt}
+            )
+          `;
+          codes.push(undefined);
+        } catch (error) {
+          codes.push((error as {errno?: string}).errno);
+        }
+      }
+
+      expect(codes).toEqual(Array(3).fill('23514'));
+    });
+
     it('rejects a half-open priority window', async () => {
       const tournamentId = await createTournament();
 

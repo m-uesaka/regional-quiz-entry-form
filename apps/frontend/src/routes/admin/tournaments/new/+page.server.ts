@@ -1,9 +1,7 @@
 import {error, fail, redirect} from '@sveltejs/kit';
 import {createApiClient, isUnauthorized, readErrorMessage} from '$lib/api';
 import {
-  entryPeriodError,
   parseTournamentFormValues,
-  questionSetError,
   readTournamentFormValues,
 } from '$lib/tournament-form';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
@@ -49,19 +47,13 @@ export const load: PageServerLoad = async ({fetch, cookies, url}) => {
 export const actions = {
   default: async ({request, fetch, cookies, url}) => {
     const values = readTournamentFormValues(await request.formData());
-    const input = parseTournamentFormValues(values);
-    if (!input) {
-      return createFailure(
-        400,
-        values,
-        questionSetError(values) ??
-          entryPeriodError(values) ??
-          INVALID_INPUT_MESSAGE,
-      );
+    const parsed = parseTournamentFormValues(values);
+    if (!parsed.ok) {
+      return createFailure(400, values, parsed.error);
     }
 
     const res = await createApiClient(fetch).api.tournaments.$post({
-      json: input,
+      json: parsed.input,
     });
     if (!res.ok) {
       if (isUnauthorized(res)) {

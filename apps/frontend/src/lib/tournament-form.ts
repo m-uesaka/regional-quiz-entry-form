@@ -1,7 +1,4 @@
 import {
-  ENTRY_PERIOD_ORDER_MESSAGE,
-  isEntryPeriodOrdered,
-  QuestionSetInputSchema,
   TournamentCreateInputSchema,
   type Tournament,
   type TournamentCreateInput,
@@ -9,6 +6,7 @@ import {
 import {fromJstDatetimeLocal, toJstDatetimeLocal} from '$lib/jst-datetime';
 import type {TournamentFormValues} from '$lib/types/tournament-form';
 import {readString} from '$lib/form-data';
+import {INVALID_INPUT_MESSAGE} from '$lib/form-errors';
 
 /**
  * What the edit screen's participant-data reset asks to be typed before its
@@ -90,25 +88,33 @@ export function readTournamentFormValues(
   };
 }
 
+/** What `parseTournamentFormValues()` makes of a submitted form. */
+export type TournamentFormParse =
+  | {readonly ok: true; readonly input: TournamentCreateInput}
+  | {readonly ok: false; readonly error: string};
+
 /**
  * Checks a submitted form against the same schema the API validates with,
  * turning the control values into the body it takes.
  *
  * @param values What the controls carried.
- * @return The request body, or null when the form is not one the API would
- *     accept. Most of the schema's messages name the field in English, which
- *     is no use on this screen, so the caller reports a written-out refusal
- *     instead — most controls here are a select the page fills in, marked
- *     `required`, or free to leave blank (大会名), so a rejection of those
- *     means the browser's own checks were bypassed rather than that a staff
- *     member mistyped something. The two that can be refused for what staff
- *     typed have their own message: `questionSetError()` and
- *     `entryPeriodError()`.
+ * @return The request body, or why the form is not one the API would accept,
+ *     in words to show above the form. Most of the schema's messages name
+ *     the field in English, which is no use on this screen, so a refusal of
+ *     those is reported as `INVALID_INPUT_MESSAGE` — those controls are a
+ *     select the page fills in, marked `required`, or free to leave blank
+ *     (大会名), so a rejection of them means the browser's own checks were
+ *     bypassed rather than that a staff member mistyped something. What
+ *     staff can get wrong by typing — the 問題セット (a space inside it, a
+ *     name too long) and an entry period that doesn't open before it closes
+ *     (#285), which the browser doesn't check across two controls — the
+ *     schema refuses with refinements worded in Japanese for this form, and
+ *     those are shown as they are, all of them at once.
  */
 export function parseTournamentFormValues(
   values: TournamentFormValues,
-): TournamentCreateInput | null {
-  const parsed = TournamentCreateInputSchema.safeParse({
+): TournamentFormParse {
+  const body = {
     regionId: values.regionId,
     type: values.type,
     name: values.name,
@@ -116,44 +122,52 @@ export function parseTournamentFormValues(
     entryOpensAt: fromJstDatetimeLocal(values.entryOpensAt),
     entryClosesAt: fromJstDatetimeLocal(values.entryClosesAt),
     questionSet: values.questionSet,
-  });
-  return parsed.success ? parsed.data : null;
-}
-
-/**
- * Why the form's 問題セット is refused, in words to show above the form, or
- * null when it is fine. The one control staff type free text into that can
- * be refused -- a space inside the name, a name too long -- so unlike the
- * rest of the form a refusal here is a mistake worth naming rather than a
- * bypassed browser check.
- * @param values What the controls carried.
- */
-export function questionSetError(values: TournamentFormValues): string | null {
-  const parsed = QuestionSetInputSchema.safeParse(values.questionSet);
-  return parsed.success ? null : (parsed.error.issues[0]?.message ?? null);
-}
-
-/**
- * Why the form's entry period is refused, in words to show above the form,
- * or null when it is fine (#285). Two valid date-times can still make a
- * period that closes no later than it opens -- an easy slip on two separate
- * controls, and one the browser doesn't check -- which the API refuses with
- * the same message by the same rule (`isEntryPeriodOrdered()`). A control
- * left empty or unreadable is left to the generic refusal.
- * @param values What the controls carried.
- */
-export function entryPeriodError(values: TournamentFormValues): string | null {
-  const opensAt = fromJstDatetimeLocal(values.entryOpensAt);
-  const closesAt = fromJstDatetimeLocal(values.entryClosesAt);
-  if (
-    opensAt === null ||
-    closesAt === null ||
-    Number.isNaN(Date.parse(opensAt)) ||
-    Number.isNaN(Date.parse(closesAt))
-  ) {
-    return null;
+  };
+  const parsed = TournamentCreateInputSchema.safeParse(body);
+  if (parsed.success) {
+    return {ok: true, input: parsed.data};
   }
-  return isEntryPeriodOrdered(opensAt, closesAt)
-    ? null
-    : ENTRY_PERIOD_ORDER_MESSAGE;
+  const messages = new Set(refinementMessages(parsed.error));
+  // A refused 問題セット fails the transform it sits in, which makes Zod
+  // skip the object's own refinement -- the entry period's. So the form is
+  // checked once more with the 問題セット left blank, which is always
+  // accepted, to name a bad period along with it.
+  if (parsed.error.issues.some(issue => issue.path[0] === 'questionSet')) {
+    const rest = TournamentCreateInputSchema.safeParse({
+      ...body,
+      questionSet: '',
+    });
+    if (!rest.success) {
+      for (const message of refinementMessages(rest.error)) {
+        messages.add(message);
+      }
+    }
+  }
+  return {
+    ok: false,
+    error:
+      messages.size === 0 ? INVALID_INPUT_MESSAGE : [...messages].join('。'),
+  };
+}
+
+/**
+ * The part of a `ZodError` `refinementMessages()` reads, typed structurally
+ * as `$lib/zod-field-errors` does, so the frontend needn't depend on `zod`.
+ */
+interface IssuesError {
+  readonly issues: ReadonlyArray<{
+    readonly code: string;
+    readonly message: string;
+  }>;
+}
+
+/**
+ * The messages of the schema's refinements among `error`'s issues: the only
+ * issues it raises as `custom`, and the ones worded for this form.
+ * @param error What the schema refused the form with.
+ */
+function refinementMessages(error: IssuesError): string[] {
+  return error.issues
+    .filter(issue => issue.code === 'custom')
+    .map(issue => issue.message);
 }

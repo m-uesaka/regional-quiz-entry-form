@@ -237,6 +237,25 @@ describe('admin tournament create action', () => {
     expect(calls).toEqual([]);
   });
 
+  it('names both a bad 問題セット and a bad entry period at once', async () => {
+    const calls: RecordedRequest[] = [];
+    const event = buildActionEvent(
+      fakeApi({calls}),
+      createFormData({
+        questionSet: '宮　崎',
+        entryClosesAt: '2026-01-01T09:00',
+      }),
+    );
+
+    await expect(actions.default(event)).resolves.toMatchObject({
+      status: 400,
+      data: {
+        error: `問題セットに空白は使えません。${ENTRY_PERIOD_ORDER_MESSAGE}`,
+      },
+    });
+    expect(calls).toEqual([]);
+  });
+
   it('refuses a form the API would reject, without asking it', async () => {
     const calls: RecordedRequest[] = [];
     const event = buildActionEvent(

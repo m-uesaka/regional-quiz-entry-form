@@ -24,15 +24,15 @@ import {createDbClient, type TablesInsert, type TablesUpdate} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {FORM_FIELD_DEF_COLUMNS, toFormFieldDef} from '../lib/form-field-defs';
 import {
+  badRequest,
   CHECK_VIOLATION_SQLSTATE,
+  constraintKey,
   DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
   DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE,
   duplicate,
   ENTRY_PERIOD_OPEN_SQLSTATE,
   FOREIGN_KEY_VIOLATION_SQLSTATE,
-  invalidValue,
   mapPgError,
-  missingReference,
   NO_ROW_PGRST_CODE,
   noRow,
   type PgErrorTable,
@@ -59,16 +59,18 @@ const TOURNAMENT_WRITE_ERRORS = {
     'この地域には同じ種別の大会がすでにあります',
   ),
   // `region_id` names no region.
-  [FOREIGN_KEY_VIOLATION_SQLSTATE]:
-    missingReference('指定された地域が存在しません'),
+  [FOREIGN_KEY_VIOLATION_SQLSTATE]: badRequest('指定された地域が存在しません'),
   // `tournaments_entry_period_ordered` (0048): a PATCH sent one end of the
   // entry period, and it doesn't come before (or after) the stored other
-  // end. The request schemas check the period whenever both ends are sent,
-  // and rule out what the table's other checks refuse -- a capacity below 1
+  // end -- the request schemas check the period whenever both ends are
+  // sent -- or a PATCH that left alone a period stored out of order before
+  // 0048 added the check `not valid`. The table's other checks -- a capacity below 1
   // (`tournaments_capacity_positive`, 0048) and a question set not in its
-  // stored form (`tournaments_question_set_format`, 0044) -- so this is the
-  // one check a valid request can still run into.
-  [CHECK_VIOLATION_SQLSTATE]: invalidValue(ENTRY_PERIOD_ORDER_MESSAGE),
+  // stored form (`tournaments_question_set_format`, 0044) -- are ruled out
+  // by the request schemas, so one of those is a bug and is left to the
+  // 500.
+  [constraintKey(CHECK_VIOLATION_SQLSTATE, 'tournaments_entry_period_ordered')]:
+    badRequest(ENTRY_PERIOD_ORDER_MESSAGE),
   // The other tournament of a region allowing dual entry has the same
   // question set (0045).
   [DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE]: {

@@ -8,9 +8,7 @@ import {
 } from '@regional-quiz/shared';
 import {createApiClient, isUnauthorized, readErrorMessage} from '$lib/api';
 import {
-  entryPeriodError,
   parseTournamentFormValues,
-  questionSetError,
   readTournamentFormValues,
   isResetConfirmation,
   RESET_CONFIRMATION_WORD,
@@ -106,20 +104,14 @@ export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
 export const actions = {
   update: async ({params, request, fetch, cookies, url}) => {
     const values = readTournamentFormValues(await request.formData());
-    const input = parseTournamentFormValues(values);
-    if (!input) {
-      return updateFailure(
-        400,
-        values,
-        questionSetError(values) ??
-          entryPeriodError(values) ??
-          INVALID_INPUT_MESSAGE,
-      );
+    const parsed = parseTournamentFormValues(values);
+    if (!parsed.ok) {
+      return updateFailure(400, values, parsed.error);
     }
 
     const res = await createApiClient(fetch).api.tournaments[':id'].$patch({
       param: {id: params.id},
-      json: input,
+      json: parsed.input,
     });
     if (!res.ok) {
       if (isUnauthorized(res)) {

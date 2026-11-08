@@ -47,14 +47,18 @@ export const QuestionSetInputSchema = z
 export const QuestionSetListSchema = z.array(z.string());
 export type QuestionSetList = z.infer<typeof QuestionSetListSchema>;
 
+// What `entryOpensAt` and `entryClosesAt` take: an ISO 8601 date-time with
+// its offset.
+const EntryDateTimeSchema = z.string().datetime({offset: true});
+
 export const TournamentSchema = z.object({
   id: z.string().uuid(),
   regionId: z.string().uuid(),
   type: TournamentTypeSchema,
   name: z.string(),
   capacity: z.number().int().positive().nullable(),
-  entryOpensAt: z.string().datetime({offset: true}),
-  entryClosesAt: z.string().datetime({offset: true}),
+  entryOpensAt: EntryDateTimeSchema,
+  entryClosesAt: EntryDateTimeSchema,
   // Staff paused taking entries (0039): within the period or not, no new
   // entry is accepted and the form is staff-only, as outside the period.
   entriesPaused: z.boolean(),
@@ -70,7 +74,8 @@ export type Tournament = z.infer<typeof TournamentSchema>;
 // refused with: shown as it is above the admin form, by the form's own
 // check and by the API when the database's
 // `tournaments_entry_period_ordered` (0048) refuses a PATCH that sent only
-// one end of the period.
+// one end of the period, and after the row's values in the bulk import's
+// refusal of a row.
 export const ENTRY_PERIOD_ORDER_MESSAGE =
   'エントリー終了はエントリー開始より後の日時にしてください';
 
@@ -88,6 +93,30 @@ export function isEntryPeriodOrdered(
   entryClosesAt: string,
 ): boolean {
   return Date.parse(entryOpensAt) < Date.parse(entryClosesAt);
+}
+
+/**
+ * Whether the request schemas below let an entry period through: refused
+ * only when both ends are date-times and the period doesn't open before it
+ * closes. An end its own check refused still reaches an object's
+ * refinement -- Zod runs it on a result the fields only marked dirty -- and
+ * is reported by that check, so it isn't reported a second time as a
+ * period out of order.
+ * @param entryOpensAt What was sent as when entries open.
+ * @param entryClosesAt What was sent as when entries close.
+ */
+function isEntryPeriodAcceptable(
+  entryOpensAt: string,
+  entryClosesAt: string,
+): boolean {
+  const isDateTime = (value: string) =>
+    EntryDateTimeSchema.safeParse(value).success &&
+    !Number.isNaN(Date.parse(value));
+  return (
+    !isDateTime(entryOpensAt) ||
+    !isDateTime(entryClosesAt) ||
+    isEntryPeriodOrdered(entryOpensAt, entryClosesAt)
+  );
 }
 
 // The fields a tournament is created or updated with: everything but the
@@ -113,7 +142,7 @@ const TournamentInputFieldsSchema = TournamentSchema.omit({
 // check and the API's `zValidator` are the same rule rather than two that
 // can drift apart.
 export const TournamentCreateInputSchema = TournamentInputFieldsSchema.refine(
-  input => isEntryPeriodOrdered(input.entryOpensAt, input.entryClosesAt),
+  input => isEntryPeriodAcceptable(input.entryOpensAt, input.entryClosesAt),
   {message: ENTRY_PERIOD_ORDER_MESSAGE, path: ['entryClosesAt']},
 );
 export type TournamentCreateInput = z.infer<typeof TournamentCreateInputSchema>;
@@ -133,7 +162,7 @@ export const TournamentUpdateInputSchema =
     input =>
       input.entryOpensAt === undefined ||
       input.entryClosesAt === undefined ||
-      isEntryPeriodOrdered(input.entryOpensAt, input.entryClosesAt),
+      isEntryPeriodAcceptable(input.entryOpensAt, input.entryClosesAt),
     {message: ENTRY_PERIOD_ORDER_MESSAGE, path: ['entryClosesAt']},
   );
 export type TournamentUpdateInput = z.infer<typeof TournamentUpdateInputSchema>;

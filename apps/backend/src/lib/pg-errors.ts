@@ -22,14 +22,15 @@ export const UNIQUE_VIOLATION_SQLSTATE = '23505';
  * Postgres' `foreign_key_violation`. On an insert or update it means the row
  * names one that doesn't exist; on a delete, that rows still point at the one
  * being deleted. Which of the two it is depends on the statement, so a
- * caller answers it with `missingReference()` or `stillReferenced()`.
+ * caller answers it with `badRequest()` or `stillReferenced()`.
  */
 export const FOREIGN_KEY_VIOLATION_SQLSTATE = '23503';
 
 /**
  * Postgres' `check_violation`: a value a `check` constraint refuses. Every
- * table has several, so a route maps it only when the request schema
- * already rules out all but the one it names (see `invalidValue()`).
+ * table has several, and the code doesn't say which one refused, so a route
+ * answers it per constraint (`constraintKey()`) and lets a constraint it
+ * doesn't name fall through to a 500.
  */
 export const CHECK_VIOLATION_SQLSTATE = '23514';
 
@@ -153,6 +154,18 @@ export interface PgErrorAnswer<S extends ClientFailureStatus> {
 }
 
 /**
+ * The key a route's table answers one code with only when the failure names
+ * `constraint` -- for codes like `CHECK_VIOLATION_SQLSTATE`, where the code
+ * alone doesn't say what was refused. A failure naming a constraint is
+ * looked up under this key before its bare code.
+ * @param code The code the failure carries.
+ * @param constraint The name of the constraint it names.
+ */
+export function constraintKey(code: string, constraint: string): string {
+  return `${code}:${constraint}`;
+}
+
+/**
  * The failures a route can name, keyed by the code they carry.
  *
  * One kind of violation is answered with one status on every route, and the
@@ -160,14 +173,19 @@ export interface PgErrorAnswer<S extends ClientFailureStatus> {
  * entry for one of them with any other status does not compile. Build those
  * entries with the functions below. A foreign key violation can be either
  * of two answers, depending on the statement (see
- * `FOREIGN_KEY_VIOLATION_SQLSTATE`).
+ * `FOREIGN_KEY_VIOLATION_SQLSTATE`). A check violation can only be answered
+ * per constraint, under `constraintKey(CHECK_VIOLATION_SQLSTATE, name)` and
+ * with `badRequest()`: an entry for the bare code does not compile, so a
+ * constraint the route doesn't name stays a 500. (The type can't hold the
+ * per-constraint entries to 400 as well: a computed key's type widens to
+ * `string`.)
  * @template S The statuses the route answers them with.
  */
 export type PgErrorTable<S extends ClientFailureStatus> = Readonly<
   Record<string, PgErrorAnswer<S>> & {
     [UNIQUE_VIOLATION_SQLSTATE]?: PgErrorAnswer<409>;
     [FOREIGN_KEY_VIOLATION_SQLSTATE]?: PgErrorAnswer<400 | 409>;
-    [CHECK_VIOLATION_SQLSTATE]?: PgErrorAnswer<400>;
+    [CHECK_VIOLATION_SQLSTATE]?: never;
     [NO_ROW_PGRST_CODE]?: PgErrorAnswer<404>;
   }
 >;
@@ -182,23 +200,14 @@ export function duplicate(error: string): PgErrorAnswer<409> {
 }
 
 /**
- * The answer to a foreign key violation (`23503`) on an insert or update:
- * the request names a row that doesn't exist, which is a mistake in the
- * request itself -- 400, like any other invalid input.
+ * The answer to a violation that is a mistake in the request itself -- 400,
+ * like any other invalid input: a foreign key violation (`23503`) on an
+ * insert or update, where the request names a row that doesn't exist, or a
+ * check violation (`23514`) of a constraint the route names, where the
+ * request holds a value the table refuses.
  * @param error The code or staff-facing message to answer with.
  */
-export function missingReference(error: string): PgErrorAnswer<400> {
-  return {status: 400, error};
-}
-
-/**
- * The answer to a check violation (`23514`): the request holds a value the
- * table refuses, which is a mistake in the request itself -- 400. The code
- * doesn't say which constraint refused it, so the answer can only be as
- * specific as the one constraint a schema-valid request can still run into.
- * @param error The code or staff-facing message to answer with.
- */
-export function invalidValue(error: string): PgErrorAnswer<400> {
+export function badRequest(error: string): PgErrorAnswer<400> {
   return {status: 400, error};
 }
 
@@ -222,8 +231,21 @@ export function noRow(error: string): PgErrorAnswer<404> {
 }
 
 /**
+ * The name of the constraint a Postgres failure names, or null if it names
+ * none. PostgREST passes on no field of its own for it, so it is read from
+ * Postgres' message (`... violates check constraint "name"`), which only
+ * Postgres writes -- not from `details`, which holds the failing row and so
+ * whatever the request put in it.
+ * @param message The failure's message.
+ */
+function constraintNamed(message: string | undefined): string | null {
+  return message?.match(/ constraint "([^"]+)"/)?.[1] ?? null;
+}
+
+/**
  * Turns a failure supabase-js returned into the route's response: the entry
- * of `table` for its code, or -- for anything the route can't name --
+ * of `table` for its code and the constraint it names (`constraintKey()`),
+ * else for its code alone, or -- for anything the route can't name --
  * `internalError()`'s body with a 500, logging the failure.
  *
  * Returned rather than answered, so that the route's `c.json(body, status)`
@@ -234,14 +256,20 @@ export function noRow(error: string): PgErrorAnswer<404> {
  * @template S The statuses `table` answers with.
  */
 export function mapPgError<S extends ClientFailureStatus>(
-  error: {code?: string},
+  error: {code?: string; message?: string},
   table: PgErrorTable<S>,
   context: string,
 ): {body: {error: string}; status: S | 500} {
+  const answerFor = (key: string) =>
+    Object.hasOwn(table, key) ? table[key] : undefined;
+  const constraint = constraintNamed(error.message);
   const answer =
-    error.code !== undefined && Object.hasOwn(table, error.code)
-      ? table[error.code]
-      : undefined;
+    error.code === undefined
+      ? undefined
+      : ((constraint === null
+          ? undefined
+          : answerFor(constraintKey(error.code, constraint))) ??
+        answerFor(error.code));
   if (answer !== undefined) {
     return {body: {error: answer.error}, status: answer.status};
   }

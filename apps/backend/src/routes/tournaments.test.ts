@@ -300,6 +300,28 @@ describe('tournaments routes (database errors)', () => {
     }
   });
 
+  // `tournaments_question_set_format` (0044) or any other check than the
+  // period's: ruled out by the request schemas, so a bug rather than a
+  // mistake staff can fix.
+  it('answers a check violation of any other constraint with a generic 500', async () => {
+    stubPostgrestError(400, {
+      code: CHECK_VIOLATION_SQLSTATE,
+      message:
+        'new row for relation "tournaments" violates check constraint "tournaments_question_set_format"',
+      details: null,
+      hint: null,
+    });
+
+    for (const method of ['POST', 'PATCH'] as const) {
+      const res = await request(method);
+      const text = await res.text();
+
+      expect(res.status).toBe(500);
+      expect(JSON.parse(text)).toEqual({error: 'internal server error'});
+      expect(text).not.toContain('tournaments_question_set_format');
+    }
+  });
+
   it('answers any other database error with a generic 500', async () => {
     stubPostgrestError(400, {
       // `exclusion_violation`, which no tournament write maps.

@@ -16,50 +16,43 @@
 --   の空き数が負になる。API の Zod スキーマ(`.positive()`)と一括登録は
 --   すでに 1 以上しか通さないので、これは SQL での直接編集に対する備え。
 --
--- 違反した書き込みは `check_violation`(23514)になり、API は
--- `TOURNAMENT_WRITE_ERRORS`(`routes/tournaments.ts`)で 400 と
--- `ENTRY_PERIOD_ORDER_MESSAGE`(`packages/shared`)に対応付ける。
+-- 違反した書き込みは `check_violation`(23514)になる。API は
+-- `TOURNAMENT_WRITE_ERRORS`(`routes/tournaments.ts`)で、エラーが
+-- `tournaments_entry_period_ordered` を名指ししているときだけ 400 と
+-- `ENTRY_PERIOD_ORDER_MESSAGE`(`packages/shared`)に対応付け、ほかの CHECK
+-- 違反(定員を含む。リクエストのスキーマが先に弾くので API からは起きない)は
+-- 500 にする。
 --
--- 既存の行の扱い: 違反する行があれば、このマイグレーションは理由と該当する
--- 大会の id を示す例外で止まる(ファイル全体が 1 トランザクションなので、
--- 何も適用されない)。違反した行を勝手に直すことはしない。受付期間や定員を
--- どう直すべきかは大会ごとにスタッフが決めることで、`regulations` の優先
--- 期間(0014)のように「無かったことにしても振る舞いが変わらない」値への
--- 置き換えがないため。`not valid` で既存の行を見逃すこともしない(新しい
--- 書き込みだけを検査すると、違反した大会が残っていることに誰も気付かない)。
+-- 既存の行の扱い: どちらの制約も `not valid` で追加する。新しい INSERT と
+-- UPDATE は検査されるが、追加の時点では既存の行を検査しない。`develop` /
+-- `main` への merge で staging / production に自動でデプロイされる
+-- (`.github/workflows/deploy-*.yml`)ので、違反した古い行が 1 件でもあると
+-- マイグレーションが失敗し、デプロイが止まるのを避けるため。違反した行を
+-- 勝手に直すこともしない。受付期間や定員をどう直すべきかは大会ごとに
+-- スタッフが決めることで、`regulations` の優先期間(0014)のように
+-- 「無かったことにしても振る舞いが変わらない」値への置き換えがないため。
 --
--- **本番に適用する前に**、次のクエリで違反する行がないことを確認し、
--- あれば管理画面か SQL で直してから適用すること:
+-- `not valid` でも、既存の行を UPDATE すると更新後の行が検査される。違反
+-- した大会は、期間や定員を直すまで、どの列の更新も断られる。管理画面の
+-- 編集フォームは期間の両端と定員を毎回送るので、正しい期間と定員を入れて
+-- 保存すれば直り、期間を直さずに保存したスタッフには
+-- `ENTRY_PERIOD_ORDER_MESSAGE` が表示されるので、これで足りるとする。
+-- ただし、その大会の行も書き換える受付の一時停止(`staff-entry-pause.ts`)と
+-- 全大会の並べ替え(`reorder_tournaments()`、0032)も、直すまでは 500 で
+-- 失敗する。
+--
+-- 違反した行は次のクエリで探す:
 --
 --   select id, region_id, type, capacity, entry_opens_at, entry_closes_at
 --     from tournaments
 --     where entry_opens_at >= entry_closes_at
 --        or capacity <= 0;
-do $$
-declare
-  v_bad_periods text;
-  v_bad_capacities text;
-begin
-  select string_agg(id::text, ', ' order by id) into v_bad_periods
-    from tournaments
-    where entry_opens_at >= entry_closes_at;
-  select string_agg(id::text, ', ' order by id) into v_bad_capacities
-    from tournaments
-    where capacity <= 0;
-
-  if v_bad_periods is not null or v_bad_capacities is not null then
-    raise exception 'tournaments violate the checks 0048 adds; fix them first'
-      using detail = format(
-        'entry_opens_at >= entry_closes_at: %s; capacity <= 0: %s',
-        coalesce(v_bad_periods, 'none'),
-        coalesce(v_bad_capacities, 'none')
-      );
-  end if;
-end;
-$$;
-
+--
+-- 該当する行を直したあと、後続(follow-up)のマイグレーションで
+-- `alter table tournaments validate constraint ...` を実行し、既存の行も
+-- 制約を満たすことを DB に保証させる。
 alter table tournaments
   add constraint tournaments_entry_period_ordered
-    check (entry_opens_at < entry_closes_at),
+    check (entry_opens_at < entry_closes_at) not valid,
   add constraint tournaments_capacity_positive
-    check (capacity is null or capacity > 0);
+    check (capacity is null or capacity > 0) not valid;
