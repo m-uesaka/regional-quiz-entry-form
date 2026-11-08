@@ -13,6 +13,8 @@
     "build": "wrangler deploy --dry-run",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "hono:routes": "hono routes src/hono-cli-app.ts -e yaml",
+    "hono:snapshot": "hono snapshot src/hono-cli-app.ts -e yaml",
     "staff:bootstrap": "bun src/scripts/bootstrap-general-staff.ts",
     "lint": "gts lint",
     "fix": "gts fix"
@@ -27,7 +29,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240909.0",
-    "@hono/cli": "^0.1.11",
+    "@hono/cli": "1.0.0-rc.9",
     "@types/bun": "^1.1.0",
     "typescript": "^5.5.0",
     "wrangler": "^3.78.0"

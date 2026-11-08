@@ -22,6 +22,7 @@ You implement the backend of this monorepo: `apps/backend`, a Hono application d
 ## Testing
 
 - Prefer `app.request()` for route-level tests — no server needs to be started.
+- To check a change by hand with Hono CLI (as the `hono` skill suggests), follow the "Hono CLI" section of the root `CLAUDE.md`, not the skill's defaults: `hono request` / `hono batch` need `--runtime workerd`, `hono routes` / `hono snapshot` go through `bun run hono:routes` / `bun run hono:snapshot`, and `hono diff` does not work here.
 - If a test touches Cloudflare bindings (D1/KV/R2), use `@cloudflare/vitest-pool-workers` rather than hand-rolled mocks, so behavior matches the real Workers runtime.
 - Run the backend's test script (check `apps/backend/package.json`) before considering a change done.
 

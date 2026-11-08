@@ -38,3 +38,23 @@ TypeScript + Hono のバックエンドと SvelteKit のフロントエンドか
 - `.claude/skills/create-tasks/SKILL.md`(実体: `.agents/skills/create-tasks/`) — 要件ファイルからタスクリスト(`tasks.md`)を生成するスキル。`disable-model-invocation: true` のため自動では発火せず、明示的に呼び出す。CLI管理外のため `.gitignore` で個別に追跡対象化している
 - `.claude/skills/resolve-pr-comments/SKILL.md`(実体: `.agents/skills/resolve-pr-comments/`) — PR の未解決コメントを検出し、コードを修正した上でコメントに返信するスキル。`disable-model-invocation: true` のため自動では発火せず、明示的に呼び出す。CLI管理外のため `.gitignore` で個別に追跡対象化している
 - 導入済みスキル(`skills-lock.json` 参照): `hono`(公式 `honojs/skills`。旧 `yusukebe/hono-skill` はアーカイブ済み), `bun-runtime`(`affaan-m/ECC`。旧 `flora131/atomic@bun` はメンテナンス終了。Bun 公式のユーザー向けスキルは存在しない), `svelte-code-writer`, `svelte-core-bestpractices`。`.svelte` / `.svelte.ts` を編集する際は `svelte-code-writer` / `svelte-core-bestpractices` が自動的に参照される
+- 外部スキルの指示がこのファイルと食い違う場合は、このファイルを優先する。既知の食い違い:
+  - `hono` スキルは「`Bindings` 型を手書きせず生成する」としているが、このリポジトリでは `apps/backend/src/types/env.ts` に手書きで定義する(コメントや省略可能なフィールドを持つため)。`wrangler types` 等で生成し直さない
+  - `bun-runtime` スキルの Vercel 向けの記述は当てはまらない(デプロイ先は Cloudflare Workers)
+
+## Hono CLI(`@hono/cli`)
+
+`hono` スキルが動作確認に使う Hono CLI を `apps/backend` の devDependency として入れている(`1.0.0-rc.9` に固定。1.0 正式版が出たら `latest` に戻す)。コマンドは `apps/backend` で実行する。このリポジトリではスキルに書かれたとおりには動かないため、次のように使う:
+
+- **`hono request` / `hono batch` には `--runtime workerd` を付ける**。`wrangler.toml` の `main`(`src/index.ts`)を workerd で動かし、`apps/backend/.dev.vars` の secrets(`SUPABASE_URL` / `SUPABASE_SECRET_KEY` 等)が `c.env` に入る。ローカル Supabase(`bun run db:start`)が必要
+  - 例: `bunx hono request /api/portal/tournaments --runtime workerd`
+  - 付けないと Node.js で `src/index.ts` を読み込もうとして失敗する(default export が Hono アプリではなく Worker の `{fetch, queue}` であるため)。`--runtime bun` は `c.env` が空になり、DB を使うルートが 500 になる
+- **`hono routes` / `hono snapshot` は `bun run hono:routes` / `bun run hono:snapshot` を使う**。`app` を default export する `src/hono-cli-app.ts` を渡し、`-e yaml` を付けている(`packages/shared` が使う `yaml` は CommonJS で、CLI のバンドルに含めると `Dynamic require of "process" is not supported` になる)。追加のオプションは `bun run hono:snapshot --status-only` のように後ろに付ける
+- **`hono diff` は使えない**。入口ファイルも `-e` も指定できず、上の理由で失敗する。変更前後の比較は、変更前に取った `hono:snapshot` の出力を変更後に `hono batch - --runtime workerd` で流し直して行う
+  - `.dev.vars` があると snapshot の出力の先頭に wrangler の `Using vars defined in .dev.vars` という JSON でない行が混ざり、そのまま流すと batch が `BATCH_INVALID` になる。また `expect` を持つのはパラメータのない GET だけで、残り(`:id` を含むパスや POST 等)は `expect` のない雛形なので、そのまま流すと 4xx で失敗扱いになる。`expect` を持つ行だけを使う:
+    ```sh
+    bun run --silent hono:snapshot --status-only | grep '"expect"' > /tmp/before.jsonl
+    # 変更後
+    bunx hono batch - --runtime workerd --compact < /tmp/before.jsonl
+    ```
+- CLI で確認できない場合は、これまでどおり `app.request()` を使うテスト(`bun test`)で確認する
