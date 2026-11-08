@@ -1,6 +1,7 @@
 import {fail, redirect} from '@sveltejs/kit';
 import {ParticipantLoginInputSchema} from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
+import {readString} from '$lib/form-data';
 import {participantLandingPath} from '$lib/server/participant-login';
 import type {Actions, PageServerLoad} from './$types';
 
@@ -31,10 +32,10 @@ export const actions = {
     const formData = await request.formData();
     // Echoed back on failure so only the password has to be retyped. The
     // password itself never travels back.
-    const email = String(formData.get('email') ?? '');
+    const email = readString(formData, 'email');
     const parsed = ParticipantLoginInputSchema.safeParse({
       email,
-      password: String(formData.get('password') ?? ''),
+      password: readString(formData, 'password'),
     });
     if (!parsed.success) {
       return fail(400, {

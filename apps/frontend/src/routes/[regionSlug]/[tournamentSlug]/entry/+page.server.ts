@@ -19,6 +19,7 @@ import {
   readErrorMessage,
   type ApiErrorMessages,
 } from '$lib/api';
+import {readString, readStrings} from '$lib/form-data';
 import {isWaitlistOpen, priorityEntryNotices} from '$lib/priority-entry';
 import {participantLoginPath} from '$lib/server/participant-login';
 import {clearParticipantSession} from '$lib/server/participant-session';
@@ -320,13 +321,13 @@ function readEntryFormValues(
   formFieldDefs: FormFieldDef[],
 ): EntryFormValues {
   return {
-    name: String(formData.get('name') ?? ''),
-    furigana: String(formData.get('furigana') ?? ''),
-    displayName: String(formData.get('displayName') ?? ''),
-    email: String(formData.get('email') ?? ''),
+    name: readString(formData, 'name'),
+    furigana: readString(formData, 'furigana'),
+    displayName: readString(formData, 'displayName'),
+    email: readString(formData, 'email'),
     // A checkbox group, so every checked box arrives under the same name —
     // `getAll`, not `get`.
-    regulationIds: formData.getAll('regulationIds').map(String),
+    regulationIds: readStrings(formData, 'regulationIds'),
     freeText: readFormText(formData, 'freeText'),
     customFieldValues: readCustomFieldValues(formData, formFieldDefs),
   };
@@ -456,8 +457,8 @@ export const actions = {
       const parsed = EntryInputSchema.safeParse({
         ...entry,
         email,
-        password: String(formData.get('password') ?? ''),
-        passwordConfirm: String(formData.get('passwordConfirm') ?? ''),
+        password: readString(formData, 'password'),
+        passwordConfirm: readString(formData, 'passwordConfirm'),
       });
       if (!parsed.success || customFieldValuesErrors.length > 0) {
         return invalid(

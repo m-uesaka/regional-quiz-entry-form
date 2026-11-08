@@ -9,9 +9,10 @@
   import Table from '$lib/components/ui/atoms/Table.svelte';
   import TableData from '$lib/components/ui/atoms/TableData.svelte';
   import TableHead from '$lib/components/ui/atoms/TableHead.svelte';
-  import Message from '$lib/components/ui/items/Message.svelte';
+  import FlashMessage from '$lib/components/ui/items/FlashMessage.svelte';
   import {tick} from 'svelte';
   import {dragReorder, moveItem, renumberRows} from '$lib/drag-reorder';
+  import {Hydrated} from '$lib/hydrated.svelte';
   import type {PageProps} from './$types';
 
   const {data, form}: PageProps = $props();
@@ -24,10 +25,7 @@
   let announcement = $state('');
   // The handles and buttons need scripting, so they only appear once it
   // runs; without it the numbers below still reorder the tournaments.
-  let hydrated = $state(false);
-  $effect(() => {
-    hydrated = true;
-  });
+  const hydrated = new Hydrated();
 
   /**
    * Moves a tournament to another position, then numbers every row by
@@ -59,14 +57,10 @@
   </div>
 
   {#if form?.saved}
-    <Message variant="success">
-      <p role="status" class="text-sm text-foreground">表示順を保存しました</p>
-    </Message>
+    <FlashMessage kind="success">表示順を保存しました</FlashMessage>
   {/if}
   {#if form?.error}
-    <Message variant="danger">
-      <p role="alert" class="text-sm text-foreground">{form.error}</p>
-    </Message>
+    <FlashMessage kind="error">{form.error}</FlashMessage>
   {/if}
 
   {#if data.tournaments.length > 0}
@@ -75,7 +69,7 @@
         <Table class="w-full">
           <thead>
             <tr class="border-b border-border">
-              {#if hydrated}
+              {#if hydrated.current}
                 <TableHead size="small">
                   <span class="sr-only">並べ替え</span>
                 </TableHead>
@@ -94,7 +88,7 @@
                 data-drag-item
                 class="border-b border-border bg-surface data-dragging:relative data-dragging:z-10 data-dragging:bg-accent data-dragging:shadow-md"
               >
-                {#if hydrated}
+                {#if hydrated.current}
                   <TableData size="small">
                     <ReorderControls
                       label={tournament.name}

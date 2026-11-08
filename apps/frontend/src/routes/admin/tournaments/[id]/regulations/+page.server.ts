@@ -10,6 +10,7 @@ import {
   isUnauthorized,
   readErrorMessage,
 } from '$lib/api';
+import {readString} from '$lib/form-data';
 import {fromJstDatetimeLocal} from '$lib/jst-datetime';
 import {
   emptyRegulationRow,
@@ -226,7 +227,7 @@ export const actions = {
   // write path (the `save` action above) whichever way the rows were filled.
   import: async ({params, request, fetch, cookies, url}) => {
     const formData = await request.formData();
-    const spreadsheetId = String(formData.get('spreadsheetId') ?? '').trim();
+    const spreadsheetId = readString(formData, 'spreadsheetId').trim();
     if (spreadsheetId === '') {
       return fail(
         400,

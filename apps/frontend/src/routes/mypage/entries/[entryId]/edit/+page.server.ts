@@ -12,6 +12,7 @@ import {
   resolveApiErrorMessage,
   type ApiErrorMessages,
 } from '$lib/api';
+import {readString} from '$lib/form-data';
 import {
   customFieldErrors,
   entrySchemaFieldErrors,
@@ -125,9 +126,9 @@ export const actions = {
     // Echoed back with every failure so a rejected submission re-renders
     // what the participant typed instead of resetting to the stored entry.
     const values: EntryEditFormValues = {
-      name: String(formData.get('name') ?? ''),
-      furigana: String(formData.get('furigana') ?? ''),
-      displayName: String(formData.get('displayName') ?? ''),
+      name: readString(formData, 'name'),
+      furigana: readString(formData, 'furigana'),
+      displayName: readString(formData, 'displayName'),
       freeText,
       customFieldValues: readCustomFieldValues(formData, formFieldDefs),
     };

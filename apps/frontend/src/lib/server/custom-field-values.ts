@@ -6,6 +6,7 @@ import {
   type FormFieldDef,
 } from '@regional-quiz/shared';
 import {customFieldName} from '$lib/custom-field-name';
+import {readString, readStrings} from '$lib/form-data';
 import type {FieldErrors} from '$lib/types/form-errors';
 
 /**
@@ -21,7 +22,7 @@ import type {FieldErrors} from '$lib/types/form-errors';
  * @param name The control's name.
  */
 export function readFormText(formData: FormData, name: string): string {
-  return String(formData.get(name) ?? '').replace(/\r\n?/g, '\n');
+  return readString(formData, name).replace(/\r\n?/g, '\n');
 }
 
 /**
@@ -59,7 +60,7 @@ export function readCustomFieldValues(
       values[fieldDef.fieldKey] = readFormText(formData, controlName);
       continue;
     }
-    const checked = formData.getAll(controlName).map(String);
+    const checked = readStrings(formData, controlName);
     if (fieldDef.options && fieldDef.options.length > 0) {
       values[fieldDef.fieldKey] = checked;
     } else {

@@ -2,6 +2,7 @@ import {fail, redirect} from '@sveltejs/kit';
 import {PasswordResetRequestInputSchema} from '@regional-quiz/shared';
 import {PasswordResetConfirmInputSchema} from '@regional-quiz/shared/password-policy';
 import {createApiClient} from '$lib/api';
+import {readString} from '$lib/form-data';
 import {
   readTurnstileToken,
   TURNSTILE_FAILED_MESSAGE,
@@ -54,7 +55,7 @@ export const actions = {
 
     if (token === null) {
       const parsed = PasswordResetRequestInputSchema.safeParse({
-        email: String(formData.get('email') ?? ''),
+        email: readString(formData, 'email'),
       });
       if (!parsed.success) {
         return fail(400, {
@@ -100,8 +101,8 @@ export const actions = {
       return {sent: true};
     }
 
-    const newPassword = String(formData.get('newPassword') ?? '');
-    if (newPassword !== String(formData.get('newPasswordConfirm') ?? '')) {
+    const newPassword = readString(formData, 'newPassword');
+    if (newPassword !== readString(formData, 'newPasswordConfirm')) {
       return fail(400, {
         error: PASSWORD_MISMATCH_MESSAGE,
         tokenRejected: false,

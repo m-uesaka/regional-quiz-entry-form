@@ -2,6 +2,7 @@ import {fail, redirect} from '@sveltejs/kit';
 import {StaffPasswordResetRequestInputSchema} from '@regional-quiz/shared';
 import {StaffPasswordResetConfirmInputSchema} from '@regional-quiz/shared/password-policy';
 import {createApiClient} from '$lib/api';
+import {readString} from '$lib/form-data';
 import {
   readTurnstileToken,
   TURNSTILE_FAILED_MESSAGE,
@@ -69,8 +70,8 @@ export const actions = {
     // request API even if a stale token cookie was left in this browser.
     if (formData.has('email')) {
       const parsed = StaffPasswordResetRequestInputSchema.safeParse({
-        email: String(formData.get('email') ?? ''),
-        scope: String(formData.get('scope') ?? ''),
+        email: readString(formData, 'email'),
+        scope: readString(formData, 'scope'),
       });
       if (!parsed.success) {
         return fail(400, {
@@ -118,8 +119,8 @@ export const actions = {
       return fail(400, {error: NEEDS_A_NEW_LINK_MESSAGE, tokenRejected: true});
     }
 
-    const newPassword = String(formData.get('newPassword') ?? '');
-    if (newPassword !== String(formData.get('newPasswordConfirm') ?? '')) {
+    const newPassword = readString(formData, 'newPassword');
+    if (newPassword !== readString(formData, 'newPasswordConfirm')) {
       return fail(400, {
         error: PASSWORD_MISMATCH_MESSAGE,
         tokenRejected: false,

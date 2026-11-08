@@ -5,7 +5,7 @@
   import Input from '$lib/components/ui/atoms/Input.svelte';
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import Link from '$lib/components/ui/atoms/Link.svelte';
-  import Message from '$lib/components/ui/items/Message.svelte';
+  import FlashMessage from '$lib/components/ui/items/FlashMessage.svelte';
   import {datetimeLocalStep} from '$lib/jst-datetime';
   import type {TournamentFormValues} from '$lib/types/tournament-form';
 
@@ -56,12 +56,10 @@
   </div>
 
   {#if regions.length === 0}
-    <Message variant="danger">
-      <p class="text-sm text-foreground" role="alert">
-        地域が登録されていません。先に<Link href="/admin/regions">地域の管理</Link>
-        から追加してください。
-      </p>
-    </Message>
+    <FlashMessage kind="error">
+      地域が登録されていません。先に<Link href="/admin/regions">地域の管理</Link>
+      から追加してください。
+    </FlashMessage>
   {/if}
 
   <div class="flex flex-col gap-1.5">

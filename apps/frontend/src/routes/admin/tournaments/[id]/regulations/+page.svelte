@@ -12,8 +12,10 @@
   import Input from '$lib/components/ui/atoms/Input.svelte';
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import Link from '$lib/components/ui/atoms/Link.svelte';
+  import FlashMessage from '$lib/components/ui/items/FlashMessage.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
   import {dragReorder, moveItem, renumberRows} from '$lib/drag-reorder';
+  import {Hydrated} from '$lib/hydrated.svelte';
   import {datetimeLocalStep} from '$lib/jst-datetime';
   import {
     emptyRegulationRow,
@@ -64,10 +66,7 @@
   let announcement = $state('');
   // The handles and buttons need scripting, so they only appear once it
   // runs; without it the "表示順" numbers still reorder the rows.
-  let hydrated = $state(false);
-  $effect(() => {
-    hydrated = true;
-  });
+  const hydrated = new Hydrated();
 
   /**
    * What a row is called where it is announced or labelled: by position,
@@ -103,11 +102,9 @@
   </p>
 
   {#if form?.saved}
-    <Message variant="success">
-      <p role="status" class="text-sm text-foreground">
-        レギュレーションを保存しました
-      </p>
-    </Message>
+    <FlashMessage kind="success">
+      レギュレーションを保存しました
+    </FlashMessage>
   {/if}
   {#if form?.imported}
     <Message variant="default">
@@ -119,9 +116,7 @@
     </Message>
   {/if}
   {#if form?.error}
-    <Message variant="danger">
-      <p role="alert" class="text-sm text-foreground">{form.error}</p>
-    </Message>
+    <FlashMessage kind="error">{form.error}</FlashMessage>
   {/if}
 
   <Card>
@@ -168,7 +163,7 @@
         >
           <legend class="px-1 text-sm font-bold">{index + 1} 番目</legend>
 
-          {#if hydrated}
+          {#if hydrated.current}
             <div class="sm:col-span-2">
               <ReorderControls
                 label={rowName(index)}

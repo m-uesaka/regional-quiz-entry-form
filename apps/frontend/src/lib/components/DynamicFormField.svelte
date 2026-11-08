@@ -8,6 +8,7 @@
   import FieldLabelText from '$lib/components/FieldLabelText.svelte';
   import FieldError from '$lib/components/form/FieldError.svelte';
   import TextField from '$lib/components/form/TextField.svelte';
+  import {Hydrated} from '$lib/hydrated.svelte';
 
   interface Props {
     field: FormFieldDefYaml;
@@ -64,18 +65,15 @@
   // along to remove it. See #95.
   //
   // The server-rendered HTML therefore carries no `required` on these
-  // boxes at all, and the constraint is installed only once this effect
-  // has run; the "at least one" rule is enforced for everyone by
+  // boxes at all, and the constraint is installed only once the component
+  // has hydrated; the "at least one" rule is enforced for everyone by
   // `findCustomFieldValuesErrors()` in the form action either way, so an
   // early submission is answered with that message rather than dropped.
   //
   // Only the multi-option group needs this: a lone boolean checkbox and a
   // radio group both express their rule natively, so their `required`
   // holds without any script.
-  let hydrated = $state(false);
-  $effect(() => {
-    hydrated = true;
-  });
+  const hydrated = new Hydrated();
 </script>
 
 <!-- The options stay native inputs inside their own `<label>`: a native
@@ -134,7 +132,7 @@
             class="size-4 cursor-pointer accent-primary"
             name={controlName}
             value={option}
-            required={hydrated && field.required && !hasCheckboxSelection}
+            required={hydrated.current && field.required && !hasCheckboxSelection}
             bind:group={value}
           />
           <FieldLabelText label={option} />

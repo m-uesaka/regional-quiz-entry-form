@@ -1,3 +1,5 @@
+import {readString} from '$lib/form-data';
+
 /**
  * The name Turnstile gives the hidden control it writes its token into, and
  * the header the API expects that token in.
@@ -43,9 +45,6 @@ const TURNSTILE_TOKEN_PATTERN = /^[\x21-\x7e]{1,4096}$/;
  * @param formData The submitted form.
  */
 export function readTurnstileToken(formData: FormData): string {
-  const value = formData.get(TURNSTILE_TOKEN_FIELD);
-  if (typeof value !== 'string' || !TURNSTILE_TOKEN_PATTERN.test(value)) {
-    return '';
-  }
-  return value;
+  const value = readString(formData, TURNSTILE_TOKEN_FIELD);
+  return TURNSTILE_TOKEN_PATTERN.test(value) ? value : '';
 }
