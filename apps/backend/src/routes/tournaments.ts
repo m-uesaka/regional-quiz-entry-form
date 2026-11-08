@@ -23,6 +23,8 @@ import {createDbClient, type TablesInsert, type TablesUpdate} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {FORM_FIELD_DEF_COLUMNS, toFormFieldDef} from '../lib/form-field-defs';
 import {
+  DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
+  DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE,
   duplicate,
   ENTRY_PERIOD_OPEN_SQLSTATE,
   FOREIGN_KEY_VIOLATION_SQLSTATE,
@@ -56,6 +58,12 @@ const TOURNAMENT_WRITE_ERRORS = {
   // `region_id` names no region.
   [FOREIGN_KEY_VIOLATION_SQLSTATE]:
     missingReference('指定された地域が存在しません'),
+  // The other tournament of a region allowing dual entry has the same
+  // question set (0045).
+  [DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE]: {
+    status: 409,
+    error: DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
+  },
 } as const satisfies PgErrorTable<400 | 409>;
 
 /**

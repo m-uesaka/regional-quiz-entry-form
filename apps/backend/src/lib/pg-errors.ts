@@ -118,6 +118,21 @@ export const PARTICIPANT_REGION_SQLSTATE = 'P0008';
 export const NO_LASTING_REGULATION_SQLSTATE = 'P0009';
 
 /**
+ * Raised by the triggers of 0045 when a region allowing dual entry would
+ * have its 最強位 and 新人王 on the same question set: one tournament's
+ * questions would be seen by those entered in the other.
+ */
+export const DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE = 'P0010';
+
+/**
+ * What a tournament or region write refused with
+ * `DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE` is answered with: shown as it is
+ * above the admin form.
+ */
+export const DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE =
+  '重複エントリーを認める地域では、最強位と新人王に同じ問題セットを設定できません';
+
+/**
  * How a route answers one Postgres failure it can name.
  *
  * `error` is either a fixed code the frontend picks its own wording by, or a

@@ -106,6 +106,8 @@ flowchart TB
 
 `allows_dual_entry` は requirements.md の「両方に参加することができる**ような地域も存在します**」に対応します。既定を `false` にしているのは、現在の「どの地域でも両方に出られる」挙動が仕様の欠落であって意図された既定ではないためで、許可する地域には運用開始前に明示的に `true` を立ててもらいます。判定は `check_entry_seat()` トリガ(マイグレーション `0041`)だけが行い、`cancelled` 以外のエントリーが同一地域の別大会にあれば書き込みを断ります(下記)。`apps/backend/src/lib/entry-submission.ts` の `enterTournament()`(書き込み段階の `writeEntry()`)はこれを 409 に変換します。エントリーポータル(`/portal`)は `GET /api/portal/tournaments` の `regionAllowsDualEntry` でこの設定を受け取り、許可していて最強位・新人王の両方が並んでいる地域に「この地域は最強位と新人王の両方にエントリー可能です(重複エントリー可)」と表示します。地域のルールとしての表示なので、各大会の受付状況(受付開始前 / 受付中 / 受付終了)にかかわらず出します。
 
+重複エントリーを認める地域では、最強位と新人王に同じ問題セット(`tournaments.question_set`)を設定できません(`0045`。下記「重複エントリーを認める地域の問題セット」)。
+
 作成・編集は統括スタッフ向けの `GET` / `POST` / `PATCH /api/regions`(`apps/backend/src/routes/regions.ts`)から行えます。`slug` だけは公開済み URL の一部なので作成時に固定され、更新できません。
 
 ### tournaments — 大会
@@ -630,6 +632,17 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 `supabase db push` は各バージョンを一度しか適用しません。そのため、**適用済みのマイグレーションファイルを直接書き換えても、既存環境には反映されません**。関数の挙動を変更する場合は、`0007` / `0008` のように**新しい番号のファイルで `create or replace function` し直す**のが本リポジトリの流儀です。その際は変更しない部分も含めて関数全体を書き直すことになるため、元ファイルからの差分をコメントに明記してください。
 
+### 重複エントリーを認める地域の問題セット(トリガ関数)
+
+`0045` の 2 つのトリガで、重複エントリーを認める地域(`regions.allows_dual_entry = true`)の最強位と新人王に同じ問題セットが付くのを防ぎます。両方に出られる 2 大会が同じ問題を使うと、片方で見た問題がもう片方でも出るためです。重複エントリーを認めない地域は、どのみち片方にしか出られないので制限しません。
+
+- `tournaments_check_question_set_for_dual_entry`(`tournaments` の before insert / update of `region_id`, `type`, `question_set`): 名前の付いた問題セットが、重複エントリーを認める同じ地域のもう一方の大会と同じなら、SQLSTATE `P0010` で断ります
+- `regions_check_dual_entry_question_sets`(`regions` の before update of `allows_dual_entry`): `false` → `true` にするとき、地域の大会に同じ問題セット(名前の付いたもの)があれば `P0010` で断ります
+
+比べるのは名前を付けた問題セットどうしだけで、`null`(共通問題)どうしは同じと扱いません。既存の地域はすべて両方とも `null` のまま重複エントリーを認めているためです(共通問題は最強位用と新人王用で別の問題)。
+
+同じ地域の 2 大会への同時の変更や、地域の設定と大会の変更が同時に来ても検査をすり抜けないよう、大会側のトリガは地域行を `for no key update` で取ってから、別の文でもう一方の大会を読みます。`regions` の UPDATE は自分で同じ行ロックを取ります。地域行を取るのはこの 2 つだけで、エントリーまわりのロック順には関わりません。API は `P0010` を 409 と日本語の文言にします(`POST` / `PATCH /api/tournaments`、`PATCH /api/regions/:id`)。
+
 ### record_mail_job_progress(p_job_id, p_sent, p_failed)
 
 `mail_jobs` の `sent` / `failed` に、キューのコンシューマが処理し終えた 1 バッチ分を**加算**します。
@@ -683,3 +696,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0042_regulations_closes_with_priority.sql` | `regulations.closes_with_priority`(#243)。旧来の推定で枠が外れていた行のバックフィル。`sync_regulations()` を、キーが無ければ今の値を保つよう再定義 |
 | `0043_tournament_question_set.sql` | `tournaments.question_set`。地域をまたいだ参加を、問題セットが同じ大会どうしだけ断るように `check_entry_seat()` を再定義し、`participant_holds_conflicting_region()` / `claim_participant_region_for_tournament()` を追加 |
 | `0044_question_set_normalized.sql` | 既存の `question_set` を書式文字の除去と NFKC 正規化で揃え、揃っていない値を `tournaments_question_set_format` で拒否する(#271) |
+| `0045_dual_entry_question_sets.sql` | 重複エントリーを認める地域で、最強位と新人王に同じ問題セットを設定できないようにするトリガ 2 つ。既に矛盾している地域があれば適用を止める |

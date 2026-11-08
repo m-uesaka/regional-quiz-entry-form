@@ -2,6 +2,7 @@ import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'bun:test';
 import {SQL, type ReservedSQL} from 'bun';
 import {readFileSync} from 'node:fs';
 import {
+  DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE,
   PARTICIPANT_REGION_SQLSTATE,
   REGION_DUAL_ENTRY_SQLSTATE,
   STAFF_ACCOUNT_DISABLED_SQLSTATE,
@@ -874,6 +875,28 @@ describe.skipIf(!dbReachable)(
       ).toBeUndefined();
     });
 
+    // Question sets only decide entries across regions: where a region
+    // allows one of its tournaments only, different question sets for its
+    // 最強位 and 新人王 still don't let a participant enter both.
+    it('refuses both of a region without dual entry, whatever their question sets', async () => {
+      const {entryFor} = await seedRegion(false);
+      await sql`
+        update tournaments set question_set = '最強位用'
+        where id = ${entryFor('saikyoi').tournament_id}
+      `;
+      await sql`
+        update tournaments set question_set = '新人王用'
+        where id = ${entryFor('shinjinou').tournament_id}
+      `;
+      await sql`insert into entries ${sql(entryFor('saikyoi'))}`;
+
+      const code = await refusalOf(
+        sql`insert into entries ${sql(entryFor('shinjinou'))}`,
+      );
+
+      expect(code).toBe(REGION_DUAL_ENTRY_SQLSTATE);
+    });
+
     it('claims a region by tournament, refusing only the same question set', async () => {
       const {participantId, entryFor} = await seedRegion(false);
       await sql`insert into entries ${sql(entryFor('saikyoi'))}`;
@@ -1035,6 +1058,183 @@ describe.skipIf(!dbReachable)(
         select status from entries where id = ${entry.id}
       `;
       expect(updated.status).toBe('confirmed');
+    });
+  },
+);
+
+// 0045: a region allowing dual entry can't have its 最強位 and 新人王 on the
+// same question set, whichever of the region or the tournaments changes.
+describe.skipIf(!dbReachable)(
+  'question sets of a region allowing dual entry (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const regionSlug = 'db-schema-dual-question-set-test-region';
+
+    async function cleanup() {
+      await sql`delete from tournaments where region_id in (
+        select id from regions where slug = ${regionSlug}
+      )`;
+      await sql`delete from regions where slug = ${regionSlug}`;
+    }
+
+    beforeEach(cleanup);
+
+    afterAll(async () => {
+      await cleanup();
+      await sql.close();
+    });
+
+    /**
+     * Creates the region with both of its tournaments.
+     * @param allowsDualEntry The region's dual-entry setting.
+     * @param saikyoi The 最強位's question set.
+     * @param shinjinou The 新人王's question set.
+     */
+    async function seed(
+      allowsDualEntry: boolean,
+      saikyoi: string | null,
+      shinjinou: string | null,
+    ) {
+      const [region] = await sql`
+        insert into regions (slug, name, allows_dual_entry)
+        values (${regionSlug}, '問題セット確認', ${allowsDualEntry})
+        returning id
+      `;
+      const insert = async (type: string, questionSet: string | null) => {
+        const [row] = await sql`
+          insert into tournaments (
+            region_id, type, name, entry_opens_at, entry_closes_at, question_set
+          ) values (
+            ${region.id}, ${type}, ${type}, now(), now(), ${questionSet}
+          )
+          returning id
+        `;
+        return row.id as string;
+      };
+      return {
+        regionId: region.id as string,
+        saikyoiId: await insert('saikyoi', saikyoi),
+        shinjinouId: await insert('shinjinou', shinjinou),
+      };
+    }
+
+    async function refusalOf(query: PromiseLike<unknown>) {
+      try {
+        await query;
+        return undefined;
+      } catch (e: unknown) {
+        const {errno} = e as {errno?: string};
+        if (!errno) {
+          throw e;
+        }
+        return errno;
+      }
+    }
+
+    it('refuses giving one tournament the question set of the other', async () => {
+      const {shinjinouId} = await seed(true, '宮崎', null);
+
+      const code = await refusalOf(sql`
+        update tournaments set question_set = '宮崎' where id = ${shinjinouId}
+      `);
+
+      expect(code).toBe(DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE);
+    });
+
+    it('refuses creating a tournament on the question set of the other', async () => {
+      const {regionId, shinjinouId} = await seed(true, '宮崎', null);
+      await sql`delete from tournaments where id = ${shinjinouId}`;
+
+      const code = await refusalOf(sql`
+        insert into tournaments (
+          region_id, type, name, entry_opens_at, entry_closes_at, question_set
+        ) values (
+          ${regionId}, 'shinjinou', '新人王', now(), now(), '宮崎'
+        )
+      `);
+
+      expect(code).toBe(DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE);
+    });
+
+    it('accepts different question sets, and the common questions for both', async () => {
+      const {saikyoiId, shinjinouId} = await seed(true, null, null);
+
+      const different = await refusalOf(sql`
+        update tournaments set question_set = '宮崎最強位' where id = ${saikyoiId}
+      `);
+      const alsoDifferent = await refusalOf(sql`
+        update tournaments set question_set = '宮崎新人王' where id = ${shinjinouId}
+      `);
+
+      expect(different).toBeUndefined();
+      expect(alsoDifferent).toBeUndefined();
+    });
+
+    it('leaves a region without dual entry free to share a question set', async () => {
+      const {shinjinouId} = await seed(false, '宮崎', null);
+
+      const code = await refusalOf(sql`
+        update tournaments set question_set = '宮崎' where id = ${shinjinouId}
+      `);
+
+      expect(code).toBeUndefined();
+    });
+
+    it('refuses allowing dual entry while both share a question set', async () => {
+      const {regionId} = await seed(false, '宮崎', '宮崎');
+
+      const code = await refusalOf(sql`
+        update regions set allows_dual_entry = true where id = ${regionId}
+      `);
+      // Renaming the region is no change to the rule, and goes through.
+      const renamed = await refusalOf(sql`
+        update regions set name = '改名' where id = ${regionId}
+      `);
+
+      expect(code).toBe(DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE);
+      expect(renamed).toBeUndefined();
+    });
+
+    // Both triggers take the region row before reading the other side, so
+    // two changes that are each fine alone can't both commit.
+    it('never lets concurrent changes leave both on one question set', async () => {
+      const other = new SQL(DB_URL);
+      const shared: boolean[] = [];
+      for (let round = 0; round < 10; round++) {
+        await cleanup();
+        const {regionId, saikyoiId, shinjinouId} = await seed(
+          round % 2 === 0,
+          null,
+          null,
+        );
+        const ignore = () => {};
+        await Promise.all([
+          sql`update tournaments set question_set = '同時' where id = ${saikyoiId}`.then(
+            ignore,
+            ignore,
+          ),
+          other`update tournaments set question_set = '同時' where id = ${shinjinouId}`.then(
+            ignore,
+            ignore,
+          ),
+          other`update regions set allows_dual_entry = true where id = ${regionId}`.then(
+            ignore,
+            ignore,
+          ),
+        ]);
+        const [row] = await sql`
+          select r.allows_dual_entry and count(*) filter (
+            where t.question_set = '同時'
+          ) = 2 as shared
+          from regions r join tournaments t on t.region_id = r.id
+          where r.id = ${regionId}
+          group by r.allows_dual_entry
+        `;
+        shared.push(row.shared as boolean);
+      }
+      await other.close();
+
+      expect(shared.every(value => !value)).toBe(true);
     });
   },
 );

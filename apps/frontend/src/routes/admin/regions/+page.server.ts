@@ -3,7 +3,7 @@ import {
   RegionCreateInputSchema,
   RegionUpdateInputSchema,
 } from '@regional-quiz/shared';
-import {createApiClient, isUnauthorized} from '$lib/api';
+import {createApiClient, isUnauthorized, readErrorMessage} from '$lib/api';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {Actions, PageServerLoad} from './$types';
 import {readString} from '$lib/form-data';
@@ -160,6 +160,17 @@ export const actions = {
           regionId,
           values,
           '地域が見つかりません',
+          NO_FIELD_ERRORS,
+        );
+      }
+      // 409: allowing dual entry where 最強位 and 新人王 share a question set
+      // (0045), which the API words in Japanese itself.
+      if (res.status === 409) {
+        return updateFailure(
+          409,
+          regionId,
+          values,
+          await readErrorMessage(res, '地域の更新に失敗しました'),
           NO_FIELD_ERRORS,
         );
       }
