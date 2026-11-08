@@ -1677,9 +1677,9 @@ describe.skipIf(!dbReachable)(
     });
 
     // 0048 adds both `not valid`, so a tournament stored out of order
-    // before it doesn't stop the deploy; a later migration validates them
-    // once those are fixed. New writes are checked all the same (above).
-    it('adds the period and capacity checks without validating the rows already there', async () => {
+    // before it doesn't stop the deploy; 0049 validates them once no such
+    // row is left, so the rows already there are held to them as well.
+    it('validates the period and capacity checks for the rows already there', async () => {
       const rows = await sql`
         select conname, convalidated from pg_constraint
           where conrelid = 'tournaments'::regclass
@@ -1691,8 +1691,8 @@ describe.skipIf(!dbReachable)(
       `;
 
       expect([...rows]).toEqual([
-        {conname: 'tournaments_capacity_positive', convalidated: false},
-        {conname: 'tournaments_entry_period_ordered', convalidated: false},
+        {conname: 'tournaments_capacity_positive', convalidated: true},
+        {conname: 'tournaments_entry_period_ordered', convalidated: true},
       ]);
     });
 
