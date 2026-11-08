@@ -4,23 +4,35 @@ export const TournamentTypeSchema = z.enum(['saikyoi', 'shinjinou']);
 export type TournamentType = z.infer<typeof TournamentTypeSchema>;
 
 // The longest question set name `tournaments_question_set_format` (0043)
-// accepts.
+// accepts, in code points as its `char_length` counts them.
 export const QUESTION_SET_MAX_LENGTH = 100;
 
 // What 問題セット takes in the admin form (0043). A name differing by a
 // single character counts as another question set, which lets through the
 // cross-region entries it should refuse, so the differences nobody sees are
-// taken out before it is stored: NFKC folds full-width letters and digits
-// into the ones staff type elsewhere, the ends are trimmed (full-width
-// spaces included), and a space left inside is refused, as the database
-// refuses it. Blank means the common questions, stored as null.
+// taken out before it is stored, the same way 0044 made the database store
+// them: format characters (a zero-width space pasted along with a name) are
+// dropped, NFKC folds full-width letters and digits into the ones staff type
+// elsewhere, and the ends are trimmed (full-width spaces included). A space
+// left inside is refused, as the database refuses it. Blank means the
+// common questions, stored as null.
+//
+// What this stores is already in that form, so sending a stored name back
+// unchanged -- as the edit form does on every save -- stores it unchanged.
 export const QuestionSetInputSchema = z
   .string()
-  .transform(value => value.normalize('NFKC').trim())
+  .transform(value =>
+    value
+      .replace(/\p{Cf}/gu, '')
+      .normalize('NFKC')
+      .trim(),
+  )
   .pipe(
     z
       .string()
-      .max(QUESTION_SET_MAX_LENGTH, {
+      // Code points, not the UTF-16 units `.max()` counts: a kanji outside
+      // the BMP (𠮷) is one character to the database.
+      .refine(value => [...value].length <= QUESTION_SET_MAX_LENGTH, {
         message: `問題セットは${QUESTION_SET_MAX_LENGTH}文字以内で入力してください`,
       })
       .refine(value => !/\s/.test(value), {

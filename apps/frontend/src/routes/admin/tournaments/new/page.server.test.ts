@@ -112,6 +112,18 @@ describe('admin tournament create +page.server load', () => {
     });
   });
 
+  it('leaves the question sets out when their request fails outright', async () => {
+    const regionsOnly = fakeFetch([
+      {method: 'GET', url: '/api/regions', body: [TOKYO]},
+    ]);
+    // `fakeFetch` throws for a request it has no route for, as a network
+    // failure would.
+    await expect(load(buildLoadEvent(regionsOnly))).resolves.toEqual({
+      regions: [TOKYO],
+      questionSets: [],
+    });
+  });
+
   it('reports a failed read as a bad gateway', async () => {
     const failing = fakeFetch([
       {method: 'GET', url: '/api/regions', status: 500, body: {error: 'boom'}},

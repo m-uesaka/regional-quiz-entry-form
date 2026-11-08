@@ -119,7 +119,7 @@ flowchart TB
 | `capacity` | integer | nullable | 定員。**`null` は「定員無制限」を意味する**(0 ではない) |
 | `entry_opens_at` | timestamptz | not null | エントリー開始日時 |
 | `entry_closes_at` | timestamptz | not null | エントリー終了日時 |
-| `question_set` | text | null 可、1〜100 文字・空白(全角空白を含む)なし(`tournaments_question_set_format`) | 使用する問題セットの名前(`0043`)。**`null` は共通問題**。地域をまたいだ参加を断るのは、問題セットが同じ(`null` どうしを含む)大会どうしだけ。同じ地域の最強位・新人王の組は `regions.allows_dual_entry` だけで決まり、この列は見ない。統括スタッフが管理画面の大会作成・編集画面の「問題セット」欄で設定する(`POST` / `PATCH /api/tournaments` の `questionSet`。空欄は `null`)。名前が 1 文字違うだけで別の問題セットになり、断るべきエントリーが通ってしまうので、入力は `packages/shared` の `QuestionSetInputSchema` が NFKC 正規化と前後の空白除去をし、途中の空白を拒否する。画面は既にある名前を候補(`GET /api/tournaments/question-sets`)として出し、大会一覧にも列を表示する(異体字は制約では防げないので、候補から選ぶ)。スプレッドシートからの一括登録では設定せず、既存の値も変えない。設定を変えても既に受け付けたエントリーは検査し直さない |
+| `question_set` | text | null 可、1〜100 文字・空白(全角空白を含む)と書式文字(ゼロ幅スペースなど)なし・NFKC 正規化済み(`tournaments_question_set_format`、`0043` → `0044`) | 使用する問題セットの名前(`0043`)。**`null` は共通問題**。地域をまたいだ参加を断るのは、問題セットが同じ(`null` どうしを含む)大会どうしだけ。同じ地域の最強位・新人王の組は `regions.allows_dual_entry` だけで決まり、この列は見ない。統括スタッフが管理画面の大会作成・編集画面の「問題セット」欄で設定する(`POST` / `PATCH /api/tournaments` の `questionSet`。空欄は `null`)。名前が 1 文字違うだけで別の問題セットになり、断るべきエントリーが通ってしまうので、入力は `packages/shared` の `QuestionSetInputSchema` が書式文字の除去・NFKC 正規化・前後の空白除去をし、途中の空白を拒否する。DB も `0044` から同じ形(NFKC 正規化済み・書式文字なし)の値しか受け付けないので、保存済みの名前を画面が送り直しても値は変わらない。画面は既にある名前を候補(`GET /api/tournaments/question-sets`)として出し、大会一覧にも列を表示する(異体字は制約では防げないので、候補から選ぶ)。スプレッドシートからの一括登録では設定せず、既存の値も変えない。設定を変えても既に受け付けたエントリーは検査し直さない |
 | `entries_paused` | boolean | not null, default `false` | エントリー受付の一時中断(`0039`)。`true` の間は期間内でも新しいエントリーを受け付けず、フォームは担当スタッフにしか開けない。統括スタッフと担当の地域スタッフが `PUT /api/staff/tournaments/:tournamentId/entry-pause` で切り替える |
 | `created_at` | timestamptz | not null, default `now()` | |
 
@@ -682,3 +682,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0041_merge_entry_triggers.sql` | `check_region_dual_entry()` と `check_participant_region()` を `check_entry_seat()` に統合して参加者行のロックを `for no key update` に揃え、参加者行を先にロックする `reenter_cancelled_entry()` を追加(#242) |
 | `0042_regulations_closes_with_priority.sql` | `regulations.closes_with_priority`(#243)。旧来の推定で枠が外れていた行のバックフィル。`sync_regulations()` を、キーが無ければ今の値を保つよう再定義 |
 | `0043_tournament_question_set.sql` | `tournaments.question_set`。地域をまたいだ参加を、問題セットが同じ大会どうしだけ断るように `check_entry_seat()` を再定義し、`participant_holds_conflicting_region()` / `claim_participant_region_for_tournament()` を追加 |
+| `0044_question_set_normalized.sql` | 既存の `question_set` を書式文字の除去と NFKC 正規化で揃え、揃っていない値を `tournaments_question_set_format` で拒否する(#271) |

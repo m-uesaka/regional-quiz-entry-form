@@ -52,9 +52,28 @@ describe('TournamentCreateInputSchema questionSet', () => {
     expect(parse('宮　崎').success).toBe(false);
   });
 
-  it('refuses a name over the length the database takes', () => {
+  it('refuses a name over the length the database takes, in code points', () => {
     expect(parse('あ'.repeat(101)).success).toBe(false);
     expect(parse('あ'.repeat(100)).success).toBe(true);
+    // 100 characters, 200 UTF-16 units.
+    expect(parse('𠮷'.repeat(100)).success).toBe(true);
+  });
+
+  it('drops format characters a pasted name carries', () => {
+    expect(parse('宮崎\u200b').data?.questionSet).toBe('宮崎');
+    expect(parse('\ufeff宮\u2060崎').data?.questionSet).toBe('宮崎');
+    expect(parse('\u200b').data?.questionSet).toBe(null);
+  });
+
+  it('stores half-width katakana as the full-width the database keeps', () => {
+    expect(parse('ﾐﾔｻﾞｷ').data?.questionSet).toBe('ミヤザキ');
+  });
+
+  // The edit form sends the stored name back on every save.
+  it('leaves a name it stored as it is', () => {
+    for (const name of ['宮崎A', 'ミヤザキ', '鹿児島']) {
+      expect(parse(name).data?.questionSet).toBe(name);
+    }
   });
 });
 

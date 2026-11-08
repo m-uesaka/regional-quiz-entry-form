@@ -76,7 +76,9 @@ export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
   const [tournamentRes, regionsRes, questionSetsRes] = await Promise.all([
     api.api.tournaments[':id'].$get({param: {id: params.id}}),
     api.api.regions.$get(),
-    api.api.tournaments['question-sets'].$get(),
+    // A request that fails outright, not only one answered with an error,
+    // must not take the page down with it.
+    api.api.tournaments['question-sets'].$get().catch(() => null),
   ]);
   if (isUnauthorized(tournamentRes) || isUnauthorized(regionsRes)) {
     redirectToStaffLogin(cookies, url);
@@ -94,7 +96,7 @@ export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
     customName,
     regions: await regionsRes.json(),
     // Only suggestions: a failed read leaves them out rather than the page.
-    questionSets: questionSetsRes.ok ? await questionSetsRes.json() : [],
+    questionSets: questionSetsRes?.ok ? await questionSetsRes.json() : [],
     // Written out as the YAML the editor works on, so editing starts from
     // what is stored rather than from a blank page or the spreadsheet.
     formDefinitionYaml: formFieldDefsToYaml(tournament.type, formFieldDefs),

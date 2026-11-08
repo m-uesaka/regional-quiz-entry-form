@@ -1,5 +1,5 @@
 <script lang="ts">
-  import {QUESTION_SET_MAX_LENGTH, type Region} from '@regional-quiz/shared';
+  import type {Region} from '@regional-quiz/shared';
   import NativeSelect from '$lib/components/form/NativeSelect.svelte';
   import Button from '$lib/components/ui/atoms/Button.svelte';
   import Input from '$lib/components/ui/atoms/Input.svelte';
@@ -111,7 +111,6 @@
       type="text"
       name="questionSet"
       value={values.questionSet}
-      maxlength={QUESTION_SET_MAX_LENGTH}
       list="tournament-question-set-options"
       autocomplete="off"
       aria-describedby="tournament-question-set-hint"
@@ -128,6 +127,9 @@
       </p>
       <p>
         問題セットが同じ大会(空欄どうしを含む)には、地域をまたいでエントリーできません。問題セットが違えば、地域をまたいでエントリーできます。名前が1文字でも違うと別の問題セットになるので、既にある名前は候補から選んでください。
+      </p>
+      <p>
+        変更しても、既に受け付けたエントリーは確認し直されません。エントリーの受付が始まった後に変更すると、新しい設定ではエントリーできない組み合わせのエントリーも残ります。
       </p>
     </div>
   </div>

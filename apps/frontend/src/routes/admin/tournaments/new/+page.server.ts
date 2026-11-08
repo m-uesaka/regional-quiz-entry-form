@@ -28,7 +28,9 @@ export const load: PageServerLoad = async ({fetch, cookies, url}) => {
   const api = createApiClient(fetch);
   const [res, questionSetsRes] = await Promise.all([
     api.api.regions.$get(),
-    api.api.tournaments['question-sets'].$get(),
+    // A request that fails outright, not only one answered with an error,
+    // must not take the page down with it.
+    api.api.tournaments['question-sets'].$get().catch(() => null),
   ]);
   if (!res.ok) {
     if (isUnauthorized(res)) {
@@ -40,7 +42,7 @@ export const load: PageServerLoad = async ({fetch, cookies, url}) => {
     regions: await res.json(),
     // Only suggestions for 問題セット: the form works without them, so a
     // failed read leaves the list empty rather than the page unusable.
-    questionSets: questionSetsRes.ok ? await questionSetsRes.json() : [],
+    questionSets: questionSetsRes?.ok ? await questionSetsRes.json() : [],
   };
 };
 

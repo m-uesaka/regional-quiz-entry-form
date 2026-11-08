@@ -58,6 +58,13 @@ const TOURNAMENT_WRITE_ERRORS = {
     missingReference('指定された地域が存在しません'),
 } as const satisfies PgErrorTable<400 | 409>;
 
+/**
+ * The order `/question-sets` lists names in: Japanese collation (kana in
+ * 五十音 order, kanji by code rather than by reading). Made once rather than
+ * per comparison, as `localeCompare()` would.
+ */
+const QUESTION_SET_ORDER = new Intl.Collator('ja');
+
 /** What a tournament delete answers when entries still point at it. */
 const TOURNAMENT_HAS_ENTRIES_MESSAGE = 'エントリーがある大会は削除できません';
 
@@ -197,16 +204,15 @@ export const tournamentsRoute = new Hono<StaffEnv>()
         500,
       );
     }
-    const names = new Set<string>();
-    for (const row of data) {
-      if (row.question_set !== null) {
-        names.add(row.question_set);
-      }
-    }
-    return c.json(
-      QuestionSetListSchema.parse(
-        [...names].sort((a, b) => a.localeCompare(b, 'ja')),
+    // `.not('is', null)` above keeps nulls out; the filter is only for the
+    // column's nullable type.
+    const names = new Set(
+      data.flatMap(row =>
+        row.question_set === null ? [] : [row.question_set],
       ),
+    );
+    return c.json(
+      QuestionSetListSchema.parse([...names].sort(QUESTION_SET_ORDER.compare)),
     );
   })
   // For the edit screen, which used to fetch the whole list above just to
