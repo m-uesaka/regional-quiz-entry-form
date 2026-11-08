@@ -26,6 +26,13 @@ export const UNIQUE_VIOLATION_SQLSTATE = '23505';
  */
 export const FOREIGN_KEY_VIOLATION_SQLSTATE = '23503';
 
+/**
+ * Postgres' `check_violation`: a value a `check` constraint refuses. Every
+ * table has several, so a route maps it only when the request schema
+ * already rules out all but the one it names (see `invalidValue()`).
+ */
+export const CHECK_VIOLATION_SQLSTATE = '23514';
+
 /** PostgREST's code for a `.single()` that matched no row. */
 export const NO_ROW_PGRST_CODE = 'PGRST116';
 
@@ -160,6 +167,7 @@ export type PgErrorTable<S extends ClientFailureStatus> = Readonly<
   Record<string, PgErrorAnswer<S>> & {
     [UNIQUE_VIOLATION_SQLSTATE]?: PgErrorAnswer<409>;
     [FOREIGN_KEY_VIOLATION_SQLSTATE]?: PgErrorAnswer<400 | 409>;
+    [CHECK_VIOLATION_SQLSTATE]?: PgErrorAnswer<400>;
     [NO_ROW_PGRST_CODE]?: PgErrorAnswer<404>;
   }
 >;
@@ -180,6 +188,17 @@ export function duplicate(error: string): PgErrorAnswer<409> {
  * @param error The code or staff-facing message to answer with.
  */
 export function missingReference(error: string): PgErrorAnswer<400> {
+  return {status: 400, error};
+}
+
+/**
+ * The answer to a check violation (`23514`): the request holds a value the
+ * table refuses, which is a mistake in the request itself -- 400. The code
+ * doesn't say which constraint refused it, so the answer can only be as
+ * specific as the one constraint a schema-valid request can still run into.
+ * @param error The code or staff-facing message to answer with.
+ */
+export function invalidValue(error: string): PgErrorAnswer<400> {
   return {status: 400, error};
 }
 

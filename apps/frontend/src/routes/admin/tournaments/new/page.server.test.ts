@@ -1,6 +1,10 @@
 import {describe, expect, it} from 'vitest';
 import type {HttpError} from '@sveltejs/kit';
-import type {Region, Tournament} from '@regional-quiz/shared';
+import {
+  ENTRY_PERIOD_ORDER_MESSAGE,
+  type Region,
+  type Tournament,
+} from '@regional-quiz/shared';
 import {fakeCookies} from '../../../../test-support/fake-cookies';
 import {
   fakeFetch,
@@ -212,6 +216,25 @@ describe('admin tournament create action', () => {
 
     await expect(actions.default(event)).rejects.toMatchObject({status: 303});
     expect(calls[0].body).toMatchObject({name: ''});
+  });
+
+  // #285: the period is checked here by the API's own rule, so the
+  // mistake is named rather than refused at large.
+  it('names an entry period that does not open before it closes', async () => {
+    const calls: RecordedRequest[] = [];
+    const event = buildActionEvent(
+      fakeApi({calls}),
+      createFormData({entryClosesAt: '2026-01-01T09:00'}),
+    );
+
+    await expect(actions.default(event)).resolves.toMatchObject({
+      status: 400,
+      data: {
+        error: ENTRY_PERIOD_ORDER_MESSAGE,
+        values: {entryClosesAt: '2026-01-01T09:00'},
+      },
+    });
+    expect(calls).toEqual([]);
   });
 
   it('refuses a form the API would reject, without asking it', async () => {

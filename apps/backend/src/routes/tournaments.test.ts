@@ -21,7 +21,9 @@ import {
   staffSessionAwareFetch,
   TEST_SESSIONS_VALID_FROM_MS,
 } from '../test-support/staff-session';
+import {ENTRY_PERIOD_ORDER_MESSAGE} from '@regional-quiz/shared';
 import {
+  CHECK_VIOLATION_SQLSTATE,
   DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
   DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE,
   ENTRY_PERIOD_OPEN_SQLSTATE,
@@ -277,11 +279,32 @@ describe('tournaments routes (database errors)', () => {
     });
   });
 
+  // 0048: a PATCH sent one end of the entry period, which doesn't come
+  // before the stored other end.
+  it('answers a check violation with 400 and the entry period message', async () => {
+    stubPostgrestError(400, {
+      code: CHECK_VIOLATION_SQLSTATE,
+      message:
+        'new row for relation "tournaments" violates check constraint "tournaments_entry_period_ordered"',
+      details: null,
+      hint: null,
+    });
+
+    for (const method of ['POST', 'PATCH'] as const) {
+      const res = await request(method);
+      const text = await res.text();
+
+      expect(res.status).toBe(400);
+      expect(JSON.parse(text)).toEqual({error: ENTRY_PERIOD_ORDER_MESSAGE});
+      expect(text).not.toContain('tournaments_entry_period_ordered');
+    }
+  });
+
   it('answers any other database error with a generic 500', async () => {
     stubPostgrestError(400, {
-      code: '23514',
-      message:
-        'new row for relation "tournaments" violates check constraint "x"',
+      // `exclusion_violation`, which no tournament write maps.
+      code: '23P01',
+      message: 'conflicting key value violates exclusion constraint "x"',
       details: null,
       hint: null,
     });
@@ -1032,6 +1055,64 @@ describe.skipIf(!dbReachable)(
       expect(listed).not.toContain(null);
       expect(refused.status).toBe(400);
       expect(cleared.questionSet).toBeNull();
+    });
+
+    // 0048, #285: the schema checks the period only when both ends are
+    // sent, so one end alone is checked against the stored other end by
+    // the database.
+    it('refuses an entry period that does not open before it closes', async () => {
+      const regionId = await createTestRegion('period');
+      const cookie = await generalStaffCookie();
+      const send = (method: string, path: string, body: unknown) =>
+        app.request(
+          path,
+          {
+            method,
+            headers: {cookie, 'content-type': 'application/json'},
+            body: JSON.stringify(body),
+          },
+          env,
+        );
+      const tournament = {
+        regionId,
+        type: 'saikyoi',
+        capacity: null,
+        entryOpensAt: '2026-01-01T00:00:00+09:00',
+        entryClosesAt: '2026-01-31T00:00:00+09:00',
+      };
+
+      const backwards = await send('POST', '/api/tournaments', {
+        ...tournament,
+        entryClosesAt: tournament.entryOpensAt,
+      });
+      const created = await send('POST', '/api/tournaments', tournament);
+      const {id} = (await created.json()) as {id: string};
+      const closesFirst = await send('PATCH', `/api/tournaments/${id}`, {
+        entryClosesAt: '2025-12-31T00:00:00+09:00',
+      });
+      const opensLast = await send('PATCH', `/api/tournaments/${id}`, {
+        entryOpensAt: tournament.entryClosesAt,
+      });
+      const moved = await send('PATCH', `/api/tournaments/${id}`, {
+        entryClosesAt: '2026-01-02T00:00:00+09:00',
+      });
+
+      expect(backwards.status).toBe(400);
+      expect(created.status).toBe(201);
+      for (const refused of [closesFirst, opensLast]) {
+        expect(refused.status).toBe(400);
+        expect((await refused.json()) as unknown).toEqual({
+          error: ENTRY_PERIOD_ORDER_MESSAGE,
+        });
+      }
+      expect(moved.status).toBe(200);
+      const [stored] = await sql`
+        select entry_opens_at, entry_closes_at from tournaments where id = ${id}
+      `;
+      expect(stored.entry_opens_at).toEqual(new Date(tournament.entryOpensAt));
+      expect(stored.entry_closes_at).toEqual(
+        new Date('2026-01-02T00:00:00+09:00'),
+      );
     });
 
     it('lists the question sets for general staff only', async () => {

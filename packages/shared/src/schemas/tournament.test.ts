@@ -1,6 +1,8 @@
 import {describe, expect, it} from 'bun:test';
 import {
   defaultTournamentName,
+  ENTRY_PERIOD_ORDER_MESSAGE,
+  isEntryPeriodOrdered,
   TournamentCreateInputSchema,
   TournamentOrderInputSchema,
   TournamentResetInputSchema,
@@ -29,6 +31,57 @@ describe('TournamentCreateInputSchema', () => {
         .name,
     ).toBe('東京大会');
   });
+});
+
+describe('isEntryPeriodOrdered', () => {
+  it('holds only when the period opens strictly before it closes', () => {
+    expect(
+      isEntryPeriodOrdered(
+        '2026-01-01T00:00:00+09:00',
+        '2026-01-01T00:00:01+09:00',
+      ),
+    ).toBe(true);
+    expect(
+      isEntryPeriodOrdered(
+        '2026-01-01T00:00:00+09:00',
+        '2026-01-01T00:00:00+09:00',
+      ),
+    ).toBe(false);
+    expect(
+      isEntryPeriodOrdered(
+        '2026-01-31T00:00:00+09:00',
+        '2026-01-01T00:00:00+09:00',
+      ),
+    ).toBe(false);
+  });
+
+  it('compares instants, not the strings', () => {
+    // The same instant written in two offsets.
+    expect(
+      isEntryPeriodOrdered('2026-01-01T09:00:00+09:00', '2026-01-01T00:00:00Z'),
+    ).toBe(false);
+  });
+});
+
+describe('TournamentCreateInputSchema entry period', () => {
+  for (const entryClosesAt of [
+    CREATE_INPUT.entryOpensAt,
+    '2025-12-31T00:00:00+09:00',
+  ]) {
+    it(`refuses a period closing at ${entryClosesAt}, on entryClosesAt`, () => {
+      const parsed = TournamentCreateInputSchema.safeParse({
+        ...CREATE_INPUT,
+        entryClosesAt,
+      });
+      expect(parsed.success).toBe(false);
+      expect(parsed.error?.issues).toEqual([
+        expect.objectContaining({
+          path: ['entryClosesAt'],
+          message: ENTRY_PERIOD_ORDER_MESSAGE,
+        }),
+      ]);
+    });
+  }
 });
 
 describe('TournamentCreateInputSchema questionSet', () => {
@@ -89,6 +142,35 @@ describe('TournamentUpdateInputSchema', () => {
     expect(
       TournamentUpdateInputSchema.parse({questionSet: null}).questionSet,
     ).toBe(null);
+  });
+});
+
+describe('TournamentUpdateInputSchema entry period', () => {
+  it('refuses both ends sent out of order', () => {
+    const parsed = TournamentUpdateInputSchema.safeParse({
+      entryOpensAt: CREATE_INPUT.entryClosesAt,
+      entryClosesAt: CREATE_INPUT.entryOpensAt,
+    });
+    expect(parsed.error?.issues).toEqual([
+      expect.objectContaining({
+        path: ['entryClosesAt'],
+        message: ENTRY_PERIOD_ORDER_MESSAGE,
+      }),
+    ]);
+  });
+
+  // Checked against the stored other end by the database instead (0048).
+  it('lets one end through on its own', () => {
+    expect(
+      TournamentUpdateInputSchema.safeParse({
+        entryClosesAt: '2000-01-01T00:00:00Z',
+      }).success,
+    ).toBe(true);
+    expect(
+      TournamentUpdateInputSchema.safeParse({
+        entryOpensAt: '2999-01-01T00:00:00Z',
+      }).success,
+    ).toBe(true);
   });
 });
 

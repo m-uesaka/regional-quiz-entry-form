@@ -1,6 +1,7 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
 import {
+  ENTRY_PERIOD_ORDER_MESSAGE,
   QuestionSetListSchema,
   TournamentCreateInputSchema,
   TournamentDetailSchema,
@@ -23,11 +24,13 @@ import {createDbClient, type TablesInsert, type TablesUpdate} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {FORM_FIELD_DEF_COLUMNS, toFormFieldDef} from '../lib/form-field-defs';
 import {
+  CHECK_VIOLATION_SQLSTATE,
   DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
   DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE,
   duplicate,
   ENTRY_PERIOD_OPEN_SQLSTATE,
   FOREIGN_KEY_VIOLATION_SQLSTATE,
+  invalidValue,
   mapPgError,
   missingReference,
   NO_ROW_PGRST_CODE,
@@ -58,6 +61,14 @@ const TOURNAMENT_WRITE_ERRORS = {
   // `region_id` names no region.
   [FOREIGN_KEY_VIOLATION_SQLSTATE]:
     missingReference('指定された地域が存在しません'),
+  // `tournaments_entry_period_ordered` (0048): a PATCH sent one end of the
+  // entry period, and it doesn't come before (or after) the stored other
+  // end. The request schemas check the period whenever both ends are sent,
+  // and rule out what the table's other checks refuse -- a capacity below 1
+  // (`tournaments_capacity_positive`, 0048) and a question set not in its
+  // stored form (`tournaments_question_set_format`, 0044) -- so this is the
+  // one check a valid request can still run into.
+  [CHECK_VIOLATION_SQLSTATE]: invalidValue(ENTRY_PERIOD_ORDER_MESSAGE),
   // The other tournament of a region allowing dual entry has the same
   // question set (0045).
   [DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE]: {

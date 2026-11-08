@@ -1,4 +1,6 @@
 import {
+  ENTRY_PERIOD_ORDER_MESSAGE,
+  isEntryPeriodOrdered,
   QuestionSetInputSchema,
   TournamentCreateInputSchema,
   type Tournament,
@@ -94,12 +96,14 @@ export function readTournamentFormValues(
  *
  * @param values What the controls carried.
  * @return The request body, or null when the form is not one the API would
- *     accept. The schema's own messages name the field in English, which is
- *     no use on this screen, so the caller reports a written-out refusal
- *     instead — every control here is either a select the page fills in,
- *     marked `required`, or free to leave blank (大会名), so a rejection
+ *     accept. Most of the schema's messages name the field in English, which
+ *     is no use on this screen, so the caller reports a written-out refusal
+ *     instead — most controls here are a select the page fills in, marked
+ *     `required`, or free to leave blank (大会名), so a rejection of those
  *     means the browser's own checks were bypassed rather than that a staff
- *     member mistyped something.
+ *     member mistyped something. The two that can be refused for what staff
+ *     typed have their own message: `questionSetError()` and
+ *     `entryPeriodError()`.
  */
 export function parseTournamentFormValues(
   values: TournamentFormValues,
@@ -127,4 +131,29 @@ export function parseTournamentFormValues(
 export function questionSetError(values: TournamentFormValues): string | null {
   const parsed = QuestionSetInputSchema.safeParse(values.questionSet);
   return parsed.success ? null : (parsed.error.issues[0]?.message ?? null);
+}
+
+/**
+ * Why the form's entry period is refused, in words to show above the form,
+ * or null when it is fine (#285). Two valid date-times can still make a
+ * period that closes no later than it opens -- an easy slip on two separate
+ * controls, and one the browser doesn't check -- which the API refuses with
+ * the same message by the same rule (`isEntryPeriodOrdered()`). A control
+ * left empty or unreadable is left to the generic refusal.
+ * @param values What the controls carried.
+ */
+export function entryPeriodError(values: TournamentFormValues): string | null {
+  const opensAt = fromJstDatetimeLocal(values.entryOpensAt);
+  const closesAt = fromJstDatetimeLocal(values.entryClosesAt);
+  if (
+    opensAt === null ||
+    closesAt === null ||
+    Number.isNaN(Date.parse(opensAt)) ||
+    Number.isNaN(Date.parse(closesAt))
+  ) {
+    return null;
+  }
+  return isEntryPeriodOrdered(opensAt, closesAt)
+    ? null
+    : ENTRY_PERIOD_ORDER_MESSAGE;
 }

@@ -8,6 +8,7 @@ import {
 } from '@regional-quiz/shared';
 import {createApiClient, isUnauthorized, readErrorMessage} from '$lib/api';
 import {
+  entryPeriodError,
   parseTournamentFormValues,
   questionSetError,
   readTournamentFormValues,
@@ -110,7 +111,9 @@ export const actions = {
       return updateFailure(
         400,
         values,
-        questionSetError(values) ?? INVALID_INPUT_MESSAGE,
+        questionSetError(values) ??
+          entryPeriodError(values) ??
+          INVALID_INPUT_MESSAGE,
       );
     }
 
@@ -123,7 +126,8 @@ export const actions = {
         redirectToStaffLogin(cookies, url);
       }
       // A constraint the database refused -- 400 for a region that doesn't
-      // exist, 409 for a second tournament of the same type in it (#199) --
+      // exist or an entry period that doesn't open before it closes (#285),
+      // 409 for a second tournament of the same type in it (#199) --
       // which the API words in Japanese itself, so it is shown rather than
       // replaced.
       if (res.status === 400 || res.status === 409) {
