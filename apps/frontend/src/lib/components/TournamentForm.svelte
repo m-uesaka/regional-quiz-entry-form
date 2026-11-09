@@ -7,6 +7,7 @@
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import Link from '$lib/components/ui/atoms/Link.svelte';
   import FlashMessage from '$lib/components/ui/items/FlashMessage.svelte';
+  import {InPlaceForm} from '$lib/in-place-form.svelte';
   import {datetimeLocalStep} from '$lib/jst-datetime';
   import type {TournamentFormValues} from '$lib/types/tournament-form';
 
@@ -42,6 +43,12 @@
     action,
     regionTypeLocked = false,
   }: Props = $props();
+
+  // The controls are not reset after a successful save: they take `value`
+  // rather than `bind:value`, so a reset would put back what the page was
+  // first rendered with, and a field the save left unchanged would never be
+  // set again from the re-read tournament.
+  const submission = new InPlaceForm({resetOnSuccess: false});
 </script>
 
 <!-- Posted to a form action rather than sent from the browser: `/api/*` is
@@ -51,21 +58,18 @@
      Sent with `use:enhance` so that saving re-runs `load` without a page
      load, which on the edit page would throw away the form definition's
      unsaved YAML draft below (#303); without JavaScript it still posts as a
-     plain form. The controls are not reset after a successful save: they
-     take `value` rather than `bind:value`, so a reset would put back what
-     the page was first rendered with, and a field the save left unchanged
-     would never be set again from the re-read tournament. What was typed is
-     what was stored, and a field the API rewrote comes back through
-     `values`. -->
+     plain form. See `InPlaceForm` for what it does with a failed action and
+     a second click. -->
 <form
   class="flex flex-col gap-4"
   method="POST"
   {action}
-  use:enhance={() =>
-    async ({update}) => {
-      await update({reset: false});
-    }}
+  use:enhance={submission.submit}
 >
+  {#if submission.error}
+    <FlashMessage kind="error">{submission.error}</FlashMessage>
+  {/if}
+
   {#if regionTypeLocked}
     <!-- A disabled control isn't submitted, and the action sends the region
          and type on every save: these carry the stored ones in its place,
@@ -218,6 +222,6 @@
   </div>
 
   <div class="flex flex-wrap gap-2">
-    <Button type="submit">{submitLabel}</Button>
+    <Button type="submit" disabled={submission.pending}>{submitLabel}</Button>
   </div>
 </form>

@@ -8,6 +8,7 @@ import {
   type Tournament,
 } from '@regional-quiz/shared';
 import type {SubmitFunction} from '@sveltejs/kit';
+import {RESET_CONFIRMATION_WORD} from '$lib/tournament-form';
 import Page from './+page.svelte';
 import type {PageProps} from './$types';
 
@@ -27,6 +28,47 @@ vi.mock('$app/forms', () => ({
 afterEach(() => {
   enhancedForms.clear();
 });
+
+type SubmitInput = Parameters<SubmitFunction>[0];
+type SubmitCallback = Exclude<Awaited<ReturnType<SubmitFunction>>, void>;
+type SubmitResult = Parameters<SubmitCallback>[0]['result'];
+
+/**
+ * Starts the enhanced submission of the form holding the named button, as
+ * `use:enhance` would on a submit.
+ * @param buttonName The form's submit button.
+ * @return The form, whether the submission was cancelled, and the callback
+ *     to hand the action's answer to.
+ */
+async function startSubmit(buttonName: string) {
+  const form = screen
+    .getByRole('button', {name: buttonName})
+    .closest('form') as HTMLFormElement;
+  const cancel = vi.fn();
+  const callback = await enhancedForms.get(form)?.({
+    cancel,
+    formElement: form,
+  } as unknown as SubmitInput);
+  return {form, cancel, callback: callback as SubmitCallback | undefined};
+}
+
+/**
+ * Hands the action's answer to a started submission.
+ * @param callback What `startSubmit` returned.
+ * @param result The answer.
+ * @return The `update` stand-in it was given.
+ */
+async function answer(
+  callback: SubmitCallback | undefined,
+  result: SubmitResult,
+) {
+  const update = vi.fn();
+  await callback?.({
+    result,
+    update,
+  } as unknown as Parameters<SubmitCallback>[0]);
+  return update;
+}
 
 const TOURNAMENT: Tournament = {
   id: '00000000-0000-0000-0000-000000000001',
@@ -388,20 +430,124 @@ describe('admin tournament edit +page.svelte', () => {
   // put back what the page was first rendered with.
   it('keeps the tournament form as typed after a save', async () => {
     renderPage();
-    const form = screen
-      .getByRole('button', {name: '更新'})
-      .closest('form') as HTMLFormElement;
-    const submit = enhancedForms.get(form);
-    const update = vi.fn();
+    const {callback} = await startSubmit('更新');
 
-    const callback = await submit?.(
-      {} as unknown as Parameters<SubmitFunction>[0],
-    );
-    await callback?.({update} as unknown as Parameters<
-      Exclude<typeof callback, void>
-    >[0]);
+    const update = await answer(callback, {type: 'success', status: 200});
 
     expect(update).toHaveBeenCalledExactlyOnceWith({reset: false});
+  });
+
+  // `applyAction` would swap the page for `+error.svelte`, and the YAML
+  // draft with it.
+  it('reports an update action that failed outright on the page', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.type(screen.getByLabelText('YAML'), '# 手で直した');
+    const {callback} = await startSubmit('更新');
+
+    const update = await answer(callback, {
+      type: 'error',
+      error: new Error('fetch failed'),
+    });
+
+    expect(update).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(
+        '送信に失敗しました。時間をおいてもう一度お試しください',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('YAML')).toHaveValue(
+      `${FORM_DEFINITION_YAML}# 手で直した`,
+    );
+  });
+
+  it('sends the update once while the first is still out', async () => {
+    renderPage();
+    const first = await startSubmit('更新');
+
+    expect(screen.getByRole('button', {name: '更新'})).toBeDisabled();
+    const second = await startSubmit('更新');
+    expect(second.cancel).toHaveBeenCalledOnce();
+    expect(first.cancel).not.toHaveBeenCalled();
+
+    await answer(first.callback, {type: 'success', status: 200});
+    expect(screen.getByRole('button', {name: '更新'})).toBeEnabled();
+  });
+
+  it('clears the reset safeguards after a refused reset', async () => {
+    const user = userEvent.setup();
+    renderPage({
+      ...TOURNAMENT,
+      entryOpensAt: '2025-01-01T00:00:00.000Z',
+      entryClosesAt: '2025-02-01T00:00:00.000Z',
+    });
+    await user.click(screen.getByLabelText('参加者アカウントも削除する'));
+    await user.type(
+      screen.getByLabelText(/確認のため/),
+      RESET_CONFIRMATION_WORD,
+    );
+    const {callback} = await startSubmit('参加者データをリセット');
+
+    await answer(callback, {
+      type: 'failure',
+      status: 502,
+      data: {reset: null, resetError: '参加者データのリセットに失敗しました'},
+    });
+
+    expect(
+      screen.getByLabelText('参加者アカウントも削除する'),
+    ).not.toBeChecked();
+    expect(screen.getByLabelText(/確認のため/)).toHaveValue('');
+  });
+
+  it('clears the delete tick after a refused delete', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByLabelText('この大会を削除する'));
+    const {callback} = await startSubmit('大会を削除');
+
+    await answer(callback, {
+      type: 'failure',
+      status: 409,
+      data: {deleteError: 'エントリーがある大会は削除できません'},
+    });
+
+    expect(screen.getByLabelText('この大会を削除する')).not.toBeChecked();
+  });
+
+  it('keeps a refused save on the tournament form across a reset', async () => {
+    const values = {
+      regionId: TOURNAMENT.regionId,
+      type: 'saikyoi' as const,
+      name: '直している大会名',
+      capacity: '64',
+      questionSet: '宮崎',
+      entryOpensAt: '2026-01-01T09:00',
+      entryClosesAt: '2026-02-01T09:00',
+    };
+    const {rerender} = renderPage(TOURNAMENT, {
+      saved: false,
+      error: '問題セットが重複しています',
+      values,
+      promotion: null,
+    });
+
+    await rerender({
+      params: {id: TOURNAMENT.id},
+      data: {
+        staff: STAFF,
+        tournament: TOURNAMENT,
+        customName: TOURNAMENT.name,
+        regions: REGIONS,
+        questionSets: QUESTION_SETS,
+        hasEntries: false,
+        formDefinitionYaml: FORM_DEFINITION_YAML,
+      },
+      form: {reset: null, resetError: '参加者データのリセットに失敗しました'},
+    });
+
+    expect(screen.getByLabelText(/大会名/)).toHaveValue('直している大会名');
+    expect(screen.getByText('問題セットが重複しています')).toBeInTheDocument();
   });
 
   it('keeps an unsaved YAML draft across a saved update', async () => {

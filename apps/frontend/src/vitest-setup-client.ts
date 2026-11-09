@@ -16,4 +16,7 @@ vi.mock('$env/dynamic/public', () => ({
 
 afterEach(() => {
   cleanup();
+  // What a component kept for the tab (an unsaved draft, say) must not turn
+  // up in the next test's render.
+  sessionStorage.clear();
 });

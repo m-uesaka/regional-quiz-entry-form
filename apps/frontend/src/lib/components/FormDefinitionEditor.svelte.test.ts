@@ -277,4 +277,81 @@ describe('FormDefinitionEditor', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('一致しません');
   });
+  // What no navigation guard sees -- the error page a failed `load` re-run
+  // shows in this page's place, a reload -- leaves the draft in the tab's
+  // session storage for the next render to pick up (#338).
+  describe('the draft kept for the tab', () => {
+    const DRAFT_KEY = `form-definition-draft:${TOURNAMENT_ID}:saikyoi`;
+
+    it('brings an unsaved draft back on the next render', async () => {
+      const user = userEvent.setup();
+      const first = render(FormDefinitionEditor, {props: PROPS});
+      await user.type(screen.getByLabelText('YAML'), '# 手で直した');
+      first.unmount();
+
+      render(FormDefinitionEditor, {props: PROPS});
+
+      expect(await screen.findByRole('status')).toHaveTextContent(
+        '下書きを復元しました',
+      );
+      expect(screen.getByLabelText('YAML')).toHaveValue(
+        `${STORED_YAML}# 手で直した`,
+      );
+    });
+
+    it('puts the stored text back over a restored draft on request', async () => {
+      const user = userEvent.setup();
+      sessionStorage.setItem(
+        DRAFT_KEY,
+        JSON.stringify({base: STORED_YAML, yaml: 'tournamentSlug: saikyoi\n'}),
+      );
+      render(FormDefinitionEditor, {props: PROPS});
+
+      await user.click(
+        await screen.findByRole('button', {name: '保存済みの内容に戻す'}),
+      );
+
+      expect(screen.getByLabelText('YAML')).toHaveValue(STORED_YAML);
+      expect(sessionStorage.getItem(DRAFT_KEY)).toBeNull();
+    });
+
+    it('drops a draft typed over a definition saved since', async () => {
+      sessionStorage.setItem(
+        DRAFT_KEY,
+        JSON.stringify({base: 'tournamentSlug: saikyoi\n', yaml: '# 古い'}),
+      );
+      render(FormDefinitionEditor, {props: PROPS});
+      await Promise.resolve();
+
+      expect(screen.getByLabelText('YAML')).toHaveValue(STORED_YAML);
+      expect(
+        screen.queryByText(/下書きを復元しました/),
+      ).not.toBeInTheDocument();
+      expect(sessionStorage.getItem(DRAFT_KEY)).toBeNull();
+    });
+
+    it('forgets the draft once it is saved', async () => {
+      const user = userEvent.setup();
+      fetchMock.mockResolvedValueOnce(jsonResponse({ok: true}));
+      render(FormDefinitionEditor, {props: PROPS});
+      await user.type(screen.getByLabelText('YAML'), '# 手で直した');
+      expect(sessionStorage.getItem(DRAFT_KEY)).not.toBeNull();
+
+      await user.click(screen.getByRole('button', {name: '保存'}));
+      await screen.findByText('保存しました');
+
+      expect(sessionStorage.getItem(DRAFT_KEY)).toBeNull();
+    });
+
+    it('forgets the draft when the page is left on purpose', async () => {
+      const user = userEvent.setup();
+      vi.spyOn(window, 'confirm').mockReturnValueOnce(true);
+      render(FormDefinitionEditor, {props: PROPS});
+      await user.type(screen.getByLabelText('YAML'), '# 手で直した');
+
+      expect(navigate('link')).toBe(false);
+
+      expect(sessionStorage.getItem(DRAFT_KEY)).toBeNull();
+    });
+  });
 });
