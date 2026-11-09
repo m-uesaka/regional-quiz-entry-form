@@ -79,6 +79,10 @@ export function rateLimit<I extends Input = Input>(
  */
 export type EmailKeyEndpoint =
   | 'entry'
+  // Not an endpoint: the deferred mails of entries submitted over the
+  // 'entry' limit (#346, `lib/deferred-entry-mail.ts`), paced on a bucket of
+  // their own so the submissions keeping 'entry' full can't hold them back.
+  | 'entry-deferred-mail'
   | 'participant-login'
   | 'participant-password-reset'
   | 'staff-login'
@@ -99,13 +103,14 @@ export type EmailKeyEndpoint =
  * three times the limit (9 a minute in production, up from 6) -- which is
  * still a bounded amount.
  *
- * What naming the endpoint does not stop, by design, is the same thing on
- * one endpoint: anybody who knows an address can keep that endpoint's
- * bucket for it full -- for the entry form, by submitting entries with the
- * victim's address. Each attempt costs them a Turnstile solve, and the
- * refusal expires within the limiter's period of the attacker stopping. A
- * per-address cap that its owner cannot be kept under is not a cap on the
- * address at all, and mail bombing is what the cap is there to stop.
+ * What naming the endpoint does not stop is the same thing on one endpoint:
+ * anybody who knows an address can keep that endpoint's bucket for it full.
+ * The entry form no longer refuses over its bucket: the entry is made and
+ * only its mail waits (#346, `lib/deferred-entry-mail.ts`). The reset
+ * requests still refuse, by design: each attempt costs a Turnstile solve,
+ * the refusal expires within the limiter's period of the attacker stopping,
+ * and a per-address cap that its owner cannot be kept under is not a cap on
+ * the address at all.
  *
  * The address is case-folded, because `Victim@example.com` and
  * `victim@example.com` are two strings for one mailbox. Counted as

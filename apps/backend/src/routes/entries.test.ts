@@ -7,6 +7,7 @@ import {verificationMailSubject} from '../lib/entry-verification';
 import {hashPassword, verifyPassword} from '../lib/password';
 import {legacyHashPassword} from '../test-support/password';
 import {
+  RecordingQueue,
   testBindings,
   refusingRateLimiter,
   TURNSTILE_TEST_TOKEN,
@@ -14,6 +15,8 @@ import {
 } from '../test-support/bindings';
 import {TURNSTILE_TOKEN_HEADER} from '../middleware/turnstile';
 import {emailKey} from '../middleware/rate-limit';
+import type {BulkMailMessage} from '../lib/bulk-mail-queue';
+import {ENTRY_MAIL_DEFER_SECONDS} from '../lib/deferred-entry-mail';
 import {
   NO_ROW_PGRST_CODE,
   PARTICIPANT_REGION_SQLSTATE,
@@ -135,7 +138,10 @@ describe('POST /tournaments/:tournamentId/entries (request validation)', () => {
     expect(body).toEqual({error: 'too many requests'});
   });
 
-  it('counts the per-address limit under a key naming this endpoint', async () => {
+  // #346: an address's budget is spent only by submissions that could be
+  // entered, so a flood aimed at a closed or unknown tournament costs its
+  // owner nothing.
+  it('spends no per-address budget on a tournament that does not exist', async () => {
     const keys: string[] = [];
     const recording: RateLimit = {
       limit: ({key}) => {
@@ -143,72 +149,16 @@ describe('POST /tournaments/:tournamentId/entries (request validation)', () => {
         return Promise.resolve({success: true});
       },
     };
-    // Past the limiter the route looks the tournament up; finding none, it
-    // answers 400 rather than reaching the stub that throws.
+    // The tournament lookup finds nothing, so the route answers 400.
     globalThis.fetch = turnstileAwareFetch((() =>
       Promise.resolve(Response.json([]))) as unknown as typeof fetch);
 
-    await postEntry(
-      TOURNAMENT_PATH,
-      {...validBody, email: 'Shared@Example.com'},
-      {env: {...env, MAIL_TRIGGER_EMAIL_RATE_LIMITER: recording}},
-    );
+    const res = await postEntry(TOURNAMENT_PATH, validBody, {
+      env: {...env, MAIL_TRIGGER_EMAIL_RATE_LIMITER: recording},
+    });
 
-    expect(keys).toEqual(['entry:email:shared@example.com']);
-  });
-
-  it('is not refused for an address whose reset requests used up their budget', async () => {
-    // The attack in #295: three reset requests a minute with the victim's
-    // address, so that the victim's entry is refused when entries open. The
-    // two endpoints share the limiter, so this one counts like the real
-    // binding -- a budget per key -- rather than recording or refusing.
-    const budget = 3;
-    const spent = new Map<string, number>();
-    const counting: RateLimit = {
-      limit: ({key}) => {
-        const used = (spent.get(key ?? '') ?? 0) + 1;
-        spent.set(key ?? '', used);
-        return Promise.resolve({success: used <= budget});
-      },
-    };
-    const bindings = {...env, MAIL_TRIGGER_EMAIL_RATE_LIMITER: counting};
-    // No participant and no tournament: the reset request then has nothing
-    // to mail, and the entry is answered with the unknown tournament's 400.
-    globalThis.fetch = turnstileAwareFetch((() =>
-      Promise.resolve(Response.json([]))) as unknown as typeof fetch);
-    const background: Array<Promise<unknown>> = [];
-    const executionCtx = {
-      waitUntil(promise: Promise<unknown>): void {
-        background.push(promise);
-      },
-      passThroughOnException(): void {},
-    } as unknown as ExecutionContext;
-
-    const resetStatuses: number[] = [];
-    for (let i = 0; i <= budget; i++) {
-      const res = await app.request(
-        '/api/auth/participant/password-reset/request',
-        {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            [TURNSTILE_TOKEN_HEADER]: TURNSTILE_TEST_TOKEN,
-          },
-          body: JSON.stringify({email: validBody.email}),
-        },
-        bindings,
-        executionCtx,
-      );
-      resetStatuses.push(res.status);
-    }
-    await Promise.all(background);
-    const entry = await postEntry(TOURNAMENT_PATH, validBody, {env: bindings});
-
-    // The reset endpoint's own budget is used up...
-    expect(resetStatuses).toEqual([200, 200, 200, 429]);
-    // ...and the entry form's is untouched.
-    expect(entry.status).not.toBe(429);
-    expect(spent.get(emailKey('entry', validBody.email))).toBe(1);
+    expect(res.status).toBe(400);
+    expect(keys).toEqual([]);
   });
 
   it('returns 400 when the Turnstile token is missing', async () => {
@@ -521,6 +471,7 @@ async function postWithContext(
   path: string,
   body: unknown,
   cookie?: string,
+  bindings: Bindings = env,
 ): Promise<Response> {
   const headers: Record<string, string> = {
     'content-type': 'application/json',
@@ -532,7 +483,7 @@ async function postWithContext(
   return app.request(
     path,
     {method: 'POST', headers, body: JSON.stringify(body)},
-    env,
+    bindings,
     EXECUTION_CTX,
   );
 }
@@ -550,6 +501,168 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
   afterEach(async () => {
     await settleBackgroundWork();
     globalThis.fetch = originalFetch;
+  });
+
+  it('counts the per-address limit under a key naming this endpoint', async () => {
+    const keys: string[] = [];
+    const recording: RateLimit = {
+      limit: ({key}) => {
+        keys.push(key ?? '');
+        return Promise.resolve({success: true});
+      },
+    };
+    mockSupabase({participant: null});
+
+    await postWithContext(
+      TOURNAMENT_PATH,
+      {...validBody, email: 'Shared@Example.com'},
+      undefined,
+      {...env, MAIL_TRIGGER_EMAIL_RATE_LIMITER: recording},
+    );
+
+    expect(keys).toEqual(['entry:email:shared@example.com']);
+  });
+
+  it('mails at once for an address whose reset requests used up their budget', async () => {
+    // The attack in #295: reset requests with the victim's address, so that
+    // the victim's entry is held back when entries open. The two endpoints
+    // share the limiter, so this one counts like the real binding -- a
+    // budget per key.
+    const budget = 3;
+    const spent = new Map<string, number>();
+    const counting: RateLimit = {
+      limit: ({key}) => {
+        const used = (spent.get(key ?? '') ?? 0) + 1;
+        spent.set(key ?? '', used);
+        return Promise.resolve({success: used <= budget});
+      },
+    };
+    const queue = new RecordingQueue<BulkMailMessage>();
+    const bindings = {
+      ...env,
+      MAIL_TRIGGER_EMAIL_RATE_LIMITER: counting,
+      BULK_MAIL_QUEUE: queue,
+    };
+    const recorded = mockSupabase({participant: null});
+    // The reset endpoint's own budget, used up.
+    spent.set(
+      emailKey('participant-password-reset', validBody.email),
+      budget + 1,
+    );
+
+    const res = await postWithContext(
+      TOURNAMENT_PATH,
+      validBody,
+      undefined,
+      bindings,
+    );
+    await settleBackgroundWork();
+
+    expect(res.status).toBe(202);
+    expect(spent.get(emailKey('entry', validBody.email))).toBe(1);
+    expect(recorded.mails.map(mail => mail.subject)).toEqual([
+      verificationMailSubject(TOURNAMENT_NAME),
+    ]);
+    expect(queue.sent).toEqual([]);
+  });
+
+  // #346: over the per-address limit the submission is entered as usual,
+  // and only its mail waits on the queue.
+  describe('over the per-address limit', () => {
+    function overLimit(): {
+      bindings: Bindings;
+      queue: RecordingQueue<BulkMailMessage>;
+    } {
+      const queue = new RecordingQueue<BulkMailMessage>();
+      return {
+        queue,
+        bindings: {
+          ...env,
+          MAIL_TRIGGER_EMAIL_RATE_LIMITER: refusingRateLimiter(),
+          BULK_MAIL_QUEUE: queue,
+        },
+      };
+    }
+
+    it('answers 202, writes the entry and defers its verification mail', async () => {
+      const recorded = mockSupabase({participant: null});
+      const {bindings, queue} = overLimit();
+
+      const res = await observable(
+        await postWithContext(TOURNAMENT_PATH, validBody, undefined, bindings),
+      );
+      await settleBackgroundWork();
+
+      // The same answer as any other submission: no 429 to keep the owner
+      // out, and nothing that says the address was being flooded.
+      expect(res).toEqual({status: 202, body: JSON.stringify({ok: true})});
+      expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
+      // The expired placeholder that lets the entry lapse if the mail is lost.
+      expect(recorded.calls).toContainEqual({
+        table: 'email_verification_tokens',
+        method: 'POST',
+      });
+      expect(recorded.mails).toEqual([]);
+      expect(queue.sent).toEqual([
+        {
+          kind: 'deferred-verification',
+          entryId: ENTRY_ID,
+          to: validBody.email,
+        },
+      ]);
+      expect(queue.sendOptions).toEqual([
+        {delaySeconds: ENTRY_MAIL_DEFER_SECONDS},
+      ]);
+    });
+
+    it('defers the notice of a submission that was not entered', async () => {
+      const recorded = mockSupabase({
+        participant: await registeredParticipant({password: 'the-real-one'}),
+      });
+      const {bindings, queue} = overLimit();
+
+      await postWithContext(TOURNAMENT_PATH, validBody, undefined, bindings);
+      await settleBackgroundWork();
+
+      expect(recorded.mails).toEqual([]);
+      expect(queue.sent).toEqual([
+        {
+          kind: 'deferred-notice',
+          to: validBody.email,
+          tournamentName: TOURNAMENT_NAME,
+          reason: 'password-mismatch',
+        },
+      ]);
+    });
+
+    it('rolls the entry back when the mail cannot be deferred', async () => {
+      const recorded = mockSupabase({participant: null});
+      const {bindings, queue} = overLimit();
+      // The first call is the verification mail; the notice after the
+      // rollback goes through.
+      queue.failingCallIndex = 0;
+      const originalConsoleError = console.error;
+      console.error = () => {};
+      try {
+        await postWithContext(TOURNAMENT_PATH, validBody, undefined, bindings);
+        await settleBackgroundWork();
+      } finally {
+        console.error = originalConsoleError;
+      }
+
+      expect(recorded.calls).toContainEqual({
+        table: 'entries',
+        method: 'DELETE',
+      });
+      expect(queue.sent).toEqual([
+        {
+          kind: 'deferred-notice',
+          to: validBody.email,
+          tournamentName: TOURNAMENT_NAME,
+          reason: 'processing-failed',
+        },
+      ]);
+    });
   });
 
   it('answers identically for a known and an unknown email', async () => {

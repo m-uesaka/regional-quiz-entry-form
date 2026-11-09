@@ -58,9 +58,11 @@ export interface Bindings {
   //     under a key of its own (`emailKey()`), so a flood of reset requests
   //     for an address cannot refuse that address's entry (#295) -- at the
   //     price of one inbox getting the limit once per endpoint. Flooding a
-  //     single endpoint with the victim's address still keeps that endpoint
-  //     refused for them; that is left as it is, by design (see
-  //     `emailKey()`).
+  //     reset request with the victim's address still keeps it refused for
+  //     them; that is left as it is, by design (see `emailKey()`). The entry
+  //     form refuses nothing over the limit: it defers the mail instead
+  //     (#346, `lib/deferred-entry-mail.ts`), and the deferred mails are
+  //     paced under a key of their own on this same limiter.
   //   - `MAIL_TRIGGER_IP_RATE_LIMITER` caps the same endpoints, and the
   //     logged-in entry, per source address. All of them share one bucket
   //     per IP, so participants and staff behind one network (a venue's,

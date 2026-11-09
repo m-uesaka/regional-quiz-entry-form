@@ -6,16 +6,25 @@ import {
   prepareVerificationResend,
 } from './entry-verification';
 import {
+  handleDeferredEntryMail,
+  isDeferredEntryMail,
+  type DeferredEntryMailMessage,
+} from './deferred-entry-mail';
+import {
   fetchMailJobContent,
   recordMailJobProgress,
   type MailJobContent,
 } from './mail-jobs';
 
 /**
- * One message of the bulk mail queue: a recipient of a staff bulk send, or
- * an entry a staff reminder re-sends the confirmation mail to.
+ * One message of the bulk mail queue: a recipient of a staff bulk send, an
+ * entry a staff reminder re-sends the confirmation mail to, or the mail of
+ * an entry submitted while its address was over its limit (#346).
  */
-export type BulkMailMessage = StaffMailMessage | VerificationResendMessage;
+export type BulkMailMessage = JobMailMessage | DeferredEntryMailMessage;
+
+/** A message of a staff send or reminder, counted on its `mail_jobs` row. */
+export type JobMailMessage = StaffMailMessage | VerificationResendMessage;
 
 /**
  * One recipient of one staff bulk send.
@@ -46,7 +55,7 @@ export interface VerificationResendMessage {
 }
 
 function isVerificationResend(
-  message: BulkMailMessage,
+  message: JobMailMessage,
 ): message is VerificationResendMessage {
   return 'entryId' in message;
 }
@@ -143,7 +152,7 @@ function isRetryable(error: unknown): boolean {
  */
 async function fetchBatchJobs(
   env: Bindings,
-  messages: ReadonlyArray<{body: BulkMailMessage}>,
+  messages: ReadonlyArray<{body: JobMailMessage}>,
 ): Promise<{
   contents: Map<string, MailJobContent>;
   unreadable: Set<string>;
@@ -199,12 +208,30 @@ export async function handleBulkMailQueue(
   env: Bindings,
   options: PacedMailOptions = {},
 ): Promise<void> {
-  const {contents, unreadable} = await fetchBatchJobs(env, batch.messages);
+  // The deferred entry mails belong to no job and are settled on their own
+  // terms (`lib/deferred-entry-mail.ts`); everything below is about jobs.
+  const deferred: Array<Message<DeferredEntryMailMessage>> = [];
+  const jobMessages: Array<Message<JobMailMessage>> = [];
+  for (const message of batch.messages) {
+    if (isDeferredEntryMail(message.body)) {
+      deferred.push(message as Message<DeferredEntryMailMessage>);
+    } else {
+      jobMessages.push(message as Message<JobMailMessage>);
+    }
+  }
+  if (deferred.length > 0) {
+    await handleDeferredEntryMail(deferred, env);
+  }
+  if (jobMessages.length === 0) {
+    return;
+  }
+
+  const {contents, unreadable} = await fetchBatchJobs(env, jobMessages);
 
   // Only the messages there is something to send for reach the mailer;
   // `sendable` keeps each one's place so the outcomes can be matched back
   // to the queue messages they belong to.
-  const sendable: Array<Message<BulkMailMessage>> = [];
+  const sendable: Array<Message<JobMailMessage>> = [];
   const inputs: SendMailInput[] = [];
   // The token each reminder's link names, by its place in `sendable`.
   const issuedTokens = new Map<number, string>();
@@ -218,7 +245,7 @@ export async function handleBulkMailQueue(
   // still sending for good (`attempts` counts this delivery). An outage
   // long enough to burn every delivery is one the recipient is not going to
   // survive anyway, so it is closed out as failed instead.
-  const retryOrFail = (message: Message<BulkMailMessage>) => {
+  const retryOrFail = (message: Message<JobMailMessage>) => {
     if (message.attempts < MAIL_QUEUE_MAX_ATTEMPTS) {
       message.retry({delaySeconds: queueRetryDelaySeconds(message.attempts)});
       return;
@@ -227,7 +254,7 @@ export async function handleBulkMailQueue(
     message.ack();
   };
 
-  for (const message of batch.messages) {
+  for (const message of jobMessages) {
     const content = contents.get(message.body.jobId);
     if (!content) {
       if (unreadable.has(message.body.jobId)) {
