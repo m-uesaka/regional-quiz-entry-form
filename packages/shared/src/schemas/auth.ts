@@ -66,10 +66,14 @@ export type StaffPasswordResetRequestInput = z.infer<
 // for `general` accounts, which land on the cross-region dashboard instead.
 // The slug (rather than the `regionId` the JWT claims carry) is what the
 // staff screens are keyed by: `/staff/{regionSlug}/{tournamentType}/entries`.
+// `pendingInviteScopes` names the address's other accounts that still wait
+// on their invite link (no password set), so the screens can warn that
+// logging in here is not logging in there.
 export const StaffLoginResponseSchema = z.object({
   ok: z.literal(true),
   role: StaffRoleSchema,
   regionSlug: z.string().nullable(),
   tournamentType: TournamentTypeSchema.nullable(),
+  pendingInviteScopes: z.array(StaffLoginScopeSchema),
 });
 export type StaffLoginResponse = z.infer<typeof StaffLoginResponseSchema>;

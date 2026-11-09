@@ -15,7 +15,10 @@ import type {Env} from '../types/env';
 import {createDbClient} from '../lib/db';
 import {verifyAccountPassword} from '../lib/password-rehash';
 import {respondFailure} from '../lib/errors';
-import {findStaffAccountByScope} from '../lib/staff-account-lookup';
+import {
+  findPendingInviteScopes,
+  findStaffAccountByScope,
+} from '../lib/staff-account-lookup';
 import {
   confirmStaffPasswordReset,
   requestStaffPasswordReset,
@@ -68,6 +71,7 @@ export const staffAuthRoute = new Hono<Env>()
     ),
     async c => {
       const {email, scope, password} = c.req.valid('json');
+      const db = createDbClient(c.env);
       // `scope` picks one of the address's accounts, and a disabled one
       // (#156) isn't looked for, so it gets the same 401 -- after the same
       // PBKDF2 work -- as an address that was never registered: whoever
@@ -76,7 +80,7 @@ export const staffAuthRoute = new Hono<Env>()
       // `regions` is null for `general` staff, who have no `region_id`. Only
       // its slug is read: the staff screens are keyed by it.
       const {data: staff, error} = await findStaffAccountByScope(
-        createDbClient(c.env),
+        db,
         email,
         scope,
         `
@@ -131,11 +135,24 @@ export const staffAuthRoute = new Hono<Env>()
       // The scope travels back as a slug rather than the `regionId` the claims
       // carry so that the login screen can build the entry-list URL of a
       // regional account's own tournament without a second round trip.
+      //
+      // The address's other accounts still waiting on their invite are read
+      // only now, once the password has been proven, and a failure to read
+      // them costs the warning rather than the login.
+      const pendingInviteScopes = await findPendingInviteScopes(
+        db,
+        email,
+        staff.id,
+      );
+      if (!pendingInviteScopes) {
+        console.error('failed to read the pending staff invites');
+      }
       const body: StaffLoginResponse = {
         ok: true,
         role: staff.role,
         regionSlug: staff.regions?.slug ?? null,
         tournamentType: staff.tournament_type,
+        pendingInviteScopes: pendingInviteScopes ?? [],
       };
       return c.json(body);
     },

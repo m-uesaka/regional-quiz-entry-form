@@ -143,6 +143,7 @@ describe('POST /login', () => {
       role: 'regional',
       regionSlug: REGION_SLUG,
       tournamentType: 'saikyoi',
+      pendingInviteScopes: [],
     });
   });
 
@@ -165,6 +166,7 @@ describe('POST /login', () => {
       role: 'general',
       regionSlug: null,
       tournamentType: null,
+      pendingInviteScopes: [],
     });
   });
 
@@ -177,7 +179,8 @@ describe('POST /login', () => {
 
     await login('correct-password', 'staff@example.com', 'shinjinou');
 
-    expect(urls).toHaveLength(1);
+    // The second read is the pending-invite lookup a successful login makes.
+    expect(urls).toHaveLength(2);
     expect(urls[0].searchParams.get('email')).toBe('eq.staff@example.com');
     expect(urls[0].searchParams.get('tournament_type')).toBe('eq.shinjinou');
   });
@@ -297,6 +300,115 @@ describe('POST /login', () => {
     );
 
     expect(keys).toEqual(['staff-login:email:shared@example.com']);
+  });
+
+  describe('pending invites', () => {
+    const SIBLING_ID = '44444444-4444-4444-4444-444444444444';
+
+    /**
+     * Answers the login lookup with `row` and the pending-invite lookup --
+     * the read that leaves the logged-in account out by `id` -- with
+     * `siblings`, recording the URLs asked for.
+     * @param row The account the login finds.
+     * @param siblings The address's other accounts.
+     * @param siblingStatus The status to answer the second read with.
+     */
+    function mockWithSiblings(
+      row: Record<string, unknown>,
+      siblings: Array<Record<string, unknown>>,
+      siblingStatus = 200,
+    ): URL[] {
+      const urls: URL[] = [];
+      globalThis.fetch = ((input: RequestInfo | URL) => {
+        const url = new URL(
+          input instanceof Request ? input.url : String(input),
+        );
+        urls.push(url);
+        if (!url.searchParams.has('id')) {
+          return Promise.resolve(Response.json([row]));
+        }
+        return Promise.resolve(
+          siblingStatus === 200
+            ? Response.json(siblings)
+            : Response.json({message: 'boom'}, {status: siblingStatus}),
+        );
+      }) as unknown as typeof fetch;
+      return urls;
+    }
+
+    it("names the address's other accounts still waiting on their invite", async () => {
+      const urls = mockWithSiblings(
+        regionalStaffRow(await hashPassword('correct-password')),
+        [
+          {tournament_type: null, password_hash: UNUSABLE_PASSWORD_HASH},
+          {tournament_type: 'shinjinou', password_hash: UNUSABLE_PASSWORD_HASH},
+        ],
+      );
+
+      const res = await login('correct-password');
+
+      expect(res.status).toBe(200);
+      expect(
+        ((await res.json()) as Record<string, unknown>).pendingInviteScopes,
+      ).toEqual(['shinjinou', 'general']);
+      const lookup = urls[1];
+      expect(lookup.searchParams.get('email')).toBe('eq.staff@example.com');
+      expect(lookup.searchParams.get('id')).toBe(`neq.${STAFF_ID}`);
+      expect(lookup.searchParams.get('disabled_at')).toBe('is.null');
+    });
+
+    it('leaves out the accounts whose password is already set', async () => {
+      mockWithSiblings(
+        regionalStaffRow(await hashPassword('correct-password')),
+        [
+          {
+            id: SIBLING_ID,
+            tournament_type: 'shinjinou',
+            password_hash: await hashPassword('another-password'),
+          },
+        ],
+      );
+
+      const res = await login('correct-password');
+
+      expect(
+        ((await res.json()) as Record<string, unknown>).pendingInviteScopes,
+      ).toEqual([]);
+    });
+
+    it('still logs in when the other accounts cannot be read', async () => {
+      const originalConsoleError = console.error;
+      console.error = () => {};
+      try {
+        mockWithSiblings(
+          regionalStaffRow(await hashPassword('correct-password')),
+          [],
+          500,
+        );
+
+        const res = await login('correct-password');
+
+        expect(res.status).toBe(200);
+        expect(res.headers.get('set-cookie')).toContain('staff_session=');
+        expect(
+          ((await res.json()) as Record<string, unknown>).pendingInviteScopes,
+        ).toEqual([]);
+      } finally {
+        console.error = originalConsoleError;
+      }
+    });
+
+    it('does not look for them when the password is wrong', async () => {
+      const urls = mockWithSiblings(
+        regionalStaffRow(await hashPassword('correct-password')),
+        [{tournament_type: 'shinjinou', password_hash: UNUSABLE_PASSWORD_HASH}],
+      );
+
+      const res = await login('wrong-password');
+
+      expect(res.status).toBe(401);
+      expect(urls).toHaveLength(1);
+    });
   });
 
   it('refuses an account that has not set a password yet', async () => {

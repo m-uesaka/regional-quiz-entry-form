@@ -2,6 +2,7 @@ import {fail, redirect} from '@sveltejs/kit';
 import {StaffLoginInputSchema} from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
 import {staffLandingPath} from '$lib/server/staff-login';
+import {rememberPendingInvites} from '$lib/server/staff-pending-invites';
 import type {Actions, PageServerLoad} from './$types';
 import {readString} from '$lib/form-data';
 
@@ -11,9 +12,12 @@ import {readString} from '$lib/form-data';
 // unknown address as on a known one. The 区分 is named alongside them: an
 // address with a 最強位 account but no 新人王 one (#166) answers the same
 // 401 as a wrong password, and choosing the wrong 区分 is the likelier
-// mistake.
+// mistake. So is an account whose invite link hasn't been followed yet: it
+// has no password at all, and saying so for it alone would tell anyone which
+// addresses hold which accounts, so every refusal names it.
 const INVALID_CREDENTIALS_MESSAGE =
-  'メールアドレス・区分・パスワードのいずれかが正しくありません';
+  'メールアドレス・区分・パスワードのいずれかが正しくありません。' +
+  '招待メールのリンクからパスワードを設定していない場合も、このエラーになります';
 
 /**
  * Reports a password that was just set from an invite (or reset) link, so the
@@ -26,7 +30,7 @@ export const load: PageServerLoad = ({url}) => {
 };
 
 export const actions = {
-  default: async ({request, fetch, url}) => {
+  default: async ({request, fetch, url, cookies}) => {
     const formData = await request.formData();
     // Echoed back on failure so a mistyped password doesn't cost the whole
     // form. The password never is.
@@ -69,8 +73,9 @@ export const actions = {
       });
     }
 
+    const session = await res.json();
     const landing = staffLandingPath(
-      await res.json(),
+      session,
       url.searchParams.get('redirectTo'),
     );
     if (!landing) {
@@ -83,6 +88,10 @@ export const actions = {
           '担当する大会が設定されていないため、表示できる画面がありません。管理者にお問い合わせください',
       });
     }
+    // Logging in here is not logging in to the address's other accounts:
+    // one still waiting on its invite link is warned about on landing, so
+    // its owner isn't left wondering why this account's screens look empty.
+    rememberPendingInvites(cookies, session.pendingInviteScopes);
     redirect(303, landing);
   },
 } satisfies Actions;

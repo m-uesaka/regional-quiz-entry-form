@@ -1,5 +1,9 @@
 import {error, redirect} from '@sveltejs/kit';
 import {staffLoginPath} from '$lib/server/staff-login';
+import {
+  pendingInvitesData,
+  takePendingInvites,
+} from '$lib/server/staff-pending-invites';
 import type {LayoutServerLoad} from './$types';
 
 // `/admin` is general-staff only. The APIs behind these screens all run
@@ -8,7 +12,7 @@ import type {LayoutServerLoad} from './$types';
 // missing session once they submitted it (`admin/tournaments/new` had no
 // server load at all). This is the same entry-side guard `/staff/*` already
 // applies, hoisted to the layout so every screen under `/admin` inherits it.
-export const load: LayoutServerLoad = ({locals, url}) => {
+export const load: LayoutServerLoad = ({locals, url, cookies}) => {
   if (!locals.staff) {
     redirect(303, staffLoginPath(url));
   }
@@ -17,5 +21,10 @@ export const load: LayoutServerLoad = ({locals, url}) => {
   if (locals.staff.role !== 'general') {
     error(403, 'この画面を利用する権限がありません');
   }
-  return {staff: locals.staff};
+  // A login handed back to an `/admin` page lands here rather than under
+  // `/staff`, so the warning it left is shown here too.
+  return {
+    staff: locals.staff,
+    ...pendingInvitesData(takePendingInvites(cookies)),
+  };
 };

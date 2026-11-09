@@ -7,6 +7,7 @@ const GENERAL: StaffLoginResponse = {
   role: 'general',
   regionSlug: null,
   tournamentType: null,
+  pendingInviteScopes: [],
 };
 
 const REGIONAL: StaffLoginResponse = {
@@ -14,6 +15,7 @@ const REGIONAL: StaffLoginResponse = {
   role: 'regional',
   regionSlug: 'tokyo',
   tournamentType: 'saikyoi',
+  pendingInviteScopes: [],
 };
 
 describe('staffLoginPath', () => {
