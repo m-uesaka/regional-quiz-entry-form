@@ -35,7 +35,12 @@ export const RegulationUpsertSchema = z
     id: z.string().uuid().optional(),
     label: wellFormedText(
       maxCodePoints(
-        z.string().min(1),
+        // Trimmed as the regulation sheet's cells are (`cellText()`), so a
+        // label typed in the form can't be blank but for spaces (#300).
+        z
+          .string()
+          .trim()
+          .min(1, {message: 'レギュレーション名を入力してください'}),
         REGULATION_LABEL_MAX_LENGTH,
         `レギュレーション名は${REGULATION_LABEL_MAX_LENGTH}文字以内で入力してください`,
       ),

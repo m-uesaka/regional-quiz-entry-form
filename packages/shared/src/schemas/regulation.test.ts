@@ -18,6 +18,14 @@ describe('RegulationUpsertSchema', () => {
     ).toBe(false);
   });
 
+  // Trimmed as the regulation sheet's cells are (#300).
+  it('trims the label and refuses one that is only spaces', () => {
+    expect(RegulationUpsertSchema.parse({label: ' 一般の部\u3000'}).label).toBe(
+      '一般の部',
+    );
+    expect(RegulationUpsertSchema.safeParse({label: '  '}).success).toBe(false);
+  });
+
   it('accepts a new regulation without an id or a priority window', () => {
     const result = RegulationUpsertSchema.safeParse({label: '一般の部'});
 
