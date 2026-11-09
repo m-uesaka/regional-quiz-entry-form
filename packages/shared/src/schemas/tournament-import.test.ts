@@ -1,22 +1,5 @@
 import {describe, expect, it} from 'bun:test';
-import {
-  spreadsheetIdFromInput,
-  TournamentBulkImportRequestSchema,
-} from './tournament-import';
-
-describe('spreadsheetIdFromInput', () => {
-  it('takes the ID out of a spreadsheet URL', () => {
-    expect(
-      spreadsheetIdFromInput(
-        'https://docs.google.com/spreadsheets/d/1CiNHRZo_xh-jq/edit?gid=0#gid=0',
-      ),
-    ).toBe('1CiNHRZo_xh-jq');
-  });
-
-  it('leaves a bare ID as it is', () => {
-    expect(spreadsheetIdFromInput('1CiNHRZo_xh-jq')).toBe('1CiNHRZo_xh-jq');
-  });
-});
+import {TournamentBulkImportRequestSchema} from './tournament-import';
 
 describe('TournamentBulkImportRequestSchema', () => {
   it('trims what was pasted', () => {

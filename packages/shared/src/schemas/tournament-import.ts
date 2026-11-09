@@ -1,31 +1,12 @@
 import {z} from 'zod';
+import {SpreadsheetIdInputSchema} from './spreadsheet';
 import {TournamentTypeSchema, WaitlistPromotionSchema} from './tournament';
-
-// The path segment a Google Sheets URL carries its spreadsheet ID in:
-// `https://docs.google.com/spreadsheets/d/{id}/edit#gid=0`.
-const SPREADSHEET_URL_PATTERN = /\/spreadsheets\/d\/([A-Za-z0-9_-]+)/;
-
-/**
- * The spreadsheet ID in what staff pasted: the ID itself, or the URL of the
- * spreadsheet, which is what the browser's address bar hands them.
- * @param input The pasted text, already trimmed.
- */
-export function spreadsheetIdFromInput(input: string): string {
-  return SPREADSHEET_URL_PATTERN.exec(input)?.[1] ?? input;
-}
-
-// The 大会一覧 spreadsheet's ID, or its URL.
-const IndexSpreadsheetIdSchema = z
-  .string()
-  .trim()
-  .min(1, {message: 'スプレッドシートの ID または URL を入力してください'})
-  .transform(spreadsheetIdFromInput);
 
 // Request body of `POST /api/sheet-import/tournaments/preview` (#168): the
 // 大会一覧 spreadsheet to read. Nothing is written; the answer says, row by
 // row, what registering it would do.
 export const TournamentBulkImportRequestSchema = z.object({
-  spreadsheetId: IndexSpreadsheetIdSchema,
+  spreadsheetId: SpreadsheetIdInputSchema,
 });
 export type TournamentBulkImportRequest = z.infer<
   typeof TournamentBulkImportRequestSchema
@@ -61,7 +42,7 @@ export const MAX_SELECTIONS = 200;
 // Request body of `POST /api/sheet-import/tournaments`: registers the
 // chosen rows of the 大会一覧 spreadsheet, reading it again.
 export const TournamentBulkImportExecuteRequestSchema = z.object({
-  spreadsheetId: IndexSpreadsheetIdSchema,
+  spreadsheetId: SpreadsheetIdInputSchema,
   selections: z
     .array(TournamentImportSelectionSchema)
     .min(1, {message: '登録する大会を選んでください'})

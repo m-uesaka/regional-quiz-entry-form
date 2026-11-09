@@ -744,7 +744,7 @@ describe('admin regulations import action', () => {
 
     await expect(actions.import(event)).resolves.toMatchObject({
       status: 400,
-      data: {error: 'スプレッドシートIDを入力してください'},
+      data: {error: 'スプレッドシートの ID または URL を入力してください'},
     });
     expect(log.previewBodies).toEqual([]);
   });

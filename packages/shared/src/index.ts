@@ -1,5 +1,6 @@
 export * from './schemas/tournament';
 export * from './schemas/tournament-import';
+export * from './schemas/spreadsheet';
 export * from './schemas/tournament-detail';
 export * from './schemas/entry';
 export * from './schemas/form-definition';

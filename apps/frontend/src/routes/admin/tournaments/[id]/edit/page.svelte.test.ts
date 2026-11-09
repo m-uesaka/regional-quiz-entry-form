@@ -408,7 +408,9 @@ describe('admin tournament edit +page.svelte', () => {
     );
     expect(screen.getByLabelText(/定員/)).toHaveValue(null);
     expect(screen.getByLabelText('種別')).toHaveValue('shinjinou');
-    expect(screen.getByPlaceholderText('スプレッドシートID')).toHaveValue('');
+    expect(
+      screen.getByLabelText('スプレッドシート(URL または ID)'),
+    ).toHaveValue('');
     expect(screen.getByText(/対象: 新人王/)).toBeInTheDocument();
     expect(screen.getByLabelText('YAML')).toHaveValue(
       'tournamentSlug: shinjinou\nfields: []\n',

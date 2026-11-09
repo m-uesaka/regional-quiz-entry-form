@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {SpreadsheetIdInputSchema} from './spreadsheet';
 import {maxCodePoints, wellFormedText} from './text';
 
 /**
@@ -140,7 +141,7 @@ export const REGULATION_SHEET_NAME = 'レギュレーション';
  * validate the same shape.
  */
 export const RegulationSheetImportRequestSchema = z.object({
-  spreadsheetId: z.string().min(1),
+  spreadsheetId: SpreadsheetIdInputSchema,
 });
 export type RegulationSheetImportRequest = z.infer<
   typeof RegulationSheetImportRequestSchema

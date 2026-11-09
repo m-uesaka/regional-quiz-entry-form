@@ -93,7 +93,7 @@ describe('FormDefinitionEditor', () => {
     render(FormDefinitionEditor, {props: PROPS});
 
     await user.type(
-      screen.getByPlaceholderText('スプレッドシートID'),
+      screen.getByLabelText('スプレッドシート(URL または ID)'),
       'sheet-123',
     );
     await user.click(
@@ -121,7 +121,10 @@ describe('FormDefinitionEditor', () => {
     );
     render(FormDefinitionEditor, {props: PROPS});
 
-    await user.type(screen.getByPlaceholderText('スプレッドシートID'), 'bad');
+    await user.type(
+      screen.getByLabelText('スプレッドシート(URL または ID)'),
+      'bad',
+    );
     await user.click(
       screen.getByRole('button', {name: 'スプレッドシートから読み込む'}),
     );
@@ -155,7 +158,7 @@ describe('FormDefinitionEditor', () => {
       render(FormDefinitionEditor, {props: PROPS});
       await user.type(screen.getByLabelText('YAML'), '# 手で直した');
       await user.type(
-        screen.getByPlaceholderText('スプレッドシートID'),
+        screen.getByLabelText('スプレッドシート(URL または ID)'),
         'sheet-123',
       );
       await user.click(

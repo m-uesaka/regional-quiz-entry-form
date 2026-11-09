@@ -219,13 +219,13 @@ stands, so a reloaded sheet can be checked (and touched up) first.
 
   <form onsubmit={handleLoadSheet} class="flex flex-col gap-4">
     <div class="flex flex-col gap-1.5">
-      <Label for="form-definition-spreadsheet-id">スプレッドシートID</Label>
+      <Label for="form-definition-spreadsheet-id">スプレッドシート(URL または ID)</Label>
       <Input
         id="form-definition-spreadsheet-id"
         class="w-full"
         type="text"
         bind:value={spreadsheetId}
-        placeholder="スプレッドシートID"
+        placeholder="https://docs.google.com/spreadsheets/d/…"
         required
       />
     </div>

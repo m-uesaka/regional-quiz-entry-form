@@ -1,5 +1,6 @@
 import {parse as parseYaml, stringify as stringifyYaml} from 'yaml';
 import {z} from 'zod';
+import {SpreadsheetIdInputSchema} from './spreadsheet';
 import {wellFormedText} from './text';
 import {TournamentTypeSchema, type TournamentType} from './tournament';
 
@@ -124,7 +125,7 @@ export type FormDefinitionUpload = z.infer<typeof FormDefinitionUploadSchema>;
  * frontend and backend validate the same shape.
  */
 export const SheetImportRequestSchema = z.object({
-  spreadsheetId: z.string(),
+  spreadsheetId: SpreadsheetIdInputSchema,
   tournamentSlug: TournamentTypeSchema,
 });
 export type SheetImportRequest = z.infer<typeof SheetImportRequestSchema>;

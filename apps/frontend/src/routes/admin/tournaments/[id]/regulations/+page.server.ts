@@ -231,7 +231,10 @@ export const actions = {
     if (spreadsheetId === '') {
       return fail(
         400,
-        importRefusal('スプレッドシートIDを入力してください', spreadsheetId),
+        importRefusal(
+          'スプレッドシートの ID または URL を入力してください',
+          spreadsheetId,
+        ),
       );
     }
 
