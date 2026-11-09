@@ -56,7 +56,7 @@ export const participantAuthRoute = new Hono<Env>()
     // budget.
     rateLimit<{out: {json: ParticipantLoginInput}}>(
       env => env.LOGIN_EMAIL_RATE_LIMITER,
-      c => `participant-login:${emailKey(c.req.valid('json').email)}`,
+      c => emailKey('participant-login', c.req.valid('json').email),
       LOGIN_LIMIT_PERIOD_SECONDS,
     ),
     async c => {

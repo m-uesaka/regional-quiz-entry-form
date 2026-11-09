@@ -19,11 +19,21 @@ import type {Bindings, Env} from '../types/env';
  *
  * A limit keyed on an email address is still a lever for keeping the owner
  * of that address refused -- an attacker who knows it only has to keep the
- * bucket full -- so the endpoints that use one put it on a limiter whose
- * budget is far too loose for a legitimate caller to ever meet, and pay for
- * that with a weaker cap on guessing against a single account. The tight
- * numbers are all on IP keys, where the caller being refused is the one
- * spending the budget. See `wrangler.toml`.
+ * bucket full. How much that matters decides where each one sits:
+ *
+ * - On the logins (`LOGIN_EMAIL_RATE_LIMITER`) the address is the account
+ *   being guessed at, so the limit sits on a limiter whose budget is far
+ *   too loose for a legitimate caller to ever meet, paid for with a weaker
+ *   cap on guessing against a single account. The tight login number is on
+ *   the IP key, where the caller being refused is the one spending the
+ *   budget.
+ * - On the endpoints that send mail to the address
+ *   (`MAIL_TRIGGER_EMAIL_RATE_LIMITER`) the limit is the tight one, since
+ *   the mail bomb it stops is aimed at that inbox. That leaves the owner
+ *   refusable on one endpoint by anyone flooding it with their address, a
+ *   price taken on knowingly (see `emailKey()`).
+ *
+ * See `wrangler.toml` for the numbers.
  *
  * The limiters are Cloudflare's Rate Limiting bindings, so the counting is
  * per-colo and approximate. That is enough for what this defends against
@@ -34,9 +44,12 @@ import type {Bindings, Env} from '../types/env';
  *     bindings.
  * @param keyOf Builds the key to count under. Prefix it with what the key
  *     means (`ip:` / `email:`), so two limits on the same limiter can never
- *     collide on one bucket -- and, where two endpoints share a limiter but
- *     must not share a bucket, name the endpoint too (see the email keys in
- *     `routes/participant-auth.ts` and `routes/staff-auth.ts`).
+ *     collide on one bucket. An email key also names its endpoint
+ *     (`emailKey()` will not build one without), so that two endpoints on
+ *     one limiter never share an address's bucket. IP keys deliberately do
+ *     not: every endpoint on `MAIL_TRIGGER_IP_RATE_LIMITER` counts one
+ *     network in one bucket, which is what caps a single source across all
+ *     of them (see `types/env.ts`).
  * @param retryAfterSeconds What to put in `Retry-After`. The binding does
  *     not report when the budget resets, so this is the limiter's own
  *     period, named by the caller.
@@ -58,18 +71,54 @@ export function rateLimit<I extends Input = Input>(
 }
 
 /**
- * The part of a rate-limit key that names an email address.
+ * The endpoints that count a per-address limit, as `emailKey()` names them.
  *
- * Case-folded, because `Victim@example.com` and `victim@example.com` are two
- * strings for one mailbox. Counted as submitted they land in two buckets, so
- * the per-address cap an endpoint advertises could be had over again for
- * every capitalization a caller cares to try -- which on the endpoints that
- * send mail is the whole of what the cap is for.
+ * A closed list rather than a free string, so that a new caller has to pick
+ * a name of its own here instead of reusing another endpoint's bucket by
+ * accident.
+ */
+export type EmailKeyEndpoint =
+  | 'entry'
+  | 'participant-login'
+  | 'participant-password-reset'
+  | 'staff-login'
+  | 'staff-password-reset';
+
+/**
+ * The rate-limit key for an email address on one endpoint:
+ * `<endpoint>:email:<address>`.
  *
+ * The endpoint is part of the key because the per-address limiters are
+ * shared. Without it, every endpoint on `MAIL_TRIGGER_EMAIL_RATE_LIMITER`
+ * would count one address in one bucket, and an attacker could spend the
+ * victim's budget on one endpoint to have them refused on another -- three
+ * participant reset requests a minute were enough to keep the victim's
+ * entry form answering 429 when entries opened (#295). Named per endpoint,
+ * a mailbox can be sent that much more mail in total -- one budget for each
+ * endpoint on the limiter, so with the entry form and both reset requests
+ * three times the limit (9 a minute in production, up from 6) -- which is
+ * still a bounded amount.
+ *
+ * What naming the endpoint does not stop, by design, is the same thing on
+ * one endpoint: anybody who knows an address can keep that endpoint's
+ * bucket for it full -- for the entry form, by submitting entries with the
+ * victim's address. Each attempt costs them a Turnstile solve, and the
+ * refusal expires within the limiter's period of the attacker stopping. A
+ * per-address cap that its owner cannot be kept under is not a cap on the
+ * address at all, and mail bombing is what the cap is there to stop.
+ *
+ * The address is case-folded, because `Victim@example.com` and
+ * `victim@example.com` are two strings for one mailbox. Counted as
+ * submitted they land in two buckets, so the per-address cap an endpoint
+ * advertises could be had over again for every capitalization a caller
+ * cares to try -- which on the endpoints that send mail is the whole of what
+ * the cap is for.
+ *
+ * @param endpoint The endpoint counting the limit.
  * @param email The address the request named, as it was submitted.
  */
-export function emailKey(email: string): string {
-  return `email:${email.toLowerCase()}`;
+export function emailKey(endpoint: EmailKeyEndpoint, email: string): string {
+  return `${endpoint}:email:${email.toLowerCase()}`;
 }
 
 /**

@@ -110,6 +110,8 @@ IP 鍵は、IPv4 はアドレスそのまま、IPv6 は**先頭 /64**(`2001:db8:
 
 `X-Client-IP` が届いたのにシークレットが一致しない場合(バックエンド側にシークレットが設定されているときのみ)は、`console.warn` で警告を出します(シークレットの値は出しません)。これが出ていれば、Worker と Pages のシークレットがずれていて、全利用者が 1 つのバケツを共有している状態です。Service Binding ではなく共有シークレットにしたのは、`vite dev` / E2E を含めてどこでも同じ `fetch(BACKEND_URL)` 1 本の経路で済むためです。
 
+メール鍵には**エンドポイント名を付けます**(`emailKey(endpoint, email)`。名前は `EmailKeyEndpoint` の固定の一覧から選ぶ)。同じ limiter を複数のエンドポイントが共有しているので、名前が無いと、たとえば被害者のアドレスでパスワード再設定申請を連打されただけで、その人のエントリー送信まで 429 になってしまうためです(#295)。代わりに 1 つの受信箱に届きうる件数はエンドポイントの数だけ増えます(本番ではエントリー・参加者の再設定・スタッフの再設定でそれぞれ 3 回、合わせて 1 分に 9 回。名前を付ける前は、エントリーと参加者の再設定が枠を共有していたので 6 回)が、上限があることに変わりはありません。なお、**同じエンドポイントを被害者のアドレスで連打されると、そのエンドポイントの枠は尽きます**(エントリー送信なら、被害者のアドレスでエントリーを送り続けられる場合)。これは設計上の判断として残しています。メール鍵の上限はメール爆撃を止めるためのもので、宛先の持ち主を締め出せない上限は宛先ごとの上限になりません。攻撃側は 1 回ごとに Turnstile を解く必要があり、止めれば上限の期間内に解消します。
+
 **鍵ごとに別の limiter に載せています。** Rate Limiting binding は上限を binding 単位でしか持てないので、IP 鍵とメール鍵に別々の数字を与えるには binding を分けるしかありません。
 
 | エンドポイント | 鍵 | limiter | 上限(本番) | Turnstile |
@@ -119,10 +121,10 @@ IP 鍵は、IPv4 はアドレスそのまま、IPv6 は**先頭 /64**(`2001:db8:
 | `POST /api/auth/participant/login` | `ip:` | `LOGIN_IP_RATE_LIMITER` | 10 回 / 60 秒 | なし |
 | `POST /api/auth/participant/login` | `participant-login:email:` | `LOGIN_EMAIL_RATE_LIMITER` | 60 回 / 60 秒 | なし |
 | `POST /api/tournaments/:tournamentId/entries` | `ip:` | `MAIL_TRIGGER_IP_RATE_LIMITER` | 20 回 / 60 秒 | **必須** |
-| `POST /api/tournaments/:tournamentId/entries` | `email:` | `MAIL_TRIGGER_EMAIL_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
+| `POST /api/tournaments/:tournamentId/entries` | `entry:email:` | `MAIL_TRIGGER_EMAIL_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
 | `POST /api/tournaments/:tournamentId/entries/session` | `ip:` | `MAIL_TRIGGER_IP_RATE_LIMITER` | 20 回 / 60 秒 | **必須** |
 | `POST /api/auth/participant/password-reset/request` | `ip:` | `MAIL_TRIGGER_IP_RATE_LIMITER` | 20 回 / 60 秒 | **必須** |
-| `POST /api/auth/participant/password-reset/request` | `email:` | `MAIL_TRIGGER_EMAIL_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
+| `POST /api/auth/participant/password-reset/request` | `participant-password-reset:email:` | `MAIL_TRIGGER_EMAIL_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
 | `POST /api/auth/staff/password-reset/request` | `ip:` | `MAIL_TRIGGER_IP_RATE_LIMITER` | 20 回 / 60 秒 | **必須** |
 | `POST /api/auth/staff/password-reset/request` | `staff-password-reset:email:` | `MAIL_TRIGGER_EMAIL_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
 

@@ -33,9 +33,11 @@ export const passwordResetRoute = new Hono<Env>()
     ),
     requireTurnstile(),
     zValidator('json', PasswordResetRequestInputSchema),
+    // Keyed on this endpoint as well as the address: on a key of the entry
+    // form's, requests here could keep the victim from entering (#295).
     rateLimit<{out: {json: PasswordResetRequestInput}}>(
       env => env.MAIL_TRIGGER_EMAIL_RATE_LIMITER,
-      c => emailKey(c.req.valid('json').email),
+      c => emailKey('participant-password-reset', c.req.valid('json').email),
       MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
     ),
     c => {

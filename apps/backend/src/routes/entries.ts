@@ -40,10 +40,12 @@ export const entriesRoute = new Hono<Env>().post(
   // tight number belongs. The IP key is checked first and so is spent by
   // attempts that never reach the challenge or the schema -- which is why
   // it cannot also carry that number without refusing a club filling in the
-  // form from one shared network.
+  // form from one shared network. The key names this endpoint, so reset
+  // requests for the same address cannot spend this budget and keep its
+  // owner from entering (#295; see `emailKey()`).
   rateLimit<{out: {json: EntryInput}}>(
     env => env.MAIL_TRIGGER_EMAIL_RATE_LIMITER,
-    c => emailKey(c.req.valid('json').email),
+    c => emailKey('entry', c.req.valid('json').email),
     MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
   ),
   async c => {
