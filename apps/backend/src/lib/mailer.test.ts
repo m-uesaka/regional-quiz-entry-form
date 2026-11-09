@@ -61,6 +61,154 @@ describe('ResendMailSender', () => {
 
     expect((error as MailSendError).retryAfterMs).toBeUndefined();
   });
+
+  it('reports a provider fault as transient', async () => {
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        new Response(null, {status: 503}),
+      )) as unknown as typeof fetch;
+
+    const sender = new ResendMailSender('test-api-key', 'entry@example.com');
+
+    const error = await sender
+      .send({to: 'user@example.com', subject: 'Hi', html: '<p>Hi</p>'})
+      .then(
+        () => null,
+        (thrown: unknown) => thrown,
+      );
+
+    expect(error).toBeInstanceOf(MailSendError);
+    const mailError = error as MailSendError;
+    expect(mailError.status).toBe(503);
+    expect(mailError.isTransient()).toBe(true);
+    // Not a throttle, so `sendPacedMail()` leaves it to the caller.
+    expect(mailError.isRateLimited()).toBe(false);
+  });
+
+  it('sends the idempotency key as a header and leaves it out of the mail', async () => {
+    let request: {headers: Headers; body: Record<string, unknown>} | null =
+      null;
+    globalThis.fetch = ((_input: unknown, init?: RequestInit) => {
+      request = {
+        headers: new Headers(init?.headers),
+        body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+      };
+      return Promise.resolve(Response.json({id: 'mail-id'}));
+    }) as unknown as typeof fetch;
+
+    const sender = new ResendMailSender('test-api-key', 'entry@example.com');
+    await sender.send({
+      to: 'user@example.com',
+      subject: 'Hi',
+      html: '<p>Hi</p>',
+      idempotencyKey: 'bulk-mail/message-1',
+    });
+
+    expect(request!.headers.get('Idempotency-Key')).toBe('bulk-mail/message-1');
+    expect(request!.body).toEqual({
+      from: 'entry@example.com',
+      to: 'user@example.com',
+      subject: 'Hi',
+      html: '<p>Hi</p>',
+    });
+  });
+
+  it('sends no idempotency key for a mail that names none', async () => {
+    let headers: Headers | null = null;
+    globalThis.fetch = ((_input: unknown, init?: RequestInit) => {
+      headers = new Headers(init?.headers);
+      return Promise.resolve(Response.json({id: 'mail-id'}));
+    }) as unknown as typeof fetch;
+
+    const sender = new ResendMailSender('test-api-key', 'entry@example.com');
+    await sender.send({
+      to: 'user@example.com',
+      subject: 'Hi',
+      html: '<p>Hi</p>',
+    });
+
+    expect(headers!.has('Idempotency-Key')).toBe(false);
+  });
+
+  it("reads the provider's name for a refusal off its body", async () => {
+    globalThis.fetch = (() =>
+      Promise.resolve(
+        Response.json(
+          {
+            statusCode: 409,
+            name: 'concurrent_idempotent_requests',
+            message: 'There is another request in progress.',
+          },
+          {status: 409},
+        ),
+      )) as unknown as typeof fetch;
+
+    const sender = new ResendMailSender('test-api-key', 'entry@example.com');
+    const error = await sender
+      .send({to: 'user@example.com', subject: 'Hi', html: '<p>Hi</p>'})
+      .then(
+        () => null,
+        (thrown: unknown) => thrown,
+      );
+
+    expect((error as MailSendError).code).toBe(
+      'concurrent_idempotent_requests',
+    );
+    expect((error as MailSendError).isTransient()).toBe(true);
+  });
+
+  it('wraps a network error so the caller can tell it is transient', async () => {
+    const networkError = new TypeError('Network connection lost.');
+    globalThis.fetch = (() =>
+      Promise.reject(networkError)) as unknown as typeof fetch;
+
+    const sender = new ResendMailSender('test-api-key', 'entry@example.com');
+
+    const error = await sender
+      .send({to: 'user@example.com', subject: 'Hi', html: '<p>Hi</p>'})
+      .then(
+        () => null,
+        (thrown: unknown) => thrown,
+      );
+
+    expect(error).toBeInstanceOf(MailSendError);
+    const mailError = error as MailSendError;
+    expect(mailError.status).toBeUndefined();
+    expect(mailError.cause).toBe(networkError);
+    expect(mailError.isTransient()).toBe(true);
+  });
+});
+
+describe('MailSendError.isTransient', () => {
+  it('holds for a throttle, a timeout, a provider fault, or no answer at all', () => {
+    for (const status of [undefined, 408, 429, 500, 502, 503, 504]) {
+      expect(new MailSendError(status).isTransient()).toBe(true);
+    }
+  });
+
+  // Resend says to ask again later; the send under the key may yet fail.
+  it('holds for a send whose key another send is still using', () => {
+    expect(
+      new MailSendError(409, undefined, {
+        code: 'concurrent_idempotent_requests',
+      }).isTransient(),
+    ).toBe(true);
+  });
+
+  // A changed body under a used key is refused however often it is sent.
+  it('does not hold for a key reused with another body', () => {
+    expect(
+      new MailSendError(409, undefined, {
+        code: 'invalid_idempotent_request',
+      }).isTransient(),
+    ).toBe(false);
+  });
+
+  it('does not hold for a rejection of the message itself', () => {
+    for (const status of [400, 401, 403, 404, 409, 422]) {
+      expect(new MailSendError(status).isTransient()).toBe(false);
+    }
+  });
 });
 
 describe('createMailSender', () => {
