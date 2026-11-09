@@ -65,16 +65,33 @@ function isVerificationResend(
 export const MAIL_QUEUE_MAX_ATTEMPTS = 4;
 
 /**
- * How long a throttled message waits before being delivered again.
+ * How long a message sent back for a failure of the attempt rather than of
+ * the message waits before its first redelivery; each later one waits twice
+ * as long as the one before (`queueRetryDelaySeconds()`).
  *
- * `sendPacedMail()` has already waited out the provider's `Retry-After`
- * and its own backoff by the time a message gets here, so what is left is
- * a throttle that outlived those -- the shared quota is spent, and the
- * useful answer is to stand back for a while rather than to come straight
- * back. The queue holds the message meanwhile, so nothing is occupying the
- * consumer during the wait.
+ * The failures that get here are of two kinds. A throttle has already been
+ * waited out once in `sendPacedMail()` (the provider's `Retry-After` and
+ * its own backoff), so what is left is a quota that outlived those. A
+ * provider fault (5xx), a timeout or a network error comes straight here
+ * with no wait at all. Either way the useful answer is to stand back rather
+ * than come straight back, and to stand back further each time: with
+ * `MAIL_QUEUE_MAX_ATTEMPTS` deliveries, waits of 30, 60 and 120 seconds see
+ * a message through an outage of about three and a half minutes, where a
+ * fixed 30 would give up after ninety seconds. The queue holds the message
+ * meanwhile, so nothing is occupying the consumer during the wait.
  */
 export const MAIL_QUEUE_RETRY_DELAY_SECONDS = 30;
+
+/**
+ * How long to wait before redelivering a message on its `attempts`-th
+ * delivery: `MAIL_QUEUE_RETRY_DELAY_SECONDS`, doubled for each delivery
+ * before this one.
+ * @param attempts The delivery that failed, counting from 1, as
+ *     `Message.attempts` does.
+ */
+export function queueRetryDelaySeconds(attempts: number): number {
+  return MAIL_QUEUE_RETRY_DELAY_SECONDS * 2 ** Math.max(0, attempts - 1);
+}
 
 /** Running total of what a batch did to one job's counters. */
 interface JobProgress {
@@ -203,7 +220,7 @@ export async function handleBulkMailQueue(
   // survive anyway, so it is closed out as failed instead.
   const retryOrFail = (message: Message<BulkMailMessage>) => {
     if (message.attempts < MAIL_QUEUE_MAX_ATTEMPTS) {
-      message.retry({delaySeconds: MAIL_QUEUE_RETRY_DELAY_SECONDS});
+      message.retry({delaySeconds: queueRetryDelaySeconds(message.attempts)});
       return;
     }
     tallyOf(progress, message.body.jobId).failed++;
@@ -227,6 +244,10 @@ export async function handleBulkMailQueue(
         to: message.body.to,
         subject: content.subject,
         html: content.bodyHtml,
+        // The queue's id for the message is the same on every delivery, and
+        // so is the body read from the job's row: a redelivery after an
+        // answer that was lost on its way back sends nothing the second time.
+        idempotencyKey: `bulk-mail/${message.id}`,
       });
       continue;
     }
@@ -253,7 +274,16 @@ export async function handleBulkMailQueue(
     }
     issuedTokens.set(sendable.length, prepared.value.tokenId);
     sendable.push(message);
-    inputs.push(prepared.value.mail);
+    // Keyed by the link rather than the message: each delivery issues a new
+    // link, so a body that differs from the last delivery's would be refused
+    // under the same key. This covers the retries `sendPacedMail()` makes
+    // within the delivery; a redelivery after a lost answer can still mail
+    // the participant twice, and the first link -- discarded as undelivered
+    // -- no longer works.
+    inputs.push({
+      ...prepared.value.mail,
+      idempotencyKey: `verification-resend/${prepared.value.tokenId}`,
+    });
   }
 
   const outcomes = await sendPacedMail(createMailSender(env), inputs, options);

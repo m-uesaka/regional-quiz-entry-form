@@ -4,6 +4,12 @@ import type {Bindings} from '../types/env';
 const RESEND_API_BASE_URL = 'https://api.resend.com';
 
 /**
+ * Resend's error name for a send whose `Idempotency-Key` another send is
+ * still using.
+ */
+const CONCURRENT_IDEMPOTENT_REQUESTS = 'concurrent_idempotent_requests';
+
+/**
  * The site's name, as the frontend's `<title>` gives it. Every name a mail
  * shows -- its sender, its subject prefix, its footer -- is built from this
  * one, so a rename can't leave them disagreeing.
@@ -24,6 +30,16 @@ export interface SendMailInput {
   html: string;
   /** The plain-text alternative, for clients that don't render HTML. */
   text?: string;
+  /**
+   * Names this mail to the provider so that sending it again within 24
+   * hours sends nothing (Resend's `Idempotency-Key`, 256 characters at
+   * most). For a send that is retried after an answer that may have been
+   * lost -- a 5xx or a network error, where the mail may have gone out
+   * after all -- so the retry can't deliver it twice. A retry must send the
+   * same body under the same key: Resend refuses a changed one (409
+   * `invalid_idempotent_request`).
+   */
+  idempotencyKey?: string;
 }
 
 export interface MailSender {
@@ -40,6 +56,12 @@ export interface MailSender {
  * (`isTransient()`) from a permanent rejection such as an invalid address.
  */
 export class MailSendError extends Error {
+  /**
+   * The provider's name for the error, when its body gave one, or
+   * `undefined`.
+   */
+  readonly code: string | undefined;
+
   constructor(
     /** The provider's HTTP status, or `undefined` for a network error. */
     readonly status: number | undefined,
@@ -48,7 +70,13 @@ export class MailSendError extends Error {
      * milliseconds, or `undefined` when it said nothing.
      */
     readonly retryAfterMs?: number,
-    options?: ErrorOptions,
+    options?: ErrorOptions & {
+      /**
+       * The provider's name for the error (Resend's `name`, e.g.
+       * `concurrent_idempotent_requests`), when its body gave one.
+       */
+      code?: string;
+    },
   ) {
     super(
       status === undefined
@@ -56,6 +84,7 @@ export class MailSendError extends Error {
         : `Failed to send mail: ${status}`,
       options,
     );
+    this.code = options?.code;
     this.name = 'MailSendError';
   }
 
@@ -67,8 +96,9 @@ export class MailSendError extends Error {
   /**
    * Whether the failure says nothing about the message itself, so the same
    * send may succeed later: a throttle (429), a fault on the provider's side
-   * (5xx), or a request that got no answer. Anything else -- an address or
-   * a body the provider refuses -- would only be refused again.
+   * (5xx), a timeout (408), a send under the same `idempotencyKey` still
+   * in flight, or a request that got no answer. Anything else -- an address
+   * or a body the provider refuses -- would only be refused again.
    *
    * A 5xx or a network error does not prove the mail was *not* accepted
    * (the answer may have been lost on its way back), so a caller that tries
@@ -78,6 +108,14 @@ export class MailSendError extends Error {
     return (
       this.status === undefined ||
       this.isRateLimited() ||
+      // A request the provider gave up waiting for says nothing about the
+      // mail either.
+      this.status === 408 ||
+      // Another send under the same `idempotencyKey` is still in flight:
+      // its own outcome isn't known yet, and Resend says to ask again
+      // later. The other 409s (a changed body under a used key) would only
+      // be refused again.
+      (this.status === 409 && this.code === CONCURRENT_IDEMPOTENT_REQUESTS) ||
       (this.status >= 500 && this.status <= 599)
     );
   }
@@ -106,6 +144,23 @@ function parseRetryAfterMs(headers: Headers): number | undefined {
     return undefined;
   }
   return Math.max(0, at - Date.now());
+}
+
+/**
+ * The provider's name for the error a refused send answered with: the
+ * `name` of Resend's JSON error body. Resend doesn't document the body's
+ * shape, so anything else -- no body, not JSON, no string `name` -- yields
+ * `undefined` rather than throwing.
+ */
+async function readErrorName(res: Response): Promise<string | undefined> {
+  try {
+    const body: unknown = await res.json();
+    if (typeof body !== 'object' || body === null) return undefined;
+    const name = (body as Record<string, unknown>).name;
+    return typeof name === 'string' ? name : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -138,6 +193,8 @@ export class ResendMailSender implements MailSender {
   }
 
   async send(input: SendMailInput): Promise<void> {
+    // The key travels as a header, not as part of the mail.
+    const {idempotencyKey, ...mail} = input;
     let res: Response;
     try {
       res = await fetch(`${this.baseUrl}/emails`, {
@@ -145,8 +202,9 @@ export class ResendMailSender implements MailSender {
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
           'Content-Type': 'application/json',
+          ...(idempotencyKey ? {'Idempotency-Key': idempotencyKey} : {}),
         },
-        body: JSON.stringify({from: this.fromAddress, ...input}),
+        body: JSON.stringify({from: this.fromAddress, ...mail}),
       });
     } catch (error) {
       // `fetch` rejects (typically with a `TypeError`) when no answer came
@@ -155,7 +213,9 @@ export class ResendMailSender implements MailSender {
       throw new MailSendError(undefined, undefined, {cause: error});
     }
     if (!res.ok) {
-      throw new MailSendError(res.status, parseRetryAfterMs(res.headers));
+      throw new MailSendError(res.status, parseRetryAfterMs(res.headers), {
+        code: await readErrorName(res),
+      });
     }
   }
 }

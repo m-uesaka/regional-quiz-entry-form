@@ -4,6 +4,7 @@ import {MAIL_FROM_NAME} from './mailer';
 import {
   MAIL_QUEUE_MAX_ATTEMPTS,
   MAIL_QUEUE_RETRY_DELAY_SECONDS,
+  queueRetryDelaySeconds,
   handleBulkMailQueue,
   type BulkMailMessage,
 } from './bulk-mail-queue';
@@ -77,6 +78,8 @@ interface FetchLog {
   tokenInserts: Array<Record<string, unknown>>;
   /** The `email_verification_tokens` delete URLs. */
   tokenDeletes: string[];
+  /** The `Idempotency-Key` each mail was sent under, in `mails` order. */
+  idempotencyKeys: Array<string | null>;
 }
 
 const ENTRY_ID = '77777777-7777-7777-7777-777777777777';
@@ -135,6 +138,7 @@ function mockFetch(
     jobLookups: [],
     tokenInserts: [],
     tokenDeletes: [],
+    idempotencyKeys: [],
   };
 
   globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
@@ -148,6 +152,9 @@ function mockFetch(
     if (url.startsWith('https://api.resend.com/')) {
       const mail = JSON.parse(String(init?.body)) as SentMail;
       log.mails.push(mail);
+      log.idempotencyKeys.push(
+        new Headers(init?.headers).get('Idempotency-Key'),
+      );
       if (throttled.includes(mail.to)) {
         return Promise.resolve(new Response(null, {status: 429}));
       }
@@ -345,6 +352,45 @@ describe('handleBulkMailQueue', () => {
     expect(log.progress).toEqual([{p_job_id: JOB_ID, p_sent: 1, p_failed: 0}]);
   });
 
+  // A fixed wait would give up on an outage after ninety seconds; doubling
+  // it sees a message through one of about three and a half minutes.
+  it('waits longer before each redelivery', async () => {
+    mockFetch([jobRow(JOB_ID)], {unavailable: ['taro@example.com']});
+    const messages = [1, 2, 3].map(
+      attempts =>
+        new FakeMessage({jobId: JOB_ID, to: 'taro@example.com'}, attempts),
+    );
+
+    for (const message of messages) {
+      await handleBulkMailQueue(batchOf([message]), ENV, NO_RETRIES);
+    }
+
+    expect(messages.map(message => message.retriedWith)).toEqual([
+      {delaySeconds: 30},
+      {delaySeconds: 60},
+      {delaySeconds: 120},
+    ]);
+  });
+
+  it('sends each message under a key that stays the same across deliveries', async () => {
+    const log = mockFetch([jobRow(JOB_ID)]);
+    const first = new FakeMessage({jobId: JOB_ID, to: 'taro@example.com'});
+    const redelivered = new FakeMessage(
+      {jobId: JOB_ID, to: 'taro@example.com'},
+      2,
+    );
+
+    await handleBulkMailQueue(batchOf([first]), ENV);
+    await handleBulkMailQueue(batchOf([redelivered]), ENV);
+
+    expect(log.idempotencyKeys).toEqual([
+      `bulk-mail/${first.id}`,
+      `bulk-mail/${first.id}`,
+    ]);
+    // The key is a header, not part of the mail.
+    expect(log.mails[0]).not.toHaveProperty('idempotencyKey');
+  });
+
   it('retries a message whose send got no answer', async () => {
     const log = mockFetch([jobRow(JOB_ID)], {
       unreachable: ['taro@example.com'],
@@ -505,6 +551,8 @@ describe('handleBulkMailQueue', () => {
         '「テスト大会」のエントリーを確定してください',
       );
       expect(log.mails[0].html).toContain(`${ENV.FRONTEND_URL}/verify?token=`);
+      // Each delivery's link is new, so the key follows the link.
+      expect(log.idempotencyKeys).toEqual([`verification-resend/${TOKEN_ID}`]);
       expect(messages[0].acked).toBe(true);
       expect(log.tokenDeletes).toEqual([]);
       expect(log.progress).toEqual([
@@ -592,5 +640,16 @@ describe('handleBulkMailQueue', () => {
       expect(messages[0].acked).toBe(false);
       expect(messages[0].retried).toBe(true);
     });
+  });
+});
+
+describe('queueRetryDelaySeconds', () => {
+  it('doubles the wait for each delivery before this one', () => {
+    expect([1, 2, 3, 4].map(queueRetryDelaySeconds)).toEqual([
+      MAIL_QUEUE_RETRY_DELAY_SECONDS,
+      MAIL_QUEUE_RETRY_DELAY_SECONDS * 2,
+      MAIL_QUEUE_RETRY_DELAY_SECONDS * 4,
+      MAIL_QUEUE_RETRY_DELAY_SECONDS * 8,
+    ]);
   });
 });
