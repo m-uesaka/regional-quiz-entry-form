@@ -25,12 +25,30 @@ export function isFreeTextFieldType(
   return (FREE_TEXT_FIELD_TYPES as readonly FormFieldType[]).includes(type);
 }
 
+/**
+ * Names a field key may not take: what every plain object already has
+ * (`constructor`, `toString`, `__proto__`, ...) and `prototype`. Answers are
+ * kept in plain objects keyed by field key, where such a key reads or
+ * writes the object's own machinery instead of an answer (#299). The key
+ * pattern below lets only `constructor` of these through today; listing
+ * them all keeps the rule from depending on it.
+ */
+const RESERVED_FIELD_KEYS: ReadonlySet<string> = new Set([
+  ...Object.getOwnPropertyNames(Object.prototype),
+  'prototype',
+]);
+
 // A YAML double-quoted `"\ud800"` decodes to a lone surrogate, which the
 // database refuses (#298).
 const optionSchema = wellFormedText(z.string(), '選択肢');
 
 const BaseFormFieldDefYamlSchema = z.object({
-  key: z.string().regex(/^[a-z][a-z0-9_]*$/),
+  key: z
+    .string()
+    .regex(/^[a-z][a-z0-9_]*$/)
+    .refine(key => !RESERVED_FIELD_KEYS.has(key), {
+      message: 'このフィールドキーは使えません(予約語です)',
+    }),
   label: wellFormedText(z.string(), 'ラベル'),
   required: z.boolean().default(false),
 });

@@ -8,6 +8,25 @@ import {codePointLength} from '../schemas/text';
 export type CustomFieldValues = Record<string, string | string[]>;
 
 /**
+ * The answer `values` holds under `fieldKey`, or `undefined` for none.
+ *
+ * Read as an own property only: `values[fieldKey]` on a plain object finds
+ * what `Object.prototype` has under that name, so a field keyed
+ * `constructor` read the `Object` function as its answer when none was
+ * sent -- a required free-text field then passed as answered, and an unsent
+ * checkbox was refused as not being a list (#299). Every lookup of an answer
+ * by its field key goes through this.
+ * @param values The answers.
+ * @param fieldKey The field's key.
+ */
+export function customFieldValueOf(
+  values: Readonly<CustomFieldValues>,
+  fieldKey: string,
+): string | string[] | undefined {
+  return Object.hasOwn(values, fieldKey) ? values[fieldKey] : undefined;
+}
+
+/**
  * The longest a single custom field answer may be: a `textarea` /
  * `textfield` answer, or
  * one element of a `checkbox` answer. Without a bound one request could
@@ -219,7 +238,10 @@ export function findCustomFieldValuesErrors(
   }
 
   for (const fieldDef of fieldDefs) {
-    const error = findFieldError(fieldDef, values[fieldDef.fieldKey]);
+    const error = findFieldError(
+      fieldDef,
+      customFieldValueOf(values, fieldDef.fieldKey),
+    );
     if (error) {
       errors.push(error);
     }
