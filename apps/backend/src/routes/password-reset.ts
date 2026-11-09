@@ -2,6 +2,7 @@ import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
 import {
   PasswordResetRequestInputSchema,
+  TURNSTILE_ACTIONS,
   type PasswordResetRequestInput,
 } from '@regional-quiz/shared';
 import {PasswordResetConfirmInputSchema} from '@regional-quiz/shared/password-policy';
@@ -31,7 +32,7 @@ export const passwordResetRoute = new Hono<Env>()
       c => `ip:${clientIp(c)}`,
       MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
     ),
-    requireTurnstile(),
+    requireTurnstile(TURNSTILE_ACTIONS.PASSWORD_RESET),
     zValidator('json', PasswordResetRequestInputSchema),
     // Keyed on this endpoint as well as the address: on a key of the entry
     // form's, requests here could keep the victim from entering (#295).

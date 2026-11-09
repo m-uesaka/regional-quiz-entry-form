@@ -32,6 +32,23 @@ fields:
     expect(result.fields.length).toBe(3);
   });
 
+  // Answers are kept in plain objects keyed by field key (#299).
+  it('rejects a field key an Object.prototype member already has', () => {
+    for (const key of ['constructor', 'prototype']) {
+      expect(() =>
+        parseFormDefinitionYaml(
+          `tournamentSlug: saikyoi\nfields:\n  - key: ${key}\n    label: x\n    type: textarea\n`,
+        ),
+      ).toThrow('予約語');
+    }
+    // Only the exact names: a key containing one is an ordinary key.
+    expect(
+      parseFormDefinitionYaml(
+        'tournamentSlug: saikyoi\nfields:\n  - key: constructor_name\n    label: x\n    type: textarea\n',
+      ).fields,
+    ).toHaveLength(1);
+  });
+
   it('rejects an invalid field key', () => {
     const yamlText = `
 tournamentSlug: saikyoi

@@ -15,6 +15,7 @@ re-renders the form. See "A seeded form lives in a child component" in
 -->
 <script lang="ts">
   import {
+    customFieldValueOf,
     toFormFieldDefYaml,
     type CustomFieldValues,
     type FormFieldDef,
@@ -44,7 +45,7 @@ re-renders the form. See "A seeded form lives in a child component" in
   <DynamicFormField
     {field}
     bind:value={
-      () => customFieldValueFor(field.type, values[field.key]),
+      () => customFieldValueFor(field.type, customFieldValueOf(values, field.key)),
       answer => (values[field.key] = answer)
     }
     error={firstFieldError(fieldErrors, customFieldName(field.key))}

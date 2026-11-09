@@ -145,7 +145,11 @@ export function turnstileAwareFetch(
   return ((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString();
     if (url.includes('challenges.cloudflare.com')) {
-      return Promise.resolve(Response.json({success: verified}));
+      // Solved on the frontend `testBindings()` names, with no action: what
+      // a genuine token from that host looks like to every endpoint.
+      return Promise.resolve(
+        Response.json({success: verified, hostname: 'entry.example.com'}),
+      );
     }
     return fetchImpl(input as RequestInfo, init);
   }) as unknown as typeof fetch;

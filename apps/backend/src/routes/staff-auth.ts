@@ -5,6 +5,7 @@ import {deleteCookie, setCookie} from 'hono/cookie';
 import {
   StaffLoginInputSchema,
   StaffPasswordResetRequestInputSchema,
+  TURNSTILE_ACTIONS,
   type StaffClaims,
   type StaffLoginInput,
   type StaffPasswordResetRequestInput,
@@ -153,7 +154,7 @@ export const staffAuthRoute = new Hono<Env>()
       c => `ip:${clientIp(c)}`,
       MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
     ),
-    requireTurnstile(),
+    requireTurnstile(TURNSTILE_ACTIONS.STAFF_PASSWORD_RESET),
     zValidator('json', StaffPasswordResetRequestInputSchema),
     rateLimit<{out: {json: StaffPasswordResetRequestInput}}>(
       env => env.MAIL_TRIGGER_EMAIL_RATE_LIMITER,

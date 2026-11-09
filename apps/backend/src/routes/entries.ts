@@ -1,6 +1,10 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {EntryInputSchema, EntrySessionInputSchema} from '@regional-quiz/shared';
+import {
+  EntryInputSchema,
+  EntrySessionInputSchema,
+  TURNSTILE_ACTIONS,
+} from '@regional-quiz/shared';
 import type {Env, ParticipantEnv} from '../types/env';
 import {
   checkEntrySubmission,
@@ -28,7 +32,7 @@ export const entriesRoute = new Hono<Env>().post(
     c => `ip:${clientIp(c)}`,
     MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
   ),
-  requireTurnstile(),
+  requireTurnstile(TURNSTILE_ACTIONS.ENTRY),
   zValidator('json', EntryInputSchema),
   async c => {
     const input = c.req.valid('json');
@@ -107,7 +111,7 @@ export const entrySessionRoute = new Hono<ParticipantEnv>().post(
     c => `ip:${clientIp(c)}`,
     MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
   ),
-  requireTurnstile(),
+  requireTurnstile(TURNSTILE_ACTIONS.ENTRY),
   zValidator('json', EntrySessionInputSchema),
   async c => {
     const result = await createEntryForParticipant(

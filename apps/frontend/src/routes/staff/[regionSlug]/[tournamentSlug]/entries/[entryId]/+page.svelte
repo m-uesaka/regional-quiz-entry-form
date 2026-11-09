@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     BOOLEAN_CHECKBOX_LABELS,
+    customFieldValueOf,
     ENTRY_STATUS_LABELS,
     isBooleanCheckbox,
     isFreeTextFieldType,
@@ -26,7 +27,7 @@
   const customFieldEntries = $derived(
     data.entry.formFieldDefs.map(fieldDef => ({
       fieldDef,
-      value: data.entry.customFieldValues[fieldDef.fieldKey],
+      value: customFieldValueOf(data.entry.customFieldValues, fieldDef.fieldKey),
     })),
   );
 

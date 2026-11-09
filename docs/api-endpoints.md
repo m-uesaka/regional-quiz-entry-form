@@ -47,7 +47,7 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 どちらのセッションも、署名の検証に加えて**リクエストごとに DB 参照が 1 回入ります**(セッションの失効)。
 
 - **参加者**: `pwdChangedAt` はログイン時点の `participants.password_changed_at`(エポックミリ秒)で、`requireParticipant()` が毎リクエストその列を読み直し、**値が動いていたら 401** にします。パスワード再設定でこの列が更新されるため、再設定前に発行された Cookie(盗まれたものを含む)はその時点で使えなくなります。ステートレスな JWT のままだと、パスワードを変えても攻撃者のアクセスが最大 7 日間続いてしまいます。
-- **スタッフ**(Task 11-3): `sessionsValidFrom` はログイン時点の `staff_accounts.sessions_valid_from`(エポックミリ秒)で、スタッフ用のミドルウェアすべて(`requireStaff()` / `requireGeneralStaff()` / `requireStaffForTournament()` / `requireStaffForEntry()`、期間外の `requireOpenEntryPeriodOrStaff()`)が毎リクエストその列を読み直し、**値が動いていたら 401** にします。この列は統括スタッフの明示的な無効化(`POST /api/staff/accounts/:id/revoke-sessions`、12 章)とパスワード再設定(`reset_staff_password()`)で進みます。スタッフの Cookie は参加者全員の氏名・ふりがな・メールアドレスに届くので、漏れたときに 12 時間止められないことの影響は参加者セッションより大きく、列名を `password_changed_at` にしていないのは端末紛失・Cookie の漏洩などパスワード変更以外でも切れるようにするためです。ただし切れるのはセッションだけで、**パスワードを知っている人の再ログインは止められません**。締め出すにはアカウントを無効化します(`POST /api/staff/accounts/:id/disable`、12 章)。無効化されたアカウントのセッションは、この列の値にかかわらず 401 です(`staff_accounts.disabled_at` も同じ読み取りで見ています)。
+- **スタッフ**(Task 11-3): `sessionsValidFrom` はログイン時点の `staff_accounts.sessions_valid_from`(エポックミリ秒)で、スタッフ用のミドルウェアすべて(`requireStaff()` / `requireGeneralStaff()` / `requireStaffForTournament()` / `requireStaffForEntry()`、期間外の `requireOpenEntryPeriodOrStaff()`)が毎リクエストその列を読み直し、**値が動いていたら 401** にします。この列は統括スタッフの明示的な無効化(`POST /api/staff/accounts/:id/revoke-sessions`、12 章)とパスワード再設定(`reset_staff_password()`)で進みます。スタッフの Cookie は参加者全員の氏名・ふりがな・メールアドレスに届くので、漏れたときに 12 時間止められないことの影響は参加者セッションより大きく、列名を `password_changed_at` にしていないのは端末紛失・Cookie の漏洩などパスワード変更以外でも切れるようにするためです。ただし切れるのはセッションだけで、**パスワードを知っている人の再ログインは止められません**。締め出すにはアカウントを無効化します(`POST /api/staff/accounts/:id/disable`、12 章)。無効化されたアカウントのセッションは、この列の値にかかわらず 401 です(`staff_accounts.disabled_at` も同じ読み取りで見ています)。同じ読み取りで、クレームの `role` / `regionId` / `tournamentType` がアカウントの `role` / `region_id` / `tournament_type` と一致することも確かめ、一致しなければ 401 にします(#296)。担当範囲の判定はクレームで行うため、SQL などでアカウントの役割や担当を変えたときに、古い権限のセッションが残らないようにするためです。再ログインすれば今の値でクレームが発行されます。
 
 どちらも、**列を読めなかったときは 401 ではなく 500** を返します。セッション自体は正しいかもしれず、DB 障害でログイン画面に追い返すべきではないためです。行が消えている(アカウント削除)場合は失効と同じく 401 です。`sessionsValidFrom` を持たない古いスタッフ Cookie(Task 11-3 以前に発行されたもの)はクレームの形の検証で落ち、未ログインと同じ扱いになります。
 
@@ -83,7 +83,7 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 2. `isAcceptingEntries()`(`packages/shared`。期間内で、かつ一時中断(`entries_paused`、`0039`)されていない)が真なら、セッションを見ずに通過
 3. 受付中でなければ `staff_session` を読む。`staff_session` が**付いているのに検証できなかった**場合(期限切れ・改竄)は **401** `{"error": "staff session expired"}`。セッションが切れただけのスタッフをログイン画面に戻すためで、セッションを最初から持たない訪問者(4 の 403)と区別する必要があるのはこの点です
 4. セッションが無ければ **403** `{"error": "entry period closed"}`。期間内だが一時中断中のときは `{"error": "entries paused"}`(フォーム側で「一時中断しています」と出し分けるため。6 も同じ)
-5. セッションの失効を確かめる(`staff_accounts.sessions_valid_from`)。失効していれば 3 と同じ **401** `{"error": "staff session expired"}`、列を読めなければ **500**
+5. セッションの失効を確かめる(`staff_accounts.sessions_valid_from`、`disabled_at`、クレームの役割・担当とアカウントの一致)。失効していれば 3 と同じ **401** `{"error": "staff session expired"}`、列を読めなければ **500**
 6. 担当スタッフでなければ **403** `{"error": "entry period closed"}`
 
 失効の確認を範囲の確認より先にしているのは、スタッフ用ミドルウェアと同じ理由です。失効したセッションは対象の大会にかかわらず死んでいるので、他地域のフォームを開いた場合でも 403 ではなく 401 で返し、ログイン画面に戻します。
@@ -149,6 +149,8 @@ IP 鍵は、IPv4 はアドレスそのまま、IPv6 は**先頭 /64**(`2001:db8:
 メールを送る 2 本は、上記に加えて **Turnstile のトークン**を要求します。トークンはリクエストボディではなく **`cf-turnstile-response` ヘッダ**で受け取ります(送信のたびに使い捨てるものなので、`packages/shared` のスキーマ — マイページの編集フォームや DB への insert も組み立てる — には入れません)。フロントエンドはウィジェットがフォームに差し込む同名の hidden control を読み、ヘッダに載せ替えます。載せる前に `$lib/turnstile.ts` の `readTurnstileToken()` を通し、**HTTP ヘッダに載らない値(改行・制御文字・非 ASCII・極端に長い値)は空文字に落とします**。フォームアクションには直接 POST できるので、この control の値は呼び出し側の任意です。そのまま渡すと `new Request()` が `TypeError` を投げ、Turnstile が返すべき 400 ではなく 500 のエラーページになります。空文字はトークン無しと同じ扱い(fail closed の 400)です。
 
 検証は `lib/turnstile.ts` の `verifyTurnstile()` が Cloudflare の siteverify API に対して行い、**トークンが無い場合・無効な場合・siteverify に到達できない場合のいずれも 400 `{"error": "turnstile verification failed"}`** で落とします(fail closed)。Cloudflare 側の一時障害で素通しになると、そのままメール爆撃の口が開くためです。3 者を区別しないのは、どれも「もう一度ウィジェットを解いてやり直す」で直るからです。
+
+**解いた場所とフォームも確かめます**(#297)。siteverify の応答の `hostname` が `FRONTEND_URL`(と `CSRF_TRUSTED_ORIGINS`)のホスト名のどれかでなければ、同じく 400 です。sitekey の許可ホストに staging と本番を共用で入れている場合に、staging で解いたトークンを本番で使えないようにするためです。また、ウィジェットはフォームごとに `action`(`TURNSTILE_ACTIONS`: エントリー `entry`、参加者の再設定 `password-reset`、スタッフの再設定 `staff-password-reset`)を付けて描画し、別のフォームの `action` を持つトークンは 400 にします。`action` の無いトークンは通します(バックエンドがフロントエンドより先にデプロイされる間に、古いページで解かれたトークンのため)。Cloudflare のテスト用シークレット(ローカル開発と E2E)の応答はダミーなので、ホスト名と `action` は確かめません。`remoteip` は送りません(理由は `lib/turnstile.ts` のコメント)。
 
 **トークンは使い捨てです。** siteverify に一度通したトークンを再送すると Cloudflare は `timeout-or-duplicate` を返すため、この 2 本のフォームは送信が拒否された(429・401・400 など何であれ)たびにウィジェットを描き直します。フロントエンドの 2 つのフォームは `use:enhance` + `fail()` でその場に再描画されるだけなので、放っておくと hidden control に使用済みトークンが残り、次の送信が「本当の失敗理由」ではなく Turnstile の 400 で落ちてしまいます。`$lib/components/Turnstile.svelte` が `reset()` を公開し、各フォームの `enhance` コールバックがこれを呼びます。
 

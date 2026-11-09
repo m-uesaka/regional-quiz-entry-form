@@ -2,6 +2,7 @@
   import {
     REGULATION_LABEL_MAX_LENGTH,
     REGULATION_SHEET_NAME,
+    maxLengthAttribute,
   } from '@regional-quiz/shared';
   import ReorderControls from '$lib/components/ReorderControls.svelte';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
@@ -132,7 +133,7 @@
         </p>
       </div>
       <div class="flex flex-col gap-1.5">
-        <Label for="regulation-import-spreadsheet-id">スプレッドシートID</Label>
+        <Label for="regulation-import-spreadsheet-id">スプレッドシート(URL または ID)</Label>
         <Input
           id="regulation-import-spreadsheet-id"
           class="w-full"
@@ -199,7 +200,7 @@
               class="w-full"
               name="regulations[{index}].label"
               type="text"
-              maxlength={REGULATION_LABEL_MAX_LENGTH}
+              maxlength={maxLengthAttribute(REGULATION_LABEL_MAX_LENGTH)}
               value={row.label}
             />
           </div>

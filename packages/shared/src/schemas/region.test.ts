@@ -1,5 +1,6 @@
 import {describe, expect, it} from 'bun:test';
 import {
+  REGION_NAME_MAX_LENGTH,
   RegionCreateInputSchema,
   RegionSlugSchema,
   RegionUpdateInputSchema,
@@ -125,5 +126,48 @@ describe('RegionUpdateInputSchema', () => {
     expect(RegionUpdateInputSchema.safeParse({slug: 'kanto'}).success).toBe(
       false,
     );
+  });
+});
+
+describe('RegionCreateInputSchema name', () => {
+  // A trailing space made the region impossible to find from the bulk
+  // import, which trims its cells (#300).
+  it('trims the name, full-width spaces and line breaks included', () => {
+    expect(
+      RegionCreateInputSchema.parse({slug: 'tokyo', name: '\u3000東京 \n'})
+        .name,
+    ).toBe('東京');
+    expect(RegionUpdateInputSchema.parse({name: ' 東 京 '}).name).toBe('東 京');
+  });
+
+  it('refuses a name that is blank once trimmed, in Japanese', () => {
+    const result = RegionCreateInputSchema.safeParse({
+      slug: 'tokyo',
+      name: ' ',
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.flatten().fieldErrors).toEqual({
+      name: ['地域名を入力してください'],
+    });
+  });
+
+  it('counts the limit in code points and refuses a lone surrogate', () => {
+    expect(
+      RegionCreateInputSchema.safeParse({
+        slug: 'tokyo',
+        name: '𠮷'.repeat(REGION_NAME_MAX_LENGTH),
+      }).success,
+    ).toBe(true);
+    expect(
+      RegionCreateInputSchema.safeParse({
+        slug: 'tokyo',
+        name: '𠮷'.repeat(REGION_NAME_MAX_LENGTH + 1),
+      }).success,
+    ).toBe(false);
+    expect(
+      RegionCreateInputSchema.safeParse({slug: 'tokyo', name: '\ud800'})
+        .success,
+    ).toBe(false);
   });
 });

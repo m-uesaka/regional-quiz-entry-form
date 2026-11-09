@@ -2,6 +2,7 @@ import {describe, expect, it} from 'bun:test';
 import type {FormFieldDef} from '../schemas/form-definition';
 import {
   CUSTOM_FIELD_VALUE_MAX_LENGTH,
+  customFieldValueOf,
   customFieldValuesLength,
   findCustomFieldValuesError,
   findCustomFieldValuesErrors,
@@ -232,5 +233,58 @@ describe('findCustomFieldValuesErrors', () => {
     expect(errors).toMatchObject([
       {reason: 'expects-list', fieldKey: 'agree_to_rules'},
     ]);
+  });
+});
+
+// A field keyed after something every object has read `Object.prototype`'s
+// member as its answer when none was sent (#299). Such keys are refused
+// when a form is defined, but a definition stored before that still reaches
+// these checks.
+describe('a field keyed like an Object.prototype member', () => {
+  function fieldKeyed(
+    fieldKey: string,
+    fieldType: FormFieldDef['fieldType'],
+    options: string[] | null = null,
+  ): FormFieldDef {
+    return {
+      fieldKey,
+      label: 'ラベル',
+      plainLabel: 'ラベル',
+      fieldType,
+      required: true,
+      options,
+      displayOrder: 0,
+    };
+  }
+
+  it('reads a required free-text field left out as unanswered', () => {
+    for (const fieldKey of ['constructor', 'valueOf', 'hasOwnProperty']) {
+      expect(
+        findCustomFieldValuesError([fieldKeyed(fieldKey, 'textarea')], {}),
+      ).toMatchObject({fieldKey, reason: 'required'});
+    }
+  });
+
+  it('reads an unsent checkbox as no answer, not as a value that is not a list', () => {
+    expect(
+      findCustomFieldValuesError(
+        [fieldKeyed('constructor', 'checkbox', ['A', 'B'])],
+        {},
+      ),
+    ).toMatchObject({fieldKey: 'constructor', reason: 'required'});
+  });
+
+  it('still reads an answer that was sent under that key', () => {
+    expect(
+      findCustomFieldValuesError([fieldKeyed('constructor', 'textarea')], {
+        constructor: '回答',
+      }),
+    ).toBeNull();
+  });
+
+  it('answers customFieldValueOf() with own properties only', () => {
+    expect(customFieldValueOf({}, 'constructor')).toBeUndefined();
+    expect(customFieldValueOf({}, '__proto__')).toBeUndefined();
+    expect(customFieldValueOf({constructor: 'x'}, 'constructor')).toBe('x');
   });
 });
