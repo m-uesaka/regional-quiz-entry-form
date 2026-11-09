@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {wellFormedText} from './text';
 
 export const TournamentTypeSchema = z.enum(['saikyoi', 'shinjinou']);
 export type TournamentType = z.infer<typeof TournamentTypeSchema>;
@@ -134,7 +135,7 @@ const TournamentInputFieldsSchema = TournamentSchema.omit({
   // with the rest of the tournament's settings.
   entriesPaused: true,
 }).extend({
-  name: z.string().trim().default(''),
+  name: wellFormedText(z.string().trim(), '大会名').default(''),
   questionSet: QuestionSetInputSchema.default(null),
 });
 

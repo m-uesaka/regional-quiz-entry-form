@@ -102,6 +102,19 @@ describe('POST /tournaments/:tournamentId/entries (request validation)', () => {
     expect(res.status).toBe(400);
   });
 
+  // `JSON.stringify` writes it as the `\ud800` escape, as an attacker would.
+  // The database refused it with a 500 before the schema did (#298).
+  it('rejects a lone surrogate in the free text or an answer with 400', async () => {
+    for (const body of [
+      {...validBody, freeText: '\ud800'},
+      {...validBody, customFieldValues: {comment: '\udc00'}},
+    ]) {
+      const res = await postEntry(TOURNAMENT_PATH, body);
+
+      expect(res.status).toBe(400);
+    }
+  });
+
   it('rejects mismatched password confirmation with 400', async () => {
     const res = await postEntry(TOURNAMENT_PATH, {
       ...validBody,
