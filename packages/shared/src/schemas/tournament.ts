@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {wellFormedText} from './text';
+import {codePointLength, wellFormedText} from './text';
 
 export const TournamentTypeSchema = z.enum(['saikyoi', 'shinjinou']);
 export type TournamentType = z.infer<typeof TournamentTypeSchema>;
@@ -33,7 +33,7 @@ export const QuestionSetInputSchema = z
       .string()
       // Code points, not the UTF-16 units `.max()` counts: a kanji outside
       // the BMP (𠮷) is one character to the database.
-      .refine(value => [...value].length <= QUESTION_SET_MAX_LENGTH, {
+      .refine(value => codePointLength(value) <= QUESTION_SET_MAX_LENGTH, {
         message: `問題セットは${QUESTION_SET_MAX_LENGTH}文字以内で入力してください`,
       })
       .refine(value => !/\s/.test(value), {

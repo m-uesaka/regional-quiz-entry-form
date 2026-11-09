@@ -3,6 +3,7 @@
     CUSTOM_FIELD_VALUE_MAX_LENGTH,
     isFreeTextFieldType,
     type FormFieldDefYaml,
+    maxLengthAttribute,
   } from '@regional-quiz/shared';
   import {customFieldName} from '$lib/custom-field-name';
   import FieldLabelText from '$lib/components/FieldLabelText.svelte';
@@ -88,7 +89,7 @@
     name={controlName}
     multiline={field.type === 'textarea'}
     required={field.required}
-    maxlength={CUSTOM_FIELD_VALUE_MAX_LENGTH}
+    maxlength={maxLengthAttribute(CUSTOM_FIELD_VALUE_MAX_LENGTH)}
     {error}
     bind:value={() => (typeof value === 'string' ? value : ''), typed => (value = typed)}
   >
