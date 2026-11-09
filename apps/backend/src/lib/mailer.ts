@@ -122,6 +122,48 @@ export class MailSendError extends Error {
 }
 
 /**
+ * The mail sender was configured with an API origin that can't be posted
+ * to -- not a URL, or not an `http:`/`https:` one (#344). Unlike
+ * `MailSendError` it says nothing about the provider: every send would fail
+ * the same way until the binding is fixed, so nothing that catches it
+ * should try the send again.
+ */
+export class MailConfigError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'MailConfigError';
+  }
+}
+
+/**
+ * The URL a send is posted to, under the API origin `baseUrl`.
+ * @param baseUrl The API origin, with or without a trailing slash.
+ * @throws MailConfigError If the result is not an `http:`/`https:` URL.
+ */
+function emailsEndpoint(baseUrl: string): string {
+  // A configured origin may or may not carry a trailing slash, and
+  // `https://api.resend.com//emails` is not the same path to Resend.
+  const raw = `${baseUrl.replace(/\/+$/, '')}/emails`;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch (error) {
+    throw new MailConfigError(
+      `Invalid mail API base URL: ${JSON.stringify(baseUrl)}`,
+      {cause: error},
+    );
+  }
+  // `localhost:8787` (no scheme) does parse, as the scheme `localhost:`;
+  // only `fetch` would refuse it, as if the network had failed.
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new MailConfigError(
+      `Invalid mail API base URL: ${JSON.stringify(baseUrl)} is not http(s)`,
+    );
+  }
+  return url.href;
+}
+
+/**
  * Reads a `Retry-After`-style header into milliseconds.
  *
  * `Retry-After` is either a delay in seconds or an HTTP date; Resend also
@@ -172,7 +214,12 @@ async function readErrorName(res: Response): Promise<string | undefined> {
  * `MailSender` interface above, not on Resend specifically.
  */
 export class ResendMailSender implements MailSender {
-  private readonly baseUrl: string;
+  /**
+   * The URL every send is posted to, built and checked once here so that a
+   * bad origin is a configuration error rather than a send that `fetch`
+   * refuses -- which would look like a network error, i.e. worth retrying.
+   */
+  private readonly endpoint: string;
 
   /**
    * @param apiKey The Resend API key.
@@ -181,15 +228,14 @@ export class ResendMailSender implements MailSender {
    *     pass this, pointing the sender at a local stub so a test run
    *     neither needs a real API key nor delivers mail; production leaves
    *     it at Resend's own origin.
+   * @throws MailConfigError If `baseUrl` is not an `http:`/`https:` URL.
    */
   constructor(
     private readonly apiKey: string,
     private readonly fromAddress: string,
     baseUrl: string = RESEND_API_BASE_URL,
   ) {
-    // A configured origin may or may not carry a trailing slash, and
-    // `https://api.resend.com//emails` is not the same path to Resend.
-    this.baseUrl = baseUrl.replace(/\/+$/, '');
+    this.endpoint = emailsEndpoint(baseUrl);
   }
 
   async send(input: SendMailInput): Promise<void> {
@@ -197,7 +243,7 @@ export class ResendMailSender implements MailSender {
     const {idempotencyKey, ...mail} = input;
     let res: Response;
     try {
-      res = await fetch(`${this.baseUrl}/emails`, {
+      res = await fetch(this.endpoint, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
@@ -227,15 +273,35 @@ export class ResendMailSender implements MailSender {
  * `ResendMailSender` directly, so that `MAIL_API_BASE_URL` — the binding
  * the end-to-end tests point at their own stub — takes effect everywhere
  * mail is sent, not just where a test happened to look.
+ *
+ * An invalid `MAIL_API_BASE_URL` is logged here and every send through the
+ * returned sender rejects with a `MailConfigError`, which no caller retries.
  * @param env The Worker bindings.
  */
 export function createMailSender(env: Bindings): MailSender {
   // An unset binding arrives as `undefined`, and a blank one as an empty
   // string; neither is a usable origin, so both fall back to Resend.
   const baseUrl = env.MAIL_API_BASE_URL?.trim();
-  return new ResendMailSender(
-    env.MAIL_API_KEY,
-    `${MAIL_FROM_NAME} <${env.MAIL_FROM_ADDRESS}>`,
-    baseUrl || undefined,
-  );
+  try {
+    return new ResendMailSender(
+      env.MAIL_API_KEY,
+      `${MAIL_FROM_NAME} <${env.MAIL_FROM_ADDRESS}>`,
+      baseUrl || undefined,
+    );
+  } catch (error) {
+    if (!(error instanceof MailConfigError)) throw error;
+    // The binding is checked here, before anything is sent, but the error
+    // goes to each send rather than out of this call. Several callers
+    // create the sender outside the `try` that handles a failed send --
+    // after a waitlist promotion is committed, before a queue batch is
+    // settled message by message -- so throwing here would turn the
+    // misconfiguration into a 500 for a request that otherwise succeeded,
+    // or into a redelivery of the whole queue batch. As a failed send, it
+    // takes each caller's own path for a permanent failure instead: none
+    // of them retries an error that isn't a transient `MailSendError`.
+    console.error('MAIL_API_BASE_URL is invalid; no mail can be sent', {
+      error,
+    });
+    return {send: () => Promise.reject(error)};
+  }
 }
