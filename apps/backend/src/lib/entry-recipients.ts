@@ -2,13 +2,7 @@ import type {EntryStatus, StaffMailStatusFilter} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {createDbClient} from './db';
 import type {InternalFailure} from './errors';
-
-// PostgREST caps every response at the project's `db-max-rows`, so a single
-// unbounded select silently stops at that many entries. Recipients are
-// therefore read one explicit page at a time until a short page arrives.
-// Keep this at or below the configured `db-max-rows`, or the last row of
-// each page would be dropped rather than paged over.
-export const RECIPIENT_PAGE_SIZE = 500;
+import {fetchAllRows, SELECT_PAGE_SIZE} from './paged-select';
 
 /**
  * Who a send with no `statusFilter` reaches: the entries whose owner
@@ -55,29 +49,21 @@ type RecipientsResult = {ok: true; recipients: string[]} | InternalFailure;
  * @param env The Worker bindings.
  * @param tournamentId The tournament whose entries to mail.
  * @param statusFilter The single entry status to narrow the recipients to.
- * @param pageSize Rows to read per request; must be a positive integer.
+ * @param pageSize Rows to read per request; see `fetchAllRows()`.
  * @throws RangeError If `pageSize` is not a positive integer.
  */
 export async function fetchTournamentRecipients(
   env: Bindings,
   tournamentId: string,
   statusFilter?: StaffMailStatusFilter,
-  pageSize: number = RECIPIENT_PAGE_SIZE,
+  pageSize: number = SELECT_PAGE_SIZE,
 ): Promise<RecipientsResult> {
-  // A page size of 0 (or a fractional/negative one) would have every request
-  // come back empty without ever satisfying the short-page check below, i.e.
-  // an endless request loop, so reject it up front rather than hanging the
-  // caller.
-  if (!Number.isInteger(pageSize) || pageSize < 1) {
-    throw new RangeError(
-      `pageSize must be a positive integer, got ${pageSize}`,
-    );
-  }
-
   const db = createDbClient(env);
-  const recipients = new Set<string>();
-
-  for (let page = 0; ; page++) {
+  // Paged through `fetchAllRows()` because the Data API silently trims a
+  // single response to its `max_rows`; that helper only stops on an empty
+  // page, so a hosted `max_rows` below the page size still reaches every
+  // recipient (#292).
+  const result = await fetchAllRows((from, to) => {
     let query = db
       .from('entries')
       // `!inner` so the filter on the participant drops the entry itself,
@@ -88,23 +74,17 @@ export async function fetchTournamentRecipients(
     query = statusFilter
       ? query.eq('status', statusFilter)
       : query.in('status', [...DEFAULT_RECIPIENT_STATUSES]);
-
-    const {data, error} = await query
-      // Ordered by the primary key so the pages partition the rows instead
-      // of overlapping: without an order PostgREST makes no promise that
-      // two ranges see the same row order.
-      .order('id', {ascending: true})
-      .range(page * pageSize, (page + 1) * pageSize - 1);
-    if (error) {
-      return {ok: false, status: 500, error: error.message};
-    }
-
-    const rows = data ?? [];
-    for (const row of rows) {
-      recipients.add(row.participants.email);
-    }
-    if (rows.length < pageSize) {
-      return {ok: true, recipients: [...recipients]};
-    }
+    // Ordered by the primary key so the pages partition the rows instead
+    // of overlapping: without an order PostgREST makes no promise that two
+    // ranges see the same row order.
+    return query.order('id', {ascending: true}).range(from, to);
+  }, pageSize);
+  if (result.error) {
+    return {ok: false, status: 500, error: result.error.message};
   }
+
+  // De-duplicated: a participant holding several matching entries is
+  // mailed once.
+  const recipients = new Set(result.rows.map(row => row.participants.email));
+  return {ok: true, recipients: [...recipients]};
 }
