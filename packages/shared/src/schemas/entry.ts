@@ -9,6 +9,7 @@ import {
 } from '../logic/custom-field-values';
 import {FormFieldDefSchema} from './form-definition';
 import {TournamentTypeSchema} from './tournament';
+import {wellFormedText} from './text';
 
 // Upper bounds on what one entry may store (#122). Without them a single
 // request could store megabytes, and the public entry list, the staff list
@@ -65,13 +66,18 @@ function nameFieldSchema(label: string) {
 // option. The per-answer bound is also checked field by field in
 // `findCustomFieldValuesErrors()`, which is what puts the message under the
 // control that caused it.
-const customFieldValueSchema = z.string().max(CUSTOM_FIELD_VALUE_MAX_LENGTH, {
-  message: `回答は${CUSTOM_FIELD_VALUE_MAX_LENGTH}文字以内で入力してください`,
-});
+// Answers are stored in jsonb, which refuses a lone surrogate as the text
+// columns do (#298).
+const customFieldValueSchema = wellFormedText(
+  z.string().max(CUSTOM_FIELD_VALUE_MAX_LENGTH, {
+    message: `回答は${CUSTOM_FIELD_VALUE_MAX_LENGTH}文字以内で入力してください`,
+  }),
+  '回答',
+);
 
 export const CustomFieldValuesInputSchema = z
   .record(
-    z.string(),
+    wellFormedText(z.string(), '追加項目'),
     z.union([customFieldValueSchema, z.array(customFieldValueSchema)]),
   )
   .refine(
@@ -106,12 +112,12 @@ export const EntryInputSchema = z
     regulationIds: z
       .array(z.string().uuid({message: 'レギュレーションを選択してください'}))
       .min(1, {message: 'レギュレーションを選択してください'}),
-    freeText: z
-      .string()
-      .max(ENTRY_FREE_TEXT_MAX_LENGTH, {
+    freeText: wellFormedText(
+      z.string().max(ENTRY_FREE_TEXT_MAX_LENGTH, {
         message: `自由記述は${ENTRY_FREE_TEXT_MAX_LENGTH}文字以内で入力してください`,
-      })
-      .optional(),
+      }),
+      '自由記述',
+    ).optional(),
     customFieldValues: CustomFieldValuesInputSchema,
   })
   .refine(data => data.password === data.passwordConfirm, {
