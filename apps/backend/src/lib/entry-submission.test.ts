@@ -728,7 +728,8 @@ describe.skipIf(!dbReachable)(
       await verifyAddress(input.email);
       await sql`
         update entries
-        set status = 'cancelled', cancelled_at = now(), email_verified_at = now()
+        set status = 'cancelled', cancelled_at = now(), email_verified_at = now(),
+            confirmed_at = now()
         where id = ${firstResult.entry.id}
       `;
 
@@ -746,7 +747,8 @@ describe.skipIf(!dbReachable)(
       expect(reEntryResult.entry.id).toBe(firstResult.entry.id);
       expect(mailSendCount).toBe(1);
       const rows = await sql`
-        select id, status, display_name, cancelled_at, email_verified_at
+        select id, status, display_name, cancelled_at, email_verified_at,
+               confirmed_at
         from entries where tournament_id = ${fixture.tournamentId}
       `;
       expect(rows.length).toBe(1);
@@ -754,6 +756,7 @@ describe.skipIf(!dbReachable)(
       expect(rows[0].display_name).toBe('再エントリー太郎');
       expect(rows[0].cancelled_at).toBeNull();
       expect(rows[0].email_verified_at).toBeNull();
+      expect(rows[0].confirmed_at).toBeNull();
     });
 
     it('restores the cancellation when the re-entry verification email fails', async () => {
@@ -765,7 +768,8 @@ describe.skipIf(!dbReachable)(
       await verifyAddress(input.email);
       await sql`
         update entries
-        set status = 'cancelled', cancelled_at = now(), email_verified_at = now()
+        set status = 'cancelled', cancelled_at = now(), email_verified_at = now(),
+            confirmed_at = now()
         where id = ${firstResult.entry.id}
       `;
       const previousFetch = globalThis.fetch;
@@ -799,7 +803,7 @@ describe.skipIf(!dbReachable)(
         // original entry's contents, not the failed re-entry's.
         const rows = await sql`
           select id, status, cancelled_at, display_name, free_text,
-                 email_verified_at
+                 email_verified_at, confirmed_at
           from entries where tournament_id = ${fixture.tournamentId}
         `;
         expect(rows.length).toBe(1);
@@ -809,6 +813,8 @@ describe.skipIf(!dbReachable)(
         expect(rows[0].display_name).toBe(input.displayName);
         expect(rows[0].free_text).toBe(input.freeText ?? null);
         expect(rows[0].email_verified_at).not.toBeNull();
+        // Still holding its region, as it did before the re-entry (0052).
+        expect(rows[0].confirmed_at).not.toBeNull();
       } finally {
         globalThis.fetch = previousFetch;
       }
@@ -1650,12 +1656,17 @@ describe.skipIf(!dbReachable)(
          * has them enter a tournament in another region.
          * @param suffix The region slug suffix, as in `createFixture()`.
          * @param cancelledAt When the entry was cancelled.
-         * @param verifiedAt When it was confirmed, or null if it never was.
+         * @param verifiedAt When its link was followed, or null if it never
+         *     was.
+         * @param confirmedAt When it took a seat, or null if it never did.
+         *     Following the link also sets `verifiedAt` for an entry that
+         *     only joined the waitlist (#287).
          */
         async function enterAfterCancelling(
           suffix: string,
           cancelledAt: string,
           verifiedAt: string | null,
+          confirmedAt: string | null = verifiedAt,
         ) {
           const closed = await createFixture(`${suffix}-closed`, {
             entryClosesAt: closedAt,
@@ -1666,7 +1677,8 @@ describe.skipIf(!dbReachable)(
           await sql`
             update entries
             set cancelled_at = ${cancelledAt},
-                email_verified_at = ${verifiedAt}
+                email_verified_at = ${verifiedAt},
+                confirmed_at = ${confirmedAt}
             where tournament_id = ${closed.tournamentId}
           `;
           return createEntry(
@@ -1702,6 +1714,19 @@ describe.skipIf(!dbReachable)(
           const result = await enterAfterCancelling(
             'unconfirmed',
             '2020-07-01T00:00:00Z',
+            null,
+          );
+
+          expect(result.ok).toBe(true);
+        });
+
+        // Verified, but only ever on the waitlist: it never had a seat to
+        // give up, so it holds no region either (#287).
+        it('allows it after a waitlisted entry cancelled past the close', async () => {
+          const result = await enterAfterCancelling(
+            'waitlisted-late',
+            '2020-07-01T00:00:00Z',
+            '2020-05-01T00:00:00Z',
             null,
           );
 

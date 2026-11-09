@@ -44,6 +44,7 @@ export type Database = {
       entries: {
         Row: {
           cancelled_at: string | null
+          confirmed_at: string | null
           created_at: string
           custom_field_values: Json
           display_name: string
@@ -60,6 +61,7 @@ export type Database = {
         }
         Insert: {
           cancelled_at?: string | null
+          confirmed_at?: string | null
           created_at?: string
           custom_field_values?: Json
           display_name: string
@@ -76,6 +78,7 @@ export type Database = {
         }
         Update: {
           cancelled_at?: string | null
+          confirmed_at?: string | null
           created_at?: string
           custom_field_values?: Json
           display_name?: string
@@ -580,6 +583,7 @@ export type Database = {
         }
         Returns: {
           cancelled_at: string | null
+          confirmed_at: string | null
           created_at: string
           custom_field_values: Json
           display_name: string

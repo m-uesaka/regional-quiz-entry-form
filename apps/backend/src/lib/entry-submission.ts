@@ -122,7 +122,7 @@ const PARTICIPANT_COLUMNS = 'id, region_id, password_hash, email_verified_at';
 /**
  * The participant's existing entry for the tournament, if there is one.
  *
- * Every column `reenter_cancelled_entry()` (migration 0041) overwrites is
+ * Every column `reenter_cancelled_entry()` (migrations 0041, 0052) overwrites is
  * selected, not just the ones the reuse decision is made on, so a re-entry
  * that fails afterwards can put the row back exactly as it was. A column added
  * to that function's `set` list has to be added here and to `rollbackEntry()`.
@@ -137,6 +137,7 @@ interface ExistingEntryRow extends Pick<
   | 'status'
   | 'waitlist_position'
   | 'email_verified_at'
+  | 'confirmed_at'
   | 'cancelled_at'
   | 'custom_field_values'
 > {
@@ -150,7 +151,7 @@ interface ExistingEntryRow extends Pick<
 const EXISTING_ENTRY_COLUMNS = `
   id, name, furigana, display_name, entry_regulations(regulation_id),
   free_text, custom_field_values, status, waitlist_position,
-  email_verified_at, cancelled_at
+  email_verified_at, confirmed_at, cancelled_at
 `;
 
 /**
@@ -245,6 +246,10 @@ async function rollbackEntry(
       status: existingEntry.status,
       waitlist_position: existingEntry.waitlist_position,
       email_verified_at: existingEntry.email_verified_at,
+      // Whether the cancelled entry still holds its region after the entry
+      // period (0052): losing it would let the participant into another
+      // region's tournament on the same question set.
+      confirmed_at: existingEntry.confirmed_at,
       cancelled_at: existingEntry.cancelled_at,
     })
     .eq('id', entryId);
