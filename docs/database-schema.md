@@ -230,7 +230,13 @@ flowchart TB
 `waitlist_position` について:
 
 - 1 始まりの整数です。`cancel_own_entry()` は waitlisted な行をキャンセルする際、後ろの行を1つずつ前に詰めます。
-- 繰り上げ(`promote_waitlisted_entries()`、`0037`)も、確定にした後で残りのキャンセル待ちを 1 から振り直します。そのため `confirm_entry_by_token()` の「次の順位 = 現在の waitlisted 件数 + 1」という採番が既存の順位と衝突しません。`0037` より前の `promote_next_waitlisted_entry()` は先頭を確定にするだけで後続を詰めなかったため欠番が残り、後から来た人が前から待っていた人と同じか小さい順位を得ることがありました(残っている欠番も、次に繰り上げが走った時点で詰められます)。
+- 繰り上げ(`promote_waitlisted_entries()`、`0037`)も、確定にした後で残りのキャンセル待ちを 1 から振り直します。`0037` より前の `promote_next_waitlisted_entry()` は先頭を確定にするだけで後続を詰めなかったため欠番が残り、後から来た人が前から待っていた人と同じか小さい順位を得ることがありました。
+- `confirm_entry_by_token()` の採番は「キャンセル待ちの最大の順位 + 1」です(`0051`、#286。それまでは「件数 + 1」で、欠番があると既存の順位と重なりました)。詰め直しは順番を保つためのもので、採番の正しさは詰め直しに頼りません。
+- 不変条件は制約で保証します(`0051`、#286。違反は `23514` / `23505`):
+  - `entries_waitlist_position_iff_waitlisted`: `check ((status = 'waitlisted') = (waitlist_position is not null))`。`waitlisted` の行には必ず順位があり、それ以外の行には無い
+  - `entries_waitlist_position_positive`: `check (waitlist_position > 0)`
+  - `entries_tournament_id_waitlist_position_key`: `unique (tournament_id, waitlist_position)` を **`deferrable initially deferred`** で。詰め直しの UPDATE は途中で同じ順位を一時的に作りうる(Postgres の即時の一意制約は行ごとに検査される)ので、コミット時に検査します。NULL は対象外なので `waitlisted` 以外の行には効きません
+  - `0051` は制約を足す前に既存の行を直します。`waitlisted` 以外の行の順位を消し、`waitlisted` の行を大会ごとに今の順(順位、同じ順位や順位なしは作成順・id 順)で 1 から振り直します
 
 ### entry_regulations — エントリーが選んだレギュレーション
 
@@ -466,7 +472,7 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 2. トークン行を `for update of evt` でロックしつつ取得。未知 / 使用済み / 期限切れなら SQLSTATE `P0003` を raise。
 3. 大会行を `for update` でロック(`capacity` も同時に取得)。
 4. **ロック取得後に**エントリーの `status` を読み直し、`pending_verification` でなければ `P0003` を raise(`0008` で追加)。
-5. `confirmed` 件数を数え、`capacity` に空きがあれば `confirmed`、なければ `waitlisted`(順位 = 現在の waitlisted 件数 + 1)。
+5. `confirmed` 件数・`waitlisted` 件数・キャンセル待ちの最大の順位を数え、キャンセル待ちが 1 件でもあるか `capacity` に空きがなければ `waitlisted`(順位 = 最大の順位 + 1。`0047`、`0051`)、それ以外は `confirmed`。
 6. エントリーと トークン(`used_at`)を更新し、参加者の `email_verified_at` が null なら打刻する(`0034` で追加、#189)。
 
 参加者行を最初に取るのは、`check_entry_seat()` が「参加者行 → 大会行(外部キー検査の `for key share`)」の順で取るのと揃え、`take_over_unverified_participant()` と直列化するためです。大会行を持ったまま参加者行を取るとデッドロックし得ます。`for no key update` なので、エントリーの INSERT が外部キー検査で参加者行に取る `for key share` とは衝突しません。

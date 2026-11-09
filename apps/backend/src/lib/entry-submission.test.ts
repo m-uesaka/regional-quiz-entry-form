@@ -164,11 +164,15 @@ describe.skipIf(!dbReachable)(
       tournamentId: string,
       status = 'confirmed',
     ): Promise<void> {
+      // A waitlisted entry needs a position, and only it may have one (0051).
+      const waitlistPosition = status === 'waitlisted' ? 1 : null;
       await sql`
         insert into entries (
-          participant_id, tournament_id, name, furigana, display_name, status
+          participant_id, tournament_id, name, furigana, display_name, status,
+          waitlist_position
         )
-        select id, ${tournamentId}, '山田太郎', 'ヤマダタロウ', '太郎', ${status}::entry_status
+        select id, ${tournamentId}, '山田太郎', 'ヤマダタロウ', '太郎', ${status}::entry_status,
+            ${waitlistPosition}::integer
           from participants where email = ${email}
       `;
     }

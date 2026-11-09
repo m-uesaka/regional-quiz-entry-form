@@ -15,6 +15,14 @@ import {
   ENTRY_NAME_MAX_LENGTH,
 } from '@regional-quiz/shared';
 import {DB_URL, isDbReachable} from '../test-support/db';
+import {
+  createEntryRow,
+  createTournamentAndRegulation,
+  createVerificationToken,
+  deleteTestRegionRows,
+  type TournamentFixture,
+} from '../test-support/db-fixtures';
+import {hashToken} from './token';
 
 // Probed once for the whole file rather than per `describe`, so a run without
 // a database pays for one failed connection instead of one per block.
@@ -1675,6 +1683,8 @@ describe.skipIf(!dbReachable)(
         furigana: 'ヤマダタロウ',
         display_name: '太郎',
         status,
+        // Only a waitlisted entry has a position, and it must (0051).
+        waitlist_position: status === 'waitlisted' ? 1 : null,
       })}`;
     }
 
@@ -2762,6 +2772,147 @@ describe.skipIf(!dbReachable)(
         select password_hash from participants where id = ${participantId}
       `;
       expect(row.password_hash).toBe('old-hash');
+    });
+  },
+);
+
+// The queue's order rests on its positions: a position only on a waitlisted
+// entry, never two alike in a tournament, and a new one behind the last
+// rather than at count + 1 (#286).
+describe.skipIf(!dbReachable)(
+  'waitlist positions (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const regionSlug = 'waitlist-position-test-region';
+    const emailDomain = 'waitlist-position-test.example.com';
+    let suffix = 0;
+
+    afterAll(async () => {
+      await deleteTestRegionRows(sql, regionSlug, emailDomain);
+      await sql.close();
+    });
+
+    // Capacity 1, so a confirmed entry fills it.
+    function createFixture(): Promise<TournamentFixture> {
+      suffix += 1;
+      return createTournamentAndRegulation(sql, `${regionSlug}-${suffix}`, {
+        capacity: 1,
+      });
+    }
+
+    async function refusalOf(query: PromiseLike<unknown>) {
+      try {
+        await query;
+        return undefined;
+      } catch (e: unknown) {
+        const {errno} = e as {errno?: string};
+        if (!errno) {
+          throw e;
+        }
+        return errno;
+      }
+    }
+
+    async function waitlistOf(tournamentId: string) {
+      return (await sql`
+        select id, waitlist_position from entries
+        where tournament_id = ${tournamentId} and status = 'waitlisted'
+        order by waitlist_position
+      `) as Array<{id: string; waitlist_position: number}>;
+    }
+
+    it('refuses a waitlisted entry without a position, and a position on any other', async () => {
+      const f = await createFixture();
+
+      const unplaced = await refusalOf(
+        createEntryRow(sql, f, emailDomain, {status: 'waitlisted'}),
+      );
+      const placedConfirmed = await refusalOf(
+        createEntryRow(sql, f, emailDomain, {
+          status: 'confirmed',
+          waitlistPosition: 1,
+        }),
+      );
+      const placedAtZero = await refusalOf(
+        createEntryRow(sql, f, emailDomain, {
+          status: 'waitlisted',
+          waitlistPosition: 0,
+        }),
+      );
+
+      expect(unplaced).toBe('23514');
+      expect(placedConfirmed).toBe('23514');
+      expect(placedAtZero).toBe('23514');
+    });
+
+    it('refuses two waitlisted entries at one position in a tournament', async () => {
+      const f = await createFixture();
+      const other = await createFixture();
+      await createEntryRow(sql, f, emailDomain, {
+        status: 'waitlisted',
+        waitlistPosition: 1,
+      });
+
+      // Another tournament's queue has positions of its own.
+      await createEntryRow(sql, other, emailDomain, {
+        status: 'waitlisted',
+        waitlistPosition: 1,
+      });
+      const duplicate = await refusalOf(
+        createEntryRow(sql, f, emailDomain, {
+          status: 'waitlisted',
+          waitlistPosition: 1,
+        }),
+      );
+
+      expect(duplicate).toBe('23505');
+    });
+
+    // Closing up the queue moves positions one at a time, passing through
+    // a duplicate; the constraint is checked at commit, not per row.
+    it('lets the queue be renumbered through a duplicate within a transaction', async () => {
+      const f = await createFixture();
+      const {participantId, entryId: head} = await createEntryRow(
+        sql,
+        f,
+        emailDomain,
+        {status: 'waitlisted', waitlistPosition: 1},
+      );
+      for (const position of [2, 3]) {
+        await createEntryRow(sql, f, emailDomain, {
+          status: 'waitlisted',
+          waitlistPosition: position,
+        });
+      }
+
+      await sql`select * from cancel_own_entry(${head}, ${participantId})`;
+
+      expect(
+        (await waitlistOf(f.tournamentId)).map(r => r.waitlist_position),
+      ).toEqual([1, 2]);
+    });
+
+    it('queues a newly confirmed entry behind the last position, past any gap', async () => {
+      const f = await createFixture();
+      await createEntryRow(sql, f, emailDomain, {status: 'confirmed'});
+      // Two waiting with a gap between: count + 1 would hand out 3 again.
+      for (const position of [1, 3]) {
+        await createEntryRow(sql, f, emailDomain, {
+          status: 'waitlisted',
+          waitlistPosition: position,
+        });
+      }
+      const {entryId} = await createEntryRow(sql, f, emailDomain);
+      const token = await createVerificationToken(sql, entryId);
+
+      const [{status}] = await sql`
+        select confirm_entry_by_token(${await hashToken(token)}) as status
+      `;
+
+      expect(status).toBe('waitlisted');
+      const waitlist = await waitlistOf(f.tournamentId);
+      expect(waitlist.map(r => r.waitlist_position)).toEqual([1, 3, 4]);
+      expect(waitlist[2].id).toBe(entryId);
     });
   },
 );
