@@ -1,5 +1,5 @@
 import type {Bindings} from '../types/env';
-import {createMailSender} from './mailer';
+import {createMailSender, type SendMailInput} from './mailer';
 import {
   buildSystemMail,
   systemMailSubject,
@@ -117,10 +117,27 @@ export async function sendEntryNoticeEmail(
   reason: EntryNoticeReason,
 ): Promise<void> {
   await createMailSender(env).send(
-    buildSystemMail(email, entryNoticeSubject(tournamentName), [
-      `「${tournamentName}」へのエントリーを受け付けられませんでした。`,
-      ...reasonBlocks(reason, env.FRONTEND_URL),
-      'このエントリーに心当たりがない場合は、このメールを破棄してください。',
-    ]),
+    buildEntryNoticeMail(env, email, tournamentName, reason),
   );
+}
+
+/**
+ * The mail `sendEntryNoticeEmail()` sends, built without sending it, for a
+ * notice sent later from the queue (#346).
+ * @param env The Worker bindings.
+ * @param email The address the submission was made under.
+ * @param tournamentName The tournament it tried to enter.
+ * @param reason Why it wasn't entered.
+ */
+export function buildEntryNoticeMail(
+  env: Pick<Bindings, 'FRONTEND_URL'>,
+  email: string,
+  tournamentName: string,
+  reason: EntryNoticeReason,
+): SendMailInput {
+  return buildSystemMail(email, entryNoticeSubject(tournamentName), [
+    `「${tournamentName}」へのエントリーを受け付けられませんでした。`,
+    ...reasonBlocks(reason, env.FRONTEND_URL),
+    'このエントリーに心当たりがない場合は、このメールを破棄してください。',
+  ]);
 }

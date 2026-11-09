@@ -1,10 +1,6 @@
 import {Hono} from 'hono';
 import {zValidator} from '@hono/zod-validator';
-import {
-  EntryInputSchema,
-  EntrySessionInputSchema,
-  type EntryInput,
-} from '@regional-quiz/shared';
+import {EntryInputSchema, EntrySessionInputSchema} from '@regional-quiz/shared';
 import type {Env, ParticipantEnv} from '../types/env';
 import {
   checkEntrySubmission,
@@ -34,26 +30,14 @@ export const entriesRoute = new Hono<Env>().post(
   ),
   requireTurnstile(),
   zValidator('json', EntryInputSchema),
-  // The address being mailed is limited separately from the address doing
-  // the mailing, and on its own limiter: a botnet spreads the IP key thin,
-  // but the victim's inbox is the same one every time, so that is where the
-  // tight number belongs. The IP key is checked first and so is spent by
-  // attempts that never reach the challenge or the schema -- which is why
-  // it cannot also carry that number without refusing a club filling in the
-  // form from one shared network. The key names this endpoint, so reset
-  // requests for the same address cannot spend this budget and keep its
-  // owner from entering (#295; see `emailKey()`).
-  rateLimit<{out: {json: EntryInput}}>(
-    env => env.MAIL_TRIGGER_EMAIL_RATE_LIMITER,
-    c => emailKey('entry', c.req.valid('json').email),
-    MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
-  ),
   async c => {
     const input = c.req.valid('json');
     // Only the refusals that don't depend on the address are answered
     // directly: the tournament, its entry period, the regulations and the
     // custom fields read the same, and take the same time, whoever is
-    // entering.
+    // entering. They come before the per-address limit, so a submission
+    // for a tournament that doesn't exist or has closed spends nothing of
+    // the address's budget (#346).
     const check = await checkEntrySubmission(
       c.env,
       c.req.valid('param').tournamentId,
@@ -62,6 +46,25 @@ export const entriesRoute = new Hono<Env>().post(
     if (!check.ok) {
       return respondFailure(c, check, 'failed to check the entry');
     }
+
+    // The address being mailed is limited separately from the address doing
+    // the mailing, and on its own limiter: a botnet spreads the IP key thin,
+    // but the victim's inbox is the same one every time, so that is where the
+    // tight number belongs. The key names this endpoint, so reset requests
+    // for the same address cannot spend this budget (#295; see `emailKey()`).
+    //
+    // Over the limit the submission is not refused: refusing it let anyone
+    // who knew an address keep its owner's entry answering 429 for as long
+    // as they kept submitting under it (#346). The entry is made as usual
+    // and only its mail waits on the queue, to be sent when the address has
+    // room again -- and then only if the entry still needs it, so of a
+    // flood under one unverified address only the latest mail goes out
+    // (`lib/deferred-entry-mail.ts`). The answer is the same 202 either
+    // way, for the reason below.
+    const {success: withinLimit} =
+      await c.env.MAIL_TRIGGER_EMAIL_RATE_LIMITER.limit({
+        key: emailKey('entry', input.email),
+      });
 
     // Everything past this point depends on the address: whether it is
     // registered, in which region, under which password. Answering with any
@@ -74,7 +77,12 @@ export const entriesRoute = new Hono<Env>().post(
     // to the owner of the address only: the verification link, or why there
     // won't be one.
     c.executionCtx.waitUntil(
-      createEntryUnauthenticated(c.env, check.tournament, input),
+      createEntryUnauthenticated(
+        c.env,
+        check.tournament,
+        input,
+        withinLimit ? 'now' : 'deferred',
+      ),
     );
     return c.json({ok: true}, 202);
   },

@@ -26,7 +26,11 @@ import {
   type TablesInsert,
 } from './db';
 import {sendEntryNoticeEmail, type EntryNoticeReason} from './entry-notice';
-import {sendVerificationEmail} from './entry-verification';
+import {
+  holdForDeferredVerification,
+  sendVerificationEmail,
+} from './entry-verification';
+import {deferEntryMail} from './deferred-entry-mail';
 import type {InternalFailure, LibFailure} from './errors';
 import {validateCustomFieldValues} from './form-field-defs';
 import {hashPassword, verifyPassword} from './password';
@@ -438,6 +442,7 @@ async function createEntryAfterCheck(
   env: Bindings,
   tournament: EntryTournamentRow,
   input: EntryInput,
+  delivery: EntryMailDelivery = 'now',
 ): Promise<CreateEntryResult> {
   const db = createDbClient(env);
 
@@ -460,6 +465,7 @@ async function createEntryAfterCheck(
       tournament,
       existingParticipant,
       input,
+      delivery,
     );
   }
 
@@ -500,9 +506,15 @@ async function createEntryAfterCheck(
           error: error?.message ?? 'failed to create participant',
         };
       }
-      return enterTournament(env, tournament, created.id, input.email, input, {
-        passwordHash,
-      });
+      return enterTournament(
+        env,
+        tournament,
+        created.id,
+        input.email,
+        input,
+        {passwordHash},
+        delivery,
+      );
     }
     // A different password: the account is handed to
     // this submission, and what the earlier ones made goes with the old
@@ -533,6 +545,7 @@ async function createEntryAfterCheck(
             withdrawn.filter(id => id !== tournament.id),
           ),
         },
+        delivery,
       );
     }
     // The address was verified since it was read above -- its owner
@@ -558,10 +571,17 @@ async function createEntryAfterCheck(
       tournament,
       verifiedParticipant,
       input,
+      delivery,
     );
   }
 
-  return enterVerifiedParticipant(env, tournament, existingParticipant, input);
+  return enterVerifiedParticipant(
+    env,
+    tournament,
+    existingParticipant,
+    input,
+    delivery,
+  );
 }
 
 /**
@@ -577,6 +597,7 @@ async function enterVerifiedParticipant(
   tournament: EntryTournamentRow,
   participant: ParticipantRow,
   input: EntryInput,
+  delivery: EntryMailDelivery,
 ): Promise<CreateEntryResult> {
   // Re-entering under a verified address must prove ownership of that
   // account, otherwise anyone who learns a participant's email could attach
@@ -602,7 +623,15 @@ async function enterVerifiedParticipant(
     return {ok: false, status: 401, error: ENTRY_ERROR_CODES.INVALID_PASSWORD};
   }
   await upgrade;
-  return enterTournament(env, tournament, participant.id, input.email, input);
+  return enterTournament(
+    env,
+    tournament,
+    participant.id,
+    input.email,
+    input,
+    undefined,
+    delivery,
+  );
 }
 
 /**
@@ -655,6 +684,7 @@ async function enterUnverifiedAccountAgain(
   tournament: EntryTournamentRow,
   account: ParticipantRow,
   input: EntryInput,
+  delivery: EntryMailDelivery,
 ): Promise<CreateEntryResult> {
   const lapsed = await lapseExpiredPendingEntries(db, account.id);
   if (!lapsed.ok) {
@@ -674,9 +704,15 @@ async function enterUnverifiedAccountAgain(
       error: ENTRY_ERROR_CODES.ALREADY_REGISTERED_IN_ANOTHER_REGION,
     };
   }
-  return enterTournament(env, tournament, account.id, input.email, input, {
-    passwordHash: account.password_hash,
-  });
+  return enterTournament(
+    env,
+    tournament,
+    account.id,
+    input.email,
+    input,
+    {passwordHash: account.password_hash},
+    delivery,
+  );
 }
 
 /**
@@ -735,6 +771,8 @@ async function withdrawnTournamentNames(
  * @param participantId The participant being entered.
  * @param email The participant's address, where the link is sent.
  * @param input The entry itself.
+ * @param delivery Whether the verification link is mailed now, or
+ *     deferred for the address's limit (#346; see `EntryMailDelivery`).
  * @param unverifiedAccount For a participant whose address is not verified
  *     yet, the password hash this submission just gave the account (see
  *     `isStillUnverifiedAccountOf()` for what it guards against) and, when
@@ -751,6 +789,7 @@ async function enterTournament(
     passwordHash: string;
     withdrawnTournaments?: string[];
   },
+  delivery: EntryMailDelivery = 'now',
 ): Promise<CreateEntryResult> {
   const db = createDbClient(env);
   const tournamentId = tournament.id;
@@ -807,6 +846,7 @@ async function enterTournament(
     tournament,
     input,
     unverifiedAccount,
+    delivery,
   );
   if (!completed.ok) {
     // Rolled back here, and only here, for every stage after the write: a
@@ -843,6 +883,7 @@ async function completeWrittenEntry(
   input: EntrySessionInput,
   unverifiedAccount:
     {passwordHash: string; withdrawnTournaments?: string[]} | undefined,
+  delivery: EntryMailDelivery,
 ): Promise<{ok: true} | LibFailure<409>> {
   const stored = await storeEntryRegulations(
     db,
@@ -871,6 +912,7 @@ async function completeWrittenEntry(
     email,
     tournament,
     unverifiedAccount?.withdrawnTournaments,
+    delivery,
   );
 }
 
@@ -1175,8 +1217,22 @@ async function mailVerificationLink(
   email: string,
   tournament: EntryTournamentRow,
   withdrawnTournaments: string[] | undefined,
+  delivery: EntryMailDelivery,
 ): Promise<{ok: true} | InternalFailure> {
   try {
+    if (delivery === 'deferred') {
+      // Written now, mailed later (`lib/deferred-entry-mail.ts`). A failure
+      // to hold or enqueue it is a mail that will never go out, so it rolls
+      // the entry back like a failed send.
+      await holdForDeferredVerification(env, entryId);
+      await deferEntryMail(env, {
+        kind: 'deferred-verification',
+        entryId,
+        to: email,
+        ...(withdrawnTournaments ? {withdrawnTournaments} : {}),
+      });
+      return {ok: true};
+    }
     await sendVerificationEmail(
       env,
       entryId,
@@ -1263,6 +1319,14 @@ const ENTRY_NOTICE_REASONS: Partial<Record<EntryErrorCode, EntryNoticeReason>> =
   };
 
 /**
+ * When the mail of an anonymous entry goes out: at once, or later from the
+ * queue because its address was over the per-address limit when it was
+ * submitted (#346, `lib/deferred-entry-mail.ts`). The entry itself is made
+ * the same way either way.
+ */
+export type EntryMailDelivery = 'now' | 'deferred';
+
+/**
  * Enters an address-and-password submission whose answer the client never
  * sees (#117). The route has already answered -- identically, whatever the
  * address -- and runs this in `waitUntil()`, so the time it takes is not
@@ -1288,6 +1352,7 @@ export async function createEntryUnauthenticated(
   env: Bindings,
   tournament: EntryTournamentRow,
   input: EntryInput,
+  delivery: EntryMailDelivery = 'now',
 ): Promise<CreateEntryOutcome> {
   // Runs after the response, inside `waitUntil()`, where a throw would
   // surface as an unhandled rejection with none of the context below. So a
@@ -1295,7 +1360,7 @@ export async function createEntryUnauthenticated(
   // treated like any other failure on our side.
   let result: CreateEntryResult;
   try {
-    result = await createEntryAfterCheck(env, tournament, input);
+    result = await createEntryAfterCheck(env, tournament, input, delivery);
   } catch (e) {
     result = {
       ok: false,
@@ -1324,10 +1389,18 @@ export async function createEntryUnauthenticated(
     // now, asking them to try again -- unless the mail provider is what
     // failed, in which case this one fails too and the log above is all
     // there is.
-    await sendEntryNotice(env, input.email, tournament, 'processing-failed');
+    await sendEntryNotice(
+      env,
+      input.email,
+      tournament,
+      'processing-failed',
+      delivery,
+    );
     return {kind: 'failed', error: result.error};
   }
-  if (!(await sendEntryNotice(env, input.email, tournament, reason))) {
+  if (
+    !(await sendEntryNotice(env, input.email, tournament, reason, delivery))
+  ) {
     return {kind: 'failed', error: 'failed to send the entry notice'};
   }
   return {kind: 'notified', reason};
@@ -1343,18 +1416,24 @@ async function sendEntryNotice(
   email: string,
   tournament: EntryTournamentRow,
   reason: EntryNoticeReason,
+  delivery: EntryMailDelivery,
 ): Promise<boolean> {
+  const tournamentName = tournamentDisplayName(
+    tournament.name,
+    tournament.regions.name,
+    tournament.type,
+  );
   try {
-    await sendEntryNoticeEmail(
-      env,
-      email,
-      tournamentDisplayName(
-        tournament.name,
-        tournament.regions.name,
-        tournament.type,
-      ),
-      reason,
-    );
+    if (delivery === 'deferred') {
+      await deferEntryMail(env, {
+        kind: 'deferred-notice',
+        to: email,
+        tournamentName,
+        reason,
+      });
+    } else {
+      await sendEntryNoticeEmail(env, email, tournamentName, reason);
+    }
     return true;
   } catch (mailError) {
     console.error('failed to send the entry notice', {

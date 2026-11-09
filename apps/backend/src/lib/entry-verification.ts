@@ -114,6 +114,40 @@ async function issueVerificationMail(
 }
 
 /**
+ * Gives an entry whose verification mail is deferred (#346) a token that
+ * has already expired, and whose link nobody has.
+ *
+ * Not to be followed: the deferred mail issues the real link when it is
+ * sent (`prepareVerificationResend()`, which takes an entry with no live
+ * token). It is there so the entry is not one with no token at all, which
+ * `lapse_expired_pending_entries()` passes over as still being written: if
+ * the deferred mail never goes out, the owner's next submission lapses the
+ * entry and enters again, rather than being told the entry is waiting for a
+ * link that is not coming.
+ * @param env The Worker bindings.
+ * @param entryId The entry whose mail is deferred.
+ * @throws Error If the token could not be stored.
+ */
+export async function holdForDeferredVerification(
+  env: Bindings,
+  entryId: string,
+): Promise<void> {
+  const {error} = await createDbClient(env)
+    .from('email_verification_tokens')
+    .insert({
+      entry_id: entryId,
+      // The hash of a token that is thrown away: no link names it.
+      token_hash: await hashToken(generateToken()),
+      expires_at: new Date().toISOString(),
+    });
+  if (error) {
+    throw new Error(
+      `failed to hold the entry for its deferred mail: ${error.message}`,
+    );
+  }
+}
+
+/**
  * Deletes a verification token whose mail never went out.
  *
  * Left in place, the undelivered link would count as live: the entry would
@@ -211,6 +245,7 @@ export async function fetchResendableEntryIds(
 export async function prepareVerificationResend(
   env: Bindings,
   entryId: string,
+  withdrawnTournaments?: readonly string[],
 ): Promise<InternalResult<IssuedVerificationMail | null>> {
   const db = createDbClient(env);
   const {data, error} = await db
@@ -247,6 +282,7 @@ export async function prepareVerificationResend(
         tournament.type,
       ),
       tournament.capacity !== null,
+      withdrawnTournaments,
     );
     return {ok: true, value: issued};
   } catch (issueError) {
