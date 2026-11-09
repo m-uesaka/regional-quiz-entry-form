@@ -132,7 +132,7 @@
         </p>
       </div>
       <div class="flex flex-col gap-1.5">
-        <Label for="regulation-import-spreadsheet-id">スプレッドシートID</Label>
+        <Label for="regulation-import-spreadsheet-id">スプレッドシート(URL または ID)</Label>
         <Input
           id="regulation-import-spreadsheet-id"
           class="w-full"
