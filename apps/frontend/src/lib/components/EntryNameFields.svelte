@@ -11,7 +11,7 @@ a rejected submission re-renders the form. See "A seeded form lives in a child
 component" in `apps/frontend/README.md`.
 -->
 <script lang="ts">
-  import {ENTRY_NAME_MAX_LENGTH} from '@regional-quiz/shared';
+  import {ENTRY_NAME_MAX_LENGTH, maxLengthAttribute} from '@regional-quiz/shared';
   import TextField from '$lib/components/form/TextField.svelte';
   import {firstFieldError} from '$lib/entry-form';
   import type {EntryFieldErrors} from '$lib/types/entry-form';
@@ -36,7 +36,7 @@ component" in `apps/frontend/README.md`.
   name="name"
   label="氏名"
   bind:value={name}
-  maxlength={ENTRY_NAME_MAX_LENGTH}
+  maxlength={maxLengthAttribute(ENTRY_NAME_MAX_LENGTH)}
   error={firstFieldError(fieldErrors, 'name')}
   required
 />
@@ -46,7 +46,7 @@ component" in `apps/frontend/README.md`.
   name="furigana"
   label="ふりがな"
   bind:value={furigana}
-  maxlength={ENTRY_NAME_MAX_LENGTH}
+  maxlength={maxLengthAttribute(ENTRY_NAME_MAX_LENGTH)}
   error={firstFieldError(fieldErrors, 'furigana')}
   required
 />
@@ -56,7 +56,7 @@ component" in `apps/frontend/README.md`.
   name="displayName"
   label="エントリーリスト掲載名"
   bind:value={displayName}
-  maxlength={ENTRY_NAME_MAX_LENGTH}
+  maxlength={maxLengthAttribute(ENTRY_NAME_MAX_LENGTH)}
   error={firstFieldError(fieldErrors, 'displayName')}
   required
 />

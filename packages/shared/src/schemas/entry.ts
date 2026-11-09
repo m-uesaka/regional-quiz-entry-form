@@ -9,6 +9,7 @@ import {
 } from '../logic/custom-field-values';
 import {FormFieldDefSchema} from './form-definition';
 import {TournamentTypeSchema} from './tournament';
+import {maxCodePoints, wellFormedText} from './text';
 
 // Upper bounds on what one entry may store (#122). Without them a single
 // request could store megabytes, and the public entry list, the staff list
@@ -48,16 +49,16 @@ const NAME_FORBIDDEN_CHARACTERS =
  * @param label The field's Japanese name, as the messages call it.
  */
 function nameFieldSchema(label: string) {
-  return z
-    .string()
-    .trim()
-    .min(1, {message: `${label}を入力してください`})
-    .max(ENTRY_NAME_MAX_LENGTH, {
-      message: `${label}は${ENTRY_NAME_MAX_LENGTH}文字以内で入力してください`,
-    })
-    .refine(value => !NAME_FORBIDDEN_CHARACTERS.test(value), {
-      message: `${label}に使用できない文字が含まれています`,
-    });
+  return maxCodePoints(
+    z
+      .string()
+      .trim()
+      .min(1, {message: `${label}を入力してください`}),
+    ENTRY_NAME_MAX_LENGTH,
+    `${label}は${ENTRY_NAME_MAX_LENGTH}文字以内で入力してください`,
+  ).refine(value => !NAME_FORBIDDEN_CHARACTERS.test(value), {
+    message: `${label}に使用できない文字が含まれています`,
+  });
 }
 
 // Each answer is bounded on its own, and all of them together: a form may
@@ -65,13 +66,20 @@ function nameFieldSchema(label: string) {
 // option. The per-answer bound is also checked field by field in
 // `findCustomFieldValuesErrors()`, which is what puts the message under the
 // control that caused it.
-const customFieldValueSchema = z.string().max(CUSTOM_FIELD_VALUE_MAX_LENGTH, {
-  message: `回答は${CUSTOM_FIELD_VALUE_MAX_LENGTH}文字以内で入力してください`,
-});
+// Answers are stored in jsonb, which refuses a lone surrogate as the text
+// columns do (#298).
+const customFieldValueSchema = wellFormedText(
+  maxCodePoints(
+    z.string(),
+    CUSTOM_FIELD_VALUE_MAX_LENGTH,
+    `回答は${CUSTOM_FIELD_VALUE_MAX_LENGTH}文字以内で入力してください`,
+  ),
+  '回答',
+);
 
 export const CustomFieldValuesInputSchema = z
   .record(
-    z.string(),
+    wellFormedText(z.string(), '追加項目'),
     z.union([customFieldValueSchema, z.array(customFieldValueSchema)]),
   )
   .refine(
@@ -106,12 +114,14 @@ export const EntryInputSchema = z
     regulationIds: z
       .array(z.string().uuid({message: 'レギュレーションを選択してください'}))
       .min(1, {message: 'レギュレーションを選択してください'}),
-    freeText: z
-      .string()
-      .max(ENTRY_FREE_TEXT_MAX_LENGTH, {
-        message: `自由記述は${ENTRY_FREE_TEXT_MAX_LENGTH}文字以内で入力してください`,
-      })
-      .optional(),
+    freeText: wellFormedText(
+      maxCodePoints(
+        z.string(),
+        ENTRY_FREE_TEXT_MAX_LENGTH,
+        `自由記述は${ENTRY_FREE_TEXT_MAX_LENGTH}文字以内で入力してください`,
+      ),
+      '自由記述',
+    ).optional(),
     customFieldValues: CustomFieldValuesInputSchema,
   })
   .refine(data => data.password === data.passwordConfirm, {

@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {maxCodePoints, wellFormedText} from './text';
 
 /**
  * The longest a regulation's label may be. A label is the condition itself
@@ -32,7 +33,19 @@ export type Regulation = z.infer<typeof RegulationSchema>;
 export const RegulationUpsertSchema = z
   .object({
     id: z.string().uuid().optional(),
-    label: z.string().min(1).max(REGULATION_LABEL_MAX_LENGTH),
+    label: wellFormedText(
+      maxCodePoints(
+        // Trimmed as the regulation sheet's cells are (`cellText()`), so a
+        // label typed in the form can't be blank but for spaces (#300).
+        z
+          .string()
+          .trim()
+          .min(1, {message: 'レギュレーション名を入力してください'}),
+        REGULATION_LABEL_MAX_LENGTH,
+        `レギュレーション名は${REGULATION_LABEL_MAX_LENGTH}文字以内で入力してください`,
+      ),
+      'レギュレーション名',
+    ),
     // Omitting either field means "no priority window", so a client that
     // never uses one doesn't have to send explicit nulls.
     priorityStartsAt: z

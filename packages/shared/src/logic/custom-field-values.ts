@@ -2,6 +2,7 @@ import {
   isFreeTextFieldType,
   type FormFieldDef,
 } from '../schemas/form-definition';
+import {codePointLength} from '../schemas/text';
 
 /** The answers to a tournament's custom form fields, keyed by field key. */
 export type CustomFieldValues = Record<string, string | string[]>;
@@ -53,7 +54,7 @@ export function customFieldValuesLength(values: CustomFieldValues): number {
   let length = 0;
   for (const value of Object.values(values)) {
     for (const element of Array.isArray(value) ? value : [value]) {
-      length += element.length;
+      length += codePointLength(element);
     }
   }
   return length;
@@ -176,7 +177,11 @@ function findFieldError(
   }
 
   const selected = selectedOptions(value);
-  if (selected.some(option => option.length > CUSTOM_FIELD_VALUE_MAX_LENGTH)) {
+  if (
+    selected.some(
+      option => codePointLength(option) > CUSTOM_FIELD_VALUE_MAX_LENGTH,
+    )
+  ) {
     return rejection('too-long', fieldDef.fieldKey);
   }
   if (fieldDef.required && selected.length === 0) {
