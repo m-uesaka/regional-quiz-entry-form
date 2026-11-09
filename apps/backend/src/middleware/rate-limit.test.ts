@@ -106,7 +106,7 @@ describe('rateLimit', () => {
     // One address trying many accounts and many addresses trying one
     // account are different attacks, and only one key sees each of them.
     // Whether or not the two limits share a limiter, the `ip:` / `email:`
-    // prefixes are what keep them out of one another's bucket.
+    // parts of the keys are what keep them out of one another's bucket.
     const {binding, keys} = recordingRateLimiter();
     const app = new Hono<Env>().post(
       '/login',
@@ -118,7 +118,7 @@ describe('rateLimit', () => {
       zValidator('json', z.object({email: z.string().email()})),
       rateLimit<{out: {json: {email: string}}}>(
         env => env.LOGIN_IP_RATE_LIMITER,
-        c => `email:${c.req.valid('json').email}`,
+        c => emailKey('participant-login', c.req.valid('json').email),
         60,
       ),
       c => c.json({ok: true}),
@@ -138,7 +138,10 @@ describe('rateLimit', () => {
     );
 
     expect(res.status).toBe(200);
-    expect(keys).toEqual(['ip:203.0.113.7', 'email:participant@example.com']);
+    expect(keys).toEqual([
+      'ip:203.0.113.7',
+      'participant-login:email:participant@example.com',
+    ]);
   });
 
   it('never reaches the handler when the first key is refused', async () => {
@@ -156,7 +159,7 @@ describe('rateLimit', () => {
       zValidator('json', z.object({email: z.string().email()})),
       rateLimit<{out: {json: {email: string}}}>(
         env => env.LOGIN_IP_RATE_LIMITER,
-        c => `email:${c.req.valid('json').email}`,
+        c => emailKey('participant-login', c.req.valid('json').email),
         60,
       ),
       c => c.json({ok: true}),

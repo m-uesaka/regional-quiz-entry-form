@@ -19,11 +19,21 @@ import type {Bindings, Env} from '../types/env';
  *
  * A limit keyed on an email address is still a lever for keeping the owner
  * of that address refused -- an attacker who knows it only has to keep the
- * bucket full -- so the endpoints that use one put it on a limiter whose
- * budget is far too loose for a legitimate caller to ever meet, and pay for
- * that with a weaker cap on guessing against a single account. The tight
- * numbers are all on IP keys, where the caller being refused is the one
- * spending the budget. See `wrangler.toml`.
+ * bucket full. How much that matters decides where each one sits:
+ *
+ * - On the logins (`LOGIN_EMAIL_RATE_LIMITER`) the address is the account
+ *   being guessed at, so the limit sits on a limiter whose budget is far
+ *   too loose for a legitimate caller to ever meet, paid for with a weaker
+ *   cap on guessing against a single account. The tight login number is on
+ *   the IP key, where the caller being refused is the one spending the
+ *   budget.
+ * - On the endpoints that send mail to the address
+ *   (`MAIL_TRIGGER_EMAIL_RATE_LIMITER`) the limit is the tight one, since
+ *   the mail bomb it stops is aimed at that inbox. That leaves the owner
+ *   refusable on one endpoint by anyone flooding it with their address, a
+ *   price taken on knowingly (see `emailKey()`).
+ *
+ * See `wrangler.toml` for the numbers.
  *
  * The limiters are Cloudflare's Rate Limiting bindings, so the counting is
  * per-colo and approximate. That is enough for what this defends against
@@ -36,7 +46,10 @@ import type {Bindings, Env} from '../types/env';
  *     means (`ip:` / `email:`), so two limits on the same limiter can never
  *     collide on one bucket. An email key also names its endpoint
  *     (`emailKey()` will not build one without), so that two endpoints on
- *     one limiter never share a bucket either.
+ *     one limiter never share an address's bucket. IP keys deliberately do
+ *     not: every endpoint on `MAIL_TRIGGER_IP_RATE_LIMITER` counts one
+ *     network in one bucket, which is what caps a single source across all
+ *     of them (see `types/env.ts`).
  * @param retryAfterSeconds What to put in `Retry-After`. The binding does
  *     not report when the budget resets, so this is the limiter's own
  *     period, named by the caller.
@@ -81,8 +94,10 @@ export type EmailKeyEndpoint =
  * victim's budget on one endpoint to have them refused on another -- three
  * participant reset requests a minute were enough to keep the victim's
  * entry form answering 429 when entries opened (#295). Named per endpoint,
- * a mailbox can be sent that much more mail in total (one budget for each
- * endpoint), which is still a bounded amount.
+ * a mailbox can be sent that much more mail in total -- one budget for each
+ * endpoint on the limiter, so with the entry form and both reset requests
+ * three times the limit (9 a minute in production, up from 6) -- which is
+ * still a bounded amount.
  *
  * What naming the endpoint does not stop, by design, is the same thing on
  * one endpoint: anybody who knows an address can keep that endpoint's

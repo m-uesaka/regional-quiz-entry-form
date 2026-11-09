@@ -13,6 +13,7 @@ import {
   turnstileAwareFetch,
 } from '../test-support/bindings';
 import {TURNSTILE_TOKEN_HEADER} from '../middleware/turnstile';
+import {emailKey} from '../middleware/rate-limit';
 import {
   NO_ROW_PGRST_CODE,
   PARTICIPANT_REGION_SQLSTATE,
@@ -194,7 +195,7 @@ describe('POST /tournaments/:tournamentId/entries (request validation)', () => {
     expect(resetStatuses).toEqual([200, 200, 200, 429]);
     // ...and the entry form's is untouched.
     expect(entry.status).not.toBe(429);
-    expect(spent.get(`entry:email:${validBody.email}`)).toBe(1);
+    expect(spent.get(emailKey('entry', validBody.email))).toBe(1);
   });
 
   it('returns 400 when the Turnstile token is missing', async () => {
