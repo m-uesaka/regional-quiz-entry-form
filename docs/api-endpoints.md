@@ -29,7 +29,7 @@ const res = await api.api.tournaments[':regionSlug'][':tournamentSlug'].$get({
 });
 ```
 
-パスパラメータの型もバックエンドの `zValidator` から推論されます。例えば `tournamentSlug` は `string` ではなく `'saikyoi' | 'shinjinou'` のリテラルユニオンなので、生のルートパラメータは `TournamentTypeSchema.safeParse()` などで絞り込んでから渡す必要があります。
+パスパラメータの型もバックエンドの `validate()`(`zValidator()` のラッパー)から推論されます。例えば `tournamentSlug` は `string` ではなく `'saikyoi' | 'shinjinou'` のリテラルユニオンなので、生のルートパラメータは `TournamentTypeSchema.safeParse()` などで絞り込んでから渡す必要があります。
 
 ### 認証方式
 
@@ -193,15 +193,27 @@ IP 鍵は、IPv4 はアドレスそのまま、IPv6 は**先頭 /64**(`2001:db8:
 
 ### エラー応答の形式
 
-エラーは基本的に `{"error": "メッセージ"}` の形です。ただし `@hono/zod-validator` によるバリデーション失敗だけは例外で、ライブラリ既定の `{"success": false, "error": <ZodError>}` が 400 で返ります。
+エラーはすべて `{"error": "メッセージ"}` の形で、`error` は常に文字列です(#294)。次の 3 つは個々のルートではなくアプリ全体(`apps/backend/src/index.ts`)で決めています。`error` の値は `packages/shared` の `COMMON_ERROR_CODES` にあります。
 
-成功か失敗かの判定には `res.ok` / `res.status` をそのまま使って構いません。問題はエラー側の内訳で、400 は文字列エラー(`{"error": "メッセージ"}`)と Zod のバリデーションエラー(`{"success": false, "error": <ZodError>}`)の**どちらでも返りうる**ため、ステータスだけでは2つのエラー形式を区別できません。しかもこの2つは構造的に重なっている(どちらも `error` フィールドを持つ)ので、本文を読むときは**フィールドの有無と型**で絞り込んでください。
+| 状況 | ステータス | 本文 |
+| --- | --- | --- |
+| パスパラメータ・クエリ・本文がルートの Zod スキーマに合わない | `400` | `{"error": "invalid request"}`(`COMMON_ERROR_CODES.INVALID_REQUEST`) |
+| どのルートにも当たらないパス | `404` | `{"error": "not found"}`(`COMMON_ERROR_CODES.NOT_FOUND`) |
+| ハンドラが応答を返さずに例外を投げた(DB の想定外の値で `XSchema.parse()` が失敗した等) | `500` | `{"error": "internal server error"}`(`internalError()` と同じ。原因は `console.error` に記録) |
+
+バリデーションは `@hono/zod-validator` の `zValidator()` を直接使わず、`apps/backend/src/middleware/validate.ts` の `validate(target, schema)` を通します。ライブラリ既定の `{"success": false, "error": <ZodError>}` を返さないためです。Zod の issues は応答に載せません。フロントエンドは同じ `packages/shared` のスキーマで送信前に検査しているので、項目ごとの文言はそちらで出せます。
+
+ミドルウェアが `HTTPException` として投げる拒否(オリジンチェックの 403 など)は、この 500 にはせず、その例外が持つ応答をそのまま返します。
+
+`invalid request` と `not found` はコードだけで、画面にそのまま出す文言ではありません。フロントエンドの `readErrorMessage()`(`apps/frontend/src/lib/api.ts`)はこの 2 つを受け取ったときも呼び出し側の fallback を返します。
+
+成功か失敗かの判定には `res.ok` / `res.status` をそのまま使って構いません。1 つのステータスが複数の拒否を表すことがある(400 は `invalid request` のほかにルート固有の文言も返る)ので、内訳は `error` の文字列で見分けてください。`hc` のレスポンス型は本文の和になるため、成功時の本文と区別するときはフィールドの有無で絞り込みます。
 
 ```ts
 const body = await res.json();
 if ('yaml' in body) {
   previewYaml = body.yaml;
-} else if ('error' in body && typeof body.error === 'string') {
+} else if ('error' in body && isShowableError(body.error)) {
   previewError = body.error;
 }
 ```
@@ -339,7 +351,7 @@ Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts
 
 - リクエスト: `StaffPasswordResetRequestInputSchema` — `{email: string(email), scope: 'saikyoi' | 'shinjinou' | 'general'}`、および `cf-turnstile-response` ヘッダ。1 つのアドレスが最強位・新人王の 2 アカウントを持ち得るため(#166)、ログインと同じく `scope` でアカウントを指定します
 - `200`: `{"ok": true}`
-- `400`: 本文が不正(zValidator)、または `{"error": "turnstile verification failed"}`
+- `400`: 本文が不正(`validate()`)、または `{"error": "turnstile verification failed"}`
 - `429`: `{"error": "too many requests"}`(`Retry-After: 60`)
 
 `lib/staff-password-reset.ts` の `requestStaffPasswordReset()` が、該当する**無効化されていない**アカウントがあれば `sendStaffPasswordLink()` で有効期限 **1 時間**のリンクを `FRONTEND_URL/staff/password-reset?token=...` 宛てに送ります(統括スタッフが発行する招待・再発行リンクは 24 時間。本人が待っているリンクなので参加者側と同じ長さにしています)。招待済みでまだパスワードを設定していないアカウントも対象で、新しいリンクを自分で取り直せます。アカウントの検索はログインと同じ `findStaffAccountByScope()`(`lib/staff-account-lookup.ts`)です。
@@ -379,7 +391,7 @@ Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts
 
 - リクエスト: `PasswordResetRequestInputSchema` — `{email: string(email)}`、および `cf-turnstile-response` ヘッダ
 - `200`: `{"ok": true}`
-- `400`: メール形式が不正(zValidator)、または `{"error": "turnstile verification failed"}`
+- `400`: メール形式が不正(`validate()`)、または `{"error": "turnstile verification failed"}`
 - `429`: `{"error": "too many requests"}`(`Retry-After: 60`)
 
 メールアドレスが未登録の場合、トークンの保存に失敗した場合、メール送信に失敗した場合のいずれも、送信できた場合と同じ `200 {"ok": true}` を返します。内部的な失敗は `console.error` に記録されます。
@@ -432,7 +444,7 @@ Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts
   - `name` は 1〜100 文字
   - `allowsDualEntry` は省略可で、既定は `false`(最強位・新人王のどちらか一方のみ)。省略時に許可側へ倒さないのは、この設定を意識しなかった地域が黙って重複エントリーを受け付けてしまわないようにするためです
 - `201`: 作成された `Region`
-- `400`: バリデーション違反(`zValidator`)
+- `400`: バリデーション違反(`validate()`)
 - `409`: `{"error": "slug already in use"}` — slug の重複(Postgres の `23505`)。スタッフが直せる入力ミスなので 500 ではなくこれを返します
 - `401` / `403`
 - `500`: `{"error": "internal server error"}`
@@ -444,7 +456,7 @@ Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts
 - パス: `id` は UUID
 - リクエスト: `RegionUpdateInputSchema` — `{name?, allowsDualEntry?}`(両方省略した空の body は 400)
 - `200`: 更新後の `Region`
-- `400`: バリデーション違反(`zValidator`)
+- `400`: バリデーション違反(`validate()`)
 - `404`: `{"error": "region not found"}`(Supabase の `PGRST116` を変換)
 - `409`: `{"error": "重複エントリーを認める地域では、最強位と新人王に同じ問題セットを設定できません"}` — 最強位と新人王に同じ問題セット(名前を設定したもの)が付いている地域で、`allowsDualEntry` を `true` にしようとした(SQLSTATE `P0010`、`0045`)。管理画面はこの文言をそのまま表示します
 - `401` / `403`
@@ -1136,7 +1148,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
   - `{role: 'general', email}`
   - `{role: 'regional', email, regionId, tournamentType}`
 - `201`: 作成された `StaffAccount`(`passwordSet` は必ず `false`)
-- `400`: バリデーション違反(`zValidator`)、または `{"error": "unknown region"}`(存在しない `regionId` = Postgres の `23503`)
+- `400`: バリデーション違反(`validate()`)、または `{"error": "unknown region"}`(存在しない `regionId` = Postgres の `23503`)
 - `409`: `{"error": "email already in use"}`(Postgres の `23505`。同じアドレスで同じ担当種別のアカウント、または同じアドレスの統括スタッフが既にある)
 
 一意なのは `(email, tournament_type)` の組です(#166)。同じアドレスで最強位と新人王のアカウントを 1 つずつ作れます。統括スタッフ(`tournament_type` が null)はアドレスごとに 1 つです。アドレスは小文字にしてから保存します(#133)。
@@ -1157,7 +1169,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 - パス: `id` は UUID
 - `200`: `{"ok": true}`
-- `400`: バリデーション違反(`zValidator`)
+- `400`: バリデーション違反(`validate()`)
 - `404`: `{"error": "staff account not found"}`
 - `409`: `{"error": "staff account disabled"}`(無効化されたアカウント。先に有効化してください。判定は DB 関数 `issue_staff_password_link()`(`0027`)がアカウント行をロックしてから行い、古いリンクの削除と新しいリンクの追加も同じトランザクションで行うので、無効化と同時に走っても無効なアカウントにリンクが残ることはありません)
 - `401` / `403`
@@ -1175,7 +1187,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 - パス: `id` は UUID
 - `200`: `{"ok": true}`
-- `400`: バリデーション違反(`zValidator`)
+- `400`: バリデーション違反(`validate()`)
 - `404`: `{"error": "staff account not found"}`
 - `401` / `403`(`regional` スタッフは不可)
 - `500`: `{"error": "internal server error"}`
@@ -1194,7 +1206,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 - パス: `id` は UUID
 - `200`: `{"ok": true}`(既に無効なアカウントでも 200。`disabledAt` は最初に無効化した時刻のまま)
-- `400`: バリデーション違反(`zValidator`)
+- `400`: バリデーション違反(`validate()`)
 - `404`: `{"error": "staff account not found"}`
 - `409`: `{"error": "cannot disable your own account"}`(自分自身)、`{"error": "cannot disable the last general staff account"}`(有効な統括スタッフが残らなくなる)
 - `401` / `403`
@@ -1214,7 +1226,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 - パス: `id` は UUID
 - `200`: `{"ok": true}`
-- `400`: バリデーション違反(`zValidator`)
+- `400`: バリデーション違反(`validate()`)
 - `404`: `{"error": "staff account not found"}`
 - `401` / `403`
 - `500`: `{"error": "internal server error"}`

@@ -1,5 +1,4 @@
 import {Hono} from 'hono';
-import {zValidator} from '@hono/zod-validator';
 import {
   PasswordResetRequestInputSchema,
   TURNSTILE_ACTIONS,
@@ -14,6 +13,7 @@ import {
 } from '../lib/password-reset';
 import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
 import {requireTurnstile} from '../middleware/turnstile';
+import {validate} from '../middleware/validate';
 
 // Matches the period both mail-trigger limiters count over
 // (`wrangler.toml`).
@@ -33,7 +33,7 @@ export const passwordResetRoute = new Hono<Env>()
       MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
     ),
     requireTurnstile(TURNSTILE_ACTIONS.PASSWORD_RESET),
-    zValidator('json', PasswordResetRequestInputSchema),
+    validate('json', PasswordResetRequestInputSchema),
     // Keyed on this endpoint as well as the address: on a key of the entry
     // form's, requests here could keep the victim from entering (#295).
     rateLimit<{out: {json: PasswordResetRequestInput}}>(
@@ -58,7 +58,7 @@ export const passwordResetRoute = new Hono<Env>()
   )
   .post(
     '/confirm',
-    zValidator('json', PasswordResetConfirmInputSchema),
+    validate('json', PasswordResetConfirmInputSchema),
     async c => {
       const result = await confirmPasswordReset(c.env, c.req.valid('json'));
       if (!result.ok) {

@@ -1,4 +1,13 @@
-import {describe, expect, it} from 'bun:test';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  spyOn,
+  type Mock,
+} from 'bun:test';
+import {COMMON_ERROR_CODES} from '@regional-quiz/shared';
 import {app} from './index';
 import {testBindings} from './test-support/bindings';
 import type {Bindings} from './types/env';
@@ -146,5 +155,82 @@ describe('secure headers (#120)', () => {
         'max-age=',
       );
     }
+  });
+});
+
+// What answers when no route does, or when one fails without answering
+// (#294): the API's `{error: string}`, never Hono's plain-text defaults.
+describe('error responses (#294)', () => {
+  let consoleError: Mock<typeof console.error>;
+
+  beforeEach(() => {
+    consoleError = spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleError.mockRestore();
+  });
+
+  it('a path no route answers is a JSON 404', async () => {
+    for (const path of ['/api/no-such-route', '/no-api-prefix']) {
+      const res = await app.request(path, {}, ENV);
+      const body: unknown = await res.json();
+
+      expect(res.status, path).toBe(404);
+      expect(body).toEqual({error: COMMON_ERROR_CODES.NOT_FOUND});
+    }
+  });
+
+  it('a handler that throws is a JSON 500, and the cause is logged', async () => {
+    // `createClient()` throws on an empty URL: a fault the handler does not
+    // catch, standing in for a `XSchema.parse()` that meets an unexpected
+    // database value.
+    const res = await app.request(
+      '/api/portal/tournaments',
+      {},
+      {...ENV, SUPABASE_URL: ''},
+    );
+    const body: unknown = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body).toEqual({error: 'internal server error'});
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(consoleError.mock.calls[0][1]).toBeInstanceOf(Error);
+  });
+
+  it('a refusal thrown as an HTTPException keeps its own response', async () => {
+    // The origin check's 403, thrown by `hono/csrf`.
+    const res = await postLogout({origin: FOREIGN_ORIGIN});
+
+    expect(res.status).toBe(403);
+    expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it('a path parameter failing its schema is {error: invalid request}', async () => {
+    const res = await app.request(
+      '/api/tournaments/not-a-uuid/entry-list',
+      {},
+      ENV,
+    );
+    const body: unknown = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body).toEqual({error: COMMON_ERROR_CODES.INVALID_REQUEST});
+  });
+
+  it('a JSON body failing its schema is {error: invalid request}', async () => {
+    const res = await app.request(
+      '/api/auth/staff/login',
+      {
+        method: 'POST',
+        headers: {'content-type': 'application/json', origin: FRONTEND_URL},
+        body: JSON.stringify({email: 'not an email'}),
+      },
+      ENV,
+    );
+    const body: unknown = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body).toEqual({error: COMMON_ERROR_CODES.INVALID_REQUEST});
   });
 });

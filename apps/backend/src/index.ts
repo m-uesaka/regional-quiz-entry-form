@@ -1,5 +1,7 @@
+import {COMMON_ERROR_CODES} from '@regional-quiz/shared';
 import {Hono} from 'hono';
 import {csrf} from 'hono/csrf';
+import {HTTPException} from 'hono/http-exception';
 import {secureHeaders} from 'hono/secure-headers';
 import type {Bindings, Env} from './types/env';
 import {handleBulkMailQueue, type BulkMailMessage} from './lib/bulk-mail-queue';
@@ -23,12 +25,30 @@ import {sheetImportRoute} from './routes/sheet-import';
 import {mypageRoute} from './routes/mypage';
 import {portalRoute} from './routes/portal';
 import {trustedOrigins} from './lib/trusted-origins';
+import {internalError} from './lib/errors';
 
 // Exported by name for the tests, which drive the API through
 // `app.request()`. The default export below is the Worker itself, and it is
 // no longer this object: a Worker with a queue consumer has to export the
 // `queue` handler alongside `fetch`.
 export const app = new Hono<Env>().basePath('/api');
+
+// What answers when nothing else does, in the API's own `{error: string}`
+// shape (#294) rather than Hono's plain-text defaults. Registered on the app
+// itself, so the routes mounted below with `.route()` fall back to them too.
+//
+// An `HTTPException` is a refusal some middleware chose on purpose -- the
+// origin check's 403 below -- so it keeps the response it carries, as Hono's
+// default handler would give it. Anything else thrown is a fault on our side
+// (a `XSchema.parse()` meeting a database value it did not expect, say),
+// logged and answered with the same 500 a route's own `internalError()` gives.
+app.onError((err, c) => {
+  if (err instanceof HTTPException) {
+    return err.getResponse();
+  }
+  return c.json(internalError(`${c.req.method} ${c.req.path}`, err), 500);
+});
+app.notFound(c => c.json({error: COMMON_ERROR_CODES.NOT_FOUND}, 404));
 
 // Every response, the API's own errors included: registered first, so it
 // still sees the 403 the origin check below answers with.
@@ -70,7 +90,7 @@ const routes = app
   .route('/tournaments', entryListRoute)
   // Mounted before `tournamentsRoute` on purpose: its public
   // `/:regionSlug/:tournamentSlug` route also matches two segments, and its
-  // `zValidator` would answer `/:tournamentId/regulations` with a 400
+  // `validate()` would answer `/:tournamentId/regulations` with a 400
   // before this handler ever ran.
   .route('/tournaments', regulationsRoute)
   .route('/tournaments', tournamentsRoute)

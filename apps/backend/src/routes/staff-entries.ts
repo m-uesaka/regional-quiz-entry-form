@@ -1,5 +1,4 @@
 import {Hono} from 'hono';
-import {zValidator} from '@hono/zod-validator';
 import {
   COMMON_ERROR_CODES,
   ENTRY_STATUS_LABELS,
@@ -30,6 +29,7 @@ import {
 } from '../lib/paged-select';
 import {internalError} from '../lib/errors';
 import {TournamentIdParamSchema, EntryIdParamSchema} from './params';
+import {validate} from '../middleware/validate';
 
 // An entry may claim several regulations, so they come through the
 // `entry_regulations` join table rather than off the entry itself.
@@ -119,8 +119,8 @@ function rowToEntry(row: EntryRow): Entry {
 export const staffEntriesRoute = new Hono<StaffEnv>()
   .get(
     '/tournaments/:tournamentId/entries',
-    zValidator('param', TournamentIdParamSchema),
-    zValidator('query', StaffEntryListQuerySchema),
+    validate('param', TournamentIdParamSchema),
+    validate('query', StaffEntryListQuerySchema),
     requireStaffForTournament(),
     async c => {
       const db = createDbClient(c.env);
@@ -152,7 +152,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
   )
   .get(
     '/tournaments/:tournamentId/entries.csv',
-    zValidator('param', TournamentIdParamSchema),
+    validate('param', TournamentIdParamSchema),
     requireStaffForTournament(),
     async c => {
       const {tournamentId} = c.req.valid('param');
@@ -212,7 +212,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
   )
   .get(
     '/entries/:entryId',
-    zValidator('param', EntryIdParamSchema),
+    validate('param', EntryIdParamSchema),
     requireStaffForEntry(),
     async c => {
       const db = createDbClient(c.env);

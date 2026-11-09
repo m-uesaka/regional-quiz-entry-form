@@ -1,5 +1,4 @@
 import {Hono} from 'hono';
-import {zValidator} from '@hono/zod-validator';
 import {z} from 'zod';
 import {
   StaffMailInputSchema,
@@ -26,6 +25,7 @@ import {
   tournamentLookupFailure,
 } from '../lib/tournaments';
 import {TournamentIdParamSchema} from './params';
+import {validate} from '../middleware/validate';
 
 const MailJobParamSchema = TournamentIdParamSchema.extend({
   jobId: z.string().uuid(),
@@ -90,11 +90,11 @@ async function enqueueMailJob(
 export const staffMailRoute = new Hono<StaffEnv>()
   .post(
     '/tournaments/:tournamentId/mail',
-    zValidator('param', TournamentIdParamSchema),
+    validate('param', TournamentIdParamSchema),
     // The scope check runs before the body is validated, so an unauthorized
     // caller gets the same 401/403 whatever they put in the request body.
     requireStaffForTournament(),
-    zValidator('json', StaffMailInputSchema),
+    validate('json', StaffMailInputSchema),
     async c => {
       const {tournamentId} = c.req.valid('param');
       const {subject, body, statusFilter} = c.req.valid('json');
@@ -166,7 +166,7 @@ export const staffMailRoute = new Hono<StaffEnv>()
   // job is watched through the same `GET .../mail/:jobId`.
   .post(
     '/tournaments/:tournamentId/verification-mail',
-    zValidator('param', TournamentIdParamSchema),
+    validate('param', TournamentIdParamSchema),
     requireStaffForTournament(),
     async c => {
       const {tournamentId} = c.req.valid('param');
@@ -239,7 +239,7 @@ export const staffMailRoute = new Hono<StaffEnv>()
   // Worker's log.
   .get(
     '/tournaments/:tournamentId/mail/:jobId',
-    zValidator('param', MailJobParamSchema),
+    validate('param', MailJobParamSchema),
     requireStaffForTournament(),
     async c => {
       const {tournamentId, jobId} = c.req.valid('param');

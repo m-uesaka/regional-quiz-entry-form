@@ -20,6 +20,15 @@ export const COMMON_ERROR_CODES = {
    * password reset's.
    */
   INVALID_OR_EXPIRED_TOKEN: 'invalid or expired token',
+  /**
+   * A request whose path parameters, query or body fail the route's schema,
+   * whichever route it is (#294). The issues are not sent: the frontend runs
+   * the same schemas from this package before it calls the API, so it has
+   * its own field messages already.
+   */
+  INVALID_REQUEST: 'invalid request',
+  /** A path no route is mounted at (#294). */
+  NOT_FOUND: 'not found',
 } as const;
 
 /** One of the `error` strings in `COMMON_ERROR_CODES`. */

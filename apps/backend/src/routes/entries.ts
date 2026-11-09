@@ -1,5 +1,4 @@
 import {Hono} from 'hono';
-import {zValidator} from '@hono/zod-validator';
 import {
   EntryInputSchema,
   EntrySessionInputSchema,
@@ -16,6 +15,7 @@ import {requireParticipant} from '../middleware/participant-auth';
 import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
 import {requireTurnstile} from '../middleware/turnstile';
 import {TournamentIdParamSchema} from './params';
+import {validate} from '../middleware/validate';
 
 // Matches the period both mail-trigger limiters count over
 // (`wrangler.toml`).
@@ -23,7 +23,7 @@ const MAIL_TRIGGER_LIMIT_PERIOD_SECONDS = 60;
 
 export const entriesRoute = new Hono<Env>().post(
   '/:tournamentId/entries',
-  zValidator('param', TournamentIdParamSchema),
+  validate('param', TournamentIdParamSchema),
   // Unauthenticated, and every accepted call sends a confirmation mail to
   // whatever address it names, so this is a mail bomb aimed at a third
   // party unless it is both rate limited and behind a challenge.
@@ -33,7 +33,7 @@ export const entriesRoute = new Hono<Env>().post(
     MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
   ),
   requireTurnstile(TURNSTILE_ACTIONS.ENTRY),
-  zValidator('json', EntryInputSchema),
+  validate('json', EntryInputSchema),
   async c => {
     const input = c.req.valid('json');
     // Only the refusals that don't depend on the address are answered
@@ -100,7 +100,7 @@ export const entriesRoute = new Hono<Env>().post(
  */
 export const entrySessionRoute = new Hono<ParticipantEnv>().post(
   '/:tournamentId/entries/session',
-  zValidator('param', TournamentIdParamSchema),
+  validate('param', TournamentIdParamSchema),
   requireParticipant(),
   // Still mails a verification link, so the IP limit and the challenge stay.
   // The per-address limit doesn't apply: the link only ever goes to the
@@ -112,7 +112,7 @@ export const entrySessionRoute = new Hono<ParticipantEnv>().post(
     MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
   ),
   requireTurnstile(TURNSTILE_ACTIONS.ENTRY),
-  zValidator('json', EntrySessionInputSchema),
+  validate('json', EntrySessionInputSchema),
   async c => {
     const result = await createEntryForParticipant(
       c.env,

@@ -12,7 +12,7 @@ stands, so a reloaded sheet can be checked (and touched up) first.
   } from '@regional-quiz/shared';
   import {onMount} from 'svelte';
   import {beforeNavigate} from '$app/navigation';
-  import {createApiClient} from '$lib/api';
+  import {createApiClient, isShowableError} from '$lib/api';
   import {
     clearYamlDraft,
     readYamlDraft,
@@ -153,18 +153,15 @@ stands, so a reloaded sheet can be checked (and touched up) first.
       const res = await api.api['sheet-import'].preview.$post({
         json: {spreadsheetId, tournamentSlug: tournamentType},
       });
-      // The union of possible response bodies also includes the
-      // `@hono/zod-validator` default validation-failure shape (`{success:
-      // false, error: ZodError}`), which structurally overlaps with the
-      // `{error: string}` shape but has a non-string `error`. Narrow on the
-      // actual field presence/type rather than `res.status` so this stays
-      // type-safe either way.
+      // Narrowed on the fields rather than `res.status`, which several
+      // bodies share. A body the API's schema refused answers only the code
+      // `invalid request` (#294), which is not wording to show.
       const body = await res.json();
       if ('yaml' in body) {
         yaml = body.yaml;
         loadedYaml = body.yaml;
         loaded = true;
-      } else if ('error' in body && typeof body.error === 'string') {
+      } else if ('error' in body && isShowableError(body.error)) {
         loadError = body.error;
       } else {
         loadError = '入力内容を確認してください';
@@ -195,7 +192,7 @@ stands, so a reloaded sheet can be checked (and touched up) first.
       if ('ok' in body && body.ok) {
         storedYaml = sent;
         saveStatus = 'saved';
-      } else if ('error' in body && typeof body.error === 'string') {
+      } else if ('error' in body && isShowableError(body.error)) {
         saveStatus = 'error';
         saveError = body.error;
       } else {
