@@ -303,6 +303,24 @@ export async function prepareVerificationResend(
  *     when they couldn't be read.
  */
 function withdrawalNotice(tournamentNames: readonly string[]): string {
+  return (
+    describeWithdrawnEntries(tournamentNames) +
+    '引き続き参加を希望する場合は、このエントリーを確定した後、エントリーフォームからもう一度エントリーしてください。'
+  );
+}
+
+/**
+ * What a mail says about the pending entries a takeover of the unverified
+ * account withdrew (`take_over_unverified_participant()`, #189): which they
+ * were, why, and that their links no longer work. The mail goes on to say
+ * what the owner can do about it, which depends on how the submission that
+ * withdrew them ended.
+ * @param tournamentNames The withdrawn tournaments' display names, or empty
+ *     when they couldn't be read.
+ */
+export function describeWithdrawnEntries(
+  tournamentNames: readonly string[],
+): string {
   const which =
     tournamentNames.length > 0
       ? tournamentNames.map(name => `「${name}」`).join('、') + 'への'
@@ -310,8 +328,7 @@ function withdrawalNotice(tournamentNames: readonly string[]): string {
   return (
     `このメールアドレスで受け付けていた、まだ確定していない${which}エントリーは、` +
     '異なるパスワードまたは別の地域の大会でエントリーされたため取り消しました。' +
-    '取り消したエントリーの確認メールのリンクは使えません。' +
-    '引き続き参加を希望する場合は、このエントリーを確定した後、エントリーフォームからもう一度エントリーしてください。'
+    '取り消したエントリーの確認メールのリンクは使えません。'
   );
 }
 
