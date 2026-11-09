@@ -1,7 +1,8 @@
-import type {
-  CustomFieldValues,
-  FormFieldDef,
-  FormFieldType,
+import {
+  customFieldValueOf,
+  type CustomFieldValues,
+  type FormFieldDef,
+  type FormFieldType,
 } from '@regional-quiz/shared';
 import type {EntryFieldErrors} from '$lib/types/entry-form';
 
@@ -54,7 +55,10 @@ export function initialCustomFieldValues(
   return Object.fromEntries(
     formFieldDefs.map(fieldDef => [
       fieldDef.fieldKey,
-      customFieldValueFor(fieldDef.fieldType, answered[fieldDef.fieldKey]),
+      customFieldValueFor(
+        fieldDef.fieldType,
+        customFieldValueOf(answered, fieldDef.fieldKey),
+      ),
     ]),
   );
 }
