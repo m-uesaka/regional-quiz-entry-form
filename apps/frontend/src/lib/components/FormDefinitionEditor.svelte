@@ -10,7 +10,14 @@ stands, so a reloaded sheet can be checked (and touched up) first.
     TOURNAMENT_TYPE_LABELS,
     type TournamentType,
   } from '@regional-quiz/shared';
+  import {onMount} from 'svelte';
+  import {beforeNavigate} from '$app/navigation';
   import {createApiClient} from '$lib/api';
+  import {
+    clearYamlDraft,
+    readYamlDraft,
+    writeYamlDraft,
+  } from '$lib/yaml-draft';
   import Button from '$lib/components/ui/atoms/Button.svelte';
   import Card from '$lib/components/ui/atoms/Card.svelte';
   import Input from '$lib/components/ui/atoms/Input.svelte';
@@ -36,9 +43,14 @@ stands, so a reloaded sheet can be checked (and touched up) first.
   const api = createApiClient();
 
   // Seeded once: after that the text is the staff member's draft, and a
-  // `load` re-run (say, after the tournament form above is saved) must not
-  // throw it away. The page keys this component on the tournament and its
-  // type, which is when a fresh start is wanted.
+  // `load` re-run must not throw it away. The page's other forms are sent
+  // with `use:enhance`, so saving the tournament form above (or resetting the
+  // entries) re-runs `load` without a page load and the draft stays (#303);
+  // without JavaScript they reload the page, and the draft -- which cannot
+  // be edited without JavaScript anyway -- starts over from what is stored.
+  // A draft can still be brought back from session storage (see below).
+  // The page keys this component on the tournament and its type, which is
+  // when a fresh start is wanted.
   // svelte-ignore state_referenced_locally
   let yaml = $state(initialYaml);
   // The text as last stored: what `load` read, then what each save sent.
@@ -59,6 +71,64 @@ stands, so a reloaded sheet can be checked (and touched up) first.
   // 保存しました only while the text is still what was saved: typing after
   // the save makes it a draft again.
   const showSaved = $derived(saveStatus === 'saved' && yaml === storedYaml);
+  // Text that leaving the page would lose: only `storedYaml` comes back.
+  const unsaved = $derived(yaml !== storedYaml);
+  // Whether the text was brought back from a draft an earlier render of
+  // this page left behind.
+  let restored = $state(false);
+
+  // The draft is also kept in the tab's session storage while it is
+  // unsaved, and brought back here if this page is opened again on the same
+  // stored definition. That covers what no navigation guard sees: a `load`
+  // re-run after one of the page's forms that fails and shows the error
+  // page in place of this one, a session that ran out and was sent to the
+  // login page, a reload. Restored after mounting rather than while
+  // initialising, so the server-rendered text is what hydration matches.
+  onMount(() => {
+    const draft = readYamlDraft(tournamentId, tournamentType, initialYaml);
+    if (draft !== null && draft !== yaml) {
+      yaml = draft;
+      restored = true;
+    }
+  });
+  $effect(() => {
+    if (unsaved) {
+      writeYamlDraft(tournamentId, tournamentType, storedYaml, yaml);
+    } else {
+      clearYamlDraft(tournamentId, tournamentType);
+    }
+  });
+
+  /** Puts the stored text back over a restored draft. */
+  function discardRestored(): void {
+    yaml = storedYaml;
+    restored = false;
+  }
+
+  // Asks before a navigation throws an unsaved draft away (#303). Leaving the
+  // site, reloading or closing the tab (`leave`) can only be held up by the
+  // browser's own dialog, which `cancel()` asks for; SvelteKit raises this
+  // from `beforeunload`, so no listener of its own is needed. A `goto` is
+  // let through: on this page that is only a form action's redirect -- the
+  // tournament was deleted, or the session is gone -- which has already
+  // happened, and staying behind would leave a page that can't save.
+  beforeNavigate(navigation => {
+    if (!unsaved || navigation.type === 'goto') {
+      return;
+    }
+    if (navigation.type === 'leave') {
+      navigation.cancel();
+      return;
+    }
+    if (
+      !confirm('保存していない YAML の変更は失われます。このページを離れますか?')
+    ) {
+      navigation.cancel();
+      return;
+    }
+    // Left on purpose: not to be brought back next time.
+    clearYamlDraft(tournamentId, tournamentType);
+  });
 
   async function handleLoadSheet(event: SubmitEvent): Promise<void> {
     event.preventDefault();
@@ -174,6 +244,26 @@ stands, so a reloaded sheet can be checked (and touched up) first.
       <p class="text-sm text-foreground" role="status">
         スプレッドシートの内容を読み込みました。確認してから保存してください
       </p>
+    </Message>
+  {/if}
+
+  {#if restored && unsaved}
+    <Message variant="warning">
+      <div class="flex flex-col gap-2">
+        <p class="text-sm text-foreground" role="status">
+          保存していない YAML の下書きを復元しました。確認してから保存してください
+        </p>
+        <div class="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="secondary"
+            size="small"
+            onclick={discardRestored}
+          >
+            保存済みの内容に戻す
+          </Button>
+        </div>
+      </div>
     </Message>
   {/if}
 
