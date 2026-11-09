@@ -1,7 +1,18 @@
-import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from 'bun:test';
+import {SQL} from 'bun';
 import {Hono} from 'hono';
+import type {StaffClaims} from '@regional-quiz/shared';
 import {sign} from 'hono/jwt';
 import {
+  isSessionCurrent,
   requireGeneralStaff,
   requireStaffForEntry,
   requireStaffForTournament,
@@ -9,6 +20,12 @@ import {
 } from './staff-auth';
 import type {StaffEnv} from '../types/env';
 import {testBindings} from '../test-support/bindings';
+import {
+  DB_URL,
+  isDbReachable,
+  SUPABASE_SECRET_KEY,
+  SUPABASE_URL,
+} from '../test-support/db';
 import {
   staffSessionAwareFetch,
   TEST_SESSIONS_VALID_FROM,
@@ -804,3 +821,107 @@ describe('requireGeneralStaff', () => {
     expect(res.status).toBe(401);
   });
 });
+
+// The guards decide by the claims' role, region and type, copied off the
+// account at login. A change to the account has to end the session rather
+// than leave the old scope in force until the token expires (#296).
+describe.skipIf(!(await isDbReachable()))(
+  'isSessionCurrent against the account (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const env = testBindings({SUPABASE_URL, SUPABASE_SECRET_KEY});
+    const regionSlug = `staff-scope-${crypto.randomUUID().slice(0, 8)}`;
+    const emailDomain = 'staff-scope-test.example.com';
+    let regionId: string;
+    let otherRegionId: string;
+
+    beforeAll(async () => {
+      [{id: regionId}, {id: otherRegionId}] = await sql`
+        insert into regions (slug, name) values
+          (${regionSlug + '-a'}, 'テスト地域A'),
+          (${regionSlug + '-b'}, 'テスト地域B')
+        returning id
+      `;
+    });
+
+    afterAll(async () => {
+      await sql`delete from staff_accounts where email like ${'%@' + emailDomain}`;
+      await sql`delete from regions where slug like ${regionSlug + '%'}`;
+      await sql.close();
+    });
+
+    /** A regional 最強位 account in `regionId`, and claims matching it. */
+    async function regionalAccount(): Promise<StaffClaims> {
+      const [row] = await sql`
+        insert into staff_accounts (
+          email, password_hash, role, region_id, tournament_type
+        ) values (
+          ${`staff-${crypto.randomUUID()}@${emailDomain}`}, 'hash',
+          'regional', ${regionId}, 'saikyoi'
+        )
+        returning id, sessions_valid_from
+      `;
+      return {
+        sub: row.id,
+        role: 'regional',
+        regionId,
+        tournamentType: 'saikyoi',
+        sessionsValidFrom: (row.sessions_valid_from as Date).getTime(),
+      };
+    }
+
+    it('keeps a session whose claims match the account', async () => {
+      const claims = await regionalAccount();
+
+      expect(await isSessionCurrent(env, claims)).toEqual({
+        ok: true,
+        current: true,
+      });
+    });
+
+    it('ends the session once the region or the type changes', async () => {
+      const moved = await regionalAccount();
+      const retyped = await regionalAccount();
+      await sql`
+        update staff_accounts set region_id = ${otherRegionId}
+        where id = ${moved.sub}
+      `;
+      await sql`
+        update staff_accounts set tournament_type = 'shinjinou'
+        where id = ${retyped.sub}
+      `;
+
+      expect(await isSessionCurrent(env, moved)).toEqual({
+        ok: true,
+        current: false,
+      });
+      expect(await isSessionCurrent(env, retyped)).toEqual({
+        ok: true,
+        current: false,
+      });
+    });
+
+    it('ends the session of an account whose role changed', async () => {
+      const claims = await regionalAccount();
+      await sql`
+        update staff_accounts
+        set role = 'general', region_id = null, tournament_type = null
+        where id = ${claims.sub}
+      `;
+
+      expect(await isSessionCurrent(env, claims)).toEqual({
+        ok: true,
+        current: false,
+      });
+      // A general session against that account is current: the claims match.
+      expect(
+        await isSessionCurrent(env, {
+          ...claims,
+          role: 'general',
+          regionId: null,
+          tournamentType: null,
+        }),
+      ).toEqual({ok: true, current: true});
+    });
+  },
+);
