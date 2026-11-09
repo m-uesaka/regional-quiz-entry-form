@@ -2,6 +2,7 @@
   import SubNav from '$lib/components/layout/SubNav.svelte';
   import Button from '$lib/components/ui/atoms/Button.svelte';
   import Link from '$lib/components/ui/atoms/Link.svelte';
+  import PendingInvitesNotice from '$lib/components/PendingInvitesNotice.svelte';
   import type {LayoutProps} from './$types';
 
   let {data, children}: LayoutProps = $props();
@@ -24,5 +25,7 @@
     {/snippet}
   </SubNav>
 {/if}
+
+<PendingInvitesNotice message={data.pendingInvitesMessage} />
 
 {@render children()}

@@ -73,3 +73,12 @@ export const StaffLoginResponseSchema = z.object({
   tournamentType: TournamentTypeSchema.nullable(),
 });
 export type StaffLoginResponse = z.infer<typeof StaffLoginResponseSchema>;
+
+// The answer to `GET /api/staff/pending-invites`: which of the logged-in
+// address's other accounts still wait on their invite link (no password
+// set), so the staff screens can warn that being logged in here is not being
+// logged in there.
+export const StaffPendingInvitesSchema = z.object({
+  scopes: z.array(StaffLoginScopeSchema),
+});
+export type StaffPendingInvites = z.infer<typeof StaffPendingInvitesSchema>;

@@ -14,6 +14,7 @@ import {entryListRoute} from './routes/entry-list';
 import {regulationsRoute} from './routes/regulations';
 import {staffEntriesRoute} from './routes/staff-entries';
 import {staffDashboardRoute} from './routes/staff-dashboard';
+import {staffPendingInvitesRoute} from './routes/staff-pending-invites';
 import {staffMailRoute} from './routes/staff-mail';
 import {staffAccountsRoute} from './routes/staff-accounts';
 import {entryVerificationRoute} from './routes/entry-verification';
@@ -79,6 +80,7 @@ const routes = app
   .route('/staff', staffEntryPauseRoute)
   .route('/staff', staffMailRoute)
   .route('/staff', staffAccountsRoute)
+  .route('/staff', staffPendingInvitesRoute)
   .route('/entries', entryVerificationRoute)
   .route('/form-definitions', formDefinitionsRoute)
   .route('/sheet-import', sheetImportRoute)
