@@ -1,6 +1,17 @@
 <script lang="ts">
   import {onMount} from 'svelte';
   import {env} from '$env/dynamic/public';
+  import type {TurnstileAction} from '@regional-quiz/shared';
+
+  interface Props {
+    /**
+     * Which form this is. The API refuses a token solved for another form
+     * (#297), so each form names itself here as its endpoint expects.
+     */
+    action: TurnstileAction;
+  }
+
+  const {action}: Props = $props();
 
   // Cloudflare's widget, which the two endpoints that mail an address of the
   // caller's choosing are behind (#116). It writes its token into a hidden
@@ -28,7 +39,7 @@
     // what covers that case; a container the scan already filled is left
     // alone.
     if (!siteKey || !container || container.childElementCount > 0) return;
-    widgetId = window.turnstile?.render(container, {sitekey: siteKey});
+    widgetId = window.turnstile?.render(container, {sitekey: siteKey, action});
   });
 
   /**
@@ -66,5 +77,10 @@
 </svelte:head>
 
 {#if siteKey}
-  <div class="cf-turnstile" data-sitekey={siteKey} bind:this={container}></div>
+  <div
+    class="cf-turnstile"
+    data-sitekey={siteKey}
+    data-action={action}
+    bind:this={container}
+  ></div>
 {/if}

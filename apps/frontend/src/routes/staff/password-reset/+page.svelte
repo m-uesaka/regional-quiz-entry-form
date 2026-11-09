@@ -1,6 +1,6 @@
 <script lang="ts">
   import {enhance} from '$app/forms';
-  import {TOURNAMENT_TYPE_LABELS, TournamentTypeSchema} from '@regional-quiz/shared';
+  import {TOURNAMENT_TYPE_LABELS, TournamentTypeSchema, TURNSTILE_ACTIONS} from '@regional-quiz/shared';
   import NativeSelect from '$lib/components/form/NativeSelect.svelte';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
@@ -104,7 +104,7 @@
           </NativeSelect>
         </div>
 
-        <Turnstile bind:this={turnstile} />
+        <Turnstile bind:this={turnstile} action={TURNSTILE_ACTIONS.STAFF_PASSWORD_RESET} />
 
         <Button type="submit" class="w-full">再設定用リンクを送信する</Button>
       </form>

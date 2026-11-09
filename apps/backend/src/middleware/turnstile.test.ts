@@ -8,7 +8,7 @@ const ENV = testBindings({
   TURNSTILE_SECRET_KEY: 'the-secret',
 });
 
-const app = new Hono<Env>().post('/x', requireTurnstile(), c =>
+const app = new Hono<Env>().post('/x', requireTurnstile('entry'), c =>
   c.json({reached: true}),
 );
 
@@ -18,7 +18,9 @@ function mockSiteverify(success: boolean): {secrets: string[]} {
   globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body)) as {secret: string};
     secrets.push(body.secret);
-    return Promise.resolve(Response.json({success}));
+    return Promise.resolve(
+      Response.json({success, hostname: 'entry.example.com'}),
+    );
   }) as unknown as typeof fetch;
   return {secrets};
 }
