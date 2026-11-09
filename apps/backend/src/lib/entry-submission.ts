@@ -224,12 +224,38 @@ async function rollbackEntry(
   // reference it by foreign key, and on the reuse path dropping them is what
   // stops a link that did go out from confirming an entry that has been put
   // back into its cancellation.
-  await db.from('email_verification_tokens').delete().eq('entry_id', entryId);
+  const {error: tokensError} = await db
+    .from('email_verification_tokens')
+    .delete()
+    .eq('entry_id', entryId);
+  if (tokensError) {
+    console.error('failed to delete the verification tokens', {
+      entryId,
+      code: tokensError.code,
+      error: tokensError.message,
+    });
+  }
 
   if (!existingEntry) {
     // `entry_regulations` references the entry `on delete cascade`, so the
     // selection written for it goes with the row.
-    await db.from('entries').delete().eq('id', entryId);
+    //
+    // Logged rather than reported, as on the reuse path below. A row left
+    // behind here is a `pending_verification` entry whose link never
+    // arrived: a retry is refused as waiting for that link until the row
+    // lapses (`lapse_expired_pending_entries()`, 0054), so it must not pass
+    // silently either.
+    const {error: entryError} = await db
+      .from('entries')
+      .delete()
+      .eq('id', entryId);
+    if (entryError) {
+      console.error('failed to delete the entry', {
+        entryId,
+        code: entryError.code,
+        error: entryError.message,
+      });
+    }
     return;
   }
 
