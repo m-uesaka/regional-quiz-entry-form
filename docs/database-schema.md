@@ -214,7 +214,8 @@ flowchart TB
 | `custom_field_values` | jsonb | not null, default `'{}'`, 回答の合計 10000 文字以内 | 追加フォーム項目の回答。`{ field_key: string \| string[] }` |
 | `status` | entry_status | not null, default `pending_verification` | |
 | `waitlist_position` | integer | nullable | キャンセル待ちの順位。`waitlisted` 以外では `null` |
-| `email_verified_at` | timestamptz | nullable | メール確認完了時刻 |
+| `email_verified_at` | timestamptz | nullable | メール確認完了時刻。キャンセル待ちになったときにも入る |
+| `confirmed_at` | timestamptz | nullable | 最後に `confirmed` になった時刻(`0052`、#287)。トリガ `entries_set_confirmed_at` が、`confirmed` になる INSERT と `confirmed` 以外からの UPDATE で `now()` を入れる。`confirmed` の行では必須(`entries_confirmed_has_confirmed_at`)。キャンセルしても残り、再エントリーで null に戻る |
 | `cancelled_at` | timestamptz | nullable | キャンセル時刻 |
 | `created_at` | timestamptz | not null, default `now()` | |
 | `updated_at` | timestamptz | not null, default `now()` | トリガ `entries_set_updated_at` が UPDATE のたびに更新 |
@@ -406,15 +407,15 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | 関数 | 定義ファイル | 呼び出し元 | 役割 |
 | --- | --- | --- | --- |
 | `sync_form_field_defs(uuid, jsonb)` | `0002` | `lib/form-definitions.ts` | 大会のフォーム項目定義を全削除+一括挿入で置き換える |
-| `confirm_entry_by_token(text)` | `0003` → `0008` → `0034` で再定義 | `lib/entry-confirmation.ts` | 確認トークンでエントリーを確定 / キャンセル待ちに載せる |
+| `confirm_entry_by_token(text)` | `0003` → `0008` → `0034` → `0047` → `0051` で再定義 | `lib/entry-confirmation.ts` | 確認トークンでエントリーを確定 / キャンセル待ちに載せる |
 | `promote_waitlisted_entries(uuid)` | `0037`(`promote_next_waitlisted_entry()` を置き換え) | `lib/waitlist.ts` | 空いた席の数だけキャンセル待ちを繰り上げ、残りの順位を振り直す |
 | `cancel_own_entry(uuid, uuid)` | `0006` | `lib/own-entries.ts` | 参加者自身のエントリーをキャンセルする |
 | `reset_participant_password(text, text)` | `0009` → `0010` で再定義 | `lib/password-reset.ts` | 再設定トークンを消費してパスワードを更新し、残りのトークンを焼き捨てる |
 | `take_over_unverified_participant(uuid, text, uuid)` | `0034` | `lib/entry-submission.ts` | 未確認の参加者アカウントのパスワードと地域を上書きし、それまでのエントリーを削除する |
 | `claim_participant_region(uuid, uuid)` | `0040` | (旧 Worker のみ) | 地域だけを見る旧版。デプロイ中の古い Worker のために残しており、次のマイグレーションで削除する |
 | `claim_participant_region_for_tournament(uuid, uuid)` | `0043` | `lib/entry-submission.ts` | 確認済みの参加者の地域を、同じ問題セットの別の地域に押さえるエントリーが無ければエントリーする大会の地域に移す |
-| `participant_holds_conflicting_region(uuid, uuid)` | `0043` | `lib/entry-submission.ts`、`check_entry_seat()` | 参加者が、その大会とは別の地域で同じ問題セットの大会の枠を押さえているか(ロックは取らない) |
-| `reenter_cancelled_entry(uuid, uuid, text, text, text, text, jsonb)` | `0041` | `lib/entry-submission.ts` | 参加者行をロックしてから、キャンセル済みのエントリー行を再エントリーとして上書きする |
+| `participant_holds_conflicting_region(uuid, uuid)` | `0043`(`0046`・`0052` で再定義) | `lib/entry-submission.ts`、`check_entry_seat()` | 参加者が、その大会とは別の地域で同じ問題セットの大会の枠を押さえているか(ロックは取らない) |
+| `reenter_cancelled_entry(uuid, uuid, text, text, text, text, jsonb)` | `0041`(`0052` で再定義) | `lib/entry-submission.ts` | 参加者行をロックしてから、キャンセル済みのエントリー行を再エントリーとして上書きする |
 | `reset_tournament_entries(uuid, boolean)` | `0038` | `routes/tournaments.ts` | 大会のエントリーを全件削除し、指定があれば他の大会にエントリーが残っていない参加者アカウントも削除する |
 | `tournament_entry_summary()` | `0013` | `routes/staff-dashboard.ts` | 全大会のエントリー件数をステータス別に集計する(読み取り専用) |
 | `sync_regulations(uuid, jsonb)` | `0014`(`0018`・`0042` で再定義) | `lib/regulations.ts` | 大会のレギュレーションを差分同期する(update / insert / 参照が無ければ delete) |
@@ -537,7 +538,7 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 1. 参加者行を `for no key update` でロックする。
 2. `p_entry_id` の行が `p_participant_id` のもので `cancelled` なら、その行の使用済みと期限切れのトークンを削除する。有効なトークンは残す。
-3. **別の文で**、同じ条件で、入力の値と `pending_verification` で行を上書きする。`waitlist_position` / `email_verified_at` / `cancelled_at` は null に戻すので、新しく入れた行と同じ状態から始まります。
+3. **別の文で**、同じ条件で、入力の値と `pending_verification` で行を上書きする。`waitlist_position` / `email_verified_at` / `confirmed_at` / `cancelled_at` は null に戻すので、新しく入れた行と同じ状態から始まります。
 
 - 関数にしたのはロック順のためです。`entries` への直接の UPDATE は BEFORE ROW トリガが動く前に行をロックするので、トリガの中で参加者行を取ると「`entries` 行 → 参加者行」になり、`take_over_unverified_participant()` とデッドロックしました。先に参加者行を取れば、上書きとはそこで直列化されます。
 - 待っている間に行が `cancelled` でなくなっていれば(同時の再エントリーが取った、上書きが消した)0 行を返します。`setof entries` を返すので、呼び出し側は INSERT と同じ `.select('id').single()` で受けられ、0 行は `PGRST116` として `concurrent submission` の 409 になります。
@@ -550,7 +551,7 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 確認済みの参加者の `region_id` を、エントリーする大会の地域に移します(#236 の `0040` の `claim_participant_region()` を `0043` で大会単位にしたもの)。`enterTournament()` がエントリーを書く前に、期限切れの確定待ちを取り消してから `claimTournamentRegion()` の段階で呼びます。参加者行を `for no key update` でロックした後の別の文で、**エントリーする大会と問題セットが同じ別の地域の大会**に次のエントリーが無いことを確かめます(`participant_holds_conflicting_region()`)。
 
 - `cancelled` 以外のエントリー
-- 大会の受付終了より後にキャンセルした、確定済みだったエントリー(`email_verified_at` が null でなく、`cancelled_at > entry_closes_at`)
+- 大会の受付終了より後にキャンセルした、確定済みだったエントリー(`confirmed_at` が null でなく、`cancelled_at > entry_closes_at`)。`0052`(#287)より前は `email_verified_at` で見ていたため、キャンセル待ちのまま受付終了後に取り消した(一度も席を得なかった)エントリーも数えていました。`0052` より前に受付終了後に取り消された行は、確定済みだったかキャンセル待ちだったかを区別できないので、`email_verified_at` があれば確定済みだったものとして `confirmed_at` を埋めています(これまでと同じ判定)
 
 あれば何も変えずに `false` を返し、呼び出し側は `already registered in another region` で断ります。なければ地域を移して(もともとその地域なら何もせずに) `true` を返します。キャンセルには期限が無いので、後者を数えないと、大会に出た後でキャンセルして別の地域の大会にも出られてしまいます。
 

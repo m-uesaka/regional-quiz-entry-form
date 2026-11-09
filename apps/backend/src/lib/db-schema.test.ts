@@ -819,6 +819,8 @@ describe.skipIf(!dbReachable)(
         ...entryFor('saikyoi', 'cancelled'),
         tournament_id: otherTournamentId,
         email_verified_at: '2026-05-01T00:00:00Z',
+        // Confirmed, not only verified: a waitlisted one holds nothing (0052).
+        confirmed_at: '2026-05-01T00:00:00Z',
         cancelled_at: '2099-01-01T00:00:00Z',
       })}`;
 
@@ -2913,6 +2915,103 @@ describe.skipIf(!dbReachable)(
       const waitlist = await waitlistOf(f.tournamentId);
       expect(waitlist.map(r => r.waitlist_position)).toEqual([1, 3, 4]);
       expect(waitlist[2].id).toBe(entryId);
+    });
+  },
+);
+
+// Whether a cancelled entry was ever confirmed decides whether it holds its
+// region after the close; a waitlisted entry is verified too, so the time
+// of the confirmation is kept apart from the verification's (#287).
+describe.skipIf(!dbReachable)(
+  'entries.confirmed_at (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const regionSlug = 'confirmed-at-test-region';
+    const emailDomain = 'confirmed-at-test.example.com';
+    let suffix = 0;
+
+    afterAll(async () => {
+      await deleteTestRegionRows(sql, regionSlug, emailDomain);
+      await sql.close();
+    });
+
+    function createFixture(capacity: number): Promise<TournamentFixture> {
+      suffix += 1;
+      return createTournamentAndRegulation(sql, `${regionSlug}-${suffix}`, {
+        capacity,
+      });
+    }
+
+    async function confirmedAtOf(entryId: string) {
+      const [row] = await sql`
+        select status, email_verified_at, confirmed_at from entries
+        where id = ${entryId}
+      `;
+      return row as {
+        status: string;
+        email_verified_at: Date | null;
+        confirmed_at: Date | null;
+      };
+    }
+
+    async function followLink(entryId: string): Promise<void> {
+      const token = await createVerificationToken(sql, entryId);
+      await sql`select confirm_entry_by_token(${await hashToken(token)})`;
+    }
+
+    it('is set by the link that confirms an entry, and not by one that queues it', async () => {
+      const f = await createFixture(1);
+      const {entryId: seated} = await createEntryRow(sql, f, emailDomain);
+      const {entryId: queued} = await createEntryRow(sql, f, emailDomain);
+
+      await followLink(seated);
+      await followLink(queued);
+
+      const seatedRow = await confirmedAtOf(seated);
+      const queuedRow = await confirmedAtOf(queued);
+      expect(seatedRow.status).toBe('confirmed');
+      expect(seatedRow.confirmed_at).not.toBeNull();
+      expect(queuedRow.status).toBe('waitlisted');
+      expect(queuedRow.email_verified_at).not.toBeNull();
+      expect(queuedRow.confirmed_at).toBeNull();
+    });
+
+    it('is set by the promotion, and kept by the cancellation after it', async () => {
+      const f = await createFixture(1);
+      const {entryId} = await createEntryRow(sql, f, emailDomain, {
+        status: 'waitlisted',
+        waitlistPosition: 1,
+      });
+      const {participantId} = (
+        await sql`select participant_id as "participantId" from entries where id = ${entryId}`
+      )[0] as {participantId: string};
+
+      await sql`select * from promote_waitlisted_entries(${f.tournamentId})`;
+      const promoted = await confirmedAtOf(entryId);
+      await sql`select * from cancel_own_entry(${entryId}, ${participantId})`;
+      const cancelled = await confirmedAtOf(entryId);
+
+      expect(promoted.status).toBe('confirmed');
+      expect(promoted.confirmed_at).not.toBeNull();
+      expect(cancelled.status).toBe('cancelled');
+      expect(cancelled.confirmed_at).toEqual(promoted.confirmed_at);
+    });
+
+    it('is set on a row inserted as confirmed, and required while confirmed', async () => {
+      const f = await createFixture(5);
+      const {entryId} = await createEntryRow(sql, f, emailDomain, {
+        status: 'confirmed',
+      });
+
+      let errno: string | undefined;
+      try {
+        await sql`update entries set confirmed_at = null where id = ${entryId}`;
+      } catch (e: unknown) {
+        errno = (e as {errno?: string}).errno;
+      }
+
+      expect((await confirmedAtOf(entryId)).confirmed_at).not.toBeNull();
+      expect(errno).toBe('23514');
     });
   },
 );
