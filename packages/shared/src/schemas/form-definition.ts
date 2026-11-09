@@ -1,5 +1,6 @@
 import {parse as parseYaml, stringify as stringifyYaml} from 'yaml';
 import {z} from 'zod';
+import {wellFormedText} from './text';
 import {TournamentTypeSchema, type TournamentType} from './tournament';
 
 export const FormFieldTypeSchema = z.enum([
@@ -24,9 +25,13 @@ export function isFreeTextFieldType(
   return (FREE_TEXT_FIELD_TYPES as readonly FormFieldType[]).includes(type);
 }
 
+// A YAML double-quoted `"\ud800"` decodes to a lone surrogate, which the
+// database refuses (#298).
+const optionSchema = wellFormedText(z.string(), '選択肢');
+
 const BaseFormFieldDefYamlSchema = z.object({
   key: z.string().regex(/^[a-z][a-z0-9_]*$/),
-  label: z.string(),
+  label: wellFormedText(z.string(), 'ラベル'),
   required: z.boolean().default(false),
 });
 
@@ -34,17 +39,17 @@ export const FormFieldDefYamlSchema = z.discriminatedUnion('type', [
   // A plain boolean checkbox (e.g. "agree to the rules") has no options.
   BaseFormFieldDefYamlSchema.extend({
     type: z.literal('checkbox'),
-    options: z.array(z.string()).optional(),
+    options: z.array(optionSchema).optional(),
   }),
   // A radio group needs at least one option to be selectable.
   BaseFormFieldDefYamlSchema.extend({
     type: z.literal('radio'),
-    options: z.array(z.string()).min(1),
+    options: z.array(optionSchema).min(1),
   }),
   // Free text: `textarea` takes several lines, `textfield` one (#173).
   BaseFormFieldDefYamlSchema.extend({
     type: z.enum(FREE_TEXT_FIELD_TYPES),
-    options: z.array(z.string()).optional(),
+    options: z.array(optionSchema).optional(),
   }),
 ]);
 export type FormFieldDefYaml = z.infer<typeof FormFieldDefYamlSchema>;

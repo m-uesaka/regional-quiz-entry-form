@@ -27,3 +27,4 @@ export * from './entry-error-codes';
 export * from './mail-sender';
 export * from './client-ip';
 export * from './turnstile-action';
+export * from './schemas/text';

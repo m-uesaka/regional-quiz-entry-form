@@ -168,6 +168,19 @@ describe.skipIf(!(await isDbReachable()))(
       expect(body.allowsDualEntry).toBe(false);
     });
 
+    // The bulk import looks the region up by the sheet's trimmed cell (#300).
+    it('stores the name trimmed, full-width spaces included', async () => {
+      const slug = `${testSlugPrefix}-create-trim`;
+
+      const res = await createRegion(slug, '\u3000空白テスト地域 ');
+      const body = (await res.json()) as Record<string, unknown>;
+
+      expect(res.status).toBe(201);
+      expect(body.name).toBe('空白テスト地域');
+      const blank = await createRegion(`${testSlugPrefix}-create-blank`, '  ');
+      expect(blank.status).toBe(400);
+    });
+
     it('creates a region that allows dual entry when asked to', async () => {
       const slug = `${testSlugPrefix}-create-dual`;
 
