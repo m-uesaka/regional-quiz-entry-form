@@ -3,6 +3,7 @@ import {zValidator} from '@hono/zod-validator';
 import {
   EntryInputSchema,
   EntrySessionInputSchema,
+  TURNSTILE_ACTIONS,
   type EntryInput,
 } from '@regional-quiz/shared';
 import type {Env, ParticipantEnv} from '../types/env';
@@ -32,7 +33,7 @@ export const entriesRoute = new Hono<Env>().post(
     c => `ip:${clientIp(c)}`,
     MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
   ),
-  requireTurnstile(),
+  requireTurnstile(TURNSTILE_ACTIONS.ENTRY),
   zValidator('json', EntryInputSchema),
   // The address being mailed is limited separately from the address doing
   // the mailing, and on its own limiter: a botnet spreads the IP key thin,
@@ -99,7 +100,7 @@ export const entrySessionRoute = new Hono<ParticipantEnv>().post(
     c => `ip:${clientIp(c)}`,
     MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
   ),
-  requireTurnstile(),
+  requireTurnstile(TURNSTILE_ACTIONS.ENTRY),
   zValidator('json', EntrySessionInputSchema),
   async c => {
     const result = await createEntryForParticipant(

@@ -142,6 +142,8 @@ IP 鍵は、IPv4 はアドレスそのまま、IPv6 は**先頭 /64**(`2001:db8:
 
 検証は `lib/turnstile.ts` の `verifyTurnstile()` が Cloudflare の siteverify API に対して行い、**トークンが無い場合・無効な場合・siteverify に到達できない場合のいずれも 400 `{"error": "turnstile verification failed"}`** で落とします(fail closed)。Cloudflare 側の一時障害で素通しになると、そのままメール爆撃の口が開くためです。3 者を区別しないのは、どれも「もう一度ウィジェットを解いてやり直す」で直るからです。
 
+**解いた場所とフォームも確かめます**(#297)。siteverify の応答の `hostname` が `FRONTEND_URL`(と `CSRF_TRUSTED_ORIGINS`)のホスト名のどれかでなければ、同じく 400 です。sitekey の許可ホストに staging と本番を共用で入れている場合に、staging で解いたトークンを本番で使えないようにするためです。また、ウィジェットはフォームごとに `action`(`TURNSTILE_ACTIONS`: エントリー `entry`、参加者の再設定 `password-reset`、スタッフの再設定 `staff-password-reset`)を付けて描画し、別のフォームの `action` を持つトークンは 400 にします。`action` の無いトークンは通します(バックエンドがフロントエンドより先にデプロイされる間に、古いページで解かれたトークンのため)。Cloudflare のテスト用シークレット(ローカル開発と E2E)の応答はダミーなので、ホスト名と `action` は確かめません。`remoteip` は送りません(理由は `lib/turnstile.ts` のコメント)。
+
 **トークンは使い捨てです。** siteverify に一度通したトークンを再送すると Cloudflare は `timeout-or-duplicate` を返すため、この 2 本のフォームは送信が拒否された(429・401・400 など何であれ)たびにウィジェットを描き直します。フロントエンドの 2 つのフォームは `use:enhance` + `fail()` でその場に再描画されるだけなので、放っておくと hidden control に使用済みトークンが残り、次の送信が「本当の失敗理由」ではなく Turnstile の 400 で落ちてしまいます。`$lib/components/Turnstile.svelte` が `reset()` を公開し、各フォームの `enhance` コールバックがこれを呼びます。
 
 ### CSRF 対策(Origin 検証)とセキュリティヘッダ

@@ -22,6 +22,7 @@ import {formDefinitionsRoute} from './routes/form-definitions';
 import {sheetImportRoute} from './routes/sheet-import';
 import {mypageRoute} from './routes/mypage';
 import {portalRoute} from './routes/portal';
+import {trustedOrigins} from './lib/trusted-origins';
 
 // Exported by name for the tests, which drive the API through
 // `app.request()`. The default export below is the Worker itself, and it is
@@ -88,42 +89,6 @@ const routes = app
   .route('/portal', portalRoute);
 
 export type AppType = typeof routes;
-
-/** The last `trustedOrigins()` answer, and the bindings it was read from. */
-let trustedOriginsCache:
-  {key: string; origins: ReadonlySet<string>} | undefined;
-
-/**
- * The origins the CSRF check lets a form-like request come from:
- * `FRONTEND_URL` and whatever `CSRF_TRUSTED_ORIGINS` adds.
- *
- * Each is reduced to its origin, so a value written with a trailing slash or
- * a path still matches the `scheme://host[:port]` a browser sends. One that
- * is not a URL at all is left out rather than thrown on: a misconfigured
- * binding refuses form posts instead of letting every origin through.
- *
- * Parsed once and kept while the bindings say the same thing -- they are
- * fixed for an isolate's lifetime, so in practice that is once per isolate.
- * @param env The Worker's bindings.
- */
-function trustedOrigins(env: Bindings): ReadonlySet<string> {
-  const key = `${env.FRONTEND_URL}\n${env.CSRF_TRUSTED_ORIGINS ?? ''}`;
-  if (trustedOriginsCache?.key !== key) {
-    const origins = new Set<string>();
-    for (const value of [
-      env.FRONTEND_URL,
-      ...(env.CSRF_TRUSTED_ORIGINS ?? '').split(','),
-    ]) {
-      try {
-        origins.add(new URL(value.trim()).origin);
-      } catch {
-        // Not a URL; see above.
-      }
-    }
-    trustedOriginsCache = {key, origins};
-  }
-  return trustedOriginsCache.origins;
-}
 
 // The Worker's entry points. `fetch` answers the HTTP API as before;
 // `queue` is the consumer of the bulk mail queue declared in

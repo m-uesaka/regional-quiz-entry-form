@@ -7,6 +7,7 @@
     PASSWORD_MIN_LENGTH,
     type FormFieldDef,
     type Regulation,
+    TURNSTILE_ACTIONS,
   } from '@regional-quiz/shared';
   import CustomFieldsSection from '$lib/components/CustomFieldsSection.svelte';
   import EntryFreeTextField from '$lib/components/EntryFreeTextField.svelte';
@@ -194,7 +195,7 @@
        mails a confirmation to whatever address it is given, so it is one of
        the two forms behind a challenge as well as a rate limit (#116). -->
   {#if !preview}
-    <Turnstile bind:this={turnstile} />
+    <Turnstile bind:this={turnstile} action={TURNSTILE_ACTIONS.ENTRY} />
   {/if}
 
   <!-- Disabling the form's only submit button also stops Enter in a field

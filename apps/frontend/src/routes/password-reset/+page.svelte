@@ -1,4 +1,5 @@
 <script lang="ts">
+  import {TURNSTILE_ACTIONS} from '@regional-quiz/shared';
   import {enhance} from '$app/forms';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
@@ -87,7 +88,7 @@
              to whatever address is typed in, while the form above is reached
              only with a token that was already mailed to the account's own
              address (#116). -->
-        <Turnstile bind:this={turnstile} />
+        <Turnstile bind:this={turnstile} action={TURNSTILE_ACTIONS.PASSWORD_RESET} />
 
         <Button type="submit" variant="primary" tone="solid" class="w-full">
           再設定用リンクを送信する
