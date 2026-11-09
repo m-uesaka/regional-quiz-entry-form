@@ -1,4 +1,6 @@
 import {SheetFetchError} from './google-sheets';
+import {FormSheetError} from './sheet-to-form-definition';
+import {RegulationSheetError} from './sheet-to-regulations';
 
 /** How a failed sheet import is answered. */
 export interface SheetImportFailure {
@@ -9,7 +11,14 @@ export interface SheetImportFailure {
 /**
  * Decides the response for an error thrown while reading or converting a
  * sheet, separating what the caller got wrong from what Google did.
+ *
+ * Only the errors a sheet import is known to throw are answered here.
+ * Anything else -- a `SyntaxError` from a 200 that wasn't JSON, a
+ * `TypeError` from a grid of an unexpected shape -- is a server fault whose
+ * message says nothing staff can act on, so it is thrown again for the
+ * caller to log and answer as a 500 (#293).
  * @param e The thrown value.
+ * @throws The thrown value itself, if it is none of those errors.
  */
 export function classifySheetImportError(e: unknown): SheetImportFailure {
   if (e instanceof SheetFetchError) {
@@ -36,11 +45,10 @@ export function classifySheetImportError(e: unknown): SheetImportFailure {
     // ID or an inaccessible sheet — a caller-input-shaped failure.
     return {status: 400, error: e.message};
   }
-  // The converters' own errors (a `FormSheetError`, or a regulation row
-  // that can't be read) are staff-facing Japanese naming the sheet row, and
-  // caller-input-shaped rather than a server fault.
-  return {
-    status: 400,
-    error: e instanceof Error ? e.message : 'invalid sheet data',
-  };
+  // The converters' own errors are staff-facing Japanese naming the sheet
+  // row, and caller-input-shaped rather than a server fault.
+  if (e instanceof FormSheetError || e instanceof RegulationSheetError) {
+    return {status: 400, error: e.message};
+  }
+  throw e;
 }

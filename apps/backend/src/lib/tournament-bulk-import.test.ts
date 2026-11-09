@@ -171,6 +171,8 @@ interface FakeEntrySheet {
   regulationRows?: FakeCell[][];
   /** A status Google refuses the read with, instead of the tabs. */
   refusedWith?: number;
+  /** A body Google answers 200 with, instead of the tabs' JSON. */
+  rawBody?: string;
 }
 
 /** A `spreadsheets.get` grid row for `cells`. */
@@ -233,6 +235,9 @@ describe.skipIf(!(await isDbReachable()))(
         const sheet = entrySheets[id];
         if (sheet?.refusedWith !== undefined) {
           return Response.json({error: 'refused'}, {status: sheet.refusedWith});
+        }
+        if (sheet?.rawBody !== undefined) {
+          return new Response(sheet.rawBody, {status: 200});
         }
         if (!sheet || sheet.regulationRows === undefined) {
           return Response.json({error: 'not found'}, {status: 400});
@@ -951,6 +956,20 @@ describe.skipIf(!(await isDbReachable()))(
       const [refused] = await previewTournamentImport(env, 'index', NOW);
 
       expect(refused.error).toBe('Failed to fetch sheet: 403');
+    });
+
+    // #293: a failure that is neither the sheet's nor Google's says nothing
+    // staff can act on, so it gets the generic message instead of its own.
+    it('answers an unexpected failure reading a row with the generic message', async () => {
+      indexValues = [HEADER, indexRow(regionB, '新人王', 's1')];
+      entrySheets = {s1: {formRows: [], rawBody: '<html>not json</html>'}};
+      stubSheets();
+
+      const [row] = await previewTournamentImport(env, 'index', NOW);
+
+      expect(row.error).toBe(
+        '読み込みに失敗しました。時間をおいて再度お試しください',
+      );
     });
   },
 );
