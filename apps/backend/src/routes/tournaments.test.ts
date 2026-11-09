@@ -22,13 +22,24 @@ import {
   TEST_SESSIONS_VALID_FROM_MS,
 } from '../test-support/staff-session';
 import {
+  ENTRY_PERIOD_ORDER_MESSAGE,
+  TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE,
+} from '@regional-quiz/shared';
+import {
+  CHECK_VIOLATION_SQLSTATE,
   DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
   DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE,
   ENTRY_PERIOD_OPEN_SQLSTATE,
   FOREIGN_KEY_VIOLATION_SQLSTATE,
   TOURNAMENT_IDS_MISMATCH_SQLSTATE,
+  TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE,
   UNIQUE_VIOLATION_SQLSTATE,
 } from '../lib/pg-errors';
+import {
+  createEntryRow,
+  createTournamentAndRegulation,
+  deleteTestRegionRows,
+} from '../test-support/db-fixtures';
 import {
   DB_URL,
   isDbReachable,
@@ -277,11 +288,72 @@ describe('tournaments routes (database errors)', () => {
     });
   });
 
+  // 0048: a PATCH sent one end of the entry period, which doesn't come
+  // before the stored other end.
+  it('answers a check violation with 400 and the entry period message', async () => {
+    stubPostgrestError(400, {
+      code: CHECK_VIOLATION_SQLSTATE,
+      message:
+        'new row for relation "tournaments" violates check constraint "tournaments_entry_period_ordered"',
+      details: null,
+      hint: null,
+    });
+
+    for (const method of ['POST', 'PATCH'] as const) {
+      const res = await request(method);
+      const text = await res.text();
+
+      expect(res.status).toBe(400);
+      expect(JSON.parse(text)).toEqual({error: ENTRY_PERIOD_ORDER_MESSAGE});
+      expect(text).not.toContain('tournaments_entry_period_ordered');
+    }
+  });
+
+  // `tournaments_question_set_format` (0044) or any other check than the
+  // period's: ruled out by the request schemas, so a bug rather than a
+  // mistake staff can fix.
+  it('answers a check violation of any other constraint with a generic 500', async () => {
+    stubPostgrestError(400, {
+      code: CHECK_VIOLATION_SQLSTATE,
+      message:
+        'new row for relation "tournaments" violates check constraint "tournaments_question_set_format"',
+      details: null,
+      hint: null,
+    });
+
+    for (const method of ['POST', 'PATCH'] as const) {
+      const res = await request(method);
+      const text = await res.text();
+
+      expect(res.status).toBe(500);
+      expect(JSON.parse(text)).toEqual({error: 'internal server error'});
+      expect(text).not.toContain('tournaments_question_set_format');
+    }
+  });
+
+  // 0050, #284: the tournament has entries, and the PATCH would move it to
+  // another region or type. PostgREST answers a raised exception with 400.
+  it('answers a region or type change of a tournament with entries with 409 in Japanese', async () => {
+    stubPostgrestError(400, {
+      code: TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE,
+      message: 'the region and type of a tournament with entries are locked',
+      details: null,
+      hint: null,
+    });
+
+    const res = await request('PATCH');
+
+    expect(res.status).toBe(409);
+    expect((await res.json()) as unknown).toEqual({
+      error: TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE,
+    });
+  });
+
   it('answers any other database error with a generic 500', async () => {
     stubPostgrestError(400, {
-      code: '23514',
-      message:
-        'new row for relation "tournaments" violates check constraint "x"',
+      // `exclusion_violation`, which no tournament write maps.
+      code: '23P01',
+      message: 'conflicting key value violates exclusion constraint "x"',
       details: null,
       hint: null,
     });
@@ -1034,6 +1106,64 @@ describe.skipIf(!dbReachable)(
       expect(cleared.questionSet).toBeNull();
     });
 
+    // 0048, #285: the schema checks the period only when both ends are
+    // sent, so one end alone is checked against the stored other end by
+    // the database.
+    it('refuses an entry period that does not open before it closes', async () => {
+      const regionId = await createTestRegion('period');
+      const cookie = await generalStaffCookie();
+      const send = (method: string, path: string, body: unknown) =>
+        app.request(
+          path,
+          {
+            method,
+            headers: {cookie, 'content-type': 'application/json'},
+            body: JSON.stringify(body),
+          },
+          env,
+        );
+      const tournament = {
+        regionId,
+        type: 'saikyoi',
+        capacity: null,
+        entryOpensAt: '2026-01-01T00:00:00+09:00',
+        entryClosesAt: '2026-01-31T00:00:00+09:00',
+      };
+
+      const backwards = await send('POST', '/api/tournaments', {
+        ...tournament,
+        entryClosesAt: tournament.entryOpensAt,
+      });
+      const created = await send('POST', '/api/tournaments', tournament);
+      const {id} = (await created.json()) as {id: string};
+      const closesFirst = await send('PATCH', `/api/tournaments/${id}`, {
+        entryClosesAt: '2025-12-31T00:00:00+09:00',
+      });
+      const opensLast = await send('PATCH', `/api/tournaments/${id}`, {
+        entryOpensAt: tournament.entryClosesAt,
+      });
+      const moved = await send('PATCH', `/api/tournaments/${id}`, {
+        entryClosesAt: '2026-01-02T00:00:00+09:00',
+      });
+
+      expect(backwards.status).toBe(400);
+      expect(created.status).toBe(201);
+      for (const refused of [closesFirst, opensLast]) {
+        expect(refused.status).toBe(400);
+        expect((await refused.json()) as unknown).toEqual({
+          error: ENTRY_PERIOD_ORDER_MESSAGE,
+        });
+      }
+      expect(moved.status).toBe(200);
+      const [stored] = await sql`
+        select entry_opens_at, entry_closes_at from tournaments where id = ${id}
+      `;
+      expect(stored.entry_opens_at).toEqual(new Date(tournament.entryOpensAt));
+      expect(stored.entry_closes_at).toEqual(
+        new Date('2026-01-02T00:00:00+09:00'),
+      );
+    });
+
     it('lists the question sets for general staff only', async () => {
       const res = await app.request(
         '/api/tournaments/question-sets',
@@ -1673,6 +1803,123 @@ describe.skipIf(!dbReachable)(
 
       expect(res.status).toBe(409);
       expect(await listIds(cookie)).toEqual(before);
+    });
+  },
+);
+
+// #284: entries were accepted under the dual-entry checks of their region
+// and type, which a move would bypass (0050).
+describe.skipIf(!dbReachable)(
+  'PATCH /tournaments/:id region and type lock (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const testRegionSlug = 'tournaments-region-lock-test-region';
+    const testEmailDomain = 'tournaments-region-lock-test.example.com';
+
+    // The slugs are fixed, so rows a crashed run left behind would make the
+    // next run's fixtures collide: clear them before each test as well.
+    beforeEach(async () => {
+      await deleteTestRegionRows(sql, testRegionSlug, testEmailDomain);
+    });
+
+    afterAll(async () => {
+      await deleteTestRegionRows(sql, testRegionSlug, testEmailDomain);
+      await sql.close();
+    });
+
+    async function patch(id: string, body: unknown): Promise<Response> {
+      return app.request(
+        `/api/tournaments/${id}`,
+        {
+          method: 'PATCH',
+          headers: {
+            cookie: await generalStaffCookie(),
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        },
+        env,
+      );
+    }
+
+    async function storedRegionAndType(id: string) {
+      const [row] = await sql`
+        select region_id, type from tournaments where id = ${id}
+      `;
+      return row as {region_id: string; type: string};
+    }
+
+    it('refuses moving a tournament with entries to another region or type', async () => {
+      const fixture = await createTournamentAndRegulation(
+        sql,
+        `${testRegionSlug}-entered`,
+      );
+      const other = await createTournamentAndRegulation(
+        sql,
+        `${testRegionSlug}-entered-other`,
+      );
+      // Cancelled still counts: it can hold the region, and it is listed
+      // to the region's staff.
+      await createEntryRow(sql, fixture, testEmailDomain, {
+        status: 'cancelled',
+      });
+
+      const moved = await patch(fixture.tournamentId, {
+        regionId: other.regionId,
+        type: 'shinjinou',
+      });
+      const retyped = await patch(fixture.tournamentId, {type: 'shinjinou'});
+
+      for (const refused of [moved, retyped]) {
+        expect(refused.status).toBe(409);
+        expect((await refused.json()) as unknown).toEqual({
+          error: TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE,
+        });
+      }
+      expect(await storedRegionAndType(fixture.tournamentId)).toEqual({
+        region_id: fixture.regionId,
+        type: 'saikyoi',
+      });
+    });
+
+    // The edit form sends the region and type on every save.
+    it('saves a tournament with entries when its region and type are sent unchanged', async () => {
+      const fixture = await createTournamentAndRegulation(
+        sql,
+        `${testRegionSlug}-unchanged`,
+      );
+      await createEntryRow(sql, fixture, testEmailDomain);
+
+      const res = await patch(fixture.tournamentId, {
+        regionId: fixture.regionId,
+        type: 'saikyoi',
+        capacity: 30,
+      });
+
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as {capacity: number}).capacity).toBe(30);
+    });
+
+    it('moves a tournament without entries', async () => {
+      const fixture = await createTournamentAndRegulation(
+        sql,
+        `${testRegionSlug}-empty`,
+      );
+      const other = await createTournamentAndRegulation(
+        sql,
+        `${testRegionSlug}-empty-other`,
+      );
+
+      const res = await patch(fixture.tournamentId, {
+        regionId: other.regionId,
+        type: 'shinjinou',
+      });
+
+      expect(res.status).toBe(200);
+      expect(await storedRegionAndType(fixture.tournamentId)).toEqual({
+        region_id: other.regionId,
+        type: 'shinjinou',
+      });
     });
   },
 );

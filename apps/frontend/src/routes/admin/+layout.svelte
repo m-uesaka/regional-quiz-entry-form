@@ -1,9 +1,10 @@
 <script lang="ts">
   import SubNav from '$lib/components/layout/SubNav.svelte';
   import Link from '$lib/components/ui/atoms/Link.svelte';
+  import PendingInvitesNotice from '$lib/components/PendingInvitesNotice.svelte';
   import type {LayoutProps} from './$types';
 
-  const {children}: LayoutProps = $props();
+  const {data, children}: LayoutProps = $props();
 </script>
 
 <!-- The management screens have no other way in: nothing links to
@@ -23,5 +24,7 @@
     </li>
   </ul>
 </SubNav>
+
+<PendingInvitesNotice message={data.pendingInvitesMessage} />
 
 {@render children()}

@@ -6,6 +6,7 @@ import {
   PARTICIPANT_REGION_SQLSTATE,
   REGION_DUAL_ENTRY_SQLSTATE,
   STAFF_ACCOUNT_DISABLED_SQLSTATE,
+  TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE,
 } from '../lib/pg-errors';
 import {
   CUSTOM_FIELD_VALUE_MAX_LENGTH,
@@ -54,7 +55,7 @@ describe.skipIf(!dbReachable)(
         insert into tournaments (
           region_id, type, name, entry_opens_at, entry_closes_at
         ) values (
-          ${region.id}, 'saikyoi', 'テスト大会', now(), now()
+          ${region.id}, 'saikyoi', 'テスト大会', now() - interval '1 day', now()
         )
         returning id
       `;
@@ -144,7 +145,7 @@ describe.skipIf(!dbReachable)(
           insert into tournaments (
             region_id, type, name, entry_opens_at, entry_closes_at
           ) values (
-            ${region.id}, ${type}, ${'テスト' + type}, now(), now()
+            ${region.id}, ${type}, ${'テスト' + type}, now() - interval '1 day', now()
           )
           returning id
         `;
@@ -224,7 +225,7 @@ describe.skipIf(!dbReachable)(
         insert into tournaments (
           region_id, type, name, entry_opens_at, entry_closes_at, question_set
         ) values (
-          ${region.id}, ${type}, '別のテスト大会', now(), now(),
+          ${region.id}, ${type}, '別のテスト大会', now() - interval '1 day', now(),
           ${questionSet}
         )
         returning id
@@ -1159,7 +1160,7 @@ describe.skipIf(!dbReachable)(
           insert into tournaments (
             region_id, type, name, entry_opens_at, entry_closes_at, question_set
           ) values (
-            ${region.id}, ${type}, ${type}, now(), now(), ${questionSet}
+            ${region.id}, ${type}, ${type}, now() - interval '1 day', now(), ${questionSet}
           )
           returning id
         `;
@@ -1203,7 +1204,7 @@ describe.skipIf(!dbReachable)(
         insert into tournaments (
           region_id, type, name, entry_opens_at, entry_closes_at, question_set
         ) values (
-          ${regionId}, 'shinjinou', '新人王', now(), now(), '宮崎'
+          ${regionId}, 'shinjinou', '新人王', now() - interval '1 day', now(), '宮崎'
         )
       `);
 
@@ -1304,7 +1305,7 @@ describe.skipIf(!dbReachable)(
           region_id, type, name, entry_opens_at, entry_closes_at, question_set
         ) values (
           '00000000-0000-0000-0000-0000000000ff', 'saikyoi', '存在しない地域',
-          now(), now(), '宮崎'
+          now() - interval '1 day', now(), '宮崎'
         )
       `);
 
@@ -1351,6 +1352,241 @@ describe.skipIf(!dbReachable)(
       await other.close();
 
       expect(shared.every(value => !value)).toBe(true);
+    });
+  },
+);
+
+// 0050, #284: a tournament's entries were accepted under the dual-entry
+// checks of its region and type, so neither may change while it has any.
+describe.skipIf(!dbReachable)(
+  'region and type of a tournament with entries (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const regionSlug = 'db-schema-region-type-lock-test-region';
+    const emailDomain = 'db-schema-region-type-lock-test.example.com';
+
+    async function cleanup() {
+      const slugs = [regionSlug, `${regionSlug}-other`];
+      await sql`delete from entries where tournament_id in (
+        select t.id from tournaments t join regions r on r.id = t.region_id
+        where r.slug in ${sql(slugs)}
+      )`;
+      await sql`delete from participants where email like ${'%@' + emailDomain}`;
+      await sql`delete from tournaments where region_id in (
+        select id from regions where slug in ${sql(slugs)}
+      )`;
+      await sql`delete from regions where slug in ${sql(slugs)}`;
+    }
+
+    beforeEach(cleanup);
+
+    afterAll(async () => {
+      await cleanup();
+      await sql.close();
+    });
+
+    /** A region with a 最強位, a participant of that region, and another region. */
+    async function seed() {
+      const [region] = await sql`
+        insert into regions (slug, name) values (${regionSlug}, '移動元')
+        returning id
+      `;
+      const [other] = await sql`
+        insert into regions (slug, name) values (${`${regionSlug}-other`}, '移動先')
+        returning id
+      `;
+      const [tournament] = await sql`
+        insert into tournaments (
+          region_id, type, name, entry_opens_at, entry_closes_at
+        ) values (
+          ${region.id}, 'saikyoi', 'テスト大会', '2020-01-01T00:00:00Z',
+          '2099-01-01T00:00:00Z'
+        )
+        returning id
+      `;
+      const [participant] = await sql`
+        insert into participants (region_id, email, password_hash)
+        values (${region.id}, ${`p-${crypto.randomUUID()}@${emailDomain}`}, 'x')
+        returning id
+      `;
+      return {
+        regionId: region.id as string,
+        otherRegionId: other.id as string,
+        tournamentId: tournament.id as string,
+        participantId: participant.id as string,
+      };
+    }
+
+    function insertEntry(
+      db: SQL,
+      tournamentId: string,
+      participantId: string,
+      status = 'pending_verification',
+    ) {
+      return db`
+        insert into entries (
+          participant_id, tournament_id, name, furigana, display_name, status
+        ) values (
+          ${participantId}, ${tournamentId}, '山田太郎', 'ヤマダタロウ', '太郎',
+          ${status}
+        )
+      `;
+    }
+
+    async function refusalOf(query: PromiseLike<unknown>) {
+      try {
+        await query;
+        return undefined;
+      } catch (e: unknown) {
+        const {errno} = e as {errno?: string};
+        if (!errno) {
+          throw e;
+        }
+        return errno;
+      }
+    }
+
+    /** The backend id of a reserved connection, to watch it wait. */
+    async function backendPid(db: SQL): Promise<number> {
+      const [row] = await db`select pg_backend_pid() as pid`;
+      return (row as {pid: number}).pid;
+    }
+
+    /**
+     * Resolves once backend `pid` is waiting on a lock, so the other side
+     * commits only after the statement under test has reached it.
+     */
+    async function waitUntilLockWaiting(pid: number): Promise<void> {
+      const deadline = Date.now() + 5_000;
+      for (;;) {
+        const [row] = await sql`
+          select exists (
+            select 1 from pg_stat_activity
+            where pid = ${pid} and wait_event_type = 'Lock'
+          ) as waiting
+        `;
+        if ((row as {waiting: boolean}).waiting) {
+          return;
+        }
+        if (Date.now() > deadline) {
+          throw new Error(`backend ${pid} never waited on a lock`);
+        }
+        await Bun.sleep(10);
+      }
+    }
+
+    it('refuses changing the region or type once there is an entry, cancelled or not', async () => {
+      const {otherRegionId, tournamentId, participantId} = await seed();
+      await insertEntry(sql, tournamentId, participantId, 'cancelled');
+
+      const moved = await refusalOf(sql`
+        update tournaments set region_id = ${otherRegionId}
+        where id = ${tournamentId}
+      `);
+      const retyped = await refusalOf(sql`
+        update tournaments set type = 'shinjinou' where id = ${tournamentId}
+      `);
+
+      expect(moved).toBe(TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE);
+      expect(retyped).toBe(TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE);
+    });
+
+    it('lets the same region and type be written back, and anything else change', async () => {
+      const {regionId, tournamentId, participantId} = await seed();
+      await insertEntry(sql, tournamentId, participantId);
+
+      const code = await refusalOf(sql`
+        update tournaments
+        set region_id = ${regionId}, type = 'saikyoi', name = '改名',
+          capacity = 10
+        where id = ${tournamentId}
+      `);
+
+      expect(code).toBeUndefined();
+    });
+
+    it('lets a tournament without entries move', async () => {
+      const {otherRegionId, tournamentId} = await seed();
+
+      const code = await refusalOf(sql`
+        update tournaments set region_id = ${otherRegionId}, type = 'shinjinou'
+        where id = ${tournamentId}
+      `);
+
+      expect(code).toBeUndefined();
+    });
+
+    // The move waits on the tournament row an uncommitted entry holds, and
+    // then sees that entry.
+    it('sees an entry committed while the move waited for the tournament row', async () => {
+      const {otherRegionId, tournamentId, participantId} = await seed();
+      const holder = await sql.reserve();
+      const mover = await sql.reserve();
+      try {
+        const moverPid = await backendPid(mover);
+        await holder`begin`;
+        await insertEntry(holder, tournamentId, participantId);
+        const move = refusalOf(mover`
+          update tournaments set region_id = ${otherRegionId}
+          where id = ${tournamentId}
+        `);
+        await waitUntilLockWaiting(moverPid);
+        await holder`commit`;
+
+        expect(await move).toBe(TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE);
+      } finally {
+        // A no-op after the commit; ends the transaction if the test failed
+        // before it, so the connection goes back to the pool clean.
+        await holder`rollback`.catch(() => {});
+        holder.release();
+        mover.release();
+      }
+    });
+
+    // The other order: the move holds the row first, and the entry is
+    // checked where the tournament ends up, not where it was.
+    it('checks an entry that waited for an uncommitted move against the destination', async () => {
+      const {otherRegionId, tournamentId, participantId} = await seed();
+      // The participant already has a seat in the destination, which (like
+      // the source) doesn't allow dual entry. The 新人王's common questions
+      // differ from the 最強位's (0046), so it doesn't conflict across
+      // regions: only once both tournaments are in one region.
+      const [held] = await sql`
+        insert into tournaments (
+          region_id, type, name, entry_opens_at, entry_closes_at
+        ) values (
+          ${otherRegionId}, 'shinjinou', '移動先の大会',
+          '2020-01-01T00:00:00Z', '2099-01-01T00:00:00Z'
+        )
+        returning id
+      `;
+      await insertEntry(sql, held.id as string, participantId);
+      const mover = await sql.reserve();
+      const enterer = await sql.reserve();
+      try {
+        const entererPid = await backendPid(enterer);
+        await mover`begin`;
+        await mover`
+          update tournaments set region_id = ${otherRegionId}
+          where id = ${tournamentId}
+        `;
+        const entry = refusalOf(
+          insertEntry(enterer, tournamentId, participantId),
+        );
+        await waitUntilLockWaiting(entererPid);
+        await mover`commit`;
+
+        expect(await entry).toBe(REGION_DUAL_ENTRY_SQLSTATE);
+        const [{count}] = await sql`
+          select count(*)::integer as count from entries
+          where tournament_id = ${tournamentId}
+        `;
+        expect(count).toBe(0);
+      } finally {
+        await mover`rollback`.catch(() => {});
+        mover.release();
+        enterer.release();
+      }
     });
   },
 );
@@ -1402,7 +1638,7 @@ describe.skipIf(!dbReachable)(
           region_id, type, name, capacity, entry_opens_at, entry_closes_at
         ) values (
           ${region.id}, 'saikyoi', ${regionName + '大会'}, ${capacity},
-          now(), now()
+          now() - interval '1 day', now()
         )
         returning id
       `;
@@ -1623,7 +1859,7 @@ describe.skipIf(!dbReachable)(
       await sql`delete from regions where slug = ${testRegionSlug}`;
     }
 
-    beforeAll(deleteTestRegion);
+    beforeEach(deleteTestRegion);
 
     afterAll(async () => {
       await deleteTestRegion();
@@ -1639,12 +1875,91 @@ describe.skipIf(!dbReachable)(
         insert into tournaments (
           region_id, type, name, entry_opens_at, entry_closes_at
         ) values (
-          ${region.id}, 'saikyoi', 'テスト大会', now(), now()
+          ${region.id}, 'saikyoi', 'テスト大会', now() - interval '1 day', now()
         )
         returning id
       `;
       return tournament.id as string;
     }
+
+    // 0048, #285: held in the table too, for writes made straight through
+    // SQL and for a PATCH that sends one end of the period.
+    it('refuses a tournament whose entry period or capacity can never work', async () => {
+      const tournamentId = await createTournament();
+      const codes = [];
+      for (const statement of [
+        sql`update tournaments set entry_closes_at = entry_opens_at
+            where id = ${tournamentId}`,
+        sql`update tournaments
+            set entry_closes_at = entry_opens_at - interval '1 second'
+            where id = ${tournamentId}`,
+        sql`update tournaments set capacity = 0 where id = ${tournamentId}`,
+        sql`update tournaments set capacity = -1 where id = ${tournamentId}`,
+      ]) {
+        try {
+          await statement;
+          codes.push(undefined);
+        } catch (error) {
+          codes.push((error as {errno?: string}).errno);
+        }
+      }
+
+      expect(codes).toEqual(Array(4).fill('23514'));
+      // A capacity of 1, or none at all, goes in.
+      await sql`update tournaments set capacity = 1 where id = ${tournamentId}`;
+      await sql`
+        update tournaments set capacity = null where id = ${tournamentId}
+      `;
+    });
+
+    // 0048 adds both `not valid`, so a tournament stored out of order
+    // before it doesn't stop the deploy; 0049 validates them once no such
+    // row is left, so the rows already there are held to them as well.
+    it('validates the period and capacity checks for the rows already there', async () => {
+      const rows = await sql`
+        select conname, convalidated from pg_constraint
+          where conrelid = 'tournaments'::regclass
+            and conname in (
+              'tournaments_entry_period_ordered',
+              'tournaments_capacity_positive'
+            )
+          order by conname
+      `;
+
+      expect([...rows]).toEqual([
+        {conname: 'tournaments_capacity_positive', convalidated: true},
+        {conname: 'tournaments_entry_period_ordered', convalidated: true},
+      ]);
+    });
+
+    it('refuses a new tournament whose entry period or capacity can never work', async () => {
+      const [region] = await sql`
+        insert into regions (slug, name) values (${testRegionSlug}, 'テスト地域')
+        returning id
+      `;
+      const codes = [];
+      for (const [opensAt, closesAt, capacity] of [
+        ['2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', null],
+        ['2026-01-02T00:00:00Z', '2026-01-01T00:00:00Z', null],
+        ['2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z', 0],
+      ] as const) {
+        try {
+          await sql`
+            insert into tournaments (
+              region_id, type, name, capacity, entry_opens_at, entry_closes_at
+            ) values (
+              ${region.id}, 'saikyoi', 'テスト大会', ${capacity}, ${opensAt},
+              ${closesAt}
+            )
+          `;
+          codes.push(undefined);
+        } catch (error) {
+          codes.push((error as {errno?: string}).errno);
+        }
+      }
+
+      expect(codes).toEqual(Array(3).fill('23514'));
+    });
 
     it('rejects a half-open priority window', async () => {
       const tournamentId = await createTournament();
@@ -1749,7 +2064,7 @@ describe.skipIf(!dbReachable)(
         insert into tournaments (
           region_id, type, name, entry_opens_at, entry_closes_at
         ) values (
-          ${region.id}, 'saikyoi', 'テスト大会', now(), now()
+          ${region.id}, 'saikyoi', 'テスト大会', now() - interval '1 day', now()
         )
         returning id
       `;
@@ -1894,7 +2209,7 @@ describe.skipIf(!dbReachable)(
         insert into tournaments (
           region_id, type, name, entry_opens_at, entry_closes_at
         ) values (
-          ${region.id}, 'saikyoi', 'テスト大会', now(), now()
+          ${region.id}, 'saikyoi', 'テスト大会', now() - interval '1 day', now()
         )
         returning id
       `;
@@ -2201,7 +2516,7 @@ describe.skipIf(!dbReachable)(
       const [tournament] = await sql`
         insert into tournaments (
           region_id, type, name, entry_opens_at, entry_closes_at
-        ) values (${region.id}, 'saikyoi', 'テスト大会', now(), now())
+        ) values (${region.id}, 'saikyoi', 'テスト大会', now() - interval '1 day', now())
         returning id
       `;
       const [participant] = await sql`

@@ -3,13 +3,13 @@ import {
   formFieldDefsToYaml,
   TournamentResetInputSchema,
   TournamentSchema,
+  type DashboardTournamentSummary,
   type TournamentResetResponse,
   type WaitlistPromotion,
 } from '@regional-quiz/shared';
 import {createApiClient, isUnauthorized, readErrorMessage} from '$lib/api';
 import {
   parseTournamentFormValues,
-  questionSetError,
   readTournamentFormValues,
   isResetConfirmation,
   RESET_CONFIRMATION_WORD,
@@ -72,13 +72,18 @@ export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
   // The 問題セット names already in use come from their own small read, not
   // the list, which the form suggests so a name isn't typed slightly
   // differently (0043).
-  const [tournamentRes, regionsRes, questionSetsRes] = await Promise.all([
-    api.api.tournaments[':id'].$get({param: {id: params.id}}),
-    api.api.regions.$get(),
-    // A request that fails outright, not only one answered with an error,
-    // must not take the page down with it.
-    api.api.tournaments['question-sets'].$get().catch(() => null),
-  ]);
+  // Whether it has entries comes from the general-staff dashboard's counts,
+  // the one read that already has them: a tournament with entries can't move
+  // to another region or type (#284), so the form locks those up front.
+  const [tournamentRes, regionsRes, questionSetsRes, dashboardRes] =
+    await Promise.all([
+      api.api.tournaments[':id'].$get({param: {id: params.id}}),
+      api.api.regions.$get(),
+      // A request that fails outright, not only one answered with an error,
+      // must not take the page down with it.
+      api.api.tournaments['question-sets'].$get().catch(() => null),
+      api.api.staff.dashboard.$get().catch(() => null),
+    ]);
   if (isUnauthorized(tournamentRes) || isUnauthorized(regionsRes)) {
     redirectToStaffLogin(cookies, url);
   }
@@ -96,6 +101,14 @@ export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
     regions: await regionsRes.json(),
     // Only suggestions: a failed read leaves them out rather than the page.
     questionSets: questionSetsRes?.ok ? await questionSetsRes.json() : [],
+    // A failed read leaves the controls open: the API still refuses the
+    // move (409), as it does for an entry that arrives after this render.
+    hasEntries: dashboardRes?.ok
+      ? (await dashboardRes.json()).some(
+          summary =>
+            summary.tournamentId === tournament.id && entryCount(summary) > 0,
+        )
+      : false,
     // Written out as the YAML the editor works on, so editing starts from
     // what is stored rather than from a blank page or the spreadsheet.
     formDefinitionYaml: formFieldDefsToYaml(tournament.type, formFieldDefs),
@@ -105,25 +118,23 @@ export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
 export const actions = {
   update: async ({params, request, fetch, cookies, url}) => {
     const values = readTournamentFormValues(await request.formData());
-    const input = parseTournamentFormValues(values);
-    if (!input) {
-      return updateFailure(
-        400,
-        values,
-        questionSetError(values) ?? INVALID_INPUT_MESSAGE,
-      );
+    const parsed = parseTournamentFormValues(values);
+    if (!parsed.ok) {
+      return updateFailure(400, values, parsed.error);
     }
 
     const res = await createApiClient(fetch).api.tournaments[':id'].$patch({
       param: {id: params.id},
-      json: input,
+      json: parsed.input,
     });
     if (!res.ok) {
       if (isUnauthorized(res)) {
         redirectToStaffLogin(cookies, url);
       }
       // A constraint the database refused -- 400 for a region that doesn't
-      // exist, 409 for a second tournament of the same type in it (#199) --
+      // exist or an entry period that doesn't open before it closes (#285),
+      // 409 for a second tournament of the same type in it (#199) or for a
+      // region or type changed while the tournament has entries (#284) --
       // which the API words in Japanese itself, so it is shown rather than
       // replaced.
       if (res.status === 400 || res.status === 409) {
@@ -244,6 +255,20 @@ export const actions = {
     } satisfies TournamentResetActionResult;
   },
 } satisfies Actions;
+
+/**
+ * How many entries a tournament has, cancelled ones included: any of them
+ * locks its region and type (0050).
+ * @param summary The tournament's row of the dashboard.
+ */
+function entryCount(summary: DashboardTournamentSummary): number {
+  return (
+    summary.confirmedCount +
+    summary.waitlistedCount +
+    summary.pendingVerificationCount +
+    summary.cancelledCount
+  );
+}
 
 /**
  * Refuses a delete, with the message to show in the delete section.

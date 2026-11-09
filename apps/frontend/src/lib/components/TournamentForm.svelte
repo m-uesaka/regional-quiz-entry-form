@@ -27,10 +27,21 @@
     submitLabel: string;
     /** The named action to post to, or undefined for the page's default. */
     action?: string;
+    /**
+     * Whether the region and type are shown but can't be changed: the
+     * tournament has entries, which the database refuses to move (#284).
+     */
+    regionTypeLocked?: boolean;
   }
 
-  const {regions, values, questionSets, submitLabel, action}: Props =
-    $props();
+  const {
+    regions,
+    values,
+    questionSets,
+    submitLabel,
+    action,
+    regionTypeLocked = false,
+  }: Props = $props();
 </script>
 
 <!-- Posted to a form action rather than sent from the browser: `/api/*` is
@@ -55,6 +66,14 @@
       await update({reset: false});
     }}
 >
+  {#if regionTypeLocked}
+    <!-- A disabled control isn't submitted, and the action sends the region
+         and type on every save: these carry the stored ones in its place,
+         which the database lets through unchanged. -->
+    <input type="hidden" name="regionId" value={values.regionId} />
+    <input type="hidden" name="type" value={values.type} />
+  {/if}
+
   <div class="flex flex-col gap-1.5">
     <Label for="tournament-region">地域</Label>
     <!-- A select rather than a UUID typed by hand: the id is not something
@@ -62,9 +81,13 @@
          under a region nobody notices until its entry-form URL is wrong. -->
     <NativeSelect
       id="tournament-region"
-      name="regionId"
+      name={regionTypeLocked ? undefined : 'regionId'}
       value={values.regionId}
       required
+      disabled={regionTypeLocked}
+      aria-describedby={regionTypeLocked
+        ? 'tournament-region-type-locked'
+        : undefined}
     >
       <option value="" disabled>選択してください</option>
       {#each regions as region (region.id)}
@@ -82,11 +105,25 @@
 
   <div class="flex flex-col gap-1.5">
     <Label for="tournament-type">種別</Label>
-    <NativeSelect id="tournament-type" name="type" value={values.type}>
+    <NativeSelect
+      id="tournament-type"
+      name={regionTypeLocked ? undefined : 'type'}
+      value={values.type}
+      disabled={regionTypeLocked}
+      aria-describedby={regionTypeLocked
+        ? 'tournament-region-type-locked'
+        : undefined}
+    >
       <option value="saikyoi">最強位</option>
       <option value="shinjinou">新人王</option>
     </NativeSelect>
   </div>
+
+  {#if regionTypeLocked}
+    <p id="tournament-region-type-locked" class="text-sm text-muted-foreground">
+      エントリーがあるため、地域と種別は変更できません。
+    </p>
+  {/if}
 
   <div class="flex flex-col gap-1.5">
     <Label for="tournament-name">大会名(任意)</Label>

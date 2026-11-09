@@ -2,7 +2,6 @@ import {error, fail, redirect} from '@sveltejs/kit';
 import {createApiClient, isUnauthorized, readErrorMessage} from '$lib/api';
 import {
   parseTournamentFormValues,
-  questionSetError,
   readTournamentFormValues,
 } from '$lib/tournament-form';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
@@ -48,24 +47,21 @@ export const load: PageServerLoad = async ({fetch, cookies, url}) => {
 export const actions = {
   default: async ({request, fetch, cookies, url}) => {
     const values = readTournamentFormValues(await request.formData());
-    const input = parseTournamentFormValues(values);
-    if (!input) {
-      return createFailure(
-        400,
-        values,
-        questionSetError(values) ?? INVALID_INPUT_MESSAGE,
-      );
+    const parsed = parseTournamentFormValues(values);
+    if (!parsed.ok) {
+      return createFailure(400, values, parsed.error);
     }
 
     const res = await createApiClient(fetch).api.tournaments.$post({
-      json: input,
+      json: parsed.input,
     });
     if (!res.ok) {
       if (isUnauthorized(res)) {
         redirectToStaffLogin(cookies, url);
       }
       // A constraint the database refused -- 400 for a region that doesn't
-      // exist, 409 for a second tournament of the same type in it (#199) --
+      // exist or an entry period that doesn't open before it closes (#285),
+      // 409 for a second tournament of the same type in it (#199) --
       // which the API words in Japanese itself, so it is shown rather than
       // replaced.
       if (res.status === 400 || res.status === 409) {

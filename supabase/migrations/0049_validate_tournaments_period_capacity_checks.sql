@@ -1,0 +1,22 @@
+-- 0048 で `not valid` として追加した大会の受付期間と定員の CHECK 制約を、
+-- 既存の行についても検査する(#339)。
+--
+-- 0048 は、merge のたびに staging / production へ自動でデプロイされる
+-- (`.github/workflows/deploy-*.yml`)ので、違反した古い行でマイグレーションが
+-- 失敗しないよう、どちらの制約も既存の行を検査せずに追加した。その後、
+-- production で次のクエリが 0 件であることを確かめた。0048 の適用後は新しい
+-- INSERT / UPDATE がすべて検査されるので、違反した行がこれから増えることもない。
+--
+--   select id, region_id, type, capacity, entry_opens_at, entry_closes_at
+--     from tournaments
+--     where entry_opens_at >= entry_closes_at
+--        or capacity <= 0;
+--
+-- `validate constraint` は違反した行が 1 件でもあると失敗し、このマイグレー
+-- ション全体が巻き戻る(デプロイも止まる)。適用する環境で上のクエリが 0 件で
+-- あることを先に確かめること。
+--
+-- `validate constraint` が取るのは `share update exclusive` ロックなので、
+-- 走査の間も大会の読み書きは止まらない。大会の行数は少ない。
+alter table tournaments validate constraint tournaments_entry_period_ordered;
+alter table tournaments validate constraint tournaments_capacity_positive;

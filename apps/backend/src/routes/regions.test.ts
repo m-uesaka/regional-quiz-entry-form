@@ -269,7 +269,7 @@ describe.skipIf(!(await isDbReachable()))(
           insert into tournaments (
             region_id, type, name, entry_opens_at, entry_closes_at, question_set
           ) values (
-            ${created.id}, ${type}, ${type}, now(), now(), '共有セット'
+            ${created.id}, ${type}, ${type}, now() - interval '1 day', now(), '共有セット'
           )
         `;
       }

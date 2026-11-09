@@ -1,6 +1,9 @@
 import {afterAll, afterEach, beforeAll, describe, expect, it} from 'bun:test';
 import {SQL} from 'bun';
-import type {TournamentImportSelection} from '@regional-quiz/shared';
+import {
+  ENTRY_PERIOD_ORDER_MESSAGE,
+  type TournamentImportSelection,
+} from '@regional-quiz/shared';
 import {testBindings} from '../test-support/bindings';
 import {
   importTournaments,
@@ -785,6 +788,11 @@ describe.skipIf(!(await isDbReachable()))(
           opens: '2026/10/01 0:00',
           closes: '2026/10/31 23:59',
         }),
+        // Never open either, though neither end comes after the other.
+        indexRow(regionA, '新人王', 's1', {
+          opens: '2026/12/10 0:00',
+          closes: '2026/12/10 0:00',
+        }),
       ];
       entrySheets = {
         s1: {formRows: FORM_ROWS, regulationRows: REGULATION_ROWS},
@@ -793,8 +801,13 @@ describe.skipIf(!(await isDbReachable()))(
 
       const rows = await previewTournamentImport(env, 'index', NOW);
 
-      expect(rows[0].error).toContain('エントリー開始がエントリー終了より後');
+      expect(rows[0].error).toBe(
+        `エントリー期間「2026/12/20 0:00 〜 2026/12/10 0:00」: ${ENTRY_PERIOD_ORDER_MESSAGE}`,
+      );
       expect(rows[1].error).toContain('既に過ぎています');
+      expect(rows[2].error).toBe(
+        `エントリー期間「2026/12/10 0:00 〜 2026/12/10 0:00」: ${ENTRY_PERIOD_ORDER_MESSAGE}`,
+      );
     });
 
     it('refuses a form definition the sheet gets wrong', async () => {

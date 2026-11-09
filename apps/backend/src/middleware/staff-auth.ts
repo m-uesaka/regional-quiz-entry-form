@@ -143,6 +143,20 @@ const NOT_FOUND: Authorization<never> = {decision: 'not-found'};
 const AUTHORIZATION_ERROR: Authorization<never> = {decision: 'error'};
 
 /**
+ * Lets through any staff member with a live session, whatever their role or
+ * scope: for what a staff member may ask about their own account, which
+ * involves no region or tournament.
+ */
+export function requireStaff() {
+  return createMiddleware<StaffEnv>(async (c, next) => {
+    const auth = await authenticateStaff(c, () => ALLOWED);
+    if (auth instanceof Response) return auth;
+    c.set('staff', auth.staff);
+    await next();
+  });
+}
+
+/**
  * The verified, still-current claims of the caller's staff session, or the
  * response to refuse the request with.
  *

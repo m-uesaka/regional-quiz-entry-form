@@ -1,7 +1,12 @@
 import {render, screen} from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import {afterEach, describe, expect, it, vi} from 'vitest';
-import type {Region, StaffClaims, Tournament} from '@regional-quiz/shared';
+import {
+  TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE,
+  type Region,
+  type StaffClaims,
+  type Tournament,
+} from '@regional-quiz/shared';
 import type {SubmitFunction} from '@sveltejs/kit';
 import Page from './+page.svelte';
 import type {PageProps} from './$types';
@@ -82,6 +87,7 @@ function renderPage(
   tournament: Tournament = TOURNAMENT,
   form: PageProps['form'] = null,
   customName: string | null = tournament.name,
+  hasEntries = false,
 ) {
   return render(Page, {
     props: {
@@ -92,6 +98,7 @@ function renderPage(
         customName,
         regions: REGIONS,
         questionSets: QUESTION_SETS,
+        hasEntries,
         formDefinitionYaml: FORM_DEFINITION_YAML,
       },
       form,
@@ -231,6 +238,73 @@ describe('admin tournament edit +page.svelte', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
+  // #284: the database refuses to move a tournament with entries, so the
+  // controls say so up front instead of the save failing as a whole.
+  it('locks the region and type of a tournament with entries', () => {
+    renderPage(TOURNAMENT, null, TOURNAMENT.name, true);
+
+    const region = screen.getByLabelText('地域');
+    const type = screen.getByLabelText('種別');
+    expect(region).toBeDisabled();
+    expect(type).toBeDisabled();
+    expect(region).toHaveAccessibleDescription(
+      'エントリーがあるため、地域と種別は変更できません。',
+    );
+    expect(type).toHaveAccessibleDescription(
+      'エントリーがあるため、地域と種別は変更できません。',
+    );
+    expect(screen.getByLabelText(/大会名/)).toBeEnabled();
+    // Disabled controls aren't submitted; the stored values go in their
+    // place, once each, so the save neither fails validation nor moves it.
+    const form = screen
+      .getByRole('button', {name: '更新'})
+      .closest('form') as HTMLFormElement;
+    const submitted = new FormData(form);
+    expect(submitted.getAll('regionId')).toEqual([TOURNAMENT.regionId]);
+    expect(submitted.getAll('type')).toEqual([TOURNAMENT.type]);
+  });
+
+  it('leaves the region and type of a tournament without entries open', () => {
+    renderPage();
+
+    expect(screen.getByLabelText('地域')).toBeEnabled();
+    expect(screen.getByLabelText('種別')).toBeEnabled();
+    expect(
+      screen.queryByText('エントリーがあるため、地域と種別は変更できません。'),
+    ).not.toBeInTheDocument();
+  });
+
+  // The page was rendered before the first entry arrived, so the move went
+  // out and was refused (409); `load` now knows of the entries.
+  it('shows the stored region and type after a move refused for its entries', () => {
+    renderPage(
+      TOURNAMENT,
+      {
+        saved: false,
+        promotion: null,
+        error: TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE,
+        values: {
+          regionId: REGIONS[1].id,
+          type: 'shinjinou',
+          name: '書きかけの大会名',
+          capacity: '',
+          entryOpensAt: '2026-01-01T09:00',
+          entryClosesAt: '2026-02-01T09:00',
+          questionSet: '',
+        },
+      },
+      TOURNAMENT.name,
+      true,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE,
+    );
+    expect(screen.getByLabelText('地域')).toHaveValue(TOURNAMENT.regionId);
+    expect(screen.getByLabelText('種別')).toHaveValue(TOURNAMENT.type);
+    expect(screen.getByLabelText(/大会名/)).toHaveValue('書きかけの大会名');
+  });
+
   // The previewed YAML carries the tournament's type as its
   // `tournamentSlug`, and the API refuses an upload whose slug doesn't match
   // the target tournament — so the panel follows the type `load` last read
@@ -247,6 +321,7 @@ describe('admin tournament edit +page.svelte', () => {
         customName: TOURNAMENT.name,
         regions: REGIONS,
         questionSets: QUESTION_SETS,
+        hasEntries: false,
         formDefinitionYaml: 'tournamentSlug: shinjinou\nfields: []\n',
       },
       form: {
@@ -279,6 +354,7 @@ describe('admin tournament edit +page.svelte', () => {
         customName: OTHER_TOURNAMENT.name,
         regions: REGIONS,
         questionSets: QUESTION_SETS,
+        hasEntries: false,
         formDefinitionYaml: 'tournamentSlug: shinjinou\nfields: []\n',
       },
       form: null,
@@ -343,6 +419,7 @@ describe('admin tournament edit +page.svelte', () => {
         customName: '第1回テスト最強位(改)',
         regions: REGIONS,
         questionSets: QUESTION_SETS,
+        hasEntries: false,
         formDefinitionYaml: FORM_DEFINITION_YAML,
       },
       form: {

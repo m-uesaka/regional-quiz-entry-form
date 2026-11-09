@@ -47,14 +47,18 @@ export const QuestionSetInputSchema = z
 export const QuestionSetListSchema = z.array(z.string());
 export type QuestionSetList = z.infer<typeof QuestionSetListSchema>;
 
+// What `entryOpensAt` and `entryClosesAt` take: an ISO 8601 date-time with
+// its offset.
+const EntryDateTimeSchema = z.string().datetime({offset: true});
+
 export const TournamentSchema = z.object({
   id: z.string().uuid(),
   regionId: z.string().uuid(),
   type: TournamentTypeSchema,
   name: z.string(),
   capacity: z.number().int().positive().nullable(),
-  entryOpensAt: z.string().datetime({offset: true}),
-  entryClosesAt: z.string().datetime({offset: true}),
+  entryOpensAt: EntryDateTimeSchema,
+  entryClosesAt: EntryDateTimeSchema,
   // Staff paused taking entries (0039): within the period or not, no new
   // entry is accepted and the form is staff-only, as outside the period.
   entriesPaused: z.boolean(),
@@ -66,15 +70,65 @@ export const TournamentSchema = z.object({
 });
 export type Tournament = z.infer<typeof TournamentSchema>;
 
-// Request body of `POST /api/tournaments`: everything but the id, which the
-// database assigns. Shared so the admin form's own check and the API's
-// `zValidator` are the same rule rather than two that can drift apart.
+// What a tournament whose entry period ends no later than it opens is
+// refused with: shown as it is above the admin form, by the form's own
+// check and by the API when the database's
+// `tournaments_entry_period_ordered` (0048) refuses a PATCH that sent only
+// one end of the period, and after the row's values in the bulk import's
+// refusal of a row.
+export const ENTRY_PERIOD_ORDER_MESSAGE =
+  'エントリー終了はエントリー開始より後の日時にしてください';
+
+/**
+ * Whether an entry period opens strictly before it closes, the rule
+ * `tournaments_entry_period_ordered` (0048) holds every tournament to. A
+ * period that closes when it opens is never open, so it is refused as well.
+ * Shared by the request schemas below and the bulk import, so every way a
+ * tournament is written applies the same rule.
+ * @param entryOpensAt When entries open, as an ISO 8601 date-time.
+ * @param entryClosesAt When entries close, as an ISO 8601 date-time.
+ */
+export function isEntryPeriodOrdered(
+  entryOpensAt: string,
+  entryClosesAt: string,
+): boolean {
+  return Date.parse(entryOpensAt) < Date.parse(entryClosesAt);
+}
+
+/**
+ * Whether the request schemas below let an entry period through: refused
+ * only when both ends are date-times and the period doesn't open before it
+ * closes. An end its own check refused still reaches an object's
+ * refinement -- Zod runs it on a result the fields only marked dirty -- and
+ * is reported by that check, so it isn't reported a second time as a
+ * period out of order.
+ * @param entryOpensAt What was sent as when entries open.
+ * @param entryClosesAt What was sent as when entries close.
+ */
+function isEntryPeriodAcceptable(
+  entryOpensAt: string,
+  entryClosesAt: string,
+): boolean {
+  const isDateTime = (value: string) =>
+    EntryDateTimeSchema.safeParse(value).success &&
+    !Number.isNaN(Date.parse(value));
+  return (
+    !isDateTime(entryOpensAt) ||
+    !isDateTime(entryClosesAt) ||
+    isEntryPeriodOrdered(entryOpensAt, entryClosesAt)
+  );
+}
+
+// The fields a tournament is created or updated with: everything but the
+// id, which the database assigns. The two request schemas below add the
+// entry period check to it, each as a refinement of its own, since a
+// refined schema can no longer be made `.partial()`.
 //
 // `name` may be left out or blank: the usual name is just the region's
 // name followed by the type's label, so the API stores no name and answers
 // with `defaultTournamentName()` for the region and type at the time of each
 // read, rather than making staff type it.
-export const TournamentCreateInputSchema = TournamentSchema.omit({
+const TournamentInputFieldsSchema = TournamentSchema.omit({
   id: true,
   // Switched by staff on its own (`TournamentEntryPauseInputSchema`), not
   // with the rest of the tournament's settings.
@@ -83,6 +137,14 @@ export const TournamentCreateInputSchema = TournamentSchema.omit({
   name: z.string().trim().default(''),
   questionSet: QuestionSetInputSchema.default(null),
 });
+
+// Request body of `POST /api/tournaments`. Shared so the admin form's own
+// check and the API's `zValidator` are the same rule rather than two that
+// can drift apart.
+export const TournamentCreateInputSchema = TournamentInputFieldsSchema.refine(
+  input => isEntryPeriodAcceptable(input.entryOpensAt, input.entryClosesAt),
+  {message: ENTRY_PERIOD_ORDER_MESSAGE, path: ['entryClosesAt']},
+);
 export type TournamentCreateInput = z.infer<typeof TournamentCreateInputSchema>;
 
 // Request body of `PATCH /api/tournaments/:id`. Every field is optional
@@ -90,8 +152,19 @@ export type TournamentCreateInput = z.infer<typeof TournamentCreateInputSchema>;
 // value. A blank `name` is not "keep": it clears the name, so the tournament
 // goes back to `defaultTournamentName()` for whatever region and type it
 // has.
+//
+// The entry period is checked here only when both ends are sent. One end
+// sent alone is checked against the stored other end by the database
+// (`tournaments_entry_period_ordered`, 0048), which the API answers with
+// `ENTRY_PERIOD_ORDER_MESSAGE` as well.
 export const TournamentUpdateInputSchema =
-  TournamentCreateInputSchema.partial();
+  TournamentInputFieldsSchema.partial().refine(
+    input =>
+      input.entryOpensAt === undefined ||
+      input.entryClosesAt === undefined ||
+      isEntryPeriodAcceptable(input.entryOpensAt, input.entryClosesAt),
+    {message: ENTRY_PERIOD_ORDER_MESSAGE, path: ['entryClosesAt']},
+  );
 export type TournamentUpdateInput = z.infer<typeof TournamentUpdateInputSchema>;
 
 // Request body of `PUT /api/tournaments/order`: every tournament's id, in
@@ -161,6 +234,16 @@ export const TournamentUpdateResponseSchema = TournamentSchema.extend({
 export type TournamentUpdateResponse = z.infer<
   typeof TournamentUpdateResponseSchema
 >;
+
+// What `PATCH /api/tournaments/:id` answers (409) when it would move a
+// tournament that has entries to another region or type (#284): the entries
+// would follow without the dual-entry checks they were accepted under, so
+// the database refuses it (`tournaments_lock_region_type_with_entries`,
+// 0050). Shown as it is above the admin form. Deleting the entries with the
+// participant data reset lifts it, but the reset is refused while the entry
+// period is open (`P0007`, 0038), hence the condition in the wording.
+export const TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE =
+  'エントリーがある大会の地域・種別は変更できません。受付期間外であれば、参加者データをリセットしてエントリーを消した後に変更できます';
 
 // Japanese display labels for each tournament type, shared so staff-facing
 // screens don't each carry their own copy of the wording.

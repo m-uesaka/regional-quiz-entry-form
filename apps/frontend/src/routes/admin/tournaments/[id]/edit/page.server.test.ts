@@ -1,6 +1,13 @@
 import {describe, expect, it} from 'vitest';
 import type {HttpError} from '@sveltejs/kit';
-import type {FormFieldDef, Region, Tournament} from '@regional-quiz/shared';
+import {
+  ENTRY_PERIOD_ORDER_MESSAGE,
+  TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE,
+  type DashboardTournamentSummary,
+  type FormFieldDef,
+  type Region,
+  type Tournament,
+} from '@regional-quiz/shared';
 import {fakeCookies} from '../../../../../test-support/fake-cookies';
 import {
   fakeFetch,
@@ -41,6 +48,21 @@ const FORM_FIELD_DEFS: FormFieldDef[] = [
   },
 ];
 
+/** The dashboard's row for `TOURNAMENT`, which has no entries. */
+const SUMMARY: DashboardTournamentSummary = {
+  tournamentId: TOURNAMENT.id,
+  tournamentName: TOURNAMENT.name,
+  tournamentType: TOURNAMENT.type,
+  regionId: TOKYO.id,
+  regionSlug: TOKYO.slug,
+  regionName: TOKYO.name,
+  capacity: TOURNAMENT.capacity,
+  confirmedCount: 0,
+  waitlistedCount: 0,
+  pendingVerificationCount: 0,
+  cancelledCount: 0,
+};
+
 const PROMOTION = {promotedCount: 2, mailFailedCount: 0};
 const RESET_RESPONSE = {
   deletedEntryCount: 5,
@@ -55,6 +77,7 @@ const RESET_RESPONSE = {
  * @param options.error The `{error}` message to answer a refusal with.
  * @param options.tournaments The tournaments `GET /api/tournaments/:id` can
  *     find.
+ * @param options.summaries What `GET /api/staff/dashboard` answers with.
  * @param options.calls Collects the requests sent.
  */
 function fakeApi(
@@ -62,12 +85,18 @@ function fakeApi(
     status?: number;
     error?: string;
     tournaments?: Tournament[];
+    summaries?: DashboardTournamentSummary[];
     calls?: RecordedRequest[];
   } = {},
 ): typeof fetch {
   const tournaments = options.tournaments ?? [TOURNAMENT];
   const reads: FakeRoute[] = [
     {method: 'GET', url: /^\/api\/regions$/, body: [TOKYO]},
+    {
+      method: 'GET',
+      url: '/api/staff/dashboard',
+      body: options.summaries ?? [SUMMARY],
+    },
     // Before the `:id` read, whose pattern this path matches too.
     {method: 'GET', url: '/api/tournaments/question-sets', body: ['宮崎']},
     {
@@ -156,6 +185,7 @@ describe('admin tournament edit +page.server load', () => {
       customName: TOURNAMENT.name,
       regions: [TOKYO],
       questionSets: ['宮崎'],
+      hasEntries: false,
       formDefinitionYaml:
         'tournamentSlug: saikyoi\n' +
         'fields:\n' +
@@ -168,7 +198,8 @@ describe('admin tournament edit +page.server load', () => {
 
   // Not the whole list to `find` the one being edited in (#123), and its
   // form fields with it rather than through the entry-period-gated read.
-  // The 問題セット suggestions come from their own read, not the list.
+  // The 問題セット suggestions come from their own read, not the list, and
+  // whether it has entries from the dashboard's counts (#284).
   it('load fetches only the tournament it needs', async () => {
     const calls: RecordedRequest[] = [];
 
@@ -176,9 +207,56 @@ describe('admin tournament edit +page.server load', () => {
 
     expect(calls.map(call => `${call.method} ${call.url}`).sort()).toEqual([
       'GET /api/regions',
+      'GET /api/staff/dashboard',
       `GET /api/tournaments/${TOURNAMENT.id}`,
       'GET /api/tournaments/question-sets',
     ]);
+  });
+
+  // #284: any entry, a cancelled one too, locks the region and type, and
+  // only this tournament's count is read.
+  it('reports the tournament as having entries from its dashboard counts', async () => {
+    const other: DashboardTournamentSummary = {
+      ...SUMMARY,
+      tournamentId: '00000000-0000-0000-0000-0000000000ff',
+      confirmedCount: 5,
+    };
+    const loadWith = (summaries: DashboardTournamentSummary[]) =>
+      load(buildLoadEvent(fakeApi({summaries})));
+
+    await expect(loadWith([other, SUMMARY])).resolves.toMatchObject({
+      hasEntries: false,
+    });
+    await expect(
+      loadWith([other, {...SUMMARY, cancelledCount: 1}]),
+    ).resolves.toMatchObject({hasEntries: true});
+  });
+
+  // The API still refuses the move (409), so a failed read only leaves the
+  // controls open rather than taking the page down.
+  it('leaves the region and type open when the dashboard cannot be read', async () => {
+    const failing = fakeFetch([
+      {method: 'GET', url: '/api/staff/dashboard', status: 500, body: {}},
+      {
+        method: 'GET',
+        url: /^\/api\/regions$/,
+        body: [TOKYO],
+      },
+      {method: 'GET', url: '/api/tournaments/question-sets', body: []},
+      {
+        method: 'GET',
+        url: `/api/tournaments/${TOURNAMENT.id}`,
+        body: {
+          tournament: TOURNAMENT,
+          customName: TOURNAMENT.name,
+          formFieldDefs: [],
+        },
+      },
+    ]);
+
+    await expect(load(buildLoadEvent(failing))).resolves.toMatchObject({
+      hasEntries: false,
+    });
   });
 
   it('reports an id that is not a UUID as not found, without asking the API', async () => {
@@ -286,6 +364,46 @@ describe('admin tournament update action', () => {
     expect(calls).toEqual([]);
   });
 
+  // #285: the period is checked here by the API's own rule, so the
+  // mistake is named rather than refused at large.
+  for (const entryClosesAt of ['2026-01-01T09:00', '2025-12-31T09:00']) {
+    it(`names an entry period closing at ${entryClosesAt}, without asking the API`, async () => {
+      const calls: RecordedRequest[] = [];
+      const event = buildActionEvent(
+        fakeApi({calls}),
+        updateFormData({entryClosesAt}),
+      );
+
+      await expect(actions.update(event)).resolves.toMatchObject({
+        status: 400,
+        data: {
+          error: ENTRY_PERIOD_ORDER_MESSAGE,
+          values: {entryClosesAt},
+        },
+      });
+      expect(calls).toEqual([]);
+    });
+  }
+
+  it('names both a bad 問題セット and a bad entry period at once', async () => {
+    const calls: RecordedRequest[] = [];
+    const event = buildActionEvent(
+      fakeApi({calls}),
+      updateFormData({
+        questionSet: '宮　崎',
+        entryClosesAt: '2026-01-01T09:00',
+      }),
+    );
+
+    await expect(actions.update(event)).resolves.toMatchObject({
+      status: 400,
+      data: {
+        error: `問題セットに空白は使えません。${ENTRY_PERIOD_ORDER_MESSAGE}`,
+      },
+    });
+    expect(calls).toEqual([]);
+  });
+
   it('refuses a form the API would reject, without asking it', async () => {
     const calls: RecordedRequest[] = [];
     const event = buildActionEvent(
@@ -338,6 +456,24 @@ describe('admin tournament update action', () => {
       data: {
         error: 'この地域には同じ種別の大会がすでにあります',
         values: {name: '書きかけの大会名'},
+      },
+    });
+  });
+
+  // #284: the tournament has entries, which a move would carry past the
+  // dual-entry checks they were accepted under.
+  it('surfaces a region or type change refused for a tournament with entries', async () => {
+    const event = buildActionEvent(
+      fakeApi({status: 409, error: TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE}),
+      updateFormData({type: 'shinjinou'}),
+    );
+
+    await expect(actions.update(event)).resolves.toMatchObject({
+      status: 409,
+      data: {
+        saved: false,
+        error: TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE,
+        values: {type: 'shinjinou'},
       },
     });
   });
