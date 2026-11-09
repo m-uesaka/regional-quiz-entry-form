@@ -17,7 +17,8 @@ describe('EntryFreeTextField', () => {
     expect(control).not.toBeRequired();
     expect(control).toHaveAttribute(
       'maxlength',
-      String(ENTRY_FREE_TEXT_MAX_LENGTH),
+      // The browser counts UTF-16 units, the schema code points (#302).
+      String(ENTRY_FREE_TEXT_MAX_LENGTH * 2),
     );
   });
 

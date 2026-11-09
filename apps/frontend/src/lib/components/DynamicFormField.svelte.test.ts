@@ -262,7 +262,8 @@ describe('DynamicFormField', () => {
       expect(control.tagName).toBe(tagName);
       expect(control).toHaveAttribute('id', 'custom.note');
       expect(control).toHaveAttribute('name', 'custom.note');
-      expect(control).toHaveAttribute('maxlength', '2000');
+      // Twice the 2000 code points: the browser counts UTF-16 units (#302).
+      expect(control).toHaveAttribute('maxlength', '4000');
       expect(control).toBeRequired();
       expect(control).toHaveValue('既存');
     });

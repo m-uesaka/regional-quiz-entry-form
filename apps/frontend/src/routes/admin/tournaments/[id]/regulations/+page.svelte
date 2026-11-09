@@ -2,6 +2,7 @@
   import {
     REGULATION_LABEL_MAX_LENGTH,
     REGULATION_SHEET_NAME,
+    maxLengthAttribute,
   } from '@regional-quiz/shared';
   import ReorderControls from '$lib/components/ReorderControls.svelte';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
@@ -199,7 +200,7 @@
               class="w-full"
               name="regulations[{index}].label"
               type="text"
-              maxlength={REGULATION_LABEL_MAX_LENGTH}
+              maxlength={maxLengthAttribute(REGULATION_LABEL_MAX_LENGTH)}
               value={row.label}
             />
           </div>
