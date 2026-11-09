@@ -47,7 +47,7 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 どちらのセッションも、署名の検証に加えて**リクエストごとに DB 参照が 1 回入ります**(セッションの失効)。
 
 - **参加者**: `pwdChangedAt` はログイン時点の `participants.password_changed_at`(エポックミリ秒)で、`requireParticipant()` が毎リクエストその列を読み直し、**値が動いていたら 401** にします。パスワード再設定でこの列が更新されるため、再設定前に発行された Cookie(盗まれたものを含む)はその時点で使えなくなります。ステートレスな JWT のままだと、パスワードを変えても攻撃者のアクセスが最大 7 日間続いてしまいます。
-- **スタッフ**(Task 11-3): `sessionsValidFrom` はログイン時点の `staff_accounts.sessions_valid_from`(エポックミリ秒)で、スタッフ用のミドルウェアすべて(`requireGeneralStaff()` / `requireStaffForTournament()` / `requireStaffForEntry()`、期間外の `requireOpenEntryPeriodOrStaff()`)が毎リクエストその列を読み直し、**値が動いていたら 401** にします。この列は統括スタッフの明示的な無効化(`POST /api/staff/accounts/:id/revoke-sessions`、12 章)とパスワード再設定(`reset_staff_password()`)で進みます。スタッフの Cookie は参加者全員の氏名・ふりがな・メールアドレスに届くので、漏れたときに 12 時間止められないことの影響は参加者セッションより大きく、列名を `password_changed_at` にしていないのは端末紛失・Cookie の漏洩などパスワード変更以外でも切れるようにするためです。ただし切れるのはセッションだけで、**パスワードを知っている人の再ログインは止められません**。締め出すにはアカウントを無効化します(`POST /api/staff/accounts/:id/disable`、12 章)。無効化されたアカウントのセッションは、この列の値にかかわらず 401 です(`staff_accounts.disabled_at` も同じ読み取りで見ています)。
+- **スタッフ**(Task 11-3): `sessionsValidFrom` はログイン時点の `staff_accounts.sessions_valid_from`(エポックミリ秒)で、スタッフ用のミドルウェアすべて(`requireStaff()` / `requireGeneralStaff()` / `requireStaffForTournament()` / `requireStaffForEntry()`、期間外の `requireOpenEntryPeriodOrStaff()`)が毎リクエストその列を読み直し、**値が動いていたら 401** にします。この列は統括スタッフの明示的な無効化(`POST /api/staff/accounts/:id/revoke-sessions`、12 章)とパスワード再設定(`reset_staff_password()`)で進みます。スタッフの Cookie は参加者全員の氏名・ふりがな・メールアドレスに届くので、漏れたときに 12 時間止められないことの影響は参加者セッションより大きく、列名を `password_changed_at` にしていないのは端末紛失・Cookie の漏洩などパスワード変更以外でも切れるようにするためです。ただし切れるのはセッションだけで、**パスワードを知っている人の再ログインは止められません**。締め出すにはアカウントを無効化します(`POST /api/staff/accounts/:id/disable`、12 章)。無効化されたアカウントのセッションは、この列の値にかかわらず 401 です(`staff_accounts.disabled_at` も同じ読み取りで見ています)。
 
 どちらも、**列を読めなかったときは 401 ではなく 500** を返します。セッション自体は正しいかもしれず、DB 障害でログイン画面に追い返すべきではないためです。行が消えている(アカウント削除)場合は失効と同じく 401 です。`sessionsValidFrom` を持たない古いスタッフ Cookie(Task 11-3 以前に発行されたもの)はクレームの形の検証で落ち、未ログインと同じ扱いになります。
 
@@ -220,7 +220,7 @@ Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts
 
 ## 2. エンドポイント一覧
 
-「認可」列が「なし」(または「期間中はなし」)で始まる行は、無認証で到達できるルートです。この表は登録済みのルート、および `apps/backend/src/routes-authz.test.ts` の認可方針(`ROUTE_POLICIES`)と**一致することをテストで確かめています**(「なし」→ 公開、「期間中はなし」→ 期間ゲート、「統括スタッフ」「スタッフ(担当範囲)」「参加者」→ それぞれのガード)。ルートを足したら、この表にも行を足してください(理由は [`database-schema.md`](./database-schema.md) 4 章)。
+「認可」列が「なし」(または「期間中はなし」)で始まる行は、無認証で到達できるルートです。この表は登録済みのルート、および `apps/backend/src/routes-authz.test.ts` の認可方針(`ROUTE_POLICIES`)と**一致することをテストで確かめています**(「なし」→ 公開、「期間中はなし」→ 期間ゲート、「統括スタッフ」「スタッフ(担当範囲)」「スタッフ(全員)」「参加者」→ それぞれのガード)。ルートを足したら、この表にも行を足してください(理由は [`database-schema.md`](./database-schema.md) 4 章)。
 
 | メソッド | パス | 認可 |
 | --- | --- | --- |
@@ -273,6 +273,7 @@ Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts
 | POST | `/api/staff/accounts/:id/revoke-sessions` | 統括スタッフ |
 | POST | `/api/staff/accounts/:id/disable` | 統括スタッフ |
 | POST | `/api/staff/accounts/:id/enable` | 統括スタッフ |
+| GET | `/api/staff/pending-invites` | スタッフ(全員) |
 | GET | `/api/mypage/entries` | 参加者 |
 | GET | `/api/mypage/entries/:entryId` | 参加者(本人) |
 | PATCH | `/api/mypage/entries/:entryId` | 参加者(本人) |
@@ -293,7 +294,7 @@ Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts
 
 - リクエスト: `StaffLoginInputSchema` — `{email: string(email), scope: "saikyoi" | "shinjinou" | "general", password: string(min 1, max 1024)}`(ログインには下記のパスワードポリシーを**適用しません**。ポリシー導入前に設定したパスワードでもログインできる必要があるためです。上限も新規設定時の 256 文字より緩い 1024 文字(`LOGIN_PASSWORD_MAX_LENGTH`)にしています。256 文字の上限ができる前は上限が無かったためで、上限自体は PBKDF2 の計算量を守るために残しています)
 - `200`: `StaffLoginResponseSchema` — `{"ok": true, "role": "regional" | "general", "regionSlug": string | null, "tournamentType": "saikyoi" | "shinjinou" | null}`
-- `401`: `{"error": "invalid credentials"}`
+- `401`: `{"error": "invalid credentials"}`(パスワード未設定(招待メールのリンク待ち)のアカウントも同じ。ログイン画面はその旨を添えて表示します)
 - `429`: `{"error": "too many requests"}`(`Retry-After: 60`。1 章「レート制限と Turnstile」を参照)
 - `500`: `{"error": "internal server error"}`
 
@@ -308,6 +309,17 @@ Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts
 ログインに成功したとき、保存されているハッシュが旧形式・旧パラメータ(`verifyPassword()` の `needsRehash`)なら、**その場で現行パラメータのハッシュに書き換えます**。平文が手元にあるのは照合が通ったこの瞬間だけなので、利用者に何も求めずに移行を進められます。書き換えは `waitUntil()` で応答の後に行い、失敗してもログは残してログイン自体は成功させます(次回のログインで再試行されます)。`password_hash` が照合時の値のままである行だけを更新するので、その間に再設定されたパスワードを古いもので上書きすることはありません。`password_changed_at` は動かしません(パスワードは変わっていないので、セッションを切る理由がないためです)。仕組みの詳細は [`database-schema.md`](./database-schema.md#participants--参加者アカウント) を参照してください。
 
 `regionSlug` / `tournamentType` は `regional` スタッフの担当範囲で、`general` スタッフでは両方 `null` です。スタッフ画面は `/staff/{regionSlug}/{tournamentType}/entries` のように**スラッグ**で引くため、JWT クレームが持つ `regionId` ではなく `regions` を join したスラッグを返しています。ログイン画面(`/staff/login`)はこれを見て、`general` を `/staff/dashboard` へ、`regional` を担当大会のエントリー一覧へリダイレクトします。
+
+### `GET /api/staff/pending-invites`
+
+ログイン中のスタッフと**同じメールアドレス**の他のアカウント(無効化されていないもの)のうち、パスワード未設定(招待メールのリンク待ち)のものの区分を返します。`routes/staff-pending-invites.ts`。認可は `requireStaff()`(統括・地域を問わず、生きたセッションがあれば可)。
+
+- `200`: `StaffPendingInvitesSchema` — `{"scopes": ("saikyoi" | "shinjinou" | "general")[]}`(`StaffLoginScopeSchema` の順)
+- `401` / `500`
+
+ログインは区分で選んだ 1 つのアカウントに入るだけなので、最強位は設定済み・新人王は招待待ち、という人が最強位でログインしても新人王のことは何も分からず、空のエントリー一覧を見て戸惑うことになります。スタッフ画面(`/staff`・`/admin` のレイアウト)はこれを読み込みのたびに問い合わせ、招待待ちのアカウントが残っている間は警告を出します。読み出しに失敗した場合、フロントエンドは警告を出さないだけで画面は表示します。
+
+招待待ちのアカウントにはログインできない(どのパスワードとも一致しない)ため、この情報を得られるのはそのアドレスの別のアカウントでパスワードを証明した本人だけで、どのアドレスがどのアカウントを持つかを探る手段にはなりません。
 
 ### `POST /api/auth/staff/password-reset/request`
 

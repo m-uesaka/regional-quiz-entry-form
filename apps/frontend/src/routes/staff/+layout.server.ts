@@ -1,7 +1,4 @@
-import {
-  pendingInvitesData,
-  takePendingInvites,
-} from '$lib/server/staff-pending-invites';
+import {fetchPendingInvitesData} from '$lib/server/staff-pending-invites';
 import type {LayoutServerLoad} from './$types';
 
 /**
@@ -11,11 +8,12 @@ import type {LayoutServerLoad} from './$types';
  * (`dashboard/+page.server.ts` answers 403 to anyone else), so regional staff
  * are not shown a link that would only lead there.
  *
- * It also shows, once, the warning the login left for the page it landed
- * on: which of the address's other accounts still wait on their invite link.
+ * It also warns, for as long as it lasts, that some of the address's other
+ * accounts still wait on their invite link -- asked only with a session,
+ * since there is no address to ask about without one.
  */
-export const load: LayoutServerLoad = ({locals, cookies}) => ({
+export const load: LayoutServerLoad = async ({locals, fetch}) => ({
   loggedIn: Boolean(locals.staff),
   isGeneralStaff: locals.staff?.role === 'general',
-  ...(locals.staff ? pendingInvitesData(takePendingInvites(cookies)) : {}),
+  ...(locals.staff ? await fetchPendingInvitesData(fetch) : {}),
 });

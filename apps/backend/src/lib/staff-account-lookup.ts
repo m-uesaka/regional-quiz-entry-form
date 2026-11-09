@@ -45,39 +45,34 @@ export async function findStaffAccountByScope<Columns extends string>(
 /**
  * The scopes of the address's other enabled accounts whose owner hasn't
  * followed their invite link yet, i.e. whose `password_hash` is still
- * `UNUSABLE_PASSWORD_HASH`.
- *
- * A login is let into the one account its `scope` names, so an address with
- * a 最強位 account set up and a 新人王 one still waiting on its invite logs in
- * to the former without a word about the latter -- and its owner, looking at
- * the wrong tournament's empty entry list, has no way to tell why. The login
- * hands these back so the staff screens can say so.
- *
- * Asked only after the password has been proven: the mailbox's owner is the
- * one being told about their own accounts, so this is no oracle for which
- * addresses hold which accounts.
+ * `UNUSABLE_PASSWORD_HASH` (`GET /api/staff/pending-invites`).
  * @param db The Supabase client to read with.
- * @param email The address, already lowercased by the request schema.
- * @param loggedInId The account just logged in to, which is left out.
- * @return The scopes in the order `StaffLoginScopeSchema` lists them, or
- *     `null` if the accounts couldn't be read.
+ * @param email The address of the account the caller is logged in to.
+ * @param loggedInId That account, which is left out.
+ * @return The scopes in the order `StaffLoginScopeSchema` lists them, or the
+ *     error the read failed with.
  */
 export async function findPendingInviteScopes(
   db: DbClient,
   email: string,
   loggedInId: string,
-): Promise<StaffLoginScope[] | null> {
+): Promise<
+  {scopes: StaffLoginScope[]; error: null} | {scopes: null; error: unknown}
+> {
   const {data, error} = await db
     .from('staff_accounts')
     .select('tournament_type, password_hash')
     .eq('email', email)
     .is('disabled_at', null)
     .neq('id', loggedInId);
-  if (error) return null;
+  if (error) return {scopes: null, error};
   const pending = new Set<StaffLoginScope>(
     data
       .filter(account => !isPasswordHashUsable(account.password_hash))
       .map(account => account.tournament_type ?? 'general'),
   );
-  return StaffLoginScopeSchema.options.filter(scope => pending.has(scope));
+  return {
+    scopes: StaffLoginScopeSchema.options.filter(scope => pending.has(scope)),
+    error: null,
+  };
 }

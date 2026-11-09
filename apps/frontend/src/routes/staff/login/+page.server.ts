@@ -2,7 +2,6 @@ import {fail, redirect} from '@sveltejs/kit';
 import {StaffLoginInputSchema} from '@regional-quiz/shared';
 import {createApiClient} from '$lib/api';
 import {staffLandingPath} from '$lib/server/staff-login';
-import {rememberPendingInvites} from '$lib/server/staff-pending-invites';
 import type {Actions, PageServerLoad} from './$types';
 import {readString} from '$lib/form-data';
 
@@ -30,7 +29,7 @@ export const load: PageServerLoad = ({url}) => {
 };
 
 export const actions = {
-  default: async ({request, fetch, url, cookies}) => {
+  default: async ({request, fetch, url}) => {
     const formData = await request.formData();
     // Echoed back on failure so a mistyped password doesn't cost the whole
     // form. The password never is.
@@ -73,9 +72,8 @@ export const actions = {
       });
     }
 
-    const session = await res.json();
     const landing = staffLandingPath(
-      session,
+      await res.json(),
       url.searchParams.get('redirectTo'),
     );
     if (!landing) {
@@ -88,10 +86,6 @@ export const actions = {
           '担当する大会が設定されていないため、表示できる画面がありません。管理者にお問い合わせください',
       });
     }
-    // Logging in here is not logging in to the address's other accounts:
-    // one still waiting on its invite link is warned about on landing, so
-    // its owner isn't left wondering why this account's screens look empty.
-    rememberPendingInvites(cookies, session.pendingInviteScopes);
     redirect(303, landing);
   },
 } satisfies Actions;

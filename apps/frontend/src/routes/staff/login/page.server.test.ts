@@ -5,8 +5,6 @@ import {
   fakeFetch,
   type RecordedRequest,
 } from '../../../test-support/fake-fetch';
-import {fakeCookieJar} from '../../../test-support/fake-cookies';
-import {STAFF_PENDING_INVITES_COOKIE} from '$lib/server/staff-pending-invites';
 import {actions, load} from './+page.server';
 
 const REGIONAL: StaffLoginResponse = {
@@ -14,7 +12,6 @@ const REGIONAL: StaffLoginResponse = {
   role: 'regional',
   regionSlug: 'tokyo',
   tournamentType: 'saikyoi',
-  pendingInviteScopes: [],
 };
 
 const GENERAL: StaffLoginResponse = {
@@ -22,7 +19,6 @@ const GENERAL: StaffLoginResponse = {
   role: 'general',
   regionSlug: null,
   tournamentType: null,
-  pendingInviteScopes: [],
 };
 
 const SESSION_COOKIE_HEADER =
@@ -154,30 +150,6 @@ describe('staff login action', () => {
     // cookie jar as the call comes back (see `forwardBackendCookies()` in
     // `$lib/server/backend-fetch`), so the action writes no cookie itself.
     expect(set).toEqual([]);
-  });
-
-  it('leaves the landing page a warning about accounts still waiting on their invite', async () => {
-    const jar = fakeCookieJar();
-
-    await expect(
-      actions.default(
-        buildEvent({
-          ...CREDENTIALS,
-          cookies: jar.cookies,
-          fetch: fakeLoginFetch({
-            body: {...REGIONAL, pendingInviteScopes: ['shinjinou']},
-          }),
-        }),
-      ),
-    ).rejects.toMatchObject({
-      status: 303,
-      location: '/staff/tokyo/saikyoi/entries',
-    } satisfies Partial<Redirect>);
-    expect(jar.jar.get(STAFF_PENDING_INVITES_COOKIE)).toBe('shinjinou');
-    expect(jar.setOptions.get(STAFF_PENDING_INVITES_COOKIE)).toMatchObject({
-      path: '/',
-      httpOnly: true,
-    });
   });
 
   it('reports a rejected login without saying which field was wrong', async () => {

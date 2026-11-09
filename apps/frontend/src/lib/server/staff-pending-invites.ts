@@ -1,80 +1,56 @@
-import type {Cookies} from '@sveltejs/kit';
 import {
-  StaffLoginScopeSchema,
-  TOURNAMENT_TYPE_LABELS,
+  StaffPendingInvitesSchema,
   type StaffLoginScope,
 } from '@regional-quiz/shared';
+import {createApiClient} from '$lib/api';
+import {staffScopeLabel} from '$lib/staff-scope';
 
-/**
- * Carries the login's `pendingInviteScopes` across the redirect to the
- * landing page, which is a different request: the login form posts without
- * `use:enhance`, so the action's result never reaches the page it sends the
- * browser to.
- */
-export const STAFF_PENDING_INVITES_COOKIE = 'staff_pending_invites';
-
-// Long enough for the redirect to be followed, short enough that a login
-// abandoned before landing doesn't warn on a visit days later.
-const MAX_AGE_SECONDS = 60 * 5;
-
-/**
- * Remembers which of the address's other accounts still wait on their
- * invite link, for the landing page to warn about. Nothing is written when
- * there are none.
- * @param cookies The login request's cookies.
- * @param scopes The login response's `pendingInviteScopes`.
- */
-export function rememberPendingInvites(
-  cookies: Cookies,
-  scopes: readonly StaffLoginScope[],
-): void {
-  if (scopes.length === 0) return;
-  cookies.set(STAFF_PENDING_INVITES_COOKIE, scopes.join(','), {
-    path: '/',
-    httpOnly: true,
-    sameSite: 'lax',
-    maxAge: MAX_AGE_SECONDS,
-  });
-}
-
-/**
- * Reads and clears what `rememberPendingInvites()` wrote, so the warning is
- * shown on the page the login lands on and not on every page after it.
- *
- * The cookie is only ever written by the login action, but it is still read
- * as untrusted input: anything that isn't a scope is dropped.
- * @param cookies The current request's cookies.
- * @return The scopes, in the order `StaffLoginScopeSchema` lists them.
- */
-export function takePendingInvites(cookies: Cookies): StaffLoginScope[] {
-  const value = cookies.get(STAFF_PENDING_INVITES_COOKIE);
-  if (value === undefined) return [];
-  cookies.delete(STAFF_PENDING_INVITES_COOKIE, {path: '/'});
-  const named = new Set(value.split(','));
-  return StaffLoginScopeSchema.options.filter(scope => named.has(scope));
-}
-
-/**
- * What a login screen's 区分 calls the account `scope` names, e.g.
- * 「新人王の地域スタッフ」.
- * @param scope The scope.
- */
-export function staffScopeLabel(scope: StaffLoginScope): string {
-  return scope === 'general'
-    ? '統括スタッフ'
-    : `${TOURNAMENT_TYPE_LABELS[scope]}の地域スタッフ`;
-}
-
-/**
- * The warning to show for the address's accounts still waiting on their
- * invite link, as layout data: a `pendingInvitesMessage` field when there is
- * one, nothing at all when there isn't, so the many pages that build their
- * layout's data by hand needn't spell out its absence.
- * @param scopes What `takePendingInvites()` returned.
- */
-export function pendingInvitesData(scopes: readonly StaffLoginScope[]): {
+/** What the staff layouts add to their data for the warning. */
+export interface PendingInvitesData {
+  /**
+   * The warning, present only when there is one, so the many pages that
+   * build their layout's data by hand in tests needn't spell out its
+   * absence.
+   */
   pendingInvitesMessage?: string;
-} {
+}
+
+/**
+ * The warning for the logged-in address's other accounts that still wait on
+ * their invite link, from `GET /api/staff/pending-invites`.
+ *
+ * Asked on every load of the `/staff` and `/admin` layouts, so the warning
+ * stays for as long as an invite is outstanding and goes once it is
+ * followed. It is a warning and nothing more: anything short of a
+ * well-formed answer -- a refused or failed request, a backend that doesn't
+ * have the endpoint (rolled back, or deployed behind the frontend) -- shows
+ * no warning rather than failing the page. A dead session is the page's to
+ * deal with: its own request gets the same 401 and sends the staff member to
+ * log in again.
+ * @param fetch The load's `fetch`, which carries the session cookie.
+ */
+export async function fetchPendingInvitesData(
+  fetch: typeof globalThis.fetch,
+): Promise<PendingInvitesData> {
+  try {
+    const res =
+      await createApiClient(fetch).api.staff['pending-invites'].$get();
+    if (!res.ok) return {};
+    const parsed = StaffPendingInvitesSchema.safeParse(await res.json());
+    return parsed.success ? pendingInvitesData(parsed.data.scopes) : {};
+  } catch (e) {
+    console.error('failed to read the pending staff invites', e);
+    return {};
+  }
+}
+
+/**
+ * `PendingInvitesData` for `scopes`.
+ * @param scopes The accounts still waiting on their invite link.
+ */
+export function pendingInvitesData(
+  scopes: readonly StaffLoginScope[],
+): PendingInvitesData {
   if (scopes.length === 0) return {};
   const accounts = scopes.map(staffScopeLabel).join('・');
   return {

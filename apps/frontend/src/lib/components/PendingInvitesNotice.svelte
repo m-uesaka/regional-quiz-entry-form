@@ -3,8 +3,8 @@
 
   interface Props {
     /**
-     * The warning the login left about the address's accounts still waiting
-     * on their invite link (`$lib/server/staff-pending-invites`), if any.
+     * The warning about the address's accounts still waiting on their invite
+     * link (`$lib/server/staff-pending-invites`), if any.
      */
     message?: string;
   }
