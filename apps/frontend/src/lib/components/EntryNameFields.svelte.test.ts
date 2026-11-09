@@ -29,7 +29,8 @@ describe('EntryNameFields', () => {
       expect(control).toBeRequired();
       expect(control).toHaveAttribute(
         'maxlength',
-        String(ENTRY_NAME_MAX_LENGTH),
+        // The browser counts UTF-16 units, the schema code points (#302).
+        String(ENTRY_NAME_MAX_LENGTH * 2),
       );
     }
     expect(screen.getAllByRole('textbox')).toHaveLength(3);

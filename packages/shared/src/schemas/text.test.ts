@@ -1,9 +1,25 @@
 import {describe, expect, it} from 'bun:test';
-import {EntryEditInputSchema, EntryInputSchema} from './entry';
+import {
+  CUSTOM_FIELD_VALUE_MAX_LENGTH,
+  customFieldValuesLength,
+} from '../logic/custom-field-values';
+import {
+  ENTRY_FREE_TEXT_MAX_LENGTH,
+  ENTRY_NAME_MAX_LENGTH,
+  EntryEditInputSchema,
+  EntryInputSchema,
+} from './entry';
 import {parseFormDefinitionYaml} from './form-definition';
-import {StaffMailInputSchema} from './mail';
-import {RegulationUpsertSchema} from './regulation';
-import {isWellFormedText} from './text';
+import {
+  STAFF_MAIL_BODY_MAX_LENGTH,
+  STAFF_MAIL_SUBJECT_MAX_LENGTH,
+  StaffMailInputSchema,
+} from './mail';
+import {
+  REGULATION_LABEL_MAX_LENGTH,
+  RegulationUpsertSchema,
+} from './regulation';
+import {codePointLength, isWellFormedText, maxLengthAttribute} from './text';
 import {TournamentCreateInputSchema} from './tournament';
 
 // What `"\ud800"` in a JSON body decodes to.
@@ -124,6 +140,105 @@ describe('the schemas of what is stored', () => {
         entryOpensAt: '2026-01-01T00:00:00+09:00',
         entryClosesAt: '2026-01-31T00:00:00+09:00',
         name: LONE_HIGH,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('codePointLength', () => {
+  it('counts a character outside the BMP once, as char_length() does', () => {
+    expect(codePointLength('𠮷野家')).toBe(3);
+    expect('𠮷野家'.length).toBe(4);
+    // A composed emoji is several code points to the database too.
+    expect(codePointLength('👨‍👩‍👧')).toBe(5);
+    expect(codePointLength('')).toBe(0);
+  });
+});
+
+describe('maxLengthAttribute', () => {
+  it('leaves room for the limit in characters outside the BMP', () => {
+    const limit = 3;
+    expect('🎉'.repeat(limit).length).toBe(maxLengthAttribute(limit));
+  });
+});
+
+// The JS side used to count UTF-16 units and so refuse at about half the
+// limit what the database's `char_length()` would take (#302).
+describe('limits counted in code points', () => {
+  const ENTRY = {
+    name: '山田太郎',
+    furigana: 'やまだたろう',
+    displayName: '太郎',
+    email: 'taro@example.com',
+    password: 'quiz-pass-one',
+    passwordConfirm: 'quiz-pass-one',
+    regulationIds: ['00000000-0000-0000-0000-000000000000'],
+    customFieldValues: {},
+  };
+  const WIDE = '🎉';
+
+  it('takes a display name of the limit in emoji, and refuses one more', () => {
+    const atLimit = WIDE.repeat(ENTRY_NAME_MAX_LENGTH);
+
+    expect(
+      EntryInputSchema.safeParse({...ENTRY, displayName: atLimit}).success,
+    ).toBe(true);
+    const over = EntryInputSchema.safeParse({
+      ...ENTRY,
+      displayName: atLimit + WIDE,
+    });
+    expect(over.success).toBe(false);
+    expect(over.error?.flatten().fieldErrors).toEqual({
+      displayName: [
+        `エントリーリスト掲載名は${ENTRY_NAME_MAX_LENGTH}文字以内で入力してください`,
+      ],
+    });
+  });
+
+  it('counts the free text and the answers the same way', () => {
+    expect(
+      EntryInputSchema.safeParse({
+        ...ENTRY,
+        freeText: WIDE.repeat(ENTRY_FREE_TEXT_MAX_LENGTH),
+        customFieldValues: {
+          comment: WIDE.repeat(CUSTOM_FIELD_VALUE_MAX_LENGTH),
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      EntryInputSchema.safeParse({
+        ...ENTRY,
+        customFieldValues: {
+          comment: WIDE.repeat(CUSTOM_FIELD_VALUE_MAX_LENGTH + 1),
+        },
+      }).success,
+    ).toBe(false);
+    expect(customFieldValuesLength({a: WIDE.repeat(3), b: [WIDE, 'x']})).toBe(
+      5,
+    );
+  });
+
+  it('counts a regulation label and a staff mail in code points', () => {
+    expect(
+      RegulationUpsertSchema.safeParse({
+        label: WIDE.repeat(REGULATION_LABEL_MAX_LENGTH),
+      }).success,
+    ).toBe(true);
+    expect(
+      RegulationUpsertSchema.safeParse({
+        label: WIDE.repeat(REGULATION_LABEL_MAX_LENGTH + 1),
+      }).success,
+    ).toBe(false);
+    expect(
+      StaffMailInputSchema.safeParse({
+        subject: WIDE.repeat(STAFF_MAIL_SUBJECT_MAX_LENGTH),
+        body: WIDE.repeat(STAFF_MAIL_BODY_MAX_LENGTH),
+      }).success,
+    ).toBe(true);
+    expect(
+      StaffMailInputSchema.safeParse({
+        subject: WIDE.repeat(STAFF_MAIL_SUBJECT_MAX_LENGTH + 1),
+        body: '本文',
       }).success,
     ).toBe(false);
   });
