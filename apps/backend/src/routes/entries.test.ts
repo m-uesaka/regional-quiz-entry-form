@@ -18,6 +18,7 @@ import {emailKey} from '../middleware/rate-limit';
 import type {BulkMailMessage} from '../lib/bulk-mail-queue';
 import {ENTRY_MAIL_DEFER_SECONDS} from '../lib/deferred-entry-mail';
 import {
+  FOREIGN_KEY_VIOLATION_SQLSTATE,
   NO_ROW_PGRST_CODE,
   PARTICIPANT_REGION_SQLSTATE,
   REGION_DUAL_ENTRY_SQLSTATE,
@@ -302,6 +303,8 @@ function mockSupabase(options: {
   activeElsewhere?: boolean;
   /** The SQLSTATE the entry write is refused with, if it is. */
   entryWriteErrorCode?: string;
+  /** The SQLSTATE storing the entry's regulations is refused with, if it is. */
+  regulationsWriteErrorCode?: string;
   /** The participant's cancelled entry for the tournament, if any. */
   cancelledEntry?: Record<string, unknown>;
   /** Makes `reenter_cancelled_entry()` match no row: the row was taken. */
@@ -418,9 +421,15 @@ function mockSupabase(options: {
         return options.failVerificationToken
           ? Response.json({message: 'boom'}, {status: 500})
           : Response.json({id: 'token-id'}, {status: 201});
+      case 'POST entry_regulations':
+        return options.regulationsWriteErrorCode
+          ? Response.json(
+              {code: options.regulationsWriteErrorCode, message: 'refused'},
+              {status: 409},
+            )
+          : new Response(null, {status: 201});
       // The last two are the rollback after a failed verification mail.
       case 'DELETE entry_regulations':
-      case 'POST entry_regulations':
       case 'DELETE email_verification_tokens':
       case 'DELETE entries':
         return new Response(null, {status: 201});
@@ -958,6 +967,119 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     // name is this tournament's, but it comes from the withdrawn-list read.
     expect(recorded.mails[0].html).toContain(`「${TOURNAMENT_NAME}」への`);
     expect(recorded.mails[0].html).toContain('取り消しました');
+  });
+
+  // The takeover can't be undone: a failure after it rolls back only the new
+  // entry, so the notice of that failure is the one place the owner hears of
+  // the entries it withdrew (#291).
+  describe('failing after a takeover that withdrew pending entries', () => {
+    const OTHER_TOURNAMENT_ID = '88888888-8888-8888-8888-888888888888';
+
+    async function takenOver(
+      options: Omit<Parameters<typeof mockSupabase>[0], 'participant'>,
+    ): Promise<MockSupabase> {
+      return mockSupabase({
+        participant: await registeredParticipant({
+          password: 'someone-elses-password',
+          verified: false,
+        }),
+        ...options,
+      });
+    }
+
+    async function postQuietly(bindings: Bindings = env): Promise<void> {
+      const originalConsoleError = console.error;
+      console.error = () => {};
+      try {
+        await postWithContext(TOURNAMENT_PATH, validBody, undefined, bindings);
+        await settleBackgroundWork();
+      } finally {
+        console.error = originalConsoleError;
+      }
+    }
+
+    it('names them in the notice of a regulation changed meanwhile', async () => {
+      const recorded = await takenOver({
+        withdrawn: [OTHER_TOURNAMENT_ID],
+        regulationsWriteErrorCode: FOREIGN_KEY_VIOLATION_SQLSTATE,
+      });
+
+      await postQuietly();
+
+      expect(recorded.calls).toContainEqual({
+        table: 'entries',
+        method: 'DELETE',
+      });
+      expect(recorded.mails).toHaveLength(1);
+      expect(recorded.mails[0].subject).toBe(
+        entryNoticeSubject(TOURNAMENT_NAME),
+      );
+      expect(recorded.mails[0].html).toContain(
+        'レギュレーションが変更されました',
+      );
+      expect(recorded.mails[0].html).toContain(`「${TOURNAMENT_NAME}」への`);
+      expect(recorded.mails[0].html).toContain('取り消しました');
+    });
+
+    // The verification mail leaves this tournament's own earlier entry out,
+    // as the new one replaces it; a failed submission replaces nothing.
+    it('names this tournament too in the notice of a failure on our side', async () => {
+      const recorded = await takenOver({
+        withdrawn: [TOURNAMENT_ID],
+        failVerificationToken: true,
+      });
+
+      await postQuietly();
+
+      expect(recorded.mails).toHaveLength(1);
+      expect(recorded.mails[0].subject).toBe(
+        entryNoticeSubject(TOURNAMENT_NAME),
+      );
+      expect(recorded.mails[0].html).toContain(
+        'エラーが発生したため、エントリーを完了できませんでした',
+      );
+      expect(recorded.mails[0].html).toContain(
+        `まだ確定していない「${TOURNAMENT_NAME}」へのエントリーは`,
+      );
+      expect(recorded.mails[0].html).toContain('取り消しました');
+    });
+
+    it('says nothing of a withdrawal when the takeover withdrew nothing', async () => {
+      const recorded = await takenOver({
+        regulationsWriteErrorCode: FOREIGN_KEY_VIOLATION_SQLSTATE,
+      });
+
+      await postQuietly();
+
+      expect(recorded.mails).toHaveLength(1);
+      expect(recorded.mails[0].html).not.toContain('取り消しました');
+    });
+
+    it('carries them in a deferred notice', async () => {
+      await takenOver({
+        withdrawn: [OTHER_TOURNAMENT_ID, TOURNAMENT_ID],
+        regulationsWriteErrorCode: FOREIGN_KEY_VIOLATION_SQLSTATE,
+      });
+      const queue = new RecordingQueue<BulkMailMessage>();
+
+      await postQuietly({
+        ...env,
+        MAIL_TRIGGER_EMAIL_RATE_LIMITER: refusingRateLimiter(),
+        BULK_MAIL_QUEUE: queue,
+      });
+
+      // The mock answers every tournament lookup with this tournament's
+      // row, so the other one reads under this one's name as well.
+      expect(queue.sent).toEqual([
+        {
+          kind: 'deferred-notice',
+          to: validBody.email,
+          tournamentName: TOURNAMENT_NAME,
+          reason: 'regulation-unavailable',
+          withdrawnTournaments: [TOURNAMENT_NAME, TOURNAMENT_NAME],
+        },
+      ]);
+    });
   });
 
   it('enters an unverified account under its own password and region without a takeover', async () => {

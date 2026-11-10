@@ -48,6 +48,18 @@ type CreateEntryResult =
   {ok: true; entry: {id: string}} | LibFailure<400 | 401 | 403 | 409>;
 
 /**
+ * What `createEntryAfterCheck()` comes to. A submission that took an
+ * unverified account over and then failed also carries the tournaments
+ * whose pending entries the takeover withdrew: the takeover can't be undone,
+ * so the notice of the failure is where the owner learns of them (#291).
+ */
+type AddressEntryResult =
+  | CreateEntryResult
+  | (Extract<CreateEntryResult, {ok: false}> & {
+      withdrawnTournaments: string[];
+    });
+
+/**
  * What the address-independent half of an entry submission concluded: the
  * tournament it can go on to enter, or why it can't.
  */
@@ -469,7 +481,7 @@ async function createEntryAfterCheck(
   tournament: EntryTournamentRow,
   input: EntryInput,
   delivery: EntryMailDelivery = 'now',
-): Promise<CreateEntryResult> {
+): Promise<AddressEntryResult> {
   const db = createDbClient(env);
 
   const {data: existingParticipant, error: participantError} = await db
@@ -558,21 +570,32 @@ async function createEntryAfterCheck(
     }
     // Null when the address turned out to be verified (see below).
     if (withdrawn !== null) {
-      return enterTournament(
+      const otherWithdrawn = await withdrawnTournamentNames(
+        db,
+        withdrawn.filter(id => id !== tournament.id),
+      );
+      const entered = await enterTournament(
         env,
         tournament,
         existingParticipant.id,
         input.email,
         input,
-        {
-          passwordHash,
-          withdrawnTournaments: await withdrawnTournamentNames(
-            db,
-            withdrawn.filter(id => id !== tournament.id),
-          ),
-        },
+        {passwordHash, withdrawnTournaments: otherWithdrawn},
         delivery,
       );
+      if (entered.ok) {
+        return entered;
+      }
+      // Only the new entry is rolled back; what the takeover deleted stays
+      // deleted, this tournament's earlier entry included.
+      const withdrawnTournaments = withdrawnWithoutReplacement(
+        tournament,
+        withdrawn,
+        otherWithdrawn,
+      );
+      return withdrawnTournaments
+        ? {...entered, withdrawnTournaments}
+        : entered;
     }
     // The address was verified since it was read above -- its owner
     // followed a link a moment ago -- so the account is theirs now, and
@@ -776,6 +799,41 @@ async function withdrawnTournamentNames(
   return data.map(row =>
     tournamentDisplayName(row.name, row.regions.name, row.type),
   );
+}
+
+/**
+ * The tournaments a takeover withdrew pending entries from, for the notice
+ * of a submission that then failed: the ones the verification mail would
+ * have named, and this tournament too if it had one, since that entry is
+ * gone with nothing to replace it.
+ * @param tournament The tournament the submission tried to enter.
+ * @param withdrawnIds Every tournament `take_over_unverified_participant()`
+ *     reported.
+ * @param otherNames What `withdrawnTournamentNames()` read for the rest.
+ * @return `undefined` when nothing was withdrawn, and an empty list when
+ *     the names of the rest couldn't be read: naming only this tournament
+ *     would read as if it were the only one.
+ */
+function withdrawnWithoutReplacement(
+  tournament: EntryTournamentRow,
+  withdrawnIds: readonly string[],
+  otherNames: string[] | undefined,
+): string[] | undefined {
+  if (!withdrawnIds.includes(tournament.id)) {
+    return otherNames;
+  }
+  // `withdrawnTournamentNames()` answers empty only for a failed read.
+  if (otherNames?.length === 0) {
+    return [];
+  }
+  return [
+    tournamentDisplayName(
+      tournament.name,
+      tournament.regions.name,
+      tournament.type,
+    ),
+    ...(otherNames ?? []),
+  ];
 }
 
 /**
@@ -1384,7 +1442,7 @@ export async function createEntryUnauthenticated(
   // surface as an unhandled rejection with none of the context below. So a
   // thrown error (a network failure inside the Supabase client, say) is
   // treated like any other failure on our side.
-  let result: CreateEntryResult;
+  let result: AddressEntryResult;
   try {
     result = await createEntryAfterCheck(env, tournament, input, delivery);
   } catch (e) {
@@ -1398,6 +1456,8 @@ export async function createEntryUnauthenticated(
     return {kind: 'created', entryId: result.entry.id};
   }
 
+  const withdrawnTournaments =
+    'withdrawnTournaments' in result ? result.withdrawnTournaments : undefined;
   // Only a known code: `error` can be any thrown or database message, and one
   // spelling an inherited property would otherwise read as a reason.
   const reason = isEntryErrorCode(result.error)
@@ -1421,11 +1481,19 @@ export async function createEntryUnauthenticated(
       tournament,
       'processing-failed',
       delivery,
+      withdrawnTournaments,
     );
     return {kind: 'failed', error: result.error};
   }
   if (
-    !(await sendEntryNotice(env, input.email, tournament, reason, delivery))
+    !(await sendEntryNotice(
+      env,
+      input.email,
+      tournament,
+      reason,
+      delivery,
+      withdrawnTournaments,
+    ))
   ) {
     return {kind: 'failed', error: 'failed to send the entry notice'};
   }
@@ -1435,6 +1503,7 @@ export async function createEntryUnauthenticated(
 /**
  * Sends an entry notice, logging rather than throwing a failure: it runs in
  * the background, with no one left to report to.
+ * @param withdrawnTournaments As for `sendEntryNoticeEmail()`.
  * @return Whether the notice went out.
  */
 async function sendEntryNotice(
@@ -1443,6 +1512,7 @@ async function sendEntryNotice(
   tournament: EntryTournamentRow,
   reason: EntryNoticeReason,
   delivery: EntryMailDelivery,
+  withdrawnTournaments: string[] | undefined,
 ): Promise<boolean> {
   const tournamentName = tournamentDisplayName(
     tournament.name,
@@ -1456,9 +1526,16 @@ async function sendEntryNotice(
         to: email,
         tournamentName,
         reason,
+        ...(withdrawnTournaments ? {withdrawnTournaments} : {}),
       });
     } else {
-      await sendEntryNoticeEmail(env, email, tournamentName, reason);
+      await sendEntryNoticeEmail(
+        env,
+        email,
+        tournamentName,
+        reason,
+        withdrawnTournaments,
+      );
     }
     return true;
   } catch (mailError) {

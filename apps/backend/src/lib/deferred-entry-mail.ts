@@ -72,6 +72,8 @@ export interface DeferredNoticeMessage {
   to: string;
   tournamentName: string;
   reason: EntryNoticeReason;
+  /** As for `sendEntryNoticeEmail()`; absent when none were withdrawn. */
+  withdrawnTournaments?: string[];
 }
 
 /** A mail of an entry submission, deferred for its address's limit. */
@@ -185,7 +187,13 @@ async function handleOne(
     }
     ({mail, tokenId} = prepared.value);
   } else {
-    mail = buildEntryNoticeMail(env, body.to, body.tournamentName, body.reason);
+    mail = buildEntryNoticeMail(
+      env,
+      body.to,
+      body.tournamentName,
+      body.reason,
+      body.withdrawnTournaments,
+    );
   }
 
   const discardToken = async () => {
