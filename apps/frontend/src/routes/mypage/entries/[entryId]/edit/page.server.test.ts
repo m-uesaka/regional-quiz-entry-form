@@ -11,7 +11,10 @@ import {
   TOKYO_SAIKYOI_LIST_KEY,
 } from '../../../../../test-support/fake-platform';
 import {fakeCookies} from '../../../../../test-support/fake-cookies';
-import {fakeFetch} from '../../../../../test-support/fake-fetch';
+import {
+  fakeFetch,
+  type RecordedRequest,
+} from '../../../../../test-support/fake-fetch';
 import {jsonResponse} from '../../../../../test-support/json-response';
 import {actions, load} from './+page.server';
 
@@ -159,6 +162,22 @@ describe('mypage entry edit +page.server load', () => {
       location: '/mypage/login',
     } satisfies Partial<Redirect>);
     expect(deleted).toEqual(['participant_session']);
+  });
+
+  // #306: the backend answers an id that isn't a UUID with 400, which read
+  // as a 502 here.
+  it('throws 404 without asking the API when the entry id is not a UUID', async () => {
+    const calls: RecordedRequest[] = [];
+    const event = {
+      ...buildLoadEvent(fakeFetch([], calls)),
+      params: {entryId: 'not-a-uuid'},
+    } as Parameters<typeof load>[0];
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 404,
+      body: {message: 'エントリーが見つかりません'},
+    } satisfies Partial<HttpError>);
+    expect(calls).toEqual([]);
   });
 
   it("throws 404 when the entry is not the participant's own", async () => {
@@ -388,6 +407,20 @@ describe('mypage entry edit form action', () => {
           'このエントリーは現在編集できません。ページを再読み込みしてお試しください',
       },
     });
+  });
+
+  it('throws 404 without asking the API when the entry id is not a UUID', async () => {
+    const calls: RecordedRequest[] = [];
+    const event = {
+      ...buildActionEvent(fakeFetch([], calls), validFormData()),
+      params: {entryId: 'not-a-uuid'},
+    } as Parameters<typeof actions.default>[0];
+
+    await expect(actions.default(event)).rejects.toMatchObject({
+      status: 404,
+      body: {message: 'エントリーが見つかりません'},
+    } satisfies Partial<HttpError>);
+    expect(calls).toEqual([]);
   });
 
   it('fails with 404 when the entry has gone', async () => {

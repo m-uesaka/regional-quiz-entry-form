@@ -6,7 +6,10 @@ import type {
   Tournament,
 } from '@regional-quiz/shared';
 import {fakeCookies} from '../../../../../../test-support/fake-cookies';
-import {fakeFetch} from '../../../../../../test-support/fake-fetch';
+import {
+  fakeFetch,
+  type RecordedRequest,
+} from '../../../../../../test-support/fake-fetch';
 import {
   GENERAL_STAFF,
   staffLocals,
@@ -169,6 +172,23 @@ describe('staff entry detail +page.server load', () => {
     await expect(load(event)).rejects.toMatchObject({
       status: 404,
     } satisfies Partial<HttpError>);
+  });
+
+  // #306: the backend answers an id that isn't a UUID with 400, which read
+  // as a 502 here.
+  it('throws 404 without asking the API when the entry id is not a UUID', async () => {
+    const calls: RecordedRequest[] = [];
+    const event = buildEvent({
+      fetch: fakeFetch([], calls),
+      staff: GENERAL_STAFF,
+      entryId: 'not-a-uuid',
+    });
+
+    await expect(load(event)).rejects.toMatchObject({
+      status: 404,
+      body: {message: 'エントリーが見つかりません'},
+    } satisfies Partial<HttpError>);
+    expect(calls).toEqual([]);
   });
 
   it('throws 403 when staff are outside their scope', async () => {

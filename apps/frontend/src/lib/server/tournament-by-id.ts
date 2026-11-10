@@ -1,6 +1,7 @@
 import {error, type Cookies} from '@sveltejs/kit';
 import {TournamentSchema, type TournamentDetail} from '@regional-quiz/shared';
 import {createApiClient, isNotFound, isUnauthorized} from '$lib/api';
+import {parseRouteId} from '$lib/server/route-id';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
 
 /** What a route naming a tournament by its id hands the helpers below. */
@@ -24,10 +25,8 @@ export interface TournamentByIdOptions {
 }
 
 /**
- * Checks that a route's `[id]` can name a tournament at all. An id that
- * isn't a UUID names none, and is answered here as "not found" rather than
- * sent on to come back as the API's 400 -- which would then be
- * indistinguishable from any other request the API refused.
+ * Checks a route's `[id]` the way the backend's `IdParamSchema` does (see
+ * `parseRouteId`): one that isn't a UUID is 404「大会が見つかりません」.
  *
  * A page that reads anything alongside the tournament calls this before
  * sending any of it, so a malformed id asks the API nothing.
@@ -35,10 +34,10 @@ export interface TournamentByIdOptions {
  * @return The id, unchanged.
  */
 export function parseTournamentId(id: string): string {
-  if (!TournamentSchema.shape.id.safeParse(id).success) {
-    error(404, '大会が見つかりません');
-  }
-  return id;
+  return parseRouteId(id, {
+    schema: TournamentSchema.shape.id,
+    notFoundMessage: '大会が見つかりません',
+  });
 }
 
 /**
