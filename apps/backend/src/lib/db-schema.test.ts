@@ -3156,3 +3156,530 @@ describe.skipIf(!dbReachable)(
     });
   },
 );
+
+// The functions that serialize on a tournament hold its row
+// `for no key update`: against each other, and not against the foreign key
+// check of a new entry. And an entry takes its verification tokens with it
+// (#313, 0058).
+describe.skipIf(!dbReachable)(
+  'tournament row locks and the token cascade (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const regionSlug = 'tournament-lock-test-region';
+    const emailDomain = 'tournament-lock-test.example.com';
+    // What Postgres raises for `nowait` and for `lock_timeout`.
+    const LOCK_NOT_AVAILABLE_SQLSTATE = '55P03';
+    const FOREIGN_KEY_VIOLATION_SQLSTATE = '23503';
+    let suffix = 0;
+
+    afterAll(async () => {
+      await deleteTestRegionRows(sql, regionSlug, emailDomain);
+      await sql.close();
+    });
+
+    function createFixture(
+      capacity: number | null = null,
+    ): Promise<TournamentFixture> {
+      suffix += 1;
+      return createTournamentAndRegulation(sql, `${regionSlug}-${suffix}`, {
+        capacity,
+      });
+    }
+
+    async function refusalOf(query: PromiseLike<unknown>) {
+      try {
+        await query;
+        return undefined;
+      } catch (e: unknown) {
+        const {errno} = e as {errno?: string};
+        if (!errno) {
+          throw e;
+        }
+        return errno;
+      }
+    }
+
+    /** The backend id of a reserved connection, to watch it wait. */
+    async function backendPid(db: SQL): Promise<number> {
+      const [row] = await db`select pg_backend_pid() as pid`;
+      return (row as {pid: number}).pid;
+    }
+
+    /** Resolves once backend `pid` is waiting on a lock. */
+    async function waitUntilLockWaiting(pid: number): Promise<void> {
+      const deadline = Date.now() + 5_000;
+      for (;;) {
+        const [row] = await sql`
+          select exists (
+            select 1 from pg_stat_activity
+            where pid = ${pid} and wait_event_type = 'Lock'
+          ) as waiting
+        `;
+        if ((row as {waiting: boolean}).waiting) {
+          return;
+        }
+        if (Date.now() > deadline) {
+          throw new Error(`backend ${pid} never waited on a lock`);
+        }
+        await Bun.sleep(10);
+      }
+    }
+
+    /** Hands a reserved connection back with no transaction or timeout. */
+    async function releaseClean(conn: ReservedSQL) {
+      try {
+        await conn`rollback`;
+        await conn`set lock_timeout = 0`;
+      } finally {
+        conn.release();
+      }
+    }
+
+    /** A committed participant with no entry yet. */
+    async function createParticipant(): Promise<string> {
+      const [participant] = await sql`
+        insert into participants (email, password_hash)
+        values (${`p-${crypto.randomUUID()}@${emailDomain}`}, 'x')
+        returning id
+      `;
+      return participant.id as string;
+    }
+
+    function insertEntry(db: SQL, tournamentId: string, participantId: string) {
+      return db`
+        insert into entries (
+          participant_id, tournament_id, name, furigana, display_name
+        ) values (
+          ${participantId}, ${tournamentId}, '山田太郎', 'ヤマダタロウ', '太郎'
+        )
+      `;
+    }
+
+    function insertToken(db: SQL, entryId: string) {
+      return db`
+        insert into email_verification_tokens (entry_id, token_hash, expires_at)
+        values (${entryId}, ${crypto.randomUUID()}, now() + interval '1 hour')
+      `;
+    }
+
+    async function tokenCountOf(entryId: string): Promise<number> {
+      const [{count}] = await sql`
+        select count(*)::integer as count from email_verification_tokens
+        where entry_id = ${entryId}
+      `;
+      return count as number;
+    }
+
+    /** Ends the tournament's entry period, as a reset requires. */
+    async function closeEntryPeriod(f: TournamentFixture): Promise<void> {
+      await sql`
+        update tournaments set entry_closes_at = '2020-06-01T00:00:00Z'
+        where id = ${f.tournamentId}
+      `;
+    }
+
+    // Each seeds what its function needs to get as far as the tournament
+    // row, and returns the call that then holds it.
+    const holders: Array<{
+      name: string;
+      seed: (f: TournamentFixture) => Promise<(db: SQL) => Promise<unknown[]>>;
+    }> = [
+      {
+        name: 'confirm_entry_by_token()',
+        seed: async f => {
+          const {entryId} = await createEntryRow(sql, f, emailDomain);
+          const hash = await hashToken(
+            await createVerificationToken(sql, entryId),
+          );
+          return db => db`select confirm_entry_by_token(${hash})`;
+        },
+      },
+      {
+        name: 'promote_waitlisted_entries()',
+        seed: async f => {
+          await createEntryRow(sql, f, emailDomain, {
+            status: 'waitlisted',
+            waitlistPosition: 1,
+          });
+          return db =>
+            db`select * from promote_waitlisted_entries(${f.tournamentId})`;
+        },
+      },
+      {
+        name: 'cancel_own_entry()',
+        seed: async f => {
+          const {entryId, participantId} = await createEntryRow(
+            sql,
+            f,
+            emailDomain,
+            {status: 'confirmed'},
+          );
+          return db =>
+            db`select * from cancel_own_entry(${entryId}, ${participantId})`;
+        },
+      },
+      {
+        name: 'lapse_expired_pending_entries()',
+        seed: async f => {
+          const {entryId, participantId} = await createEntryRow(
+            sql,
+            f,
+            emailDomain,
+          );
+          await createVerificationToken(sql, entryId, {
+            expiresAt: '2020-01-01T00:00:00Z',
+          });
+          return db =>
+            db`select * from lapse_expired_pending_entries(${participantId})`;
+        },
+      },
+      {
+        name: 'reset_tournament_entries()',
+        seed: async f => {
+          await createEntryRow(sql, f, emailDomain);
+          await closeEntryPeriod(f);
+          return db =>
+            db`select * from reset_tournament_entries(${f.tournamentId}, true)`;
+        },
+      },
+      {
+        name: 'sync_form_field_defs()',
+        seed: async f => db =>
+          db`select 1 from sync_form_field_defs(${f.tournamentId}, '[]'::jsonb)`,
+      },
+      {
+        name: 'sync_regulations()',
+        seed: async f => {
+          const regulations = JSON.stringify([
+            {id: f.regulationId, label: '書き換えたレギュレーション'},
+          ]);
+          return db => db`
+            select 1 from sync_regulations(
+              ${f.tournamentId}, ${regulations}::text::jsonb
+            )
+          `;
+        },
+      },
+    ];
+
+    for (const {name, seed} of holders) {
+      it(`${name} holds the tournament against its peers, and not against a new entry`, async () => {
+        const f = await createFixture();
+        const call = await seed(f);
+        const participantId = await createParticipant();
+
+        const holder = await sql.reserve();
+        const other = await sql.reserve();
+        try {
+          await holder`begin`;
+          const rows = await call(holder);
+          // Any wait on the uncommitted call fails the insert below.
+          await other`set lock_timeout = '1s'`;
+
+          const entry = await refusalOf(
+            insertEntry(other, f.tournamentId, participantId),
+          );
+          const keyShare = await refusalOf(other`
+            select 1 from tournaments where id = ${f.tournamentId}
+            for key share nowait
+          `);
+          // What every one of these functions, and any update of the
+          // tournament, asks for.
+          const peer = await refusalOf(other`
+            select 1 from tournaments where id = ${f.tournamentId}
+            for no key update nowait
+          `);
+
+          // The call got as far as its lock rather than returning early.
+          expect(rows).toHaveLength(1);
+          expect(entry).toBeUndefined();
+          expect(keyShare).toBeUndefined();
+          expect(peer).toBe(LOCK_NOT_AVAILABLE_SQLSTATE);
+        } finally {
+          await releaseClean(other);
+          await releaseClean(holder);
+        }
+      });
+    }
+
+    it('still hands the last seat to one of two links followed at once', async () => {
+      const f = await createFixture(1);
+      const {entryId: first} = await createEntryRow(sql, f, emailDomain);
+      const {entryId: second} = await createEntryRow(sql, f, emailDomain);
+      const firstHash = await hashToken(
+        await createVerificationToken(sql, first),
+      );
+      const secondHash = await hashToken(
+        await createVerificationToken(sql, second),
+      );
+
+      const holder = await sql.reserve();
+      const waiter = await sql.reserve();
+      let queued: PromiseLike<unknown> | undefined;
+      try {
+        const waiterPid = await backendPid(waiter);
+        await holder`begin`;
+        const [seated] = await holder`
+          select confirm_entry_by_token(${firstHash}) as status
+        `;
+        const confirming = waiter`
+          select confirm_entry_by_token(${secondHash}) as status
+        `.execute();
+        queued = confirming;
+        await waitUntilLockWaiting(waiterPid);
+        await holder`commit`;
+        const [late] = await confirming;
+
+        expect(seated.status).toBe('confirmed');
+        expect(late.status).toBe('waitlisted');
+      } finally {
+        await Promise.allSettled([queued]);
+        await releaseClean(waiter);
+        await releaseClean(holder);
+      }
+    });
+
+    it('makes a promotion wait for a confirmation, and count its seat', async () => {
+      const f = await createFixture(1);
+      const {entryId: pending} = await createEntryRow(sql, f, emailDomain);
+      const hash = await hashToken(await createVerificationToken(sql, pending));
+      const {entryId: waiting} = await createEntryRow(sql, f, emailDomain, {
+        status: 'waitlisted',
+        waitlistPosition: 1,
+      });
+
+      const holder = await sql.reserve();
+      const waiter = await sql.reserve();
+      let queued: PromiseLike<unknown> | undefined;
+      try {
+        const waiterPid = await backendPid(waiter);
+        await holder`begin`;
+        // A seat is free with someone queued for it, so the link queues
+        // behind them: the promotion has to see that row to renumber it.
+        await holder`select confirm_entry_by_token(${hash})`;
+        const promoting = waiter`
+          select entry_id from promote_waitlisted_entries(${f.tournamentId})
+        `.execute();
+        queued = promoting;
+        await waitUntilLockWaiting(waiterPid);
+        await holder`commit`;
+        const promoted = await promoting;
+
+        expect(promoted.map((row: {entry_id: string}) => row.entry_id)).toEqual(
+          [waiting],
+        );
+        const [row] = await sql`
+          select status, waitlist_position from entries where id = ${pending}
+        `;
+        expect(row).toEqual({status: 'waitlisted', waitlist_position: 1});
+      } finally {
+        await Promise.allSettled([queued]);
+        await releaseClean(waiter);
+        await releaseClean(holder);
+      }
+    });
+
+    it('deletes the verification tokens of a deleted entry', async () => {
+      const f = await createFixture();
+      const {entryId} = await createEntryRow(sql, f, emailDomain);
+      const {entryId: kept} = await createEntryRow(sql, f, emailDomain);
+      await insertToken(sql, entryId);
+      await insertToken(sql, entryId);
+      await insertToken(sql, kept);
+
+      await sql`delete from entries where id = ${entryId}`;
+
+      const [constraint] = await sql`
+        select confdeltype::text as on_delete from pg_constraint
+        where conname = 'email_verification_tokens_entry_id_fkey'
+      `;
+      expect(constraint.on_delete).toBe('c');
+      expect(await tokenCountOf(entryId)).toBe(0);
+      expect(await tokenCountOf(kept)).toBe(1);
+    });
+
+    // Before the cascade, a token added between the function's own delete of
+    // the tokens and its delete of the entries failed the whole reset, and
+    // it locked every entry row to keep one out.
+    it('resets a tournament through a link being resent at that moment', async () => {
+      const f = await createFixture();
+      const {entryId} = await createEntryRow(sql, f, emailDomain);
+      await insertToken(sql, entryId);
+      await closeEntryPeriod(f);
+
+      const resending = await sql.reserve();
+      const resetting = await sql.reserve();
+      let queued: PromiseLike<unknown> | undefined;
+      try {
+        const resettingPid = await backendPid(resetting);
+        await resending`begin`;
+        await insertToken(resending, entryId);
+        const reset = resetting`
+          select * from reset_tournament_entries(${f.tournamentId}, true)
+        `.execute();
+        queued = reset;
+        await waitUntilLockWaiting(resettingPid);
+        await resending`commit`;
+
+        expect(await reset).toEqual([
+          {
+            deleted_entry_count: 1,
+            deleted_participant_count: 1,
+            kept_participant_count: 0,
+          },
+        ]);
+        expect(await tokenCountOf(entryId)).toBe(0);
+      } finally {
+        await Promise.allSettled([queued]);
+        await releaseClean(resetting);
+        await releaseClean(resending);
+      }
+    });
+
+    it('fails the resend, not the reset, when the reset got there first', async () => {
+      const f = await createFixture();
+      const {entryId} = await createEntryRow(sql, f, emailDomain);
+      await closeEntryPeriod(f);
+
+      const resetting = await sql.reserve();
+      const resending = await sql.reserve();
+      try {
+        const resendingPid = await backendPid(resending);
+        await resetting`begin`;
+        const [counts] = await resetting`
+          select * from reset_tournament_entries(${f.tournamentId}, false)
+        `;
+        const resend = refusalOf(insertToken(resending, entryId));
+        await waitUntilLockWaiting(resendingPid);
+        await resetting`commit`;
+
+        expect(counts.deleted_entry_count).toBe(1);
+        expect(await resend).toBe(FOREIGN_KEY_VIOLATION_SQLSTATE);
+        expect(await tokenCountOf(entryId)).toBe(0);
+      } finally {
+        await releaseClean(resending);
+        await releaseClean(resetting);
+      }
+    });
+
+    it('counts the participants of the entries a reset deleted, keeping those entered elsewhere', async () => {
+      const f = await createFixture();
+      // The region's other tournament, which one of the two has entered too.
+      await sql`
+        update regions set allows_dual_entry = true where id = ${f.regionId}
+      `;
+      const [elsewhere] = await sql`
+        insert into tournaments (
+          region_id, type, name, entry_opens_at, entry_closes_at
+        ) values (
+          ${f.regionId}, 'shinjinou', 'もう一方の大会',
+          '2020-01-01T00:00:00Z', '2099-01-01T00:00:00Z'
+        )
+        returning id
+      `;
+      const {participantId: gone} = await createEntryRow(sql, f, emailDomain);
+      const {participantId: kept} = await createEntryRow(sql, f, emailDomain);
+      await insertEntry(sql, elsewhere.id as string, kept);
+      await closeEntryPeriod(f);
+
+      const [counts] = await sql`
+        select * from reset_tournament_entries(${f.tournamentId}, true)
+      `;
+
+      expect(counts).toEqual({
+        deleted_entry_count: 2,
+        deleted_participant_count: 1,
+        kept_participant_count: 1,
+      });
+      const left = await sql`
+        select id from participants where id in (${gone}, ${kept})
+      `;
+      expect(left.map((row: {id: string}) => row.id)).toEqual([kept]);
+    });
+
+    // The function's own delete of the tokens missed one added after it had
+    // locked them, and the delete of the entry then failed on it.
+    it('takes over an account through a link being resent at that moment', async () => {
+      const f = await createFixture();
+      const {entryId, participantId} = await createEntryRow(
+        sql,
+        f,
+        emailDomain,
+      );
+      await insertToken(sql, entryId);
+
+      const resending = await sql.reserve();
+      const takingOver = await sql.reserve();
+      let queued: PromiseLike<unknown> | undefined;
+      try {
+        const takingOverPid = await backendPid(takingOver);
+        await resending`begin`;
+        await insertToken(resending, entryId);
+        const takeOver = takingOver`
+          select take_over_unverified_participant(
+            ${participantId}, 'new-hash'
+          ) as withdrawn
+        `.execute();
+        queued = takeOver;
+        await waitUntilLockWaiting(takingOverPid);
+        await resending`commit`;
+        const [{withdrawn}] = await takeOver;
+
+        expect(withdrawn).toEqual([f.tournamentId]);
+        expect(await tokenCountOf(entryId)).toBe(0);
+        const entries = await sql`
+          select id from entries where participant_id = ${participantId}
+        `;
+        expect(entries).toHaveLength(0);
+      } finally {
+        await Promise.allSettled([queued]);
+        await releaseClean(takingOver);
+        await releaseClean(resending);
+      }
+    });
+
+    // A cancellation locks the tokens and then the entry. The takeover has
+    // to take them in that order too, which the cascade alone would not.
+    it('still locks the tokens before it deletes the entries of a takeover', async () => {
+      const f = await createFixture();
+      const {entryId, participantId} = await createEntryRow(
+        sql,
+        f,
+        emailDomain,
+      );
+      await insertToken(sql, entryId);
+
+      const holder = await sql.reserve();
+      const takingOver = await sql.reserve();
+      let queued: PromiseLike<unknown> | undefined;
+      try {
+        const takingOverPid = await backendPid(takingOver);
+        await holder`begin`;
+        await holder`
+          select 1 from email_verification_tokens where entry_id = ${entryId}
+          for update
+        `;
+        const takeOver = takingOver`
+          select take_over_unverified_participant(
+            ${participantId}, 'new-hash'
+          )
+        `.execute();
+        queued = takeOver;
+        await waitUntilLockWaiting(takingOverPid);
+
+        // Waiting on the tokens, with the entry row still free.
+        const locked = await holder`
+          select id from entries where id = ${entryId} for update nowait
+        `;
+        await holder`commit`;
+        await takeOver;
+
+        expect(locked).toHaveLength(1);
+      } finally {
+        await Promise.allSettled([queued]);
+        await releaseClean(takingOver);
+        await releaseClean(holder);
+      }
+    });
+  },
+);

@@ -233,10 +233,10 @@ async function rollbackEntry(
   tournamentId: string,
   existingEntry: ExistingEntryRow | null,
 ): Promise<void> {
-  // The verification tokens go first: the entry can't be deleted while they
-  // reference it by foreign key, and on the reuse path dropping them is what
-  // stops a link that did go out from confirming an entry that has been put
-  // back into its cancellation.
+  // The verification tokens go first. Deleting the entry would take them
+  // with it (`on delete cascade`, 0058), but the reuse path keeps the row,
+  // and dropping them there is what stops a link that did go out from
+  // confirming an entry that has been put back into its cancellation.
   const {error: tokensError} = await db
     .from('email_verification_tokens')
     .delete()
