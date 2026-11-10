@@ -9,6 +9,10 @@ import {
 } from '@regional-quiz/shared';
 import {createApiClient, isUnauthorized, readErrorMessage} from '$lib/api';
 import {readString} from '$lib/form-data';
+import {
+  dropCachedEntryList,
+  promotionMayChangeEntryList,
+} from '$lib/server/entry-list-cache';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
 import type {Actions} from './$types';
 
@@ -86,7 +90,7 @@ export const actions = {
   // Registers the tournaments chosen on the preview. The API reads the
   // sheets again and reports each one, so the page's job is to show which
   // made it and why the others didn't.
-  execute: async ({request, fetch, cookies, url}) => {
+  execute: async ({request, fetch, cookies, platform, url}) => {
     const formData = await request.formData();
     const spreadsheetId = readString(formData, 'spreadsheetId');
 
@@ -106,9 +110,10 @@ export const actions = {
       return failure(400, spreadsheetId, parsed.error.issues[0].message);
     }
 
-    const res = await createApiClient(fetch).api[
-      'sheet-import'
-    ].tournaments.$post({json: parsed.data});
+    const api = createApiClient(fetch);
+    const res = await api.api['sheet-import'].tournaments.$post({
+      json: parsed.data,
+    });
     if (!res.ok) {
       return apiFailure(res, spreadsheetId, cookies, url, {
         what: '一括登録',
@@ -117,14 +122,64 @@ export const actions = {
       });
     }
 
+    const {results} = await res.json();
+    await dropOverwrittenLists(api, platform, url.origin, results);
+
     return {
       spreadsheetId,
       error: null,
       rows: null,
-      results: (await res.json()).results,
+      results,
     } satisfies ImportActionResult;
   },
 } satisfies Actions;
+
+/**
+ * Drops the cached public lists an overwrite changed (#307): those whose
+ * new capacity promoted the waitlist. A new tournament has no entries yet,
+ * and an overwrite that promoted nobody leaves its list as it was.
+ *
+ * A result names its region as the sheet's 地域 cell does, which the API
+ * matched against the regions' names exactly -- and only when one region
+ * has that name -- so the same match against the regions finds the slug
+ * the list is keyed on. One read covers every row; if it fails, the lists
+ * catch up when their cached copies expire.
+ * @param api The API client to read the regions with.
+ * @param platform The request's platform, absent under `vite dev`.
+ * @param origin The request's origin, which the cache keys are under.
+ * @param results What registering each chosen row did.
+ */
+async function dropOverwrittenLists(
+  api: ReturnType<typeof createApiClient>,
+  platform: App.Platform | undefined,
+  origin: string,
+  results: TournamentImportResult[],
+): Promise<void> {
+  const changed = results.filter(
+    result =>
+      result.outcome === 'updated' &&
+      promotionMayChangeEntryList(result.promotion),
+  );
+  // Nothing is cached without a platform (`vite dev`), so nothing needs
+  // reading.
+  if (!platform || changed.length === 0) {
+    return;
+  }
+  const res = await api.api.regions.$get().catch(() => null);
+  if (!res?.ok) {
+    return;
+  }
+  const regions = await res.json();
+  for (const {regionName, type} of changed) {
+    const named = regions.filter(region => region.name === regionName);
+    if (named.length === 1 && type !== null) {
+      await dropCachedEntryList(platform, origin, {
+        regionSlug: named[0].slug,
+        type,
+      });
+    }
+  }
+}
 
 /**
  * The answer for an API call that failed as a whole.

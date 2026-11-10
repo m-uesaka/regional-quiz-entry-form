@@ -23,6 +23,13 @@ export interface OrderedTournament {
 interface ReorderActionResult {
   saved: boolean;
   error: string | null;
+  /**
+   * The tournament ids as submitted, in the order they were to be saved
+   * in, echoed back so a failed save re-renders the order on screen rather
+   * than the stored one. Null when the order on screen should come from
+   * the API again: after a save, or when the tournaments changed meanwhile.
+   */
+  order: string[] | null;
 }
 
 // Matches the control names the page renders: `tournaments[0].id` and so
@@ -60,9 +67,8 @@ export const load: PageServerLoad = async ({fetch, cookies, url}) => {
 
 export const actions = {
   default: async ({request, fetch, cookies, url}) => {
-    const parsed = TournamentOrderInputSchema.safeParse({
-      tournamentIds: readTournamentOrder(await request.formData()),
-    });
+    const tournamentIds = readTournamentOrder(await request.formData());
+    const parsed = TournamentOrderInputSchema.safeParse({tournamentIds});
     if (!parsed.success) {
       // The schema's messages are in Japanese and say what is wrong (no
       // tournaments at all, or a duplicated or malformed id).
@@ -70,6 +76,7 @@ export const actions = {
         400,
         refusal(
           parsed.error.issues[0]?.message ?? '入力内容を確認してください',
+          tournamentIds,
         ),
       );
     }
@@ -82,25 +89,36 @@ export const actions = {
         redirectToStaffLogin(cookies, url);
       }
       // 409: a tournament was created or deleted since the screen was
-      // opened. The API says so in Japanese, for this screen.
+      // opened. The API says so in Japanese, for this screen. The order is
+      // not kept: the list it was made from no longer matches the stored
+      // one, so the screen starts over from what the API has now.
       if (res.status === 409) {
         return fail(
           409,
-          refusal(await readErrorMessage(res, '表示順を保存できません')),
+          refusal(await readErrorMessage(res, '表示順を保存できません'), null),
         );
       }
-      return fail(502, refusal('表示順の保存に失敗しました'));
+      return fail(
+        502,
+        refusal('表示順の保存に失敗しました', parsed.data.tournamentIds),
+      );
     }
-    return {saved: true, error: null} satisfies ReorderActionResult;
+    return {
+      saved: true,
+      error: null,
+      order: null,
+    } satisfies ReorderActionResult;
   },
 } satisfies Actions;
 
 /**
  * Builds a refusal.
  * @param message Why the save was refused.
+ * @param order The submitted ids to re-render the list in, or null to
+ *     render it in the order the API has.
  */
-function refusal(message: string): ReorderActionResult {
-  return {saved: false, error: message};
+function refusal(message: string, order: string[] | null): ReorderActionResult {
+  return {saved: false, error: message, order};
 }
 
 /**

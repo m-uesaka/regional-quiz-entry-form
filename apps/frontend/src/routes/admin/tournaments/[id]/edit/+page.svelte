@@ -66,6 +66,11 @@
     return lines.join('');
   });
   const resetError = $derived(form?.resetError ?? null);
+  // Names the public list the reset empties, so the action can drop its
+  // cached copy (#307) without reading the tournament again.
+  const regionSlug = $derived(
+    data.regions.find(region => region.id === data.tournament.regionId)?.slug,
+  );
 
   // Both safeguards are cleared after a refusal as well, as the page load
   // these forms used to cause did: a refused attempt mustn't leave the next
@@ -149,6 +154,10 @@
       class="flex flex-col gap-3"
       use:enhance={resetSubmission.submit}
     >
+      {#if regionSlug}
+        <input type="hidden" name="regionSlug" value={regionSlug} />
+      {/if}
+      <input type="hidden" name="tournamentType" value={data.tournament.type} />
       <fieldset class="flex flex-col gap-2">
         <legend class="mb-1 text-sm font-bold">参加者アカウント</legend>
         <div class="flex items-center gap-2">

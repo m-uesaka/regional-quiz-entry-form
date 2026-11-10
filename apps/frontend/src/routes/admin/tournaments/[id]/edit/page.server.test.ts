@@ -7,8 +7,13 @@ import {
   type FormFieldDef,
   type Region,
   type Tournament,
+  type WaitlistPromotion,
 } from '@regional-quiz/shared';
 import {fakeCookies} from '../../../../../test-support/fake-cookies';
+import {
+  fakePlatform,
+  TOKYO_SAIKYOI_LIST_KEY,
+} from '../../../../../test-support/fake-platform';
 import {
   fakeFetch,
   type FakeRoute,
@@ -78,6 +83,8 @@ const RESET_RESPONSE = {
  * @param options.tournaments The tournaments `GET /api/tournaments/:id` can
  *     find.
  * @param options.summaries What `GET /api/staff/dashboard` answers with.
+ * @param options.regionsStatus The status to answer `GET /api/regions` with.
+ * @param options.promotion What a PATCH says the promotion came to.
  * @param options.calls Collects the requests sent.
  */
 function fakeApi(
@@ -86,12 +93,20 @@ function fakeApi(
     error?: string;
     tournaments?: Tournament[];
     summaries?: DashboardTournamentSummary[];
+    regionsStatus?: number;
+    promotion?: WaitlistPromotion | null;
     calls?: RecordedRequest[];
   } = {},
 ): typeof fetch {
   const tournaments = options.tournaments ?? [TOURNAMENT];
+  const regionsStatus = options.regionsStatus ?? 200;
   const reads: FakeRoute[] = [
-    {method: 'GET', url: /^\/api\/regions$/, body: [TOKYO]},
+    {
+      method: 'GET',
+      url: /^\/api\/regions$/,
+      status: regionsStatus,
+      body: regionsStatus === 200 ? [TOKYO] : {error: 'nope'},
+    },
     {
       method: 'GET',
       url: '/api/staff/dashboard',
@@ -117,13 +132,24 @@ function fakeApi(
     },
   ];
   return fakeFetch(
-    [...reads, ...writeRoutes(options.status ?? 200, options.error)],
+    [
+      ...reads,
+      ...writeRoutes(
+        options.status ?? 200,
+        options.error,
+        options.promotion === undefined ? PROMOTION : options.promotion,
+      ),
+    ],
     options.calls,
   );
 }
 
 /** How `fakeApi` answers a PATCH, POST or DELETE with the given status. */
-function writeRoutes(status: number, error = 'nope'): FakeRoute[] {
+function writeRoutes(
+  status: number,
+  error = 'nope',
+  promotion: WaitlistPromotion | null = PROMOTION,
+): FakeRoute[] {
   /** The answer to a write that, succeeding with a body, sends `body`. */
   function answer(body: unknown): {status: number; body?: unknown} {
     if (status === 204) return {status};
@@ -135,7 +161,7 @@ function writeRoutes(status: number, error = 'nope'): FakeRoute[] {
     {
       method: 'PATCH',
       url: path,
-      ...answer({...TOURNAMENT, promotion: PROMOTION}),
+      ...answer({...TOURNAMENT, promotion}),
     },
     {method: 'POST', url: `${path}/reset`, ...answer(RESET_RESPONSE)},
     {method: 'DELETE', url: path, ...answer(TOURNAMENT)},
@@ -154,10 +180,12 @@ function buildLoadEvent(fetchImpl: typeof fetch): Parameters<typeof load>[0] {
 function buildActionEvent(
   fetchImpl: typeof fetch,
   formData: FormData,
+  platform?: App.Platform,
 ): Parameters<typeof actions.update>[0] {
   return {
     params: {id: TOURNAMENT.id},
     fetch: fetchImpl,
+    platform,
     cookies: fakeCookies(),
     url: new URL(`http://localhost/admin/tournaments/${TOURNAMENT.id}/edit`),
     request: {formData: async () => formData},
@@ -539,6 +567,73 @@ describe('admin tournament update action', () => {
   });
 });
 
+describe('admin tournament update action and the public list cache (#307)', () => {
+  /** Saves `updateFormData()` with a cached tokyo / saikyoi list. */
+  async function save(
+    options: Parameters<typeof fakeApi>[0] = {},
+    platformOptions: Parameters<typeof fakePlatform>[0] = {},
+  ) {
+    const calls: RecordedRequest[] = [];
+    const {platform, stored} = fakePlatform(platformOptions);
+    stored.set(TOKYO_SAIKYOI_LIST_KEY, Response.json('v1'));
+    const result = await actions.update(
+      buildActionEvent(
+        fakeApi({...options, calls}),
+        updateFormData(),
+        platform,
+      ),
+    );
+    return {result, calls, stored};
+  }
+
+  it('drops the list when the save promoted the waitlist', async () => {
+    const {result, calls, stored} = await save();
+
+    expect(result).toMatchObject({saved: true, promotion: PROMOTION});
+    expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(false);
+    // The tournament names its region by id; the slug comes from one read.
+    expect(calls.map(c => `${c.method} ${c.url}`)).toEqual([
+      `PATCH /api/tournaments/${TOURNAMENT.id}`,
+      'GET /api/regions',
+    ]);
+  });
+
+  it('drops the list when the promotion failed, since how far it got is unknown', async () => {
+    const {stored} = await save({promotion: null});
+
+    expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(false);
+  });
+
+  it('keeps the list, without reading the regions, when nobody was promoted', async () => {
+    const {calls, stored} = await save({
+      promotion: {promotedCount: 0, mailFailedCount: 0},
+    });
+
+    expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(true);
+    expect(calls.map(c => c.method)).toEqual(['PATCH']);
+  });
+
+  it('keeps the list when the save is refused', async () => {
+    const {calls, stored} = await save({status: 409, error: '重複しています'});
+
+    expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(true);
+    expect(calls.map(c => c.method)).toEqual(['PATCH']);
+  });
+
+  it('still reports the save when the regions cannot be read', async () => {
+    const {result, stored} = await save({regionsStatus: 500});
+
+    expect(result).toMatchObject({saved: true, promotion: PROMOTION});
+    expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(true);
+  });
+
+  it('still reports the save when the cache cannot be reached', async () => {
+    const {result} = await save({}, {failDelete: true});
+
+    expect(result).toMatchObject({saved: true, promotion: PROMOTION});
+  });
+});
+
 describe('admin tournament delete action', () => {
   function deleteFormData(confirmed = true): FormData {
     const formData = new FormData();
@@ -724,6 +819,53 @@ describe('admin tournament reset action', () => {
     await expect(actions.reset(event)).resolves.toMatchObject({
       status: 502,
       data: {resetError: '参加者データのリセットに失敗しました'},
+    });
+  });
+
+  describe('and the public list cache (#307)', () => {
+    /** Resets with a cached tokyo / saikyoi list. */
+    async function reset(
+      list: {regionSlug?: string; tournamentType?: string},
+      options: Parameters<typeof fakeApi>[0] = {},
+    ) {
+      const calls: RecordedRequest[] = [];
+      const {platform, stored} = fakePlatform();
+      stored.set(TOKYO_SAIKYOI_LIST_KEY, Response.json('v1'));
+      const formData = resetFormData();
+      for (const [key, value] of Object.entries(list)) {
+        formData.set(key, value);
+      }
+      const result = await actions.reset(
+        buildActionEvent(fakeApi({...options, calls}), formData, platform),
+      );
+      return {result, calls, stored};
+    }
+
+    it('drops the list the form names, without another read', async () => {
+      const {result, calls, stored} = await reset({
+        regionSlug: TOKYO.slug,
+        tournamentType: 'saikyoi',
+      });
+
+      expect(result).toEqual({reset: RESET_RESPONSE, resetError: null});
+      expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(false);
+      expect(calls.map(c => c.method)).toEqual(['POST']);
+    });
+
+    it('keeps the list when the reset is refused', async () => {
+      const {stored} = await reset(
+        {regionSlug: TOKYO.slug, tournamentType: 'saikyoi'},
+        {status: 409, error: 'エントリー期間中です'},
+      );
+
+      expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(true);
+    });
+
+    it('still resets when the form does not name the list', async () => {
+      const {result, stored} = await reset({tournamentType: 'unknown'});
+
+      expect(result).toEqual({reset: RESET_RESPONSE, resetError: null});
+      expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(true);
     });
   });
 });

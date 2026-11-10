@@ -635,6 +635,18 @@ describe('admin tournament edit +page.svelte', () => {
     ).toBeRequired();
   });
 
+  // So the action can drop the list's cached copy without a read (#307).
+  it('names the public list the reset empties', () => {
+    renderPage(OTHER_TOURNAMENT);
+
+    const form = screen
+      .getByRole('button', {name: '参加者データをリセット'})
+      .closest('form') as HTMLFormElement;
+    const data = new FormData(form);
+    expect(data.get('regionSlug')).toBe('osaka');
+    expect(data.get('tournamentType')).toBe('shinjinou');
+  });
+
   it('warns that a bulk mail still being sent goes out after a reset', () => {
     renderPage();
 

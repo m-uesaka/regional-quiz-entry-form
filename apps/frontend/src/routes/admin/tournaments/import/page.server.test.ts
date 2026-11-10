@@ -1,10 +1,15 @@
 import {describe, expect, it} from 'vitest';
 import type {Redirect} from '@sveltejs/kit';
 import type {
+  Region,
   TournamentImportPreviewRow,
   TournamentImportResult,
 } from '@regional-quiz/shared';
 import {fakeCookies} from '../../../../test-support/fake-cookies';
+import {
+  fakePlatform,
+  TOKYO_SAIKYOI_LIST_KEY,
+} from '../../../../test-support/fake-platform';
 import {
   fakeFetch,
   type RecordedRequest,
@@ -246,5 +251,108 @@ describe('admin tournament import execute action', () => {
       status: 502,
       data: {error: '一括登録に失敗しました。時間をおいて再度お試しください'},
     });
+  });
+});
+
+describe('admin tournament import execute action and the public list cache (#307)', () => {
+  const TOKYO: Region = {
+    id: '00000000-0000-0000-0000-000000000011',
+    slug: 'tokyo',
+    name: '東京',
+    allowsDualEntry: false,
+  };
+  /** An overwrite of tokyo / saikyoi whose capacity promoted two. */
+  const OVERWRITTEN: TournamentImportResult = {
+    ...CREATED,
+    regionName: TOKYO.name,
+    outcome: 'updated',
+    promotion: {promotedCount: 2, mailFailedCount: 0},
+  };
+
+  /**
+   * Registers with a cached tokyo / saikyoi list, the API answering with
+   * `results` and the regions with `regions` (or `regionsStatus`).
+   */
+  async function execute(
+    results: TournamentImportResult[],
+    options: {regions?: Region[]; regionsStatus?: number} = {},
+  ) {
+    const calls: RecordedRequest[] = [];
+    const {platform, stored} = fakePlatform();
+    stored.set(TOKYO_SAIKYOI_LIST_KEY, Response.json('v1'));
+    const regionsStatus = options.regionsStatus ?? 200;
+    const fetchImpl = fakeFetch(
+      [
+        {
+          method: 'POST',
+          url: /^\/api\/sheet-import\/tournaments$/,
+          body: {results},
+        },
+        {
+          method: 'GET',
+          url: /^\/api\/regions$/,
+          status: regionsStatus,
+          body:
+            regionsStatus === 200
+              ? (options.regions ?? [TOKYO])
+              : {error: 'nope'},
+        },
+      ],
+      calls,
+    );
+    const result = await actions.execute({
+      ...buildEvent(fetchImpl, 'abc123', [], [JSON.stringify(SELECTION)]),
+      platform,
+    });
+    return {result, calls, stored};
+  }
+
+  it('drops the list of an overwrite that promoted the waitlist', async () => {
+    const {result, calls, stored} = await execute([CREATED, OVERWRITTEN]);
+
+    expect(result).toMatchObject({results: [CREATED, OVERWRITTEN]});
+    expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(false);
+    // One read of the regions, whatever the number of rows.
+    expect(calls.map(c => `${c.method} ${c.url}`)).toEqual([
+      'POST /api/sheet-import/tournaments',
+      'GET /api/regions',
+    ]);
+  });
+
+  it('drops the list of an overwrite whose promotion failed', async () => {
+    const {stored} = await execute([{...OVERWRITTEN, promotion: null}]);
+
+    expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(false);
+  });
+
+  it('reads nothing more when no overwrite promoted anyone', async () => {
+    const {calls, stored} = await execute([
+      CREATED,
+      {...OVERWRITTEN, promotion: {promotedCount: 0, mailFailedCount: 0}},
+      {...OVERWRITTEN, outcome: 'failed', type: null, promotion: null},
+    ]);
+
+    expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(true);
+    expect(calls.map(c => c.method)).toEqual(['POST']);
+  });
+
+  it('leaves a region name more than one region has alone', async () => {
+    const {stored} = await execute([OVERWRITTEN], {
+      regions: [
+        TOKYO,
+        {...TOKYO, id: '00000000-0000-0000-0000-000000000012', slug: 'tokyo2'},
+      ],
+    });
+
+    expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(true);
+  });
+
+  it('still hands back the results when the regions cannot be read', async () => {
+    const {result, stored} = await execute([OVERWRITTEN], {
+      regionsStatus: 500,
+    });
+
+    expect(result).toMatchObject({error: null, results: [OVERWRITTEN]});
+    expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(true);
   });
 });
