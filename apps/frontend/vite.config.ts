@@ -40,6 +40,12 @@ export default defineConfig(({command, mode}) => {
             filename.split(/[/\\]/).includes('node_modules') ? undefined : true,
         },
         adapter: adapter(),
+        experimental: {
+          // `form()` from `$app/server`, tried out on `admin/regions` (#376).
+          // Experimental: its API may change between minor versions of
+          // `@sveltejs/kit`, so read the changelog before bumping it.
+          remoteFunctions: true,
+        },
         csp: {
           // Content-Security-Policy (#120). `auto` gives every
           // server-rendered page a fresh nonce, which SvelteKit adds to
