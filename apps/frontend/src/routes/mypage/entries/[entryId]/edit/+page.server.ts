@@ -21,6 +21,7 @@ import {
 } from '$lib/server/custom-field-values';
 import {dropCachedEntryList} from '$lib/server/entry-list-cache';
 import {redirectToParticipantLogin} from '$lib/server/participant-session';
+import {parseEntryId} from '$lib/server/route-id';
 import type {EntryEditFormValues} from '$lib/types/entry-form';
 import {NO_FIELD_ERRORS} from '$lib/form-errors';
 import type {FieldErrors} from '$lib/types/form-errors';
@@ -64,9 +65,10 @@ const EDIT_REFUSAL_MESSAGES: ApiErrorMessages = {
  * whose every save the backend would refuse.
  */
 export const load: PageServerLoad = async ({cookies, params, fetch, url}) => {
+  const entryId = parseEntryId(params.entryId);
   const api = createApiClient(fetch);
   const res = await api.api.mypage.entries[':entryId'].$get({
-    param: {entryId: params.entryId},
+    param: {entryId},
   });
   if (!res.ok) {
     if (res.status === 401) {
@@ -101,13 +103,16 @@ export const load: PageServerLoad = async ({cookies, params, fetch, url}) => {
 
 export const actions = {
   default: async ({cookies, params, request, fetch, platform, url}) => {
+    // The page's own form only posts to an id `load` accepted, but a post can
+    // be sent to any URL.
+    const entryId = parseEntryId(params.entryId);
     const api = createApiClient(fetch);
 
     // The field definitions decide how the submitted body is interpreted,
     // so they're re-read from the API (which also re-checks ownership)
     // rather than trusted from the client.
     const detailRes = await api.api.mypage.entries[':entryId'].$get({
-      param: {entryId: params.entryId},
+      param: {entryId},
     });
     if (!detailRes.ok) {
       if (detailRes.status === 401) {
@@ -163,7 +168,7 @@ export const actions = {
     }
 
     const res = await api.api.mypage.entries[':entryId'].$patch({
-      param: {entryId: params.entryId},
+      param: {entryId},
       json: parsed.data,
     });
     if (!res.ok) {

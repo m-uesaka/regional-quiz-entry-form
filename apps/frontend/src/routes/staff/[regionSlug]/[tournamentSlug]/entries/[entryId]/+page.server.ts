@@ -1,5 +1,6 @@
 import {error, redirect} from '@sveltejs/kit';
 import {createApiClient} from '$lib/api';
+import {parseEntryId} from '$lib/server/route-id';
 import {staffLoginPath} from '$lib/server/staff-login';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
 import {fetchTournamentBySlug} from '$lib/server/tournament-by-slug';
@@ -15,6 +16,9 @@ export const load: PageServerLoad = async ({
   if (!locals.staff) {
     redirect(303, staffLoginPath(url));
   }
+  // Checked before the tournament is read, so a malformed id asks the API
+  // nothing.
+  const entryId = parseEntryId(params.entryId);
 
   // The entry detail endpoint is keyed only by entry UUID, so the tournament
   // implied by the URL must be resolved and cross-checked against the
@@ -28,7 +32,7 @@ export const load: PageServerLoad = async ({
   const api = createApiClient(fetch);
 
   const res = await api.api.staff.entries[':entryId'].$get({
-    param: {entryId: params.entryId},
+    param: {entryId},
   });
   if (!res.ok) {
     // The claims check above cannot rule this out: the JWT may expire between
