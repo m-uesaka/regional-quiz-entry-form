@@ -2,6 +2,7 @@ import {afterEach, describe, expect, it, spyOn} from 'bun:test';
 import {MAIL_SENDER_DOMAIN} from '@regional-quiz/shared';
 import {testBindings} from '../test-support/bindings';
 import {
+  MAIL_SEND_TIMEOUT_MS,
   MailConfigError,
   MailSendError,
   ResendMailSender,
@@ -181,6 +182,60 @@ describe('ResendMailSender', () => {
     expect(mailError.status).toBeUndefined();
     expect(mailError.cause).toBe(networkError);
     expect(mailError.isTransient()).toBe(true);
+  });
+
+  // #345: a stalled connection must not hold a queue consumer until the
+  // Worker is cut off, which would have its whole batch redelivered.
+  it('gives up on a send with no answer in time, as a transient failure', async () => {
+    // Answers only by rejecting once the request is aborted, as `fetch`
+    // does when its signal fires.
+    globalThis.fetch = ((_input: unknown, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () =>
+          reject(init.signal?.reason),
+        );
+      })) as unknown as typeof fetch;
+
+    const sender = new ResendMailSender(
+      'test-api-key',
+      'entry@example.com',
+      undefined,
+      20,
+    );
+    const error = await sender
+      .send({to: 'user@example.com', subject: 'Hi', html: '<p>Hi</p>'})
+      .then(
+        () => null,
+        (thrown: unknown) => thrown,
+      );
+
+    expect(error).toBeInstanceOf(MailSendError);
+    const mailError = error as MailSendError;
+    expect(mailError.status).toBeUndefined();
+    expect((mailError.cause as Error).name).toBe('TimeoutError');
+    expect(mailError.isTransient()).toBe(true);
+  });
+
+  it(`waits ${MAIL_SEND_TIMEOUT_MS} ms by default before giving up`, async () => {
+    let signal: AbortSignal | null | undefined;
+    globalThis.fetch = ((_input: unknown, init?: RequestInit) => {
+      signal = init?.signal;
+      return Promise.resolve(Response.json({id: 'mail-id'}));
+    }) as unknown as typeof fetch;
+    const timeout = spyOn(AbortSignal, 'timeout');
+
+    try {
+      await new ResendMailSender('test-api-key', 'entry@example.com').send({
+        to: 'user@example.com',
+        subject: 'Hi',
+        html: '<p>Hi</p>',
+      });
+
+      expect(timeout).toHaveBeenCalledWith(MAIL_SEND_TIMEOUT_MS);
+      expect(signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      timeout.mockRestore();
+    }
   });
 
   // #344: `fetch` would refuse these as it does a lost connection, and the
