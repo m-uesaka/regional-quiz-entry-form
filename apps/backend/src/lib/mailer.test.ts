@@ -1,7 +1,12 @@
-import {afterEach, describe, expect, it} from 'bun:test';
+import {afterEach, describe, expect, it, spyOn} from 'bun:test';
 import {MAIL_SENDER_DOMAIN} from '@regional-quiz/shared';
 import {testBindings} from '../test-support/bindings';
-import {MailSendError, ResendMailSender, createMailSender} from './mailer';
+import {
+  MailConfigError,
+  MailSendError,
+  ResendMailSender,
+  createMailSender,
+} from './mailer';
 
 describe('ResendMailSender', () => {
   const originalFetch = globalThis.fetch;
@@ -177,6 +182,21 @@ describe('ResendMailSender', () => {
     expect(mailError.cause).toBe(networkError);
     expect(mailError.isTransient()).toBe(true);
   });
+
+  // #344: `fetch` would refuse these as it does a lost connection, and the
+  // caller would retry a send that can never succeed.
+  it('refuses an API origin it cannot post to before anything is sent', () => {
+    for (const baseUrl of [
+      'localhost:8787',
+      '127.0.0.1:8787',
+      'not a url',
+      'ftp://mail.example.com',
+    ]) {
+      expect(
+        () => new ResendMailSender('test-api-key', 'e@example.com', baseUrl),
+      ).toThrow(MailConfigError);
+    }
+  });
 });
 
 describe('MailSendError.isTransient', () => {
@@ -259,6 +279,38 @@ describe('createMailSender', () => {
     expect(await postedUrlFor('http://127.0.0.1:8788/')).toBe(
       'http://127.0.0.1:8788/emails',
     );
+  });
+
+  // #344: checked when the sender is made, but handed to each send, so a
+  // caller that makes the sender outside its `try` still sees a failed send
+  // -- a permanent one -- rather than an exception of its own.
+  it('fails every send, permanently, when the bound base URL is invalid', async () => {
+    let fetched = false;
+    globalThis.fetch = (() => {
+      fetched = true;
+      return Promise.resolve(new Response(null, {status: 200}));
+    }) as unknown as typeof fetch;
+    const consoleError = spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const mailer = createMailSender(
+        testBindings({MAIL_API_BASE_URL: 'localhost:8787'}),
+      );
+      const error = await mailer
+        .send({to: 'user@example.com', subject: 'Hi', html: '<p>Hi</p>'})
+        .then(
+          () => null,
+          (thrown: unknown) => thrown,
+        );
+
+      expect(error).toBeInstanceOf(MailConfigError);
+      // Not a `MailSendError`, so no caller takes it for a network error.
+      expect(error).not.toBeInstanceOf(MailSendError);
+      expect(fetched).toBe(false);
+      expect(consoleError).toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it('sends from the bound address under the site’s display name', async () => {

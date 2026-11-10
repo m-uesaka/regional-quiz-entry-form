@@ -1,4 +1,12 @@
-import {afterAll, afterEach, beforeEach, describe, expect, it} from 'bun:test';
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  spyOn,
+} from 'bun:test';
 import {SQL} from 'bun';
 import {
   allowingRateLimiter,
@@ -69,6 +77,51 @@ describe('isDeferredEntryMail', () => {
     ).toBe(true);
     expect(isDeferredEntryMail({jobId: 'j', to: 'a@example.com'})).toBe(false);
     expect(isDeferredEntryMail({jobId: 'j', entryId: 'e'})).toBe(false);
+  });
+});
+
+// A notice reads nothing from the database, so this runs without one.
+describe('handleBulkMailQueue with a misconfigured mail API origin', () => {
+  const originalFetch = globalThis.fetch;
+  let consoleError: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    // The misconfiguration and the given-up mail are both logged.
+    consoleError = spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    consoleError.mockRestore();
+  });
+
+  // #344: a bad `MAIL_API_BASE_URL` will fail every delivery the same way,
+  // so the message is given up on now rather than sent back to fail again,
+  // and the batch itself still settles normally.
+  it('gives up on the mail at once instead of retrying it', async () => {
+    let fetched = false;
+    globalThis.fetch = (() => {
+      fetched = true;
+      return Promise.resolve(new Response(null, {status: 200}));
+    }) as unknown as typeof fetch;
+    const message = new FakeMessage({
+      kind: 'deferred-notice',
+      to: 'a@example.com',
+      tournamentName: '大会',
+      reason: 'already-entered',
+    });
+
+    await handleBulkMailQueue(
+      batchOf([message]),
+      testBindings({
+        MAIL_API_BASE_URL: 'localhost:8787',
+        MAIL_TRIGGER_EMAIL_RATE_LIMITER: allowingRateLimiter(),
+      }),
+    );
+
+    expect(fetched).toBe(false);
+    expect(message.acked).toBe(true);
+    expect(message.retriedWith).toBe('not retried');
   });
 });
 
