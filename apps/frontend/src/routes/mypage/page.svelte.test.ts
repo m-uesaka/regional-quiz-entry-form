@@ -1,6 +1,11 @@
 import {render, screen} from '@testing-library/svelte';
 import {describe, expect, it} from 'vitest';
-import type {MypageEntry} from '@regional-quiz/shared';
+import {
+  ENTRY_STATUS_LABELS,
+  EntryStatusSchema,
+  TOURNAMENT_TYPE_LABELS,
+  type MypageEntry,
+} from '@regional-quiz/shared';
 import Page from './+page.svelte';
 
 const OPEN_PERIOD = {
@@ -51,6 +56,28 @@ describe('mypage +page.svelte', () => {
     expect(screen.getByText(/最強位/)).toBeInTheDocument();
     expect(screen.getByText(/新人王/)).toBeInTheDocument();
   });
+
+  it('names each tournament type with its shared label', () => {
+    renderPage(ENTRIES);
+
+    const headings = screen.getAllByRole('heading', {level: 2});
+    expect(headings.map(heading => heading.textContent?.trim())).toEqual([
+      `テスト地域大会(${TOURNAMENT_TYPE_LABELS.saikyoi})`,
+      `テスト地域大会(${TOURNAMENT_TYPE_LABELS.shinjinou})`,
+    ]);
+  });
+
+  it.each(EntryStatusSchema.options)(
+    'shows the %s status by its Japanese label rather than its code',
+    status => {
+      renderPage([{...ENTRIES[0], status}]);
+
+      expect(screen.getByText(ENTRY_STATUS_LABELS[status])).toBeInTheDocument();
+      expect(
+        screen.queryByText(status, {exact: false}),
+      ).not.toBeInTheDocument();
+    },
+  );
 
   it('links each entry to its own edit page', () => {
     renderPage(ENTRIES);

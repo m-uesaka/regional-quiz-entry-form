@@ -1,11 +1,18 @@
 <script lang="ts">
   import {enhance} from '$app/forms';
-  import {isEditableEntryStatus, isEntryEditable} from '@regional-quiz/shared';
+  import {
+    ENTRY_STATUS_LABELS,
+    TOURNAMENT_TYPE_LABELS,
+    isEditableEntryStatus,
+    isEntryEditable,
+  } from '@regional-quiz/shared';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
   import Button, {buttonVariants} from '$lib/components/ui/atoms/Button.svelte';
   import Card from '$lib/components/ui/atoms/Card.svelte';
+  import Chip from '$lib/components/ui/atoms/Chip.svelte';
   import Message from '$lib/components/ui/items/Message.svelte';
+  import {ENTRY_STATUS_CHIP_VARIANT} from '$lib/entry-status';
   import type {PageProps} from './$types';
   let {data, form}: PageProps = $props();
 </script>
@@ -24,11 +31,15 @@
       <Card class="gap-4">
         <div class="flex flex-col gap-1">
           <h2 class="text-lg font-bold">
-            {entry.tournament.name}({entry.tournament.type === 'saikyoi'
-              ? '最強位'
-              : '新人王'})
+            {entry.tournament.name}({TOURNAMENT_TYPE_LABELS[entry.tournament.type]})
           </h2>
-          <p class="text-sm text-muted-foreground">ステータス: {entry.status}</p>
+          <!-- A div rather than a p: Chip renders a div, which a p can't hold. -->
+          <div class="flex items-center gap-2 text-sm text-muted-foreground">
+            ステータス:
+            <Chip tone="soft" variant={ENTRY_STATUS_CHIP_VARIANT[entry.status]}>
+              {ENTRY_STATUS_LABELS[entry.status]}
+            </Chip>
+          </div>
         </div>
         <div class="flex flex-wrap items-center gap-2">
           <!-- The edit API refuses cancelled entries and closed entry periods, so
