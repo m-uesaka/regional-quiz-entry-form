@@ -41,6 +41,36 @@ export function sortBySubmittedOrder<T>(
 }
 
 /**
+ * Puts items in the order a failed save submitted their ids in, so the
+ * screen can show the order that was being saved instead of the stored one.
+ *
+ * The submitted ids come from the request, so they are not trusted to
+ * match the items: an id no item has is skipped, an id given twice counts
+ * where it first appears, and the items whose id was not submitted follow
+ * the submitted ones, in the order they are stored in.
+ *
+ * @param items The items, in the order they are stored in.
+ * @param ids The submitted ids, or null to keep the stored order.
+ * @return The items, in the submitted order.
+ */
+export function arrangeBySubmittedIds<T extends {id: string}>(
+  items: readonly T[],
+  ids: readonly string[] | null | undefined,
+): T[] {
+  if (!ids) return [...items];
+  const unplaced = new Map(items.map(item => [item.id, item]));
+  const arranged: T[] = [];
+  for (const id of ids) {
+    const item = unplaced.get(id);
+    if (!item) continue;
+    arranged.push(item);
+    unplaced.delete(id);
+  }
+  // A Map iterates in insertion order, so these stay in the stored order.
+  return [...arranged, ...unplaced.values()];
+}
+
+/**
  * How a row ranks among others claiming the same position: one moved up
  * first, then the one still carrying the number the page pre-filled it
  * with, then one moved down.
