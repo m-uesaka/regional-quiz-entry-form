@@ -120,10 +120,11 @@ async function issueVerificationMail(
  * Not to be followed: the deferred mail issues the real link when it is
  * sent (`prepareVerificationResend()`, which takes an entry with no live
  * token). It is there so the entry is not one with no token at all, which
- * `lapse_expired_pending_entries()` passes over as still being written: if
- * the deferred mail never goes out, the owner's next submission lapses the
- * entry and enters again, rather than being told the entry is waiting for a
- * link that is not coming.
+ * `lapse_expired_pending_entries()` passes over as still being written until
+ * it has gone a link lifetime untouched (0054): if the deferred mail never
+ * goes out, the owner's next submission lapses the entry at once and enters
+ * again, rather than being told the entry is waiting for a link that is not
+ * coming.
  * @param env The Worker bindings.
  * @param entryId The entry whose mail is deferred.
  * @throws Error If the token could not be stored.

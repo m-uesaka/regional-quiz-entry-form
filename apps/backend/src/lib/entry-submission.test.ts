@@ -1,4 +1,4 @@
-import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
+import {afterAll, beforeAll, describe, expect, it, spyOn} from 'bun:test';
 import {SQL} from 'bun';
 import type {EntryInput, TournamentType} from '@regional-quiz/shared';
 import {
@@ -583,6 +583,50 @@ describe.skipIf(!dbReachable)(
 
       expect(retryResult.ok).toBe(true);
       expect(mailSendCount).toBe(1);
+    });
+
+    it('logs a rollback whose deletes fail', async () => {
+      const fixture = await createFixture('rollback-delete-failure');
+      const input = validInput({regulationIds: [fixture.regulationId]});
+      const previousFetch = globalThis.fetch;
+      globalThis.fetch = (async (
+        requestInput: RequestInfo | URL,
+        init?: RequestInit,
+      ) => {
+        const url =
+          typeof requestInput === 'string'
+            ? requestInput
+            : requestInput.toString();
+        if (url.startsWith('https://api.resend.com/')) {
+          return new Response(null, {status: 502});
+        }
+        const {pathname} = new URL(url);
+        if (
+          init?.method === 'DELETE' &&
+          (pathname === '/rest/v1/email_verification_tokens' ||
+            pathname === '/rest/v1/entries')
+        ) {
+          return Response.json(
+            {code: '08006', message: 'connection failure'},
+            {status: 503},
+          );
+        }
+        return previousFetch(requestInput, init);
+      }) as typeof fetch;
+      const consoleError = spyOn(console, 'error').mockImplementation(() => {});
+
+      try {
+        const result = await createEntry(env, fixture.tournamentId, input);
+
+        expect(result.ok).toBe(false);
+        expect(!result.ok && result.status).toBe(500);
+        const messages = consoleError.mock.calls.map(call => call[0]);
+        expect(messages).toContain('failed to delete the verification tokens');
+        expect(messages).toContain('failed to delete the entry');
+      } finally {
+        consoleError.mockRestore();
+        globalThis.fetch = previousFetch;
+      }
     });
 
     it('accepts empty answers when the tournament defines no custom fields', async () => {
@@ -1318,6 +1362,47 @@ describe.skipIf(!dbReachable)(
       expect(result.ok).toBe(true);
       const [row] = await sql`
         select status from entries where id = ${firstResult.entry.id}
+      `;
+      expect(row.status).toBe('pending_verification');
+    });
+
+    // What a rollback whose deletes failed leaves behind (#290): a pending
+    // entry whose link never went out. Once it has gone a link lifetime
+    // untouched it is no longer one being written, and is lapsed like an
+    // entry whose link ran out.
+    it('reuses a pending entry left with no link for a link lifetime', async () => {
+      const fixture = await createFixture('pending-no-token-stale');
+      const input = validInput({regulationIds: [fixture.regulationId]});
+      const firstResult = await createEntry(env, fixture.tournamentId, input);
+      expect(firstResult.ok).toBe(true);
+      if (!firstResult.ok) return;
+      await verifyAddress(input.email);
+      await sql`
+        delete from email_verification_tokens
+        where entry_id = ${firstResult.entry.id}
+      `;
+      // Written directly rather than updated: `entries_set_updated_at`
+      // would move `updated_at` back to now on an update.
+      await sql`delete from entries where id = ${firstResult.entry.id}`;
+      const [stale] = await sql`
+        insert into entries (
+          participant_id, tournament_id, name, furigana, display_name,
+          created_at, updated_at
+        )
+        select id, ${fixture.tournamentId}, '山田太郎', 'ヤマダタロウ', '太郎',
+            now() - interval '25 hours', now() - interval '25 hours'
+          from participants where email = ${input.email}
+        returning id
+      `;
+      mailSendCount = 0;
+
+      const result = await createEntry(env, fixture.tournamentId, input);
+
+      expect(result.ok).toBe(true);
+      expect(result.ok && result.entry.id).toBe(stale.id);
+      expect(mailSendCount).toBe(1);
+      const [row] = await sql`
+        select status from entries where id = ${stale.id}
       `;
       expect(row.status).toBe('pending_verification');
     });
