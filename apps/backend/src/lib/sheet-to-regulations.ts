@@ -3,13 +3,13 @@ import {
   RegulationSyncInputSchema,
   type RegulationUpsert,
 } from '@regional-quiz/shared';
-import {JST_OFFSET_MS} from './jst';
 import {
   cellText,
   fetchSheetValues,
   isBlankCell,
   SheetFetchError,
 } from './google-sheets';
+import {parseSheetDatetime} from './sheet-datetime';
 
 /**
  * A mistake on the regulation tab, worded for staff and naming the sheet row
@@ -21,22 +21,6 @@ export class RegulationSheetError extends Error {
     this.name = 'RegulationSheetError';
   }
 }
-
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
-// A Sheets date serial counts days from 1899-12-30; this is the serial of
-// the Unix epoch.
-const UNIX_EPOCH_SERIAL = 25569;
-
-// The serial of 2000-01-01. A bare number below it is far likelier to be a
-// stray figure typed into a date column (`2026`, say, is a day in 1905)
-// than a priority window anyone meant.
-const MIN_PLAUSIBLE_SERIAL = 36526;
-
-// A date-time typed as text: `2026-08-01 10:00`, `2026/8/1 10:00:30`, or a
-// bare date, which is read as midnight.
-const DATETIME_TEXT_PATTERN =
-  /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/;
 
 // What the 優先期間後 column may say. Anything else is refused rather than
 // read as one of them: a typo here changes who may enter.
@@ -146,12 +130,12 @@ export function sheetValuesToRegulations(
     seenLabels.add(label);
     regulations.push({
       label,
-      priorityStartsAt: parseSheetDatetime(
+      priorityStartsAt: parseRegulationDatetime(
         startsAtCell,
         rowNumber,
         '優先期間の開始',
       ),
-      priorityEndsAt: parseSheetDatetime(
+      priorityEndsAt: parseRegulationDatetime(
         endsAtCell,
         rowNumber,
         '優先期間の終了',
@@ -218,7 +202,7 @@ function parseAfterPriorityCell(
  * @param columnLabel The column's name, for the error message.
  * @return The instant as an ISO 8601 string, or null for a blank cell.
  */
-function parseSheetDatetime(
+function parseRegulationDatetime(
   cell: unknown,
   rowNumber: number,
   columnLabel: string,
@@ -226,66 +210,14 @@ function parseSheetDatetime(
   if (isBlankCell(cell)) {
     return null;
   }
-  const wallClockMs =
-    typeof cell === 'number'
-      ? serialToWallClockMs(cell)
-      : typeof cell === 'string'
-        ? textToWallClockMs(cell.trim())
-        : undefined;
-  if (wallClockMs === undefined) {
+  // A bare date is read as midnight: a priority window may open or close at
+  // the turn of a day.
+  const instant = parseSheetDatetime(cell, {requireTime: false});
+  if (instant === null) {
     throw new RegulationSheetError(
       `${rowNumber}行目: ${columnLabel}を日時として読み取れません: ` +
         `${String(cell)}(例: 2026-08-01 10:00)`,
     );
   }
-  return new Date(wallClockMs - JST_OFFSET_MS).toISOString();
-}
-
-/**
- * Converts a Sheets date serial into the wall-clock time it shows, as
- * milliseconds on a UTC scale (i.e. before any timezone is applied).
- * @param serial Days since 1899-12-30, with the time of day as a fraction.
- * @return The wall-clock time, or undefined for a number that is no
- *     plausible date.
- */
-function serialToWallClockMs(serial: number): number | undefined {
-  if (!Number.isFinite(serial) || serial < MIN_PLAUSIBLE_SERIAL) {
-    return undefined;
-  }
-  // A time of day is a binary fraction of a day, so the product lands a
-  // hair off the second it stands for; rounding to the second undoes that.
-  const seconds = Math.round(
-    ((serial - UNIX_EPOCH_SERIAL) * MS_PER_DAY) / 1000,
-  );
-  const ms = seconds * 1000;
-  return Number.isNaN(new Date(ms).getTime()) ? undefined : ms;
-}
-
-/**
- * Parses a date-time typed as text into wall-clock milliseconds on a UTC
- * scale.
- * @param text The trimmed cell text.
- * @return The wall-clock time, or undefined when the text isn't a date-time
- *     or names a date that doesn't exist (`2026-02-30`).
- */
-function textToWallClockMs(text: string): number | undefined {
-  const match = DATETIME_TEXT_PATTERN.exec(text);
-  if (!match) {
-    return undefined;
-  }
-  const [year, month, day, hour, minute, second] = match
-    .slice(1)
-    .map(part => (part === undefined ? 0 : Number(part)));
-  const ms = Date.UTC(year, month - 1, day, hour, minute, second);
-  const date = new Date(ms);
-  // `Date.UTC` rolls an out-of-range field over into the next unit instead
-  // of refusing it, so the result is checked against what was typed.
-  const isSameAsTyped =
-    date.getUTCFullYear() === year &&
-    date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day &&
-    date.getUTCHours() === hour &&
-    date.getUTCMinutes() === minute &&
-    date.getUTCSeconds() === second;
-  return isSameAsTyped ? ms : undefined;
+  return instant;
 }
