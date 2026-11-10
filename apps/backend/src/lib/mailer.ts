@@ -4,6 +4,26 @@ import type {Bindings} from '../types/env';
 const RESEND_API_BASE_URL = 'https://api.resend.com';
 
 /**
+ * How long a send waits for the provider's answer before giving up on it
+ * as a network error (#345), in milliseconds.
+ *
+ * Without a limit, a connection that stalls holds its caller until the
+ * Worker's own limit cuts it off: a queue consumer killed that way settles
+ * none of its messages, so the platform redelivers the whole batch --
+ * mails already sent in it included.
+ *
+ * Resend normally answers within a few hundred milliseconds, so 10 seconds
+ * only cuts off a send that has stalled. It is also short enough for the
+ * single sends on the request path: the staff account invite awaits its
+ * mail before answering, and the confirmation and password reset mails run
+ * in `waitUntil()`, which gets 30 seconds after the response -- a send that
+ * times out still leaves room there for rolling the entry back. A paced
+ * bulk batch sends its few mails at once, so it waits this long at most
+ * per batch, not per mail.
+ */
+export const MAIL_SEND_TIMEOUT_MS = 10_000;
+
+/**
  * Resend's error name for a send whose `Idempotency-Key` another send is
  * still using.
  */
@@ -49,7 +69,8 @@ export interface MailSender {
 /**
  * A send that did not go through: either the mail provider rejected it, in
  * which case `status` carries the provider's own answer, or the request got
- * no answer at all (a network error), in which case `status` is `undefined`
+ * no answer at all (a network error, or no answer within
+ * `MAIL_SEND_TIMEOUT_MS`), in which case `status` is `undefined`
  * and the error `fetch` threw is the `cause`.
  *
  * Callers use it to tell a failure worth trying again later
@@ -228,12 +249,15 @@ export class ResendMailSender implements MailSender {
    *     pass this, pointing the sender at a local stub so a test run
    *     neither needs a real API key nor delivers mail; production leaves
    *     it at Resend's own origin.
+   * @param timeoutMs How long a send waits for an answer. Only the tests
+   *     shorten it.
    * @throws MailConfigError If `baseUrl` is not an `http:`/`https:` URL.
    */
   constructor(
     private readonly apiKey: string,
     private readonly fromAddress: string,
     baseUrl: string = RESEND_API_BASE_URL,
+    private readonly timeoutMs: number = MAIL_SEND_TIMEOUT_MS,
   ) {
     this.endpoint = emailsEndpoint(baseUrl);
   }
@@ -251,11 +275,15 @@ export class ResendMailSender implements MailSender {
           ...(idempotencyKey ? {'Idempotency-Key': idempotencyKey} : {}),
         },
         body: JSON.stringify({from: this.fromAddress, ...mail}),
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {
       // `fetch` rejects (typically with a `TypeError`) when no answer came
-      // back at all. Wrapped so that every failed send reaches the caller as
-      // the one error type, which can tell this outage from a rejection.
+      // back at all, and with a `TimeoutError` when none came back in
+      // time. Either way the mail may or may not have gone out, so both
+      // are the same transient network error. Wrapped so that every failed
+      // send reaches the caller as the one error type, which can tell this
+      // outage from a rejection.
       throw new MailSendError(undefined, undefined, {cause: error});
     }
     if (!res.ok) {
