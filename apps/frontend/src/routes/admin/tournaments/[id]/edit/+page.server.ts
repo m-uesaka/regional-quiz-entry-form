@@ -2,7 +2,6 @@ import {error, fail, redirect} from '@sveltejs/kit';
 import {
   formFieldDefsToYaml,
   TournamentResetInputSchema,
-  TournamentSchema,
   type DashboardTournamentSummary,
   type TournamentResetResponse,
   type WaitlistPromotion,
@@ -15,6 +14,10 @@ import {
   RESET_CONFIRMATION_WORD,
 } from '$lib/tournament-form';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
+import {
+  fetchTournamentById,
+  parseTournamentId,
+} from '$lib/server/tournament-by-id';
 import {INVALID_INPUT_MESSAGE} from '$lib/form-errors';
 import type {TournamentFormValues} from '$lib/types/tournament-form';
 import type {Actions, PageServerLoad} from './$types';
@@ -56,45 +59,47 @@ interface TournamentResetActionResult {
 // `+page.ts` calling the API from the client): `/api/*` is only routed to
 // the backend Worker for requests the frontend makes itself until Task 9-5
 // lands, so a client-side call would 404 in production.
-export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
-  // An id that isn't a UUID names no tournament, and is answered here
-  // rather than sent on to come back as the API's 400 -- which would then be
-  // indistinguishable from any other request the API refused.
-  if (!TournamentSchema.shape.id.safeParse(params.id).success) {
-    error(404, '大会が見つかりません');
-  }
+export const load: PageServerLoad = async event => {
+  const {params, fetch, cookies, url} = event;
+  // Checked before any of the reads below is sent, so a malformed id asks
+  // the API nothing.
+  parseTournamentId(params.id);
 
   const api = createApiClient(fetch);
   // Only the tournament being edited, not the whole list to `find` it in
   // (#123). Its form fields come in the same response rather than from
   // `GET /api/form-definitions/:tournamentId`, whose entry-period gate would
   // read the tournament a second time.
+  const tournamentRead = fetchTournamentById(event, {
+    failureMessage: '大会情報の取得に失敗しました',
+  });
+  // Its refusal is thrown only once the regions read has had its say below;
+  // until then it must not count as unhandled.
+  tournamentRead.catch(() => {});
   // The 問題セット names already in use come from their own small read, not
   // the list, which the form suggests so a name isn't typed slightly
   // differently (0043).
   // Whether it has entries comes from the general-staff dashboard's counts,
   // the one read that already has them: a tournament with entries can't move
   // to another region or type (#284), so the form locks those up front.
-  const [tournamentRes, regionsRes, questionSetsRes, dashboardRes] =
-    await Promise.all([
-      api.api.tournaments[':id'].$get({param: {id: params.id}}),
-      api.api.regions.$get(),
-      // A request that fails outright, not only one answered with an error,
-      // must not take the page down with it.
-      api.api.tournaments['question-sets'].$get().catch(() => null),
-      api.api.staff.dashboard.$get().catch(() => null),
-    ]);
-  if (isUnauthorized(tournamentRes) || isUnauthorized(regionsRes)) {
+  const [regionsRes, questionSetsRes, dashboardRes] = await Promise.all([
+    api.api.regions.$get(),
+    // A request that fails outright, not only one answered with an error,
+    // must not take the page down with it.
+    api.api.tournaments['question-sets'].$get().catch(() => null),
+    api.api.staff.dashboard.$get().catch(() => null),
+  ]);
+  // An expired session either read reports wins; after it, the tournament
+  // read's refusal (404 for no such tournament) over the regions read
+  // failing.
+  if (isUnauthorized(regionsRes)) {
     redirectToStaffLogin(cookies, url);
   }
-  if (tournamentRes.status === 404) {
-    error(404, '大会が見つかりません');
-  }
-  if (!tournamentRes.ok || !regionsRes.ok) {
+  const {tournament, customName, formFieldDefs} = await tournamentRead;
+  if (!regionsRes.ok) {
     error(502, '大会情報の取得に失敗しました');
   }
 
-  const {tournament, customName, formFieldDefs} = await tournamentRes.json();
   return {
     tournament,
     customName,

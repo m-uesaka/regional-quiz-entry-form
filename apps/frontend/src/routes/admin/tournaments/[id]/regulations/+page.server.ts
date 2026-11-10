@@ -1,7 +1,6 @@
-import {error, fail} from '@sveltejs/kit';
+import {error, fail, isRedirect} from '@sveltejs/kit';
 import {
   RegulationSyncInputSchema,
-  TournamentSchema,
   type Regulation,
 } from '@regional-quiz/shared';
 import {
@@ -18,6 +17,10 @@ import {
   toRegulationRow,
 } from '$lib/regulation-rows';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
+import {
+  fetchTournamentById,
+  parseTournamentId,
+} from '$lib/server/tournament-by-id';
 import {sortBySubmittedOrder} from '$lib/submitted-order';
 import type {RegulationRowValues} from '$lib/types/regulation-form';
 import type {Actions, PageServerLoad} from './$types';
@@ -86,16 +89,12 @@ function importRefusal(
 // browser serialized the body in says nothing.
 const ROW_CONTROL_PATTERN = /^regulations\[(\d+)\]\.(\w+)$/;
 
-export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
-  // An id that isn't a UUID names no tournament, and is answered here
-  // rather than sent on to come back as the API's 400 -- which would then be
-  // indistinguishable from any other request the API refused. The edit page
-  // checks the same way.
-  if (!TournamentSchema.shape.id.safeParse(params.id).success) {
-    error(404, '大会が見つかりません');
-  }
+export const load: PageServerLoad = async event => {
+  const {params, fetch, cookies, url} = event;
+  // Checked before either read below is sent, so a malformed id asks the API
+  // nothing.
+  parseTournamentId(params.id);
 
-  const api = createApiClient(fetch);
   // The regulations endpoint sits behind `requireOpenEntryPeriodOrStaff()`,
   // which answers 404 for an id no tournament has — so a mistyped or stale
   // `[id]` is refused rather than rendering a working-looking empty form
@@ -107,24 +106,32 @@ export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
   // answers an expired session then. Outside the period (or while the
   // tournament is paused) the gate answers an expired or revoked session
   // with 401 itself, so either response can be the one that reports it.
-  const [tournamentRes, regulationsRes] = await Promise.all([
-    api.api.tournaments[':id'].$get({param: {id: params.id}}),
-    api.api.tournaments[':tournamentId'].regulations.$get({
-      param: {tournamentId: params.id},
-    }),
-  ]);
+  const tournamentRead = fetchTournamentById(event, {
+    failureMessage: 'レギュレーションの取得に失敗しました',
+  });
+  // Its refusal is thrown only once the regulations read has had its say
+  // below; until then it must not count as unhandled.
+  tournamentRead.catch(() => {});
+  const regulationsRes = await createApiClient(fetch).api.tournaments[
+    ':tournamentId'
+  ].regulations.$get({param: {tournamentId: params.id}});
   // The layout guard cannot rule this out: the JWT may expire between
   // `hooks.server.ts` parsing it and these requests reaching the backend.
-  if (isUnauthorized(tournamentRes) || isUnauthorized(regulationsRes)) {
+  if (isUnauthorized(regulationsRes)) {
     redirectToStaffLogin(cookies, url);
   }
   // A 404 from either read wins over a failure of the other: an id one of
   // them knows nothing of names no tournament this page can edit, whatever
-  // the other answered. The edit page orders its checks the same way.
-  if (isNotFound(tournamentRes) || isNotFound(regulationsRes)) {
+  // the other answered. Only an expired session the tournament read reports
+  // still comes first.
+  if (isNotFound(regulationsRes)) {
+    await tournamentRead.catch((refusal: unknown) => {
+      if (isRedirect(refusal)) throw refusal;
+    });
     error(404, '大会が見つかりません');
   }
-  if (!tournamentRes.ok || !regulationsRes.ok) {
+  await tournamentRead;
+  if (!regulationsRes.ok) {
     error(502, 'レギュレーションの取得に失敗しました');
   }
 

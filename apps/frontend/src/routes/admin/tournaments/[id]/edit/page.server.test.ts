@@ -294,6 +294,66 @@ describe('admin tournament edit +page.server load', () => {
       load(buildLoadEvent(fakeApi({tournaments: []}))),
     ).rejects.toMatchObject({status: 404} satisfies Partial<HttpError>);
   });
+
+  // The two reads run side by side; whichever of them reports an expired
+  // session sends it to log in, and after that the tournament's 404 wins
+  // over the regions read failing.
+  for (const {name, tournamentStatus, regionsStatus, status} of [
+    {
+      name: 'an expired session the regions read reports over a 404',
+      tournamentStatus: 404,
+      regionsStatus: 401,
+      status: 303,
+    },
+    {
+      name: 'an expired session the tournament read reports over a failure',
+      tournamentStatus: 401,
+      regionsStatus: 500,
+      status: 303,
+    },
+    {
+      name: 'a missing tournament over the regions read failing',
+      tournamentStatus: 404,
+      regionsStatus: 500,
+      status: 404,
+    },
+    {
+      name: 'a failed regions read as a bad gateway',
+      tournamentStatus: 200,
+      regionsStatus: 500,
+      status: 502,
+    },
+  ]) {
+    it(`reports ${name}`, async () => {
+      const failing = fakeFetch([
+        {
+          method: 'GET',
+          url: /^\/api\/regions$/,
+          status: regionsStatus,
+          body: regionsStatus === 200 ? [TOKYO] : {error: 'nope'},
+        },
+        {method: 'GET', url: '/api/staff/dashboard', body: [SUMMARY]},
+        {method: 'GET', url: '/api/tournaments/question-sets', body: []},
+        {
+          method: 'GET',
+          url: `/api/tournaments/${TOURNAMENT.id}`,
+          status: tournamentStatus,
+          body:
+            tournamentStatus === 200
+              ? {
+                  tournament: TOURNAMENT,
+                  customName: null,
+                  formFieldDefs: [],
+                }
+              : {error: 'nope'},
+        },
+      ]);
+
+      await expect(load(buildLoadEvent(failing))).rejects.toMatchObject({
+        status,
+      });
+    });
+  }
 });
 
 describe('admin tournament update action', () => {
