@@ -1,4 +1,5 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'bun:test';
+import {createDbClient} from './db';
 import {SQL} from 'bun';
 import {COMMON_ERROR_CODES} from '@regional-quiz/shared';
 import {confirmEntryByToken} from './entry-confirmation';
@@ -96,7 +97,7 @@ describe.skipIf(!(await isDbReachable()))(
       const entryId = await createEntryFixture(fixture);
       const token = await createVerificationToken(sql, entryId);
 
-      const result = await confirmEntryByToken(env, token);
+      const result = await confirmEntryByToken(env, createDbClient(env), token);
 
       expect(result).toEqual({
         ok: true,
@@ -127,6 +128,7 @@ describe.skipIf(!(await isDbReachable()))(
       expect(
         await confirmEntryByToken(
           env,
+          createDbClient(env),
           await createVerificationToken(sql, entryId),
         ),
       ).toMatchObject({ok: true});
@@ -156,6 +158,7 @@ describe.skipIf(!(await isDbReachable()))(
       expect(
         await confirmEntryByToken(
           env,
+          createDbClient(env),
           await createVerificationToken(sql, otherEntry.id),
         ),
       ).toMatchObject({ok: true});
@@ -172,7 +175,9 @@ describe.skipIf(!(await isDbReachable()))(
         expiresAt: '2020-01-01T00:00:00Z',
       });
 
-      expect(await confirmEntryByToken(env, token)).toMatchObject({ok: false});
+      expect(
+        await confirmEntryByToken(env, createDbClient(env), token),
+      ).toMatchObject({ok: false});
 
       const [participant] = await sql`
         select p.email_verified_at from participants p
@@ -188,7 +193,7 @@ describe.skipIf(!(await isDbReachable()))(
       const entryId = await createEntryFixture(fixture);
       const token = await createVerificationToken(sql, entryId);
 
-      const result = await confirmEntryByToken(env, token);
+      const result = await confirmEntryByToken(env, createDbClient(env), token);
 
       expect(result).toEqual({
         ok: true,
@@ -224,6 +229,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const result = await confirmEntryByToken(
         env,
+        createDbClient(env),
         await createVerificationToken(sql, entryId),
       );
 
@@ -256,6 +262,7 @@ describe.skipIf(!(await isDbReachable()))(
       expect(
         await confirmEntryByToken(
           env,
+          createDbClient(env),
           await createVerificationToken(sql, entryId),
         ),
       ).toMatchObject({ok: true, entryStatus: 'confirmed'});
@@ -287,6 +294,7 @@ describe.skipIf(!(await isDbReachable()))(
       expect(
         await confirmEntryByToken(
           env,
+          createDbClient(env),
           await createVerificationToken(sql, entryId),
         ),
       ).toMatchObject({ok: true, entryStatus: 'confirmed'});
@@ -316,6 +324,7 @@ describe.skipIf(!(await isDbReachable()))(
       expect(
         await confirmEntryByToken(
           env,
+          createDbClient(env),
           await createVerificationToken(sql, entryId),
         ),
       ).toMatchObject({ok: true, entryStatus: 'confirmed'});
@@ -329,7 +338,7 @@ describe.skipIf(!(await isDbReachable()))(
         expiresAt: '2020-01-01T00:00:00Z',
       });
 
-      const result = await confirmEntryByToken(env, token);
+      const result = await confirmEntryByToken(env, createDbClient(env), token);
 
       expect(result).toEqual({
         ok: false,
@@ -343,7 +352,7 @@ describe.skipIf(!(await isDbReachable()))(
       const entryId = await createEntryFixture(fixture);
       const token = await createVerificationToken(sql, entryId, {used: true});
 
-      const result = await confirmEntryByToken(env, token);
+      const result = await confirmEntryByToken(env, createDbClient(env), token);
 
       expect(result).toEqual({
         ok: false,
@@ -359,7 +368,7 @@ describe.skipIf(!(await isDbReachable()))(
       // cancellation never saw it, so it is still unused and unexpired.
       const token = await createVerificationToken(sql, entryId);
 
-      const result = await confirmEntryByToken(env, token);
+      const result = await confirmEntryByToken(env, createDbClient(env), token);
 
       expect(result).toEqual({
         ok: false,
@@ -373,7 +382,11 @@ describe.skipIf(!(await isDbReachable()))(
     });
 
     it('rejects an unknown token', async () => {
-      const result = await confirmEntryByToken(env, generateToken());
+      const result = await confirmEntryByToken(
+        env,
+        createDbClient(env),
+        generateToken(),
+      );
 
       expect(result).toEqual({
         ok: false,

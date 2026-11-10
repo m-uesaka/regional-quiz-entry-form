@@ -1,4 +1,5 @@
 import {afterAll, afterEach, beforeAll, describe, expect, it} from 'bun:test';
+import {createDbClient} from './db';
 import {SQL} from 'bun';
 import {
   ENTRY_PERIOD_ORDER_MESSAGE,
@@ -376,7 +377,12 @@ describe.skipIf(!(await isDbReachable()))(
       regionName: string,
       typeLabel: string,
     ): Promise<TournamentImportSelection> {
-      const rows = await previewTournamentImport(env, 'index', NOW);
+      const rows = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
       requestedSheetIds = [];
       const row = rows.find(
         r => r.regionName === regionName && r.typeLabel === typeLabel,
@@ -419,7 +425,12 @@ describe.skipIf(!(await isDbReachable()))(
       };
       stubSheets();
 
-      const [row] = await previewTournamentImport(env, 'index', NOW);
+      const [row] = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
 
       expect(row).toEqual({
         row: 2,
@@ -502,6 +513,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const [result] = await importTournaments(
         env,
+        createDbClient(env),
         'index',
         [await chosen(regionA, '最強位')],
         NOW,
@@ -568,7 +580,12 @@ describe.skipIf(!(await isDbReachable()))(
       ];
       stubSheets();
 
-      const [row] = await previewTournamentImport(env, 'index', NOW);
+      const [row] = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
 
       expect(row).toMatchObject({
         action: 'overwrite',
@@ -608,6 +625,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const [result] = await importTournaments(
         env,
+        createDbClient(env),
         'index',
         [await chosen(regionA, '最強位')],
         NOW,
@@ -661,7 +679,13 @@ describe.skipIf(!(await isDbReachable()))(
         indexRow(regionA, '最強位', 's1', {capacity: '5'}),
       ];
 
-      const [result] = await importTournaments(env, 'index', [selection], NOW);
+      const [result] = await importTournaments(
+        env,
+        createDbClient(env),
+        'index',
+        [selection],
+        NOW,
+      );
 
       expect(result.outcome).toBe('failed');
       expect(result.error).toContain('内容が変わりました');
@@ -687,7 +711,13 @@ describe.skipIf(!(await isDbReachable()))(
         returning id
       `;
 
-      const [result] = await importTournaments(env, 'index', [selection], NOW);
+      const [result] = await importTournaments(
+        env,
+        createDbClient(env),
+        'index',
+        [selection],
+        NOW,
+      );
 
       expect(result.outcome).toBe('failed');
       expect(result.error).toContain('内容が変わりました');
@@ -730,6 +760,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const results = await importTournaments(
         env,
+        createDbClient(env),
         'index',
         [await chosen(regionB, '最強位')],
         NOW,
@@ -748,6 +779,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const [result] = await importTournaments(
         env,
+        createDbClient(env),
         'index',
         [select(regionB, '新人王', 'create')],
         NOW,
@@ -794,6 +826,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const [result] = await importTournaments(
         env,
+        createDbClient(env),
         'index',
         [await chosen(regionA, '最強位')],
         NOW,
@@ -829,7 +862,12 @@ describe.skipIf(!(await isDbReachable()))(
       };
       stubSheets();
 
-      const rows = await previewTournamentImport(env, 'index', NOW);
+      const rows = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
 
       expect(rows.map(r => [r.row, r.action])).toEqual([
         [2, null],
@@ -857,7 +895,12 @@ describe.skipIf(!(await isDbReachable()))(
         indexRow(regionB, '新人王', 's1', {closes: '2026/12/16'}),
         indexRow(regionA, '新人王', 'missing-tab'),
       ];
-      const single = await previewTournamentImport(env, 'index', NOW);
+      const single = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
       expect(single[0].error).toContain('エントリー開始「調整中」');
       expect(single[1].error).toContain('エントリー終了「2026/12/16」');
       expect(single[2].error).toContain('レギュレーション');
@@ -886,7 +929,12 @@ describe.skipIf(!(await isDbReachable()))(
       };
       stubSheets();
 
-      const rows = await previewTournamentImport(env, 'index', NOW);
+      const rows = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
 
       expect(rows[0].error).toBe(
         `エントリー期間「2026/12/20 0:00 〜 2026/12/10 0:00」: ${ENTRY_PERIOD_ORDER_MESSAGE}`,
@@ -909,6 +957,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const [result] = await importTournaments(
         env,
+        createDbClient(env),
         'index',
         [select(regionB, '新人王', 'create')],
         NOW,
@@ -941,6 +990,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const [result] = await importTournaments(
         env,
+        createDbClient(env),
         'index',
         [await chosen(regionB, '新人王')],
         NOW,
@@ -972,6 +1022,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const [result] = await importTournaments(
         env,
+        createDbClient(env),
         'index',
         [await chosen(regionB, '新人王')],
         NOW,
@@ -1010,7 +1061,12 @@ describe.skipIf(!(await isDbReachable()))(
         entrySheets = {s1: {formRows, regulationRows: REGULATION_ROWS}};
         stubSheets();
 
-        const [row] = await previewTournamentImport(env, 'index', NOW);
+        const [row] = await previewTournamentImport(
+          env,
+          createDbClient(env),
+          'index',
+          NOW,
+        );
 
         expect(row.action).toBeNull();
         expect(row.error).toStartWith(message);
@@ -1025,7 +1081,12 @@ describe.skipIf(!(await isDbReachable()))(
       };
       stubSheets();
 
-      const [mistake] = await previewTournamentImport(env, 'index', NOW);
+      const [mistake] = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
 
       expect(mistake.error).toBe(
         'レギュレーション: 2行目: レギュレーション名が空です',
@@ -1035,7 +1096,12 @@ describe.skipIf(!(await isDbReachable()))(
       entrySheets = {s1: {formRows: FORM_ROWS, refusedWith: 403}};
       stubSheets();
 
-      const [refused] = await previewTournamentImport(env, 'index', NOW);
+      const [refused] = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
 
       expect(refused.error).toBe('Failed to fetch sheet: 403');
     });
@@ -1047,7 +1113,12 @@ describe.skipIf(!(await isDbReachable()))(
       entrySheets = {s1: {formRows: [], rawBody: '<html>not json</html>'}};
       stubSheets();
 
-      const [row] = await previewTournamentImport(env, 'index', NOW);
+      const [row] = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
 
       expect(row.error).toBe(
         '読み込みに失敗しました。時間をおいて再度お試しください',

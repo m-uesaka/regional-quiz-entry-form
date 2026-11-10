@@ -33,7 +33,7 @@ async function postLogout(
 
 describe('GET /api/healthz', () => {
   it('returns ok', async () => {
-    const res = await app.request('/api/healthz');
+    const res = await app.request('/api/healthz', {}, testBindings());
     // `Response#json()` types as `Promise<any>`; annotate as `unknown` so
     // `expect()` resolves its generic overload instead of the `never` one.
     const body: unknown = await res.json();

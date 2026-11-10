@@ -51,7 +51,7 @@ export const passwordResetRoute = new Hono<Env>()
       // indistinguishable. Nothing about the outcome is reported anyway (see
       // `requestPasswordReset`), so there is nothing to wait for.
       c.executionCtx.waitUntil(
-        requestPasswordReset(c.env, c.req.valid('json').email),
+        requestPasswordReset(c.env, c.get('db'), c.req.valid('json').email),
       );
       return c.json({ok: true});
     },
@@ -60,7 +60,10 @@ export const passwordResetRoute = new Hono<Env>()
     '/confirm',
     validate('json', PasswordResetConfirmInputSchema),
     async c => {
-      const result = await confirmPasswordReset(c.env, c.req.valid('json'));
+      const result = await confirmPasswordReset(
+        c.get('db'),
+        c.req.valid('json'),
+      );
       if (!result.ok) {
         return respondFailure(
           c,

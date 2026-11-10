@@ -5,7 +5,7 @@ import {
 } from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
-import {createDbClient, type Tables} from '../lib/db';
+import {type Tables} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {isPasswordHashUsable, UNUSABLE_PASSWORD_HASH} from '../lib/password';
 import {
@@ -80,7 +80,7 @@ function rowToStaffAccount(row: StaffAccountRow): StaffAccount {
 // a wildcard here would lock regional staff out of their own entry lists.
 export const staffAccountsRoute = new Hono<StaffEnv>()
   .get('/accounts', requireGeneralStaff(), async c => {
-    const db = createDbClient(c.env);
+    const db = c.get('db');
     const {data, error} = await db
       .from('staff_accounts')
       .select(STAFF_ACCOUNT_COLUMNS)
@@ -99,7 +99,7 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
     validate('json', StaffAccountCreateInputSchema),
     async c => {
       const input = c.req.valid('json');
-      const db = createDbClient(c.env);
+      const db = c.get('db');
       // The initial password is never chosen here and never travels back in
       // the response: the row is created with a hash nothing can match, and
       // the account's own owner sets a real one from the mailed link. That
@@ -144,6 +144,7 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
       const account = rowToStaffAccount(data);
       const mailResult = await sendStaffPasswordLink(
         c.env,
+        c.get('db'),
         account.id,
         account.email,
       );
@@ -172,7 +173,7 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
     requireGeneralStaff(),
     validate('param', IdParamSchema),
     async c => {
-      const db = createDbClient(c.env);
+      const db = c.get('db');
       // The address is read from the row rather than taken from the request:
       // a reset link must only ever go to the account's own mailbox, so there
       // is nothing for the caller to supply.
@@ -193,6 +194,7 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
 
       const mailResult = await sendStaffPasswordLink(
         c.env,
+        c.get('db'),
         account.id,
         account.email,
       );
@@ -237,7 +239,7 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
     requireGeneralStaff(),
     validate('param', IdParamSchema),
     async c => {
-      const db = createDbClient(c.env);
+      const db = c.get('db');
       // The new value comes from the Worker's clock rather than Postgres'
       // `now()`, which an update through PostgREST can't name. That is safe
       // because nothing compares it with a clock: a session is current only
@@ -288,7 +290,7 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
       if (id === c.get('staff').sub.toLowerCase()) {
         return c.json({error: 'cannot disable your own account'}, 409);
       }
-      const {error} = await createDbClient(c.env).rpc('disable_staff_account', {
+      const {error} = await c.get('db').rpc('disable_staff_account', {
         p_staff_account_id: id,
       });
       if (error) {
@@ -325,7 +327,7 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
     requireGeneralStaff(),
     validate('param', IdParamSchema),
     async c => {
-      const {error} = await createDbClient(c.env).rpc('enable_staff_account', {
+      const {error} = await c.get('db').rpc('enable_staff_account', {
         p_staff_account_id: c.req.valid('param').id,
       });
       if (error) {

@@ -1,5 +1,8 @@
 import {afterEach, describe, expect, it} from 'bun:test';
 import {staffAuthRoute} from './staff-auth';
+import {Hono} from 'hono';
+import {dbClient} from '../middleware/db';
+import type {Env} from '../types/env';
 import {
   hashPassword,
   UNUSABLE_PASSWORD_HASH,
@@ -18,6 +21,12 @@ import {
   legacyHashPassword,
   mockAccountFetchWithRehash,
 } from '../test-support/password';
+
+// The route behind the middleware that gives it its database client, as
+// `index.ts` mounts it.
+const routeUnderTest = new Hono<Env>()
+  .use(dbClient())
+  .route('/', staffAuthRoute);
 
 const ENV = testBindings();
 
@@ -73,7 +82,7 @@ async function login(
   email = 'staff@example.com',
   scope = 'saikyoi',
 ): Promise<Response> {
-  return staffAuthRoute.request(
+  return routeUnderTest.request(
     '/login',
     {
       method: 'POST',
@@ -214,7 +223,7 @@ describe('POST /login', () => {
   it('returns 400 without a scope', async () => {
     const urls = mockStaffAccountFetch(null);
 
-    const res = await staffAuthRoute.request(
+    const res = await routeUnderTest.request(
       '/login',
       {
         method: 'POST',
@@ -249,7 +258,7 @@ describe('POST /login', () => {
   it('returns 429 with Retry-After when the rate limiter refuses', async () => {
     mockStaffAccountFetch(regionalStaffRow(await hashPassword('correct')));
 
-    const res = await staffAuthRoute.request(
+    const res = await routeUnderTest.request(
       '/login',
       {
         method: 'POST',
@@ -282,7 +291,7 @@ describe('POST /login', () => {
       },
     };
 
-    await staffAuthRoute.request(
+    await routeUnderTest.request(
       '/login',
       {
         method: 'POST',
@@ -325,7 +334,7 @@ describe('POST /login', () => {
       password: string,
       ctx: ExecutionContext,
     ): Promise<Response> {
-      return staffAuthRoute.request(
+      return routeUnderTest.request(
         '/login',
         {
           method: 'POST',
@@ -420,6 +429,11 @@ describe('POST /password-reset/request', () => {
     await Promise.all(pending);
   }
 
+  // Held shut by a test that wants to see the response arrive while the
+  // deferred work is still waiting on its first call: timing alone can't tell
+  // "deferred" from "started just before the response" (#310).
+  let resetGate: Promise<void> = Promise.resolve();
+
   /**
    * Answers the account lookup with `account`, naming it for the mail as a
    * regional 最強位 account of the 東京 region, and accepts the link write
@@ -427,6 +441,7 @@ describe('POST /password-reset/request', () => {
    * @param account The account the lookup finds, or `null` for none.
    */
   function mockResetFetch(account: {id: string} | null): void {
+    resetGate = Promise.resolve();
     requests = [];
     globalThis.fetch = turnstileAwareFetch((async (
       input: RequestInfo | URL,
@@ -434,6 +449,7 @@ describe('POST /password-reset/request', () => {
     ) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       requests.push({url, body: String(init?.body ?? '')});
+      await resetGate;
       if (url.hostname === 'api.resend.com') {
         return new Response(null, {status: 200});
       }
@@ -467,7 +483,7 @@ describe('POST /password-reset/request', () => {
     if (turnstileToken !== null) {
       headers[TURNSTILE_TOKEN_HEADER] = turnstileToken;
     }
-    return staffAuthRoute.request(
+    return routeUnderTest.request(
       '/password-reset/request',
       {method: 'POST', headers, body: JSON.stringify(body)},
       env,
@@ -502,11 +518,16 @@ describe('POST /password-reset/request', () => {
 
   it('does none of the reset work before answering', async () => {
     mockResetFetch({id: STAFF_ID});
+    let release!: () => void;
+    resetGate = new Promise<void>(resolve => {
+      release = resolve;
+    });
 
     const res = await request({email: 'staff@example.com', scope: 'saikyoi'});
 
     expect(res.status).toBe(200);
-    expect(requests).toEqual([]);
+    expect(requests.some(r => r.url.hostname === 'api.resend.com')).toBe(false);
+    release();
   });
 
   it('mails an hour-long reset link for the account the address and scope name', async () => {
@@ -623,7 +644,7 @@ describe('POST /logout', () => {
   it('clears the staff session cookie', async () => {
     // No account lookup and no session are involved: the handler only
     // answers with the deletion cookie.
-    const res = await staffAuthRoute.request('/logout', {method: 'POST'}, ENV);
+    const res = await routeUnderTest.request('/logout', {method: 'POST'}, ENV);
 
     expect(res.status).toBe(200);
     expect((await res.json()) as Record<string, unknown>).toEqual({

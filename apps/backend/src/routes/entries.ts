@@ -43,7 +43,7 @@ export const entriesRoute = new Hono<Env>().post(
     // for a tournament that doesn't exist or has closed spends nothing of
     // the address's budget (#346).
     const check = await checkEntrySubmission(
-      c.env,
+      c.get('db'),
       c.req.valid('param').tournamentId,
       input,
     );
@@ -83,6 +83,7 @@ export const entriesRoute = new Hono<Env>().post(
     c.executionCtx.waitUntil(
       createEntryUnauthenticated(
         c.env,
+        c.get('db'),
         check.tournament,
         input,
         withinLimit ? 'now' : 'deferred',
@@ -116,6 +117,7 @@ export const entrySessionRoute = new Hono<ParticipantEnv>().post(
   async c => {
     const result = await createEntryForParticipant(
       c.env,
+      c.get('db'),
       c.req.valid('param').tournamentId,
       c.get('participantId'),
       c.req.valid('json'),

@@ -12,7 +12,6 @@ import {
 } from '@regional-quiz/shared';
 import {StaffPasswordResetConfirmInputSchema} from '@regional-quiz/shared/password-policy';
 import type {Env} from '../types/env';
-import {createDbClient} from '../lib/db';
 import {verifyAccountPassword} from '../lib/password-rehash';
 import {respondFailure} from '../lib/errors';
 import {findStaffAccountByScope} from '../lib/staff-account-lookup';
@@ -77,7 +76,7 @@ export const staffAuthRoute = new Hono<Env>()
       // `regions` is null for `general` staff, who have no `region_id`. Only
       // its slug is read: the staff screens are keyed by it.
       const {data: staff, error} = await findStaffAccountByScope(
-        createDbClient(c.env),
+        c.get('db'),
         email,
         scope,
         `
@@ -97,7 +96,7 @@ export const staffAuthRoute = new Hono<Env>()
       // `verifyAccountPassword()`, which also moves an older hash to the
       // current parameters after the response.
       const valid = await verifyAccountPassword(
-        c.env,
+        c.get('db'),
         'staff_accounts',
         staff,
         password,
@@ -166,7 +165,9 @@ export const staffAuthRoute = new Hono<Env>()
       // names an account can't be read off the response time any more than
       // off its body (see `requestStaffPasswordReset()`).
       const {email, scope} = c.req.valid('json');
-      c.executionCtx.waitUntil(requestStaffPasswordReset(c.env, email, scope));
+      c.executionCtx.waitUntil(
+        requestStaffPasswordReset(c.env, c.get('db'), email, scope),
+      );
       return c.json({ok: true});
     },
   )
@@ -179,7 +180,7 @@ export const staffAuthRoute = new Hono<Env>()
     validate('json', StaffPasswordResetConfirmInputSchema),
     async c => {
       const result = await confirmStaffPasswordReset(
-        c.env,
+        c.get('db'),
         c.req.valid('json'),
       );
       if (!result.ok) {

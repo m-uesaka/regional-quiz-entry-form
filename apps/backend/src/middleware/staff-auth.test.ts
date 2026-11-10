@@ -7,6 +7,8 @@ import {
   expect,
   it,
 } from 'bun:test';
+import {dbClient} from './db';
+import {createDbClient} from '../lib/db';
 import {SQL} from 'bun';
 import {Hono} from 'hono';
 import type {StaffClaims} from '@regional-quiz/shared';
@@ -101,11 +103,11 @@ describe('requireStaffForTournament', () => {
     globalThis.fetch = originalFetch;
   });
 
-  const app = new Hono<StaffEnv>().get(
-    '/tournaments/:tournamentId/x',
-    requireStaffForTournament(),
-    c => c.json({staff: c.get('staff')}),
-  );
+  const app = new Hono<StaffEnv>()
+    .use(dbClient())
+    .get('/tournaments/:tournamentId/x', requireStaffForTournament(), c =>
+      c.json({staff: c.get('staff')}),
+    );
 
   it('allows regional staff for their own region and type', async () => {
     mockTournamentFetch({region_id: REGION_ID, type: 'saikyoi'});
@@ -181,11 +183,11 @@ describe('requireStaffForTournament', () => {
 
   // The handler gets the row the scope check passed, so it neither reads it
   // again nor risks seeing a different version of it (#123).
-  const appExposingTournament = new Hono<StaffEnv>().get(
-    '/tournaments/:tournamentId/x',
-    requireStaffForTournament(),
-    c => c.json({tournament: c.get('tournament') ?? null}),
-  );
+  const appExposingTournament = new Hono<StaffEnv>()
+    .use(dbClient())
+    .get('/tournaments/:tournamentId/x', requireStaffForTournament(), c =>
+      c.json({tournament: c.get('tournament') ?? null}),
+    );
 
   it('requireStaffForTournament exposes the tournament it read to the handler', async () => {
     const row = openEntryPeriodTournament({region_id: REGION_ID});
@@ -540,11 +542,11 @@ describe('requireStaffForEntry', () => {
     globalThis.fetch = originalFetch;
   });
 
-  const app = new Hono<StaffEnv>().get(
-    '/entries/:entryId/x',
-    requireStaffForEntry(),
-    c => c.json({staff: c.get('staff')}),
-  );
+  const app = new Hono<StaffEnv>()
+    .use(dbClient())
+    .get('/entries/:entryId/x', requireStaffForEntry(), c =>
+      c.json({staff: c.get('staff')}),
+    );
 
   it('allows regional staff for their own region and type', async () => {
     mockEntryTournamentFetch({region_id: REGION_ID, type: 'saikyoi'});
@@ -681,9 +683,9 @@ describe('requireGeneralStaff', () => {
     globalThis.fetch = originalFetch;
   });
 
-  const app = new Hono<StaffEnv>().get('/x', requireGeneralStaff(), c =>
-    c.json({staff: c.get('staff')}),
-  );
+  const app = new Hono<StaffEnv>()
+    .use(dbClient())
+    .get('/x', requireGeneralStaff(), c => c.json({staff: c.get('staff')}));
 
   const generalClaims = {
     sub: STAFF_ID,
@@ -873,7 +875,7 @@ describe.skipIf(!(await isDbReachable()))(
     it('keeps a session whose claims match the account', async () => {
       const claims = await regionalAccount();
 
-      expect(await isSessionCurrent(env, claims)).toEqual({
+      expect(await isSessionCurrent(createDbClient(env), claims)).toEqual({
         ok: true,
         current: true,
       });
@@ -891,11 +893,11 @@ describe.skipIf(!(await isDbReachable()))(
         where id = ${retyped.sub}
       `;
 
-      expect(await isSessionCurrent(env, moved)).toEqual({
+      expect(await isSessionCurrent(createDbClient(env), moved)).toEqual({
         ok: true,
         current: false,
       });
-      expect(await isSessionCurrent(env, retyped)).toEqual({
+      expect(await isSessionCurrent(createDbClient(env), retyped)).toEqual({
         ok: true,
         current: false,
       });
@@ -909,13 +911,13 @@ describe.skipIf(!(await isDbReachable()))(
         where id = ${claims.sub}
       `;
 
-      expect(await isSessionCurrent(env, claims)).toEqual({
+      expect(await isSessionCurrent(createDbClient(env), claims)).toEqual({
         ok: true,
         current: false,
       });
       // A general session against that account is current: the claims match.
       expect(
-        await isSessionCurrent(env, {
+        await isSessionCurrent(createDbClient(env), {
           ...claims,
           role: 'general',
           regionId: null,

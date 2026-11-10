@@ -4,8 +4,7 @@ import {
   type Tournament,
   type TournamentType,
 } from '@regional-quiz/shared';
-import type {Bindings} from '../types/env';
-import {createDbClient, type Tables} from './db';
+import {type DbClient, type Tables} from './db';
 import {internalError} from './errors';
 
 /**
@@ -106,15 +105,14 @@ export function tournamentLookupFailure(e: unknown): {error: string} {
 
 /**
  * Reads one tournament by its primary key.
- * @param env The Worker bindings.
+ * @param db The database client.
  * @param tournamentId The tournament's UUID.
  * @return The row, or `null` if no tournament has that id.
  */
 export async function fetchTournamentById(
-  env: Bindings,
+  db: DbClient,
   tournamentId: string,
 ): Promise<TournamentRow | null> {
-  const db = createDbClient(env);
   const {data, error} = await db
     .from('tournaments')
     .select(TOURNAMENT_COLUMNS)
@@ -136,18 +134,17 @@ export async function fetchTournamentById(
  * an inner join, so a missing region comes back as no row at all, the same
  * answer as a missing tournament. The embed is the same `regions(name)` every
  * `TournamentRow` carries, made inner so it can also be filtered on.
- * @param env The Worker bindings.
+ * @param db The database client.
  * @param regionSlug The region's slug.
  * @param tournamentSlug The tournament's type.
  * @return The row, or `null` if either the region or the tournament is
  *     missing — the caller cannot act on which of the two it was.
  */
 export async function fetchTournamentBySlug(
-  env: Bindings,
+  db: DbClient,
   regionSlug: string,
   tournamentSlug: TournamentType,
 ): Promise<TournamentRow | null> {
-  const db = createDbClient(env);
   const {data, error} = await db
     .from('tournaments')
     .select(`${TOURNAMENT_OWN_COLUMNS}, regions!inner(name)` as const)

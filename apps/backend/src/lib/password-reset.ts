@@ -1,6 +1,6 @@
 import type {PasswordResetConfirmInput} from '@regional-quiz/shared/password-policy';
 import type {Bindings} from '../types/env';
-import {createDbClient} from './db';
+import type {DbClient} from './db';
 import {createMailSender} from './mailer';
 import {
   buildSystemMail,
@@ -35,14 +35,14 @@ const TOKEN_TTL_MS = 60 * 60 * 1000;
  * The route therefore hands this whole function to `waitUntil()` and answers
  * before any of it runs -- so it must not be awaited on the response path.
  * @param env The Worker bindings.
+ * @param db The database client.
  * @param email The address a reset link was requested for.
  */
 export async function requestPasswordReset(
   env: Bindings,
+  db: DbClient,
   email: string,
 ): Promise<void> {
-  const db = createDbClient(env);
-
   const {data: participant, error} = await db
     .from('participants')
     .select('id, email_verified_at')
@@ -152,15 +152,15 @@ export async function requestPasswordReset(
  * the participant's existing sessions. They are stateless week-long JWTs, so
  * `requireParticipant()` checks the value each one carries against that
  * column rather than trusting the signature alone.
- * @param env The Worker bindings.
+ * @param db The database client.
  * @param input The validated raw token and the new password.
  */
 export async function confirmPasswordReset(
-  env: Bindings,
+  db: DbClient,
   input: PasswordResetConfirmInput,
 ): Promise<TokenPasswordResetResult> {
   return confirmTokenPasswordReset(
-    env,
+    db,
     {tokenTable: 'password_reset_tokens', rpc: 'reset_participant_password'},
     input,
   );

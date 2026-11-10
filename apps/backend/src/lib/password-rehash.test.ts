@@ -1,11 +1,12 @@
 import {describe, expect, it, spyOn} from 'bun:test';
-import type {Bindings} from '../types/env';
+import {createDbClient} from './db';
+import {testBindings} from '../test-support/bindings';
 import {hashPassword, UNUSABLE_PASSWORD_HASH} from './password';
 import {verifyAccountPassword} from './password-rehash';
 
 // No Supabase to reach: the one test that schedules an upgrade only checks
 // that it was handed over, and silences the failure the write logs.
-const ENV = {} as Bindings;
+const ENV = testBindings({SUPABASE_URL: 'http://127.0.0.1:1'});
 
 const LEGACY_SALT = '00'.repeat(16);
 
@@ -38,7 +39,7 @@ describe('verifyAccountPassword', () => {
 
     expect(
       await verifyAccountPassword(
-        ENV,
+        createDbClient(ENV),
         'participants',
         account,
         'right one',
@@ -55,7 +56,7 @@ describe('verifyAccountPassword', () => {
 
     expect(
       await verifyAccountPassword(
-        ENV,
+        createDbClient(ENV),
         'participants',
         account,
         'wrong one',
@@ -71,7 +72,7 @@ describe('verifyAccountPassword', () => {
     try {
       expect(
         await verifyAccountPassword(
-          ENV,
+          createDbClient(ENV),
           'participants',
           account,
           'right one',
@@ -101,7 +102,7 @@ describe('verifyAccountPassword', () => {
       try {
         expect(
           await verifyAccountPassword(
-            ENV,
+            createDbClient(ENV),
             'participants',
             account,
             'any password',

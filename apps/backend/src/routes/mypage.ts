@@ -8,7 +8,7 @@ import {
 } from '@regional-quiz/shared';
 import type {ParticipantEnv} from '../types/env';
 import {requireParticipant} from '../middleware/participant-auth';
-import {createDbClient, type Tables} from '../lib/db';
+import {type Tables} from '../lib/db';
 import {cancelOwnEntry, updateOwnEntry} from '../lib/own-entries';
 import {internalError, respondFailure} from '../lib/errors';
 import {tournamentDisplayName} from '../lib/tournaments';
@@ -66,7 +66,7 @@ function rowToMypageEntry(row: MypageEntryRow): MypageEntry {
 export const mypageRoute = new Hono<ParticipantEnv>()
   .use('*', requireParticipant())
   .get('/entries', async c => {
-    const db = createDbClient(c.env);
+    const db = c.get('db');
     const {data, error} = await db
       .from('entries')
       .select(LIST_COLUMNS)
@@ -80,7 +80,7 @@ export const mypageRoute = new Hono<ParticipantEnv>()
     return c.json((data ?? []).map(rowToMypageEntry));
   })
   .get('/entries/:entryId', validate('param', EntryIdParamSchema), async c => {
-    const db = createDbClient(c.env);
+    const db = c.get('db');
     // Scoped to the session's participant so another participant's entry
     // is indistinguishable from a nonexistent one.
     const {data, error} = await db
@@ -128,7 +128,7 @@ export const mypageRoute = new Hono<ParticipantEnv>()
     validate('json', EntryEditInputSchema),
     async c => {
       const result = await updateOwnEntry(
-        c.env,
+        c.get('db'),
         c.get('participantId'),
         c.req.valid('param').entryId,
         c.req.valid('json'),
@@ -145,6 +145,7 @@ export const mypageRoute = new Hono<ParticipantEnv>()
     async c => {
       const result = await cancelOwnEntry(
         c.env,
+        c.get('db'),
         c.get('participantId'),
         c.req.valid('param').entryId,
       );

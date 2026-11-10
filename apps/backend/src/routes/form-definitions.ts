@@ -9,7 +9,6 @@ import {
   byTournamentIdParam,
   requireOpenEntryPeriodOrStaff,
 } from '../middleware/entry-period';
-import {createDbClient} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {
   syncFormFieldDefs,
@@ -33,7 +32,7 @@ export const formDefinitionsRoute = new Hono<StaffEnv>()
     validate('param', TournamentIdParamSchema),
     requireOpenEntryPeriodOrStaff(byTournamentIdParam),
     async c => {
-      const db = createDbClient(c.env);
+      const db = c.get('db');
       const {fieldDefs, error} = await fetchFormFieldDefs(
         db,
         c.req.valid('param').tournamentId,
@@ -63,7 +62,7 @@ export const formDefinitionsRoute = new Hono<StaffEnv>()
 
       try {
         await syncFormFieldDefs(
-          c.env,
+          c.get('db'),
           c.req.valid('param').tournamentId,
           parsed,
         );

@@ -1,5 +1,6 @@
 import type {StaffClaims} from '@regional-quiz/shared';
 import type {BulkMailMessage} from '../lib/bulk-mail-queue';
+import type {DbClient} from '../lib/db';
 import type {TournamentRow} from '../lib/tournaments';
 
 export interface Bindings {
@@ -85,6 +86,11 @@ export interface Bindings {
 
 export interface Variables {
   requestId: string;
+  // The one Supabase client of the request, made by `dbClient()`
+  // (`middleware/db.ts`) before anything else reads the database. The
+  // middleware, the handler and the `lib/` functions it calls all go
+  // through it rather than calling `createDbClient()` themselves (#310).
+  db: DbClient;
   // Set by `requireOpenEntryPeriodOrStaff()` (`middleware/entry-period.ts`)
   // and `requireStaffForTournament()` (`middleware/staff-auth.ts`) with the
   // row they had to read anyway, so the handler behind them doesn't fetch
@@ -113,6 +119,15 @@ export interface Env {
 export interface StaffEnv {
   Bindings: Bindings;
   Variables: Variables & {staff: StaffClaims};
+}
+
+// What a handler behind `requireStaffForTournament()` sees: the tournament
+// that middleware read is on the context for every role, so unlike in
+// `Variables` it is not optional. The middleware declares this type, and
+// Hono merges it into the `c` of the handlers chained after it.
+export interface StaffTournamentEnv {
+  Bindings: Bindings;
+  Variables: Variables & {staff: StaffClaims; tournament: TournamentRow};
 }
 
 // Used by routes mounted behind `requireParticipant()`, where the

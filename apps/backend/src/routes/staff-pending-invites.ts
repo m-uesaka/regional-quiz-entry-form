@@ -2,7 +2,6 @@ import {Hono} from 'hono';
 import {StaffPendingInvitesSchema} from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireStaff} from '../middleware/staff-auth';
-import {createDbClient} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {findPendingInviteScopes} from '../lib/staff-account-lookup';
 
@@ -20,7 +19,7 @@ export const staffPendingInvitesRoute = new Hono<StaffEnv>().get(
   '/pending-invites',
   requireStaff(),
   async c => {
-    const db = createDbClient(c.env);
+    const db = c.get('db');
     const staff = c.get('staff');
     const {data: account, error} = await db
       .from('staff_accounts')

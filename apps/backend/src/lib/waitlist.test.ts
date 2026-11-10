@@ -1,4 +1,5 @@
 import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
+import {createDbClient} from './db';
 import {SQL} from 'bun';
 import {confirmEntryByToken} from './entry-confirmation';
 import {promoteWaitlistedEntries} from './waitlist';
@@ -108,7 +109,11 @@ describe.skipIf(!(await isDbReachable()))(
       const second = await createWaitlistedEntry(fixture, 2);
       const first = await createWaitlistedEntry(fixture, 1);
 
-      await promoteWaitlistedEntries(env, fixture.tournamentId);
+      await promoteWaitlistedEntries(
+        env,
+        createDbClient(env),
+        fixture.tournamentId,
+      );
 
       const [firstRow] = await sql`
         select status, waitlist_position from entries where id = ${first}
@@ -134,7 +139,11 @@ describe.skipIf(!(await isDbReachable()))(
         where id = ${await createWaitlistedEntry(fixture, 2)}
       `;
 
-      await promoteWaitlistedEntries(env, fixture.tournamentId);
+      await promoteWaitlistedEntries(
+        env,
+        createDbClient(env),
+        fixture.tournamentId,
+      );
 
       const [waitlistedRow] = await sql`
         select status, waitlist_position from entries where id = ${waitlisted}
@@ -147,7 +156,11 @@ describe.skipIf(!(await isDbReachable()))(
       const fixture = await createFixture('empty');
 
       await expect(
-        promoteWaitlistedEntries(env, fixture.tournamentId),
+        promoteWaitlistedEntries(
+          env,
+          createDbClient(env),
+          fixture.tournamentId,
+        ),
       ).resolves.toEqual({promotedCount: 0, mailFailedCount: 0});
     });
 
@@ -173,7 +186,9 @@ describe.skipIf(!(await isDbReachable()))(
       `;
       expect(cancelled.previous_status).toBe('confirmed');
       mailedTo = [];
-      expect(await confirmEntryByToken(env, token)).toMatchObject({
+      expect(
+        await confirmEntryByToken(env, createDbClient(env), token),
+      ).toMatchObject({
         ok: true,
         entryStatus: 'waitlisted',
       });
@@ -193,7 +208,13 @@ describe.skipIf(!(await isDbReachable()))(
 
       // The cancellation's promotion, arriving late, has no seat left.
       mailedTo = [];
-      expect(await promoteWaitlistedEntries(env, f.tournamentId)).toEqual({
+      expect(
+        await promoteWaitlistedEntries(
+          env,
+          createDbClient(env),
+          f.tournamentId,
+        ),
+      ).toEqual({
         promotedCount: 0,
         mailFailedCount: 0,
       });
@@ -212,7 +233,9 @@ describe.skipIf(!(await isDbReachable()))(
       const token = await createVerificationToken(sql, newcomer);
       mailedTo = [];
 
-      expect(await confirmEntryByToken(env, token)).toMatchObject({
+      expect(
+        await confirmEntryByToken(env, createDbClient(env), token),
+      ).toMatchObject({
         ok: true,
         entryStatus: 'waitlisted',
       });
@@ -233,7 +256,13 @@ describe.skipIf(!(await isDbReachable()))(
 
       // Nothing is left for a later promotion to do.
       mailedTo = [];
-      expect(await promoteWaitlistedEntries(env, f.tournamentId)).toEqual({
+      expect(
+        await promoteWaitlistedEntries(
+          env,
+          createDbClient(env),
+          f.tournamentId,
+        ),
+      ).toEqual({
         promotedCount: 0,
         mailFailedCount: 0,
       });
@@ -251,7 +280,11 @@ describe.skipIf(!(await isDbReachable()))(
         await sql`update tournaments set capacity = 3 where id = ${f.tournamentId}`;
         mailedTo = [];
 
-        const promoted = await promoteWaitlistedEntries(env, f.tournamentId);
+        const promoted = await promoteWaitlistedEntries(
+          env,
+          createDbClient(env),
+          f.tournamentId,
+        );
 
         // 3 seats, 1 taken: positions 1 and 2 go up, and position
         // 3 waits at the head of the line, renumbered from 1 (0037).
@@ -276,7 +309,13 @@ describe.skipIf(!(await isDbReachable()))(
         ];
         await sql`update tournaments set capacity = null where id = ${f.tournamentId}`;
 
-        expect(await promoteWaitlistedEntries(env, f.tournamentId)).toEqual({
+        expect(
+          await promoteWaitlistedEntries(
+            env,
+            createDbClient(env),
+            f.tournamentId,
+          ),
+        ).toEqual({
           promotedCount: 2,
           mailFailedCount: 0,
         });
@@ -293,7 +332,13 @@ describe.skipIf(!(await isDbReachable()))(
         mailedTo = [];
 
         // Capacity 1 with 2 confirmed: lowered below what is confirmed.
-        expect(await promoteWaitlistedEntries(env, f.tournamentId)).toEqual({
+        expect(
+          await promoteWaitlistedEntries(
+            env,
+            createDbClient(env),
+            f.tournamentId,
+          ),
+        ).toEqual({
           promotedCount: 0,
           mailFailedCount: 0,
         });
@@ -310,7 +355,13 @@ describe.skipIf(!(await isDbReachable()))(
         const originalConsoleError = console.error;
         console.error = () => {};
         try {
-          expect(await promoteWaitlistedEntries(env, f.tournamentId)).toEqual({
+          expect(
+            await promoteWaitlistedEntries(
+              env,
+              createDbClient(env),
+              f.tournamentId,
+            ),
+          ).toEqual({
             promotedCount: 1,
             mailFailedCount: 1,
           });

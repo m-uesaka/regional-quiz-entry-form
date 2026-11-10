@@ -1,6 +1,6 @@
 import {ENTRY_VERIFICATION_TOKEN_TTL_MS} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
-import {createDbClient, type Tables} from './db';
+import {type DbClient, type Tables} from './db';
 import type {InternalResult} from './errors';
 import {createMailSender, type SendMailInput} from './mailer';
 import {fetchAllRows} from './paged-select';
@@ -31,6 +31,7 @@ import {tournamentDisplayName} from './tournaments';
  */
 export async function sendVerificationEmail(
   env: Bindings,
+  db: DbClient,
   entryId: string,
   email: string,
   tournamentName: string,
@@ -39,6 +40,7 @@ export async function sendVerificationEmail(
 ): Promise<void> {
   const {mail} = await issueVerificationMail(
     env,
+    db,
     entryId,
     email,
     tournamentName,
@@ -63,13 +65,13 @@ export interface IssuedVerificationMail {
  */
 async function issueVerificationMail(
   env: Bindings,
+  db: DbClient,
   entryId: string,
   email: string,
   tournamentName: string,
   capped: boolean,
   withdrawnTournaments?: readonly string[],
 ): Promise<IssuedVerificationMail> {
-  const db = createDbClient(env);
   const token = generateToken();
   const {data, error} = await db
     .from('email_verification_tokens')
@@ -130,17 +132,15 @@ async function issueVerificationMail(
  * @throws Error If the token could not be stored.
  */
 export async function holdForDeferredVerification(
-  env: Bindings,
+  db: DbClient,
   entryId: string,
 ): Promise<void> {
-  const {error} = await createDbClient(env)
-    .from('email_verification_tokens')
-    .insert({
-      entry_id: entryId,
-      // The hash of a token that is thrown away: no link names it.
-      token_hash: await hashToken(generateToken()),
-      expires_at: new Date().toISOString(),
-    });
+  const {error} = await db.from('email_verification_tokens').insert({
+    entry_id: entryId,
+    // The hash of a token that is thrown away: no link names it.
+    token_hash: await hashToken(generateToken()),
+    expires_at: new Date().toISOString(),
+  });
   if (error) {
     throw new Error(
       `failed to hold the entry for its deferred mail: ${error.message}`,
@@ -159,10 +159,10 @@ export async function holdForDeferredVerification(
  * @param tokenId The `email_verification_tokens` row to delete.
  */
 export async function discardVerificationToken(
-  env: Bindings,
+  db: DbClient,
   tokenId: string,
 ): Promise<InternalResult<void>> {
-  const {error} = await createDbClient(env)
+  const {error} = await db
     .from('email_verification_tokens')
     .delete()
     .eq('id', tokenId);
@@ -203,10 +203,9 @@ function hasLiveToken(tokens: readonly TokenStateRow[], now: Date): boolean {
  * @param tournamentId The tournament whose entries to look at.
  */
 export async function fetchResendableEntryIds(
-  env: Bindings,
+  db: DbClient,
   tournamentId: string,
 ): Promise<InternalResult<string[]>> {
-  const db = createDbClient(env);
   const result = await fetchAllRows((from, to) =>
     db
       .from('entries')
@@ -245,10 +244,10 @@ export async function fetchResendableEntryIds(
  */
 export async function prepareVerificationResend(
   env: Bindings,
+  db: DbClient,
   entryId: string,
   withdrawnTournaments?: readonly string[],
 ): Promise<InternalResult<IssuedVerificationMail | null>> {
-  const db = createDbClient(env);
   const {data, error} = await db
     .from('entries')
     .select(
@@ -275,6 +274,7 @@ export async function prepareVerificationResend(
   try {
     const issued = await issueVerificationMail(
       env,
+      db,
       data.id,
       data.participants.email,
       tournamentDisplayName(

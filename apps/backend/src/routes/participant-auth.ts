@@ -6,7 +6,6 @@ import {
   type ParticipantLoginInput,
 } from '@regional-quiz/shared';
 import type {Env} from '../types/env';
-import {createDbClient} from '../lib/db';
 import {verifyAccountPassword} from '../lib/password-rehash';
 import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
 import {PARTICIPANT_SESSION_COOKIE} from '../middleware/participant-auth';
@@ -61,7 +60,7 @@ export const participantAuthRoute = new Hono<Env>()
     ),
     async c => {
       const {email, password} = c.req.valid('json');
-      const db = createDbClient(c.env);
+      const db = c.get('db');
       const {data: participant, error} = await db
         .from('participants')
         .select('id, password_hash, password_changed_at, email_verified_at')
@@ -83,7 +82,7 @@ export const participantAuthRoute = new Hono<Env>()
       // hash moved to the current parameters after the response if it is
       // older: see `verifyAccountPassword()`.
       const valid = await verifyAccountPassword(
-        c.env,
+        c.get('db'),
         'participants',
         account,
         password,

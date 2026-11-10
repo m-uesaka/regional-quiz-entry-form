@@ -24,6 +24,7 @@ import {formDefinitionsRoute} from './routes/form-definitions';
 import {sheetImportRoute} from './routes/sheet-import';
 import {mypageRoute} from './routes/mypage';
 import {portalRoute} from './routes/portal';
+import {dbClient} from './middleware/db';
 import {trustedOrigins} from './lib/trusted-origins';
 import {internalError} from './lib/errors';
 
@@ -79,6 +80,10 @@ app.use('*', secureHeaders());
 //     Pages preview) sends that address instead, so it has to be listed in
 //     `CSRF_TRUSTED_ORIGINS`.
 app.use('*', csrf({origin: (origin, c) => trustedOrigins(c.env).has(origin)}));
+
+// The request's one Supabase client (#310), after the origin check so a
+// request that is refused there never makes one.
+app.use('*', dbClient());
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- only read via `typeof routes` below for the Hono RPC AppType export.
 const routes = app

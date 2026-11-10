@@ -12,7 +12,7 @@ import {
   requireStaffForEntry,
   requireStaffForTournament,
 } from '../middleware/staff-auth';
-import {createDbClient, type DbClient, type Tables} from '../lib/db';
+import {type DbClient, type Tables} from '../lib/db';
 import {fetchFormFieldDefs} from '../lib/form-field-defs';
 import {buildEntriesCsv} from '../lib/entries-csv';
 import {
@@ -123,7 +123,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
     validate('query', StaffEntryListQuerySchema),
     requireStaffForTournament(),
     async c => {
-      const db = createDbClient(c.env);
+      const db = c.get('db');
       const {tournamentId} = c.req.valid('param');
       const {status, ...page} = c.req.valid('query');
       // One page, optionally narrowed to one status: what staff look for is
@@ -156,7 +156,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
     requireStaffForTournament(),
     async c => {
       const {tournamentId} = c.req.valid('param');
-      const db = createDbClient(c.env);
+      const db = c.get('db');
       const {rows: entryRows, error} = await fetchAllEntryCsvRows(
         db,
         tournamentId,
@@ -215,7 +215,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
     validate('param', EntryIdParamSchema),
     requireStaffForEntry(),
     async c => {
-      const db = createDbClient(c.env);
+      const db = c.get('db');
       const {data, error} = await db
         .from('entries')
         .select(ENTRY_COLUMNS)

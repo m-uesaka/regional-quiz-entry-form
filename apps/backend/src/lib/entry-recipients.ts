@@ -1,6 +1,5 @@
 import type {EntryStatus, StaffMailStatusFilter} from '@regional-quiz/shared';
-import type {Bindings} from '../types/env';
-import {createDbClient} from './db';
+import {type DbClient} from './db';
 import type {InternalFailure} from './errors';
 import {fetchAllRows, SELECT_PAGE_SIZE} from './paged-select';
 
@@ -46,19 +45,18 @@ type RecipientsResult = {ok: true; recipients: string[]} | InternalFailure;
  *
  * Addresses are de-duplicated, so a participant holding more than one
  * matching entry is still mailed once.
- * @param env The Worker bindings.
+ * @param db The database client.
  * @param tournamentId The tournament whose entries to mail.
  * @param statusFilter The single entry status to narrow the recipients to.
  * @param pageSize Rows to read per request; see `fetchAllRows()`.
  * @throws RangeError If `pageSize` is not a positive integer.
  */
 export async function fetchTournamentRecipients(
-  env: Bindings,
+  db: DbClient,
   tournamentId: string,
   statusFilter?: StaffMailStatusFilter,
   pageSize: number = SELECT_PAGE_SIZE,
 ): Promise<RecipientsResult> {
-  const db = createDbClient(env);
   // Paged through `fetchAllRows()` because the Data API silently trims a
   // single response to its `max_rows`; that helper only stops on an empty
   // page, so a hosted `max_rows` below the page size still reaches every

@@ -10,7 +10,7 @@ import {
   byTournamentIdParam,
   requireOpenEntryPeriodOrStaff,
 } from '../middleware/entry-period';
-import {createDbClient, type Tables} from '../lib/db';
+import {type Tables} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {
   NoLastingRegulationError,
@@ -65,7 +65,7 @@ export const regulationsRoute = new Hono<StaffEnv>()
     validate('param', TournamentIdParamSchema),
     requireOpenEntryPeriodOrStaff(byTournamentIdParam),
     async c => {
-      const db = createDbClient(c.env);
+      const db = c.get('db');
       const {data, error} = await db
         .from('regulations')
         .select(REGULATION_COLUMNS)
@@ -91,7 +91,7 @@ export const regulationsRoute = new Hono<StaffEnv>()
     async c => {
       try {
         await syncRegulations(
-          c.env,
+          c.get('db'),
           c.req.valid('param').tournamentId,
           c.req.valid('json').regulations,
         );

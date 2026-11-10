@@ -3,7 +3,7 @@ import {
   type EntryVerificationTournament,
 } from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
-import {createDbClient} from './db';
+import type {DbClient} from './db';
 import type {LibFailure} from './errors';
 import {INVALID_TOKEN_SQLSTATE} from './pg-errors';
 import {hashToken} from './token';
@@ -49,14 +49,14 @@ type ConfirmResult =
  * concurrent confirmations for the same tournament or replays of the same
  * token can't race each other (see the migration for details).
  * @param env The Worker bindings.
+ * @param db The database client.
  * @param token The raw token from the verification link.
  */
 export async function confirmEntryByToken(
   env: Bindings,
+  db: DbClient,
   token: string,
 ): Promise<ConfirmResult> {
-  const db = createDbClient(env);
-
   const tokenHash = await hashToken(token);
   const {data, error} = await db.rpc('confirm_entry_by_token', {
     p_token_hash: tokenHash,
@@ -72,10 +72,10 @@ export async function confirmEntryByToken(
     return {ok: false, status: 500, error: error.message};
   }
 
-  const entry = await readConfirmedEntry(env, tokenHash);
+  const entry = await readConfirmedEntry(db, tokenHash);
   let entryStatus = data;
   if (entryStatus === 'waitlisted') {
-    entryStatus = await promoteIfSeatsAreFree(env, entry);
+    entryStatus = await promoteIfSeatsAreFree(env, db, entry);
   }
   return {
     ok: true,
@@ -101,10 +101,10 @@ interface ConfirmedEntry {
  * is then skipped, and caught up by the next one; see below.)
  */
 async function readConfirmedEntry(
-  env: Bindings,
+  db: DbClient,
   tokenHash: string,
 ): Promise<ConfirmedEntry | null> {
-  const {data, error} = await createDbClient(env)
+  const {data, error} = await db
     .from('email_verification_tokens')
     .select(
       'entry_id, entries(tournament_id, tournaments(type, regions(slug)))',
@@ -136,10 +136,12 @@ async function readConfirmedEntry(
  * order by the next promotion (the next queued confirmation, cancellation,
  * or capacity save).
  * @param env The Worker bindings.
+ * @param db The database client.
  * @param queued The queued entry, or `null` if it couldn't be read.
  */
 async function promoteIfSeatsAreFree(
   env: Bindings,
+  db: DbClient,
   queued: ConfirmedEntry | null,
 ): Promise<'confirmed' | 'waitlisted'> {
   if (!queued) {
@@ -151,6 +153,7 @@ async function promoteIfSeatsAreFree(
   try {
     const promoted = await promoteAfterWaitlistedConfirmation(
       env,
+      db,
       queued.tournamentId,
       queued.entryId,
     );
