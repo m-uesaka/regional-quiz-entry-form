@@ -18,7 +18,7 @@ import {
   fetchMailJob,
   recordMailJobProgress,
 } from '../lib/mail-jobs';
-import {internalError, respondFailure} from '../lib/errors';
+import {internalError} from '../lib/errors';
 import {hasVisibleText, sanitizeMailHtml} from '../lib/mail-html';
 import {tournamentDisplayName} from '../lib/tournaments';
 import {TournamentIdParamSchema} from './params';
@@ -69,15 +69,15 @@ async function enqueueMailJob(
       // this the job would sit at `sent + failed < total` forever and read
       // as one that is still running.
       const unqueued = messages.length - start;
-      const recorded = await recordMailJobProgress(db, jobId, {
-        sent: 0,
-        failed: unqueued,
-      });
-      if (!recorded.ok) {
+      // Only logged if it fails too: the enqueueing error is what the caller
+      // has to be told, and a throw here would hide it.
+      try {
+        await recordMailJobProgress(db, jobId, {sent: 0, failed: unqueued});
+      } catch (recordError) {
         console.error('failed to record unqueued bulk mail recipients', {
           jobId,
           unqueued,
-          error: recorded.error,
+          error: recordError,
         });
       }
       return {ok: false, error};
@@ -107,31 +107,23 @@ export const staffMailRoute = new Hono<StaffEnv>()
         return c.json({error: 'mail body is empty after sanitizing'}, 400);
       }
 
-      const result = await fetchTournamentRecipients(
+      const recipients = await fetchTournamentRecipients(
         c.get('db'),
         tournamentId,
         statusFilter,
       );
-      if (!result.ok) {
-        return respondFailure(c, result, 'failed to read the mail recipients');
-      }
-      const {recipients} = result;
 
       // Written before anything is enqueued: this row is where the content
       // lives (the messages carry only an address, see `BulkMailMessage`),
       // so a consumer that picks a message up the moment it lands has to
       // find it already there. It doubles as the record of the send that
       // the staff screen reads back.
-      const job = await createMailJob(c.get('db'), {
+      const jobId = await createMailJob(c.get('db'), {
         tournamentId,
         subject,
         bodyHtml,
         total: recipients.length,
       });
-      if (!job.ok) {
-        return respondFailure(c, job, 'failed to record the mail job');
-      }
-      const jobId = job.value;
 
       const enqueued = await enqueueMailJob(
         c.env,
@@ -175,20 +167,12 @@ export const staffMailRoute = new Hono<StaffEnv>()
       // 404 for a tournament that does not exist.
       const tournament = c.get('tournament');
 
-      const entries = await fetchResendableEntryIds(c.get('db'), tournamentId);
-      if (!entries.ok) {
-        return respondFailure(
-          c,
-          entries,
-          'failed to read the unconfirmed entries',
-        );
-      }
-      const entryIds = entries.value;
+      const entryIds = await fetchResendableEntryIds(c.get('db'), tournamentId);
 
       // No body: each mail carries its own link, built by the consumer
       // when it issues the token. The subject is the one every mail of the
       // job goes out under, which is what the staff screen shows.
-      const job = await createMailJob(c.get('db'), {
+      const jobId = await createMailJob(c.get('db'), {
         tournamentId,
         subject: verificationMailSubject(
           tournamentDisplayName(
@@ -200,10 +184,6 @@ export const staffMailRoute = new Hono<StaffEnv>()
         bodyHtml: '',
         total: entryIds.length,
       });
-      if (!job.ok) {
-        return respondFailure(c, job, 'failed to record the mail job');
-      }
-      const jobId = job.value;
 
       const enqueued = await enqueueMailJob(
         c.env,
@@ -242,14 +222,11 @@ export const staffMailRoute = new Hono<StaffEnv>()
       // Scoped by tournament as well as by id, so a job of a tournament
       // this staff member may not see is a 404 rather than a readable row:
       // the middleware above only vouches for the tournament in the path.
-      const result = await fetchMailJob(c.get('db'), tournamentId, jobId);
-      if (!result.ok) {
-        return respondFailure(c, result, 'failed to read the mail job');
-      }
-      if (result.value === null) {
+      const job = await fetchMailJob(c.get('db'), tournamentId, jobId);
+      if (job === null) {
         return c.json({error: 'mail job not found'}, 404);
       }
 
-      return c.json(result.value);
+      return c.json(job);
     },
   );

@@ -31,7 +31,7 @@ export const entryVerificationRoute = new Hono<Env>().post(
       //
       // Anything else is a Supabase message about the database, on an
       // endpoint anyone with a link can reach, so it stays in the log.
-      return respondFailure(c, result, 'failed to confirm the entry');
+      return respondFailure(c, result);
     }
     return c.json(
       EntryVerificationResponseSchema.parse({

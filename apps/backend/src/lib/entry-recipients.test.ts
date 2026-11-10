@@ -51,7 +51,7 @@ describe('fetchTournamentRecipients', () => {
       TOURNAMENT_ID,
     );
 
-    expect(result).toEqual({ok: true, recipients: ['taro@example.com']});
+    expect(result).toEqual(['taro@example.com']);
     expect(urls[0]).toContain(`tournament_id=eq.${TOURNAMENT_ID}`);
     expect(decodeURIComponent(urls[0])).toContain(
       'status=in.(confirmed,waitlisted)',
@@ -96,7 +96,7 @@ describe('fetchTournamentRecipients', () => {
       'cancelled',
     );
 
-    expect(result).toEqual({ok: true, recipients: ['taro@example.com']});
+    expect(result).toEqual(['taro@example.com']);
     expect(urls[0]).toContain('status=eq.cancelled');
     expect(urls[0]).not.toContain('status=in.');
   });
@@ -116,16 +116,13 @@ describe('fetchTournamentRecipients', () => {
       2,
     );
 
-    expect(result).toEqual({
-      ok: true,
-      recipients: [
-        'a@example.com',
-        'b@example.com',
-        'c@example.com',
-        'd@example.com',
-        'e@example.com',
-      ],
-    });
+    expect(result).toEqual([
+      'a@example.com',
+      'b@example.com',
+      'c@example.com',
+      'd@example.com',
+      'e@example.com',
+    ]);
     expect(urls).toHaveLength(4);
   });
 
@@ -146,10 +143,7 @@ describe('fetchTournamentRecipients', () => {
       3,
     );
 
-    expect(result).toEqual({
-      ok: true,
-      recipients: ['a@example.com', 'b@example.com', 'c@example.com'],
-    });
+    expect(result).toEqual(['a@example.com', 'b@example.com', 'c@example.com']);
     expect(urls).toHaveLength(4);
     // Each request starts right after the rows actually received, not a
     // full page further on, so no row is skipped.
@@ -171,10 +165,7 @@ describe('fetchTournamentRecipients', () => {
       2,
     );
 
-    expect(result).toEqual({
-      ok: true,
-      recipients: ['a@example.com', 'b@example.com'],
-    });
+    expect(result).toEqual(['a@example.com', 'b@example.com']);
     expect(urls).toHaveLength(2);
   });
 
@@ -202,21 +193,17 @@ describe('fetchTournamentRecipients', () => {
       TOURNAMENT_ID,
     );
 
-    expect(result).toEqual({ok: true, recipients: ['taro@example.com']});
+    expect(result).toEqual(['taro@example.com']);
   });
 
-  it('reports a failed query instead of returning a partial list', async () => {
+  it('throws a failed query instead of returning a partial list', async () => {
     mockFetch([Response.json({message: 'db is down'}, {status: 500})]);
 
-    const result = await fetchTournamentRecipients(
-      createDbClient(ENV),
-      TOURNAMENT_ID,
-    );
-
-    expect(result).toEqual({
-      ok: false,
-      status: 500,
-      error: 'db is down',
+    await expect(
+      fetchTournamentRecipients(createDbClient(ENV), TOURNAMENT_ID),
+    ).rejects.toMatchObject({
+      context: 'failed to read the recipients of the bulk mail',
+      cause: {message: 'db is down'},
     });
   });
 });

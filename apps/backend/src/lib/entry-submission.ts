@@ -26,7 +26,7 @@ import {
   sendVerificationEmail,
 } from './entry-verification';
 import {deferEntryMail} from './deferred-entry-mail';
-import type {InternalFailure, LibFailure} from './errors';
+import {UnexpectedFailure, unwrap, type ClientFailure} from './errors';
 import {validateCustomFieldValues} from './form-field-defs';
 import {hashPassword, verifyPassword} from './password';
 import {
@@ -40,7 +40,7 @@ import {tournamentDisplayName} from './tournaments';
 import {verifyAccountPassword} from './password-rehash';
 
 type CreateEntryResult =
-  {ok: true; entry: {id: string}} | LibFailure<400 | 401 | 403 | 409>;
+  {ok: true; entry: {id: string}} | ClientFailure<400 | 401 | 403 | 409>;
 
 /**
  * What `createEntryAfterCheck()` comes to. A submission that took an
@@ -59,7 +59,34 @@ type AddressEntryResult =
  * tournament it can go on to enter, or why it can't.
  */
 export type EntrySubmissionCheck =
-  {ok: true; tournament: EntryTournamentRow} | LibFailure<400 | 403 | 409>;
+  {ok: true; tournament: EntryTournamentRow} | ClientFailure<400 | 403 | 409>;
+
+/**
+ * An `UnexpectedFailure` of the entry that followed a takeover of an
+ * unverified account (#189). The takeover is already committed and can't be
+ * undone, so the failure carries the tournaments it withdrew entries from, for
+ * the notice of the failure (#291) -- as a returned failure does in
+ * `AddressEntryResult`. To `app.onError` it is any other `UnexpectedFailure`.
+ */
+class FailureAfterTakeover extends UnexpectedFailure {
+  constructor(
+    failure: UnexpectedFailure,
+    readonly withdrawnTournaments: string[] | undefined,
+  ) {
+    super(failure.context, failure.cause);
+  }
+}
+
+/**
+ * A fault on our side as `createEntryUnauthenticated()` sees it, once caught:
+ * not a refusal, so not a `ClientFailure`.
+ */
+interface UnexpectedEntryResult {
+  ok: false;
+  status: 500;
+  error: string;
+  withdrawnTournaments?: string[];
+}
 
 /**
  * What an unauthenticated entry submission came to, once it has run in the
@@ -372,26 +399,26 @@ export async function checkEntrySubmission(
   tournamentId: string,
   submission: Pick<EntrySessionInput, 'regulationIds' | 'customFieldValues'>,
 ): Promise<EntrySubmissionCheck> {
-  const {data: tournament, error: tournamentError} = await db
-    .from('tournaments')
-    .select(
-      `
+  // A failing select is not the same as an unknown tournament: a stale
+  // PostgREST schema cache or an outage would otherwise turn every submission
+  // into 「大会が見つかりません」 with nothing logged. Kept apart so the 500
+  // says so (`unwrap()` throws it).
+  const tournament = unwrap(
+    await db
+      .from('tournaments')
+      .select(
+        `
         id, name, type, capacity, entry_opens_at, entry_closes_at,
         entries_paused,
         regions(name),
         regulations(id, priority_starts_at, priority_ends_at,
         closes_with_priority)
       `,
-    )
-    .eq('id', tournamentId)
-    .maybeSingle();
-  // A failing select is not the same as an unknown tournament: a stale
-  // PostgREST schema cache or an outage would otherwise turn every submission
-  // into 「大会が見つかりません」 with nothing logged. Kept apart so the 500
-  // says so.
-  if (tournamentError) {
-    return {ok: false, status: 500, error: tournamentError.message};
-  }
+      )
+      .eq('id', tournamentId)
+      .maybeSingle(),
+    'failed to read the tournament to enter',
+  );
   if (!tournament) {
     return {
       ok: false,
@@ -477,14 +504,14 @@ async function createEntryAfterCheck(
   input: EntryInput,
   delivery: EntryMailDelivery = 'now',
 ): Promise<AddressEntryResult> {
-  const {data: existingParticipant, error: participantError} = await db
-    .from('participants')
-    .select(PARTICIPANT_COLUMNS)
-    .eq('email', input.email)
-    .maybeSingle();
-  if (participantError) {
-    return {ok: false, status: 500, error: participantError.message};
-  }
+  const existingParticipant = unwrap(
+    await db
+      .from('participants')
+      .select(PARTICIPANT_COLUMNS)
+      .eq('email', input.email)
+      .maybeSingle(),
+    'failed to read the participant to enter',
+  );
 
   if (
     existingParticipant?.email_verified_at === null &&
@@ -544,11 +571,10 @@ async function createEntryAfterCheck(
       if (error || !created) {
         // Anything else is a fault on our side, and its message describes
         // the database: a 500 keeps it in the log (#191).
-        return {
-          ok: false,
-          status: 500,
-          error: error?.message ?? 'failed to create participant',
-        };
+        throw new UnexpectedFailure(
+          'failed to create the participant',
+          error ?? {message: 'the insert returned no row'},
+        );
       }
       return enterTournament(
         env,
@@ -564,42 +590,47 @@ async function createEntryAfterCheck(
     // A different password: the account is handed to
     // this submission, and what the earlier ones made goes with the old
     // password (see the migration for why it is deleted rather than kept).
-    const {data: withdrawn, error: takeOverError} = await db.rpc(
-      'take_over_unverified_participant',
-      {
+    const withdrawn = unwrap(
+      await db.rpc('take_over_unverified_participant', {
         p_participant_id: existingParticipant.id,
         p_password_hash: passwordHash,
-      },
+      }),
+      'failed to take the unverified participant over',
     );
-    if (takeOverError) {
-      return {ok: false, status: 500, error: takeOverError.message};
-    }
     // Null when the address turned out to be verified (see below).
     if (withdrawn !== null) {
       const otherWithdrawn = await withdrawnTournamentNames(
         db,
         withdrawn.filter(id => id !== tournament.id),
       );
-      const entered = await enterTournament(
-        env,
-        db,
-        tournament,
-        existingParticipant.id,
-        input.email,
-        input,
-        {passwordHash, withdrawnTournaments: otherWithdrawn},
-        delivery,
-      );
-      if (entered.ok) {
-        return entered;
-      }
-      // Only the new entry is rolled back; what the takeover deleted stays
-      // deleted, this tournament's earlier entry included.
+      // Only the new entry is rolled back on a failure; what the takeover
+      // deleted stays deleted, this tournament's earlier entry included. So
+      // a failure, returned or thrown, carries what it withdrew.
       const withdrawnTournaments = withdrawnWithoutReplacement(
         tournament,
         withdrawn,
         otherWithdrawn,
       );
+      let entered;
+      try {
+        entered = await enterTournament(
+          env,
+          db,
+          tournament,
+          existingParticipant.id,
+          input.email,
+          input,
+          {passwordHash, withdrawnTournaments: otherWithdrawn},
+          delivery,
+        );
+      } catch (e) {
+        throw e instanceof UnexpectedFailure
+          ? new FailureAfterTakeover(e, withdrawnTournaments)
+          : e;
+      }
+      if (entered.ok) {
+        return entered;
+      }
       return withdrawnTournaments
         ? {...entered, withdrawnTournaments}
         : entered;
@@ -616,11 +647,10 @@ async function createEntryAfterCheck(
       .eq('id', existingParticipant.id)
       .single();
     if (rereadError || !verifiedParticipant) {
-      return {
-        ok: false,
-        status: 500,
-        error: rereadError?.message ?? 'failed to read the participant',
-      };
+      throw new UnexpectedFailure(
+        'failed to read the participant',
+        rereadError ?? {message: 'the participant is gone'},
+      );
     }
     return enterVerifiedParticipant(
       env,
@@ -796,8 +826,9 @@ function withdrawnWithoutReplacement(
  *
  * Each of those steps is a stage function below, run in that order, and the
  * first one to refuse ends the submission. A stage only reports its
- * failure: when one after the write fails, this function rolls the entry
- * back (`rollbackEntry()`), once, for all of them.
+ * failure, by returning a refusal or by throwing: when one after the write
+ * fails either way, this function rolls the entry back (`rollbackEntry()`),
+ * once, for all of them.
  * @param env The Worker bindings.
  * @param tournament The checked tournament.
  * @param participantId The participant being entered.
@@ -826,10 +857,7 @@ async function enterTournament(
 ): Promise<CreateEntryResult> {
   const tournamentId = tournament.id;
 
-  const lapsed = await lapseExpiredPendingEntries(db, participantId);
-  if (!lapsed.ok) {
-    return lapsed;
-  }
+  await lapseExpiredPendingEntries(db, participantId);
 
   const reusable = await findReusableEntry(db, participantId, tournamentId);
   if (!reusable.ok) {
@@ -849,21 +877,29 @@ async function enterTournament(
   }
   const {entryId} = written;
 
-  const completed = await completeWrittenEntry(
-    env,
-    db,
-    entryId,
-    participantId,
-    email,
-    tournament,
-    input,
-    unverifiedAccount,
-    delivery,
-  );
+  // Rolled back here, and only here, for every stage after the write: a
+  // refused submission must not leave behind an entry that would block its
+  // own retry (see `rollbackEntry()`). A stage that fails unexpectedly throws
+  // instead of refusing (#378), so that is caught too: the entry is rolled
+  // back all the same, and the failure goes on to `app.onError`.
+  let completed;
+  try {
+    completed = await completeWrittenEntry(
+      env,
+      db,
+      entryId,
+      participantId,
+      email,
+      tournament,
+      input,
+      unverifiedAccount,
+      delivery,
+    );
+  } catch (e) {
+    await rollbackEntry(db, entryId, tournamentId, existingEntry);
+    throw e;
+  }
   if (!completed.ok) {
-    // Rolled back here, and only here, for every stage after the write: a
-    // refused submission must not leave behind an entry that would block
-    // its own retry (see `rollbackEntry()`).
     await rollbackEntry(db, entryId, tournamentId, existingEntry);
     return completed;
   }
@@ -896,7 +932,7 @@ async function completeWrittenEntry(
   unverifiedAccount:
     {passwordHash: string; withdrawnTournaments?: string[]} | undefined,
   delivery: EntryMailDelivery,
-): Promise<{ok: true} | LibFailure<409>> {
+): Promise<{ok: true} | ClientFailure<409>> {
   const stored = await storeEntryRegulations(
     db,
     entryId,
@@ -918,7 +954,7 @@ async function completeWrittenEntry(
     }
   }
 
-  return mailVerificationLink(
+  await mailVerificationLink(
     env,
     db,
     entryId,
@@ -927,6 +963,7 @@ async function completeWrittenEntry(
     unverifiedAccount?.withdrawnTournaments,
     delivery,
   );
+  return {ok: true};
 }
 
 /**
@@ -941,7 +978,7 @@ async function ensureStillUnverifiedAccountOf(
   db: DbClient,
   participantId: string,
   passwordHash: string,
-): Promise<{ok: true} | LibFailure<409>> {
+): Promise<{ok: true} | ClientFailure<409>> {
   if (!(await isStillUnverifiedAccountOf(db, participantId, passwordHash))) {
     return {
       ok: false,
@@ -961,7 +998,7 @@ async function ensureStillUnverifiedAccountOf(
 async function lapseExpiredPendingEntries(
   db: DbClient,
   participantId: string,
-): Promise<{ok: true} | InternalFailure> {
+): Promise<void> {
   // An entry whose verification link expired unused can never be confirmed,
   // yet it would still refuse a re-entry in `findReusableEntry()` as
   // `already entered` and, in a region without dual entry, hold the region's
@@ -971,13 +1008,12 @@ async function lapseExpiredPendingEntries(
   // Entries whose link is still valid are left alone. Done here rather than
   // by a scheduled sweep, since only a new entry from the same participant is
   // ever held up by one.
-  const {error: lapseError} = await db.rpc('lapse_expired_pending_entries', {
-    p_participant_id: participantId,
-  });
-  if (lapseError) {
-    return {ok: false, status: 500, error: lapseError.message};
-  }
-  return {ok: true};
+  unwrap(
+    await db.rpc('lapse_expired_pending_entries', {
+      p_participant_id: participantId,
+    }),
+    'failed to lapse the expired pending entries',
+  );
 }
 
 /**
@@ -995,21 +1031,21 @@ async function findReusableEntry(
   participantId: string,
   tournamentId: string,
 ): Promise<
-  {ok: true; existingEntry: ExistingEntryRow | null} | LibFailure<409>
+  {ok: true; existingEntry: ExistingEntryRow | null} | ClientFailure<409>
 > {
   // A participant who cancelled may enter the same tournament again with the
   // same credentials. The unique (participant_id, tournament_id) constraint
   // means that has to reuse the cancelled row instead of inserting a second
   // one.
-  const {data: existingEntry, error: existingEntryError} = await db
-    .from('entries')
-    .select(EXISTING_ENTRY_COLUMNS)
-    .eq('participant_id', participantId)
-    .eq('tournament_id', tournamentId)
-    .maybeSingle();
-  if (existingEntryError) {
-    return {ok: false, status: 500, error: existingEntryError.message};
-  }
+  const existingEntry = unwrap(
+    await db
+      .from('entries')
+      .select(EXISTING_ENTRY_COLUMNS)
+      .eq('participant_id', participantId)
+      .eq('tournament_id', tournamentId)
+      .maybeSingle(),
+    'failed to read the existing entry',
+  );
   if (existingEntry && existingEntry.status !== 'cancelled') {
     return {
       ok: false,
@@ -1045,7 +1081,7 @@ async function writeEntry(
   tournamentId: string,
   input: EntrySessionInput,
   existingEntry: ExistingEntryRow | null,
-): Promise<{ok: true; entryId: string} | LibFailure<409>> {
+): Promise<{ok: true; entryId: string} | ClientFailure<409>> {
   const entryValues = {
     participant_id: participantId,
     tournament_id: tournamentId,
@@ -1124,11 +1160,10 @@ async function writeEntry(
     // Anything else -- a check constraint (0021's length limits), Supabase
     // being down -- is ours to fix, and its message names the table and
     // the constraint, so it goes to the log behind a 500 (#191).
-    return {
-      ok: false,
-      status: 500,
-      error: error?.message ?? 'failed to create entry',
-    };
+    throw new UnexpectedFailure(
+      'failed to create the entry',
+      error ?? {message: 'the write returned no row'},
+    );
   }
   return {ok: true, entryId: entry.id};
 }
@@ -1146,7 +1181,7 @@ async function storeEntryRegulations(
   entryId: string,
   tournamentId: string,
   regulationIds: readonly string[],
-): Promise<{ok: true} | LibFailure<409>> {
+): Promise<{ok: true} | ClientFailure<409>> {
   // The selection is written after the entry because it references it. The
   // composite foreign keys behind `entry_regulations` are what refuse a
   // regulation belonging to another tournament, so a submission that got
@@ -1171,13 +1206,17 @@ async function storeEntryRegulations(
     // `REGULATION_NO_LONGER_AVAILABLE`. Anything else is a server fault, and
     // telling the participant their regulations changed would send them to
     // reload a page that will fail again in exactly the same way.
-    return regulationsError.code === FOREIGN_KEY_VIOLATION_SQLSTATE
-      ? {
-          ok: false,
-          status: 409,
-          error: ENTRY_ERROR_CODES.REGULATION_NO_LONGER_AVAILABLE,
-        }
-      : {ok: false, status: 500, error: regulationsError.message};
+    if (regulationsError.code !== FOREIGN_KEY_VIOLATION_SQLSTATE) {
+      throw new UnexpectedFailure(
+        'failed to store the entry regulations',
+        regulationsError,
+      );
+    }
+    return {
+      ok: false,
+      status: 409,
+      error: ENTRY_ERROR_CODES.REGULATION_NO_LONGER_AVAILABLE,
+    };
   }
   return {ok: true};
 }
@@ -1200,7 +1239,7 @@ async function mailVerificationLink(
   tournament: EntryTournamentRow,
   withdrawnTournaments: string[] | undefined,
   delivery: EntryMailDelivery,
-): Promise<{ok: true} | InternalFailure> {
+): Promise<void> {
   try {
     if (delivery === 'deferred') {
       // Written now, mailed later (`lib/deferred-entry-mail.ts`). A failure
@@ -1213,7 +1252,7 @@ async function mailVerificationLink(
         to: email,
         ...(withdrawnTournaments ? {withdrawnTournaments} : {}),
       });
-      return {ok: true};
+      return;
     }
     await sendVerificationEmail(
       env,
@@ -1229,18 +1268,15 @@ async function mailVerificationLink(
       withdrawnTournaments,
     );
   } catch (mailError) {
-    // Failing here is what gets the entry rolled back: the participant never
-    // received a usable verification link, so the entry they can't confirm
-    // must not stand in the way of them trying again.
-    const message =
-      mailError instanceof Error ? mailError.message : 'unknown error';
-    return {
-      ok: false,
-      status: 500,
-      error: `failed to send verification email: ${message}`,
-    };
+    // Failing here is what gets the entry rolled back (by `enterTournament()`,
+    // which catches this): the participant never received a usable
+    // verification link, so the entry they can't confirm must not stand in the
+    // way of them trying again.
+    throw new UnexpectedFailure(
+      'failed to send the verification email',
+      mailError,
+    );
   }
-  return {ok: true};
 }
 
 /**
@@ -1342,7 +1378,11 @@ export async function createEntryUnauthenticated(
   // surface as an unhandled rejection with none of the context below. So a
   // thrown error (a network failure inside the Supabase client, say) is
   // treated like any other failure on our side.
-  let result: AddressEntryResult;
+  //
+  // A fault on our side is thrown (#378), and is a failure here like any
+  // other: the message holds the context and the database's own message, and
+  // a failure after a takeover still tells what the takeover withdrew.
+  let result: AddressEntryResult | UnexpectedEntryResult;
   try {
     result = await createEntryAfterCheck(env, db, tournament, input, delivery);
   } catch (e) {
@@ -1350,6 +1390,10 @@ export async function createEntryUnauthenticated(
       ok: false,
       status: 500,
       error: e instanceof Error ? e.message : String(e),
+      ...(e instanceof FailureAfterTakeover &&
+      e.withdrawnTournaments !== undefined
+        ? {withdrawnTournaments: e.withdrawnTournaments}
+        : {}),
     };
   }
   if (result.ok) {
@@ -1471,14 +1515,14 @@ export async function createEntryForParticipant(
   }
   const {tournament} = check;
 
-  const {data: participant, error} = await db
-    .from('participants')
-    .select('email')
-    .eq('id', participantId)
-    .maybeSingle();
-  if (error) {
-    return {ok: false, status: 500, error: error.message};
-  }
+  const participant = unwrap(
+    await db
+      .from('participants')
+      .select('email')
+      .eq('id', participantId)
+      .maybeSingle(),
+    'failed to read the participant to enter',
+  );
   if (!participant) {
     // `requireParticipant()` read this same row a moment ago, so it was
     // deleted in between; the session no longer names anyone.

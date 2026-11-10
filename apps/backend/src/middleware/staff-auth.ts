@@ -10,11 +10,8 @@ import {
 } from '@regional-quiz/shared';
 import type {StaffEnv, StaffTournamentEnv} from '../types/env';
 import type {DbClient, Tables} from '../lib/db';
-import {
-  fetchTournamentById,
-  tournamentLookupFailure,
-  type TournamentRow,
-} from '../lib/tournaments';
+import {unwrap} from '../lib/errors';
+import {fetchTournamentById, type TournamentRow} from '../lib/tournaments';
 
 export const STAFF_SESSION_COOKIE = 'staff_session';
 
@@ -65,9 +62,6 @@ export async function readStaffClaims(
   }
 }
 
-/** What `isSessionCurrent()` found out, or that it couldn't find out. */
-export type SessionCheck = {ok: true; current: boolean} | {ok: false};
-
 /**
  * Whether `staff` is still a live session of its account.
  *
@@ -89,15 +83,15 @@ export type SessionCheck = {ok: true; current: boolean} | {ok: false};
  * without requiring a session and so can't use the guards below.
  * @param db The database client.
  * @param staff The claims of a token whose signature already verified.
- * @return `ok: false` if the row couldn't be read. Callers answer that with
- *     a 500 rather than a 401: the session may well be fine, and
- *     "unauthorized" would send staff to log in again over a database
- *     outage.
+ * @return Whether the session is current. A row that couldn't be read is
+ *     thrown (`UnexpectedFailure`) and so answered with a 500 rather than a
+ *     401: the session may well be fine, and "unauthorized" would send staff
+ *     to log in again over a database outage.
  */
 export async function isSessionCurrent(
   db: DbClient,
   staff: StaffClaims,
-): Promise<SessionCheck> {
+): Promise<boolean> {
   // The scope is matched in the same read (#296). The guards decide by the
   // claims' role, region and type, which were copied off the row at login
   // and would otherwise stand for up to 12 hours after the row changed: a
@@ -117,13 +111,10 @@ export async function isSessionCurrent(
     staff.tournamentType === null
       ? query.is('tournament_type', null)
       : query.eq('tournament_type', staff.tournamentType);
-  const {data, error} = await query.maybeSingle();
-  if (error) {
-    console.error('failed to check the session against the staff account', {
-      error: error.message,
-    });
-    return {ok: false};
-  }
+  const data = unwrap(
+    await query.maybeSingle(),
+    'failed to check the session against the staff account',
+  );
   // A missing row means the account was deleted after the cookie was issued,
   // or its role or scope no longer is what the session says, which is as
   // much a dead session as a revoked one: logging in again issues claims
@@ -131,24 +122,21 @@ export async function isSessionCurrent(
   // account's (#156): disabling also moves `sessions_valid_from`, so the
   // generation check alone would already refuse it, but an account that is
   // disabled must stay shut out even if that column is ever moved back.
-  return {
-    ok: true,
-    current:
-      data !== null &&
-      data.disabled_at === null &&
-      Date.parse(data.sessions_valid_from) === staff.sessionsValidFrom,
-  };
+  return (
+    data !== null &&
+    data.disabled_at === null &&
+    Date.parse(data.sessions_valid_from) === staff.sessionsValidFrom
+  );
 }
 
 /**
  * What a guard decides about a session once its signature has verified,
  * apart from whether it is still current: let it through (with whatever it
- * read on the way, for the handler), refuse it as out of scope or as aimed
- * at nothing, or give up because the scope couldn't be read.
+ * read on the way, for the handler), or refuse it as out of scope or as aimed
+ * at nothing. A scope that couldn't be read is thrown, not a decision.
  */
 type Authorization<T> =
-  | {decision: 'allowed'; scope: T}
-  | {decision: 'forbidden' | 'not-found' | 'error'};
+  {decision: 'allowed'; scope: T} | {decision: 'forbidden' | 'not-found'};
 
 /** `Authorization` for a guard that reads nothing to decide. */
 const ALLOWED: Authorization<undefined> = {
@@ -157,7 +145,6 @@ const ALLOWED: Authorization<undefined> = {
 };
 const FORBIDDEN: Authorization<never> = {decision: 'forbidden'};
 const NOT_FOUND: Authorization<never> = {decision: 'not-found'};
-const AUTHORIZATION_ERROR: Authorization<never> = {decision: 'error'};
 
 /**
  * Lets through any staff member with a live session, whatever their role or
@@ -191,8 +178,8 @@ export function requireStaff() {
  *     it read to decide comes back as `scope`, so a guard can hand it to
  *     the handler without reading it twice.
  * @return The claims and the scope, or a 401 (no session, or a dead one),
- *     403 (out of scope), 404 (nothing to be in scope of) or 500 (something
- *     couldn't be read).
+ *     403 (out of scope) or 404 (nothing to be in scope of). Something that
+ *     couldn't be read is thrown (`UnexpectedFailure`), for a 500.
  */
 async function authenticateStaff<T, E extends StaffEnv | StaffTournamentEnv>(
   c: Context<E>,
@@ -207,19 +194,18 @@ async function authenticateStaff<T, E extends StaffEnv | StaffTournamentEnv>(
   if (!staff) {
     return c.json({error: COMMON_ERROR_CODES.UNAUTHORIZED}, 401);
   }
-  const [check, authorization] = await Promise.all([
-    isSessionCurrent(c.get('db'), staff),
-    authorize(staff),
-  ]);
-  if (!check.ok) {
-    return c.json({error: 'internal server error'}, 500);
-  }
-  if (!check.current) {
+  // Both reads start now, but the session's is awaited first and a dead
+  // session answers 401 whatever `authorize` came to, a failure to read its
+  // scope included: that failure is only thrown once the session is known to
+  // be live. The no-op `catch` keeps a rejection that is never awaited (the
+  // session read threw, or the session is dead) from going unhandled.
+  const authorizing = Promise.resolve(authorize(staff));
+  authorizing.catch(() => {});
+  if (!(await isSessionCurrent(c.get('db'), staff))) {
     return c.json({error: COMMON_ERROR_CODES.UNAUTHORIZED}, 401);
   }
+  const authorization = await authorizing;
   switch (authorization.decision) {
-    case 'error':
-      return c.json({error: 'internal server error'}, 500);
     case 'forbidden':
       return c.json({error: 'forbidden'}, 403);
     case 'not-found':
@@ -284,16 +270,10 @@ export function requireStaffForTournament() {
     const auth = await authenticateStaff(
       c,
       async (staff): Promise<Authorization<TournamentRow>> => {
-        let tournament: TournamentRow | null;
-        try {
-          tournament = await fetchTournamentById(
-            c.get('db'),
-            c.req.param('tournamentId') ?? '',
-          );
-        } catch (e: unknown) {
-          tournamentLookupFailure(e);
-          return AUTHORIZATION_ERROR;
-        }
+        const tournament = await fetchTournamentById(
+          c.get('db'),
+          c.req.param('tournamentId') ?? '',
+        );
         if (staff.role === 'general') {
           return tournament
             ? {decision: 'allowed', scope: tournament}
@@ -321,13 +301,15 @@ export function requireStaffForEntry() {
   return createMiddleware<StaffEnv>(async (c, next) => {
     const auth = await authenticateStaff(c, async staff => {
       if (staff.role === 'general') return ALLOWED;
-      const {data: entry, error} = await c
-        .get('db')
-        .from('entries')
-        .select('tournaments(region_id, type)')
-        .eq('id', c.req.param('entryId') ?? '')
-        .maybeSingle();
-      if (error) return AUTHORIZATION_ERROR;
+      const entry = unwrap(
+        await c
+          .get('db')
+          .from('entries')
+          .select('tournaments(region_id, type)')
+          .eq('id', c.req.param('entryId') ?? '')
+          .maybeSingle(),
+        'failed to read the entry to check the staff scope against',
+      );
       return isInScope(staff, entry?.tournaments ?? null) ? ALLOWED : FORBIDDEN;
     });
     if (auth instanceof Response) return auth;

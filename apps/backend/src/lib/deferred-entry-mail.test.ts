@@ -242,6 +242,38 @@ describe.skipIf(!(await isDbReachable()))(
       expect(await liveTokens(entryId)).toBe(1);
     });
 
+    it('waits and retries when the entry cannot be read', async () => {
+      const {entryId, email} = await deferredEntry();
+      const message = new FakeMessage({
+        kind: 'deferred-verification',
+        entryId,
+        to: email,
+      });
+      const working = globalThis.fetch;
+      globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        return url.includes('/rest/v1/entries')
+          ? Promise.resolve(
+              Response.json({message: 'db is down'}, {status: 500}),
+            )
+          : working(input, init);
+      }) as typeof fetch;
+      const originalConsoleError = console.error;
+      console.error = () => {};
+      try {
+        await handleBulkMailQueue(batchOf([message]), envWith());
+      } finally {
+        console.error = originalConsoleError;
+      }
+
+      // A failure of this attempt, not of the mail: it is tried again later.
+      expect(message.retriedWith).toEqual({
+        delaySeconds: ENTRY_MAIL_DEFER_SECONDS,
+      });
+      expect(message.acked).toBe(false);
+      expect(mails).toEqual([]);
+    });
+
     // What coalesces a flood: every new submission under an unverified
     // address deletes the entries the earlier ones made.
     it('sends nothing for an entry a later submission replaced', async () => {

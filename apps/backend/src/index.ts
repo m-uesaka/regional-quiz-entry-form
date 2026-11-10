@@ -1,7 +1,6 @@
 import {COMMON_ERROR_CODES} from '@regional-quiz/shared';
 import {Hono} from 'hono';
 import {csrf} from 'hono/csrf';
-import {HTTPException} from 'hono/http-exception';
 import {secureHeaders} from 'hono/secure-headers';
 import type {Bindings, Env} from './types/env';
 import {handleBulkMailQueue, type BulkMailMessage} from './lib/bulk-mail-queue';
@@ -26,7 +25,7 @@ import {mypageRoute} from './routes/mypage';
 import {portalRoute} from './routes/portal';
 import {dbClient} from './middleware/db';
 import {trustedOrigins} from './lib/trusted-origins';
-import {internalError} from './lib/errors';
+import {handleError} from './lib/errors';
 
 // Exported by name for the tests, which drive the API through
 // `app.request()`. The default export below is the Worker itself, and it is
@@ -38,17 +37,10 @@ export const app = new Hono<Env>().basePath('/api');
 // shape (#294) rather than Hono's plain-text defaults. Registered on the app
 // itself, so the routes mounted below with `.route()` fall back to them too.
 //
-// An `HTTPException` is a refusal some middleware chose on purpose -- the
-// origin check's 403 below -- so it keeps the response it carries, as Hono's
-// default handler would give it. Anything else thrown is a fault on our side
-// (a `XSchema.parse()` meeting a database value it did not expect, say),
-// logged and answered with the same 500 a route's own `internalError()` gives.
-app.onError((err, c) => {
-  if (err instanceof HTTPException) {
-    return err.getResponse();
-  }
-  return c.json(internalError(`${c.req.method} ${c.req.path}`, err), 500);
-});
+// See `handleError()`: the origin check's 403 below keeps its own response,
+// and anything else thrown -- a query that failed (`unwrap()`, #378) included
+// -- is a logged 500.
+app.onError(handleError);
 app.notFound(c => c.json({error: COMMON_ERROR_CODES.NOT_FOUND}, 404));
 
 // Every response, the API's own errors included: registered first, so it

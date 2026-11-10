@@ -1,6 +1,6 @@
 import type {EntryStatus, StaffMailStatusFilter} from '@regional-quiz/shared';
 import {type DbClient} from './db';
-import type {InternalFailure} from './errors';
+import {UnexpectedFailure} from './errors';
 import {fetchAllRows, SELECT_PAGE_SIZE} from './paged-select';
 
 /**
@@ -28,8 +28,6 @@ export const DEFAULT_EXCLUDED_STATUSES: readonly EntryStatus[] = [
   'cancelled',
 ];
 
-type RecipientsResult = {ok: true; recipients: string[]} | InternalFailure;
-
 /**
  * Collects the addresses to mail for one tournament's entries.
  *
@@ -49,6 +47,7 @@ type RecipientsResult = {ok: true; recipients: string[]} | InternalFailure;
  * @param tournamentId The tournament whose entries to mail.
  * @param statusFilter The single entry status to narrow the recipients to.
  * @param pageSize Rows to read per request; see `fetchAllRows()`.
+ * @return The addresses.
  * @throws RangeError If `pageSize` is not a positive integer.
  */
 export async function fetchTournamentRecipients(
@@ -56,7 +55,7 @@ export async function fetchTournamentRecipients(
   tournamentId: string,
   statusFilter?: StaffMailStatusFilter,
   pageSize: number = SELECT_PAGE_SIZE,
-): Promise<RecipientsResult> {
+): Promise<string[]> {
   // Paged through `fetchAllRows()` because the Data API silently trims a
   // single response to its `max_rows`; that helper only stops on an empty
   // page, so a hosted `max_rows` below the page size still reaches every
@@ -78,11 +77,14 @@ export async function fetchTournamentRecipients(
     return query.order('id', {ascending: true}).range(from, to);
   }, pageSize);
   if (result.error) {
-    return {ok: false, status: 500, error: result.error.message};
+    throw new UnexpectedFailure(
+      'failed to read the recipients of the bulk mail',
+      result.error,
+    );
   }
 
   // De-duplicated: a participant holding several matching entries is
   // mailed once.
   const recipients = new Set(result.rows.map(row => row.participants.email));
-  return {ok: true, recipients: [...recipients]};
+  return [...recipients];
 }

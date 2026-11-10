@@ -2,6 +2,7 @@ import {afterEach, describe, expect, it} from 'bun:test';
 import {passwordResetRoute} from './password-reset';
 import {Hono} from 'hono';
 import {dbClient} from '../middleware/db';
+import {handleError} from '../lib/errors';
 import type {Env} from '../types/env';
 import type {Bindings} from '../types/env';
 import {
@@ -15,6 +16,7 @@ import {TURNSTILE_TOKEN_HEADER} from '../middleware/turnstile';
 // The route behind the middleware that gives it its database client, as
 // `index.ts` mounts it.
 const routeUnderTest = new Hono<Env>()
+  .onError(handleError)
   .use(dbClient())
   .route('/', passwordResetRoute);
 

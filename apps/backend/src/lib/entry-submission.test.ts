@@ -1,5 +1,6 @@
 import {afterAll, beforeAll, describe, expect, it, spyOn} from 'bun:test';
 import {createDbClient} from './db';
+import {UnexpectedFailure} from './errors';
 import {SQL} from 'bun';
 import type {EntryInput, TournamentType} from '@regional-quiz/shared';
 import {
@@ -394,18 +395,17 @@ describe.skipIf(!dbReachable)(
 
       // Past 0021's length check, which the route's own schema would have
       // stopped first.
-      const result = await createEntry(
-        env,
-        createDbClient(env),
-        fixture.tournamentId,
-        validInput({
-          name: 'あ'.repeat(101),
-          regulationIds: [fixture.regulationId],
-        }),
-      );
-
-      expect(result.ok).toBe(false);
-      expect(!result.ok && result.status).toBe(500);
+      await expect(
+        createEntry(
+          env,
+          createDbClient(env),
+          fixture.tournamentId,
+          validInput({
+            name: 'あ'.repeat(101),
+            regulationIds: [fixture.regulationId],
+          }),
+        ),
+      ).rejects.toBeInstanceOf(UnexpectedFailure);
     });
 
     it('rejects re-entry under an existing email with the wrong password', async () => {
@@ -581,15 +581,9 @@ describe.skipIf(!dbReachable)(
       }) as typeof fetch;
 
       try {
-        const failedResult = await createEntry(
-          env,
-          createDbClient(env),
-          fixture.tournamentId,
-          input,
-        );
-
-        expect(failedResult.ok).toBe(false);
-        expect(!failedResult.ok && failedResult.status).toBe(500);
+        await expect(
+          createEntry(env, createDbClient(env), fixture.tournamentId, input),
+        ).rejects.toBeInstanceOf(UnexpectedFailure);
         const rows = await sql`
           select id from entries
           where tournament_id = ${fixture.tournamentId}
@@ -642,15 +636,9 @@ describe.skipIf(!dbReachable)(
       const consoleError = spyOn(console, 'error').mockImplementation(() => {});
 
       try {
-        const result = await createEntry(
-          env,
-          createDbClient(env),
-          fixture.tournamentId,
-          input,
-        );
-
-        expect(result.ok).toBe(false);
-        expect(!result.ok && result.status).toBe(500);
+        await expect(
+          createEntry(env, createDbClient(env), fixture.tournamentId, input),
+        ).rejects.toBeInstanceOf(UnexpectedFailure);
         const messages = consoleError.mock.calls.map(call => call[0]);
         expect(messages).toContain('failed to delete the verification tokens');
         expect(messages).toContain('failed to delete the entry');
@@ -905,21 +893,15 @@ describe.skipIf(!dbReachable)(
       }) as typeof fetch;
 
       try {
-        const failedResult = await createEntry(
-          env,
-          createDbClient(env),
-          fixture.tournamentId,
-          {
+        await expect(
+          createEntry(env, createDbClient(env), fixture.tournamentId, {
             // A re-entry submits its own form contents, which the reuse update
             // writes over the cancelled entry's before the mail is attempted.
             ...input,
             displayName: '再エントリー太郎',
             freeText: '再エントリーの備考',
-          },
-        );
-
-        expect(failedResult.ok).toBe(false);
-        expect(!failedResult.ok && failedResult.status).toBe(500);
+          }),
+        ).rejects.toBeInstanceOf(UnexpectedFailure);
         expect(await wholeRow()).toEqual(cancelledRow);
         // The row the re-entry reused is still there, back in the
         // cancellation it came from rather than deleted — and carrying the

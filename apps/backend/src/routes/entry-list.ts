@@ -10,12 +10,8 @@ import {
 import type {Env} from '../types/env';
 import {type Tables} from '../lib/db';
 import {fetchPage, toPageResponse} from '../lib/paged-select';
-import {internalError} from '../lib/errors';
-import {
-  fetchTournamentBySlug,
-  tournamentLookupFailure,
-  type TournamentRow,
-} from '../lib/tournaments';
+import {UnexpectedFailure} from '../lib/errors';
+import {fetchTournamentBySlug} from '../lib/tournaments';
 import {TournamentIdParamSchema, TournamentBySlugParamSchema} from './params';
 import {validate} from '../middleware/validate';
 
@@ -93,7 +89,7 @@ async function respondWithEntryList(
     page,
   );
   if (error) {
-    return c.json(internalError('failed to read the entry list', error), 500);
+    throw new UnexpectedFailure('failed to read the entry list', error);
   }
   return c.json(toPageResponse(rows.map(rowToEntryListItem), total, page));
 }
@@ -133,7 +129,7 @@ export const entryListRoute = new Hono<Env>()
       ]);
       const error = confirmed.error ?? waitlisted.error;
       if (error) {
-        return c.json(internalError('failed to count the entries', error), 500);
+        throw new UnexpectedFailure('failed to count the entries', error);
       }
       return c.json(
         TournamentEntryCountsSchema.parse({
@@ -166,16 +162,11 @@ export const entryListRoute = new Hono<Env>()
     validate('query', PageQuerySchema),
     async c => {
       const {regionSlug, tournamentSlug} = c.req.valid('param');
-      let tournament: TournamentRow | null;
-      try {
-        tournament = await fetchTournamentBySlug(
-          c.get('db'),
-          regionSlug,
-          tournamentSlug,
-        );
-      } catch (e: unknown) {
-        return c.json(tournamentLookupFailure(e), 500);
-      }
+      const tournament = await fetchTournamentBySlug(
+        c.get('db'),
+        regionSlug,
+        tournamentSlug,
+      );
       if (!tournament) {
         return c.json({error: 'tournament not found'}, 404);
       }

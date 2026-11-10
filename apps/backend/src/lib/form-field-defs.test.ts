@@ -1,6 +1,7 @@
 import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
 import {testBindings} from '../test-support/bindings';
 import {createDbClient} from './db';
+import {UnexpectedFailure} from './errors';
 import {fetchFormFieldDefs, validateCustomFieldValues} from './form-field-defs';
 
 const TOURNAMENT_ID = '22222222-2222-4222-8222-222222222222';
@@ -50,9 +51,8 @@ describe('form field def reads (mocked Supabase)', () => {
     it("reads the tournament's rows in display order", async () => {
       mockFetch(() => Response.json([SHIRT_SIZE_ROW]));
 
-      const {fieldDefs, error} = await fetchFormFieldDefs(db, TOURNAMENT_ID);
+      const fieldDefs = await fetchFormFieldDefs(db, TOURNAMENT_ID);
 
-      expect(error).toBeNull();
       expect(fieldDefs).toEqual([
         {
           fieldKey: 'shirt_size',
@@ -73,32 +73,33 @@ describe('form field def reads (mocked Supabase)', () => {
       });
     });
 
-    it('hands back the whole database error for the caller to log', async () => {
+    it('throws the whole database error for the log', async () => {
       mockFetch(() => Response.json(POSTGREST_ERROR, {status: 500}));
 
-      const {fieldDefs, error} = await fetchFormFieldDefs(db, TOURNAMENT_ID);
-
-      expect(fieldDefs).toBeNull();
-      expect(error).toEqual(POSTGREST_ERROR);
+      await expect(fetchFormFieldDefs(db, TOURNAMENT_ID)).rejects.toMatchObject(
+        {
+          context: 'failed to read the form field defs',
+          cause: POSTGREST_ERROR,
+        },
+      );
     });
 
     it('treats an answer with no rows as a failed read, not an empty form', async () => {
       mockFetch(() => new Response('', {status: 200}));
 
-      const {fieldDefs, error} = await fetchFormFieldDefs(db, TOURNAMENT_ID);
-
-      expect(fieldDefs).toBeNull();
-      expect(error).toEqual({
-        message: 'the form field defs read returned no data',
-      });
+      await expect(fetchFormFieldDefs(db, TOURNAMENT_ID)).rejects.toMatchObject(
+        {
+          context: 'failed to read the form field defs',
+          cause: {message: 'the form field defs read returned no data'},
+        },
+      );
     });
 
     it('still answers an empty list for a tournament with no custom fields', async () => {
       mockFetch(() => Response.json([]));
 
-      const {fieldDefs, error} = await fetchFormFieldDefs(db, TOURNAMENT_ID);
+      const fieldDefs = await fetchFormFieldDefs(db, TOURNAMENT_ID);
 
-      expect(error).toBeNull();
       expect(fieldDefs).toEqual([]);
     });
 
@@ -132,27 +133,21 @@ describe('form field def reads (mocked Supabase)', () => {
       expect(check).toMatchObject({ok: false, status: 400});
     });
 
-    it("reports a failed read as a 500 with the database's message", async () => {
+    it("throws a failed read, with the database's error", async () => {
       mockFetch(() => Response.json(POSTGREST_ERROR, {status: 500}));
 
-      const check = await validateCustomFieldValues(db, TOURNAMENT_ID, {
-        shirt_size: 'S',
-      });
-
-      expect(check).toEqual({
-        ok: false,
-        status: 500,
-        error: 'connection terminated',
-      });
+      await expect(
+        validateCustomFieldValues(db, TOURNAMENT_ID, {shirt_size: 'S'}),
+      ).rejects.toMatchObject({cause: POSTGREST_ERROR});
     });
 
     // Without this, the required fields would go unchecked.
     it('refuses to check against an answer with no rows', async () => {
       mockFetch(() => new Response('', {status: 200}));
 
-      const check = await validateCustomFieldValues(db, TOURNAMENT_ID, {});
-
-      expect(check).toMatchObject({ok: false, status: 500});
+      await expect(
+        validateCustomFieldValues(db, TOURNAMENT_ID, {}),
+      ).rejects.toBeInstanceOf(UnexpectedFailure);
     });
   });
 });

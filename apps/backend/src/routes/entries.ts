@@ -48,7 +48,7 @@ export const entriesRoute = new Hono<Env>().post(
       input,
     );
     if (!check.ok) {
-      return respondFailure(c, check, 'failed to check the entry');
+      return respondFailure(c, check);
     }
 
     // The address being mailed is limited separately from the address doing
@@ -123,7 +123,7 @@ export const entrySessionRoute = new Hono<ParticipantEnv>().post(
       c.req.valid('json'),
     );
     if (!result.ok) {
-      return respondFailure(c, result, 'failed to create the entry');
+      return respondFailure(c, result);
     }
     return c.json(result.entry, 201);
   },

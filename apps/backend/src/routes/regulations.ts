@@ -2,7 +2,6 @@ import {Hono} from 'hono';
 import {
   RegulationSchema,
   RegulationSyncInputSchema,
-  type Regulation,
 } from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
@@ -10,8 +9,7 @@ import {
   byTournamentIdParam,
   requireOpenEntryPeriodOrStaff,
 } from '../middleware/entry-period';
-import {type Tables} from '../lib/db';
-import {internalError} from '../lib/errors';
+import {UnexpectedFailure, unwrap} from '../lib/errors';
 import {
   NoLastingRegulationError,
   RegulationInUseError,
@@ -22,34 +20,13 @@ import {TournamentNotFoundError} from '../lib/tournament-errors';
 import {TournamentIdParamSchema} from './params';
 import {validate} from '../middleware/validate';
 
+// Aliased to the API's names in the select itself, so a row is the
+// `Regulation` shape and `RegulationSchema` only has to check it.
 const REGULATION_COLUMNS = `
-  id, tournament_id, label, priority_starts_at, priority_ends_at,
-  closes_with_priority, display_order
+  id, tournamentId:tournament_id, label,
+  priorityStartsAt:priority_starts_at, priorityEndsAt:priority_ends_at,
+  closesWithPriority:closes_with_priority, displayOrder:display_order
 `;
-
-/** Shape of a `regulations` row as selected above (snake_case). */
-type RegulationRow = Pick<
-  Tables<'regulations'>,
-  | 'id'
-  | 'tournament_id'
-  | 'label'
-  | 'priority_starts_at'
-  | 'priority_ends_at'
-  | 'closes_with_priority'
-  | 'display_order'
->;
-
-function rowToRegulation(row: RegulationRow): Regulation {
-  return RegulationSchema.parse({
-    id: row.id,
-    tournamentId: row.tournament_id,
-    label: row.label,
-    priorityStartsAt: row.priority_starts_at,
-    priorityEndsAt: row.priority_ends_at,
-    closesWithPriority: row.closes_with_priority,
-    displayOrder: row.display_order,
-  });
-}
 
 // The read is public *while the entry period is open*: the entry form has
 // to show which regulations a participant may pick before they have any
@@ -66,18 +43,15 @@ export const regulationsRoute = new Hono<StaffEnv>()
     requireOpenEntryPeriodOrStaff(byTournamentIdParam),
     async c => {
       const db = c.get('db');
-      const {data, error} = await db
-        .from('regulations')
-        .select(REGULATION_COLUMNS)
-        .eq('tournament_id', c.req.valid('param').tournamentId)
-        .order('display_order', {ascending: true});
-      if (error) {
-        return c.json(
-          internalError('failed to read the regulations', error),
-          500,
-        );
-      }
-      return c.json(data.map(rowToRegulation));
+      const data = unwrap(
+        await db
+          .from('regulations')
+          .select(REGULATION_COLUMNS)
+          .eq('tournament_id', c.req.valid('param').tournamentId)
+          .order('display_order', {ascending: true}),
+        'failed to read the regulations',
+      );
+      return c.json(data.map(row => RegulationSchema.parse(row)));
     },
   )
   // Whole-tournament replace, mirroring `PUT /api/form-definitions/:id`:
@@ -112,7 +86,7 @@ export const regulationsRoute = new Hono<StaffEnv>()
         if (e instanceof RegulationInUseError) {
           return c.json({error: e.message}, 409);
         }
-        return c.json(internalError('failed to sync the regulations', e), 500);
+        throw new UnexpectedFailure('failed to sync the regulations', e);
       }
 
       return c.json({ok: true});

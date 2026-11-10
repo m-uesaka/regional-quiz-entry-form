@@ -1,31 +1,12 @@
 import type {StaffMailJob} from '@regional-quiz/shared';
-import {type DbClient, type Tables} from './db';
-import type {InternalResult} from './errors';
+import {type DbClient} from './db';
+import {unwrap} from './errors';
 
 /** The content half of a job, which is all the queue consumer reads. */
 export interface MailJobContent {
   id: string;
   subject: string;
   bodyHtml: string;
-}
-
-/** Shape of a `mail_jobs` row (snake_case), minus the body. */
-type MailJobRow = Pick<
-  Tables<'mail_jobs'>,
-  'id' | 'subject' | 'total' | 'sent' | 'failed' | 'created_at' | 'updated_at'
->;
-
-/** Turns a row into what the staff status endpoint answers with. */
-function rowToStaffMailJob(row: MailJobRow): StaffMailJob {
-  return {
-    jobId: row.id,
-    subject: row.subject,
-    total: row.total,
-    sent: row.sent,
-    failed: row.failed,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
 }
 
 /**
@@ -50,21 +31,21 @@ export async function createMailJob(
     bodyHtml: string;
     total: number;
   },
-): Promise<InternalResult<string>> {
-  const {data, error} = await db
-    .from('mail_jobs')
-    .insert({
-      tournament_id: job.tournamentId,
-      subject: job.subject,
-      body_html: job.bodyHtml,
-      total: job.total,
-    })
-    .select('id')
-    .single();
-  if (error) {
-    return {ok: false, status: 500, error: error.message};
-  }
-  return {ok: true, value: data.id};
+): Promise<string> {
+  const {id} = unwrap(
+    await db
+      .from('mail_jobs')
+      .insert({
+        tournament_id: job.tournamentId,
+        subject: job.subject,
+        body_html: job.bodyHtml,
+        total: job.total,
+      })
+      .select('id')
+      .single(),
+    'failed to record the mail job',
+  );
+  return id;
 }
 
 /**
@@ -79,22 +60,16 @@ export async function createMailJob(
 export async function fetchMailJobContent(
   db: DbClient,
   jobId: string,
-): Promise<InternalResult<MailJobContent | null>> {
-  const {data, error} = await db
-    .from('mail_jobs')
-    .select('id, subject, body_html')
-    .eq('id', jobId)
-    .maybeSingle();
-  if (error) {
-    return {ok: false, status: 500, error: error.message};
-  }
-  if (!data) {
-    return {ok: true, value: null};
-  }
-  return {
-    ok: true,
-    value: {id: data.id, subject: data.subject, bodyHtml: data.body_html},
-  };
+): Promise<MailJobContent | null> {
+  const data = unwrap(
+    await db
+      .from('mail_jobs')
+      .select('id, subject, bodyHtml:body_html')
+      .eq('id', jobId)
+      .maybeSingle(),
+    'failed to read the mail job',
+  );
+  return data;
 }
 
 /**
@@ -116,17 +91,18 @@ export async function fetchMailJob(
   db: DbClient,
   tournamentId: string,
   jobId: string,
-): Promise<InternalResult<StaffMailJob | null>> {
-  const {data, error} = await db
-    .from('mail_jobs')
-    .select('id, subject, total, sent, failed, created_at, updated_at')
-    .eq('id', jobId)
-    .eq('tournament_id', tournamentId)
-    .maybeSingle();
-  if (error) {
-    return {ok: false, status: 500, error: error.message};
-  }
-  return {ok: true, value: data ? rowToStaffMailJob(data) : null};
+): Promise<StaffMailJob | null> {
+  return unwrap(
+    await db
+      .from('mail_jobs')
+      .select(
+        'jobId:id, subject, total, sent, failed, createdAt:created_at, updatedAt:updated_at',
+      )
+      .eq('id', jobId)
+      .eq('tournament_id', tournamentId)
+      .maybeSingle(),
+    'failed to read the mail job',
+  );
 }
 
 /**
@@ -147,14 +123,13 @@ export async function recordMailJobProgress(
   db: DbClient,
   jobId: string,
   progress: {sent: number; failed: number},
-): Promise<InternalResult<void>> {
-  const {error} = await db.rpc('record_mail_job_progress', {
-    p_job_id: jobId,
-    p_sent: progress.sent,
-    p_failed: progress.failed,
-  });
-  if (error) {
-    return {ok: false, status: 500, error: error.message};
-  }
-  return {ok: true, value: undefined};
+): Promise<void> {
+  unwrap(
+    await db.rpc('record_mail_job_progress', {
+      p_job_id: jobId,
+      p_sent: progress.sent,
+      p_failed: progress.failed,
+    }),
+    'failed to record the mail job progress',
+  );
 }

@@ -4,7 +4,7 @@ import type {
   StaffPasswordResetConfirmInput,
 } from '@regional-quiz/shared/password-policy';
 import {type DbClient} from './db';
-import type {LibFailure} from './errors';
+import {UnexpectedFailure, type ClientFailure} from './errors';
 import {hashPassword} from './password';
 import {INVALID_TOKEN_SQLSTATE} from './pg-errors';
 import {hashToken} from './token';
@@ -23,12 +23,11 @@ export type TokenPasswordResetInput =
   PasswordResetConfirmInput | StaffPasswordResetConfirmInput;
 
 /**
- * The outcome of a reset: a 400 when the token is unknown, used or expired,
- * a 500 carrying the database's own message when the database failed. A
- * route answers a failure through `respondFailure()`, which keeps that
- * message out of the response.
+ * The outcome of a reset: a 400 when the token is unknown, used or expired.
+ * A database failure is thrown (`UnexpectedFailure`) and answered by
+ * `app.onError`, which keeps its message out of the response.
  */
-export type TokenPasswordResetResult = {ok: true} | LibFailure<400>;
+export type TokenPasswordResetResult = {ok: true} | ClientFailure<400>;
 
 /**
  * Sets a new password through a one-time reset token and burns the token,
@@ -44,8 +43,7 @@ export type TokenPasswordResetResult = {ok: true} | LibFailure<400>;
  * @param db The database client.
  * @param target The token table and redeeming function of the flow.
  * @param input The validated raw token and the new password.
- * @return A 400 when the token is unknown, used or expired, a 500 when the
- *     database failed.
+ * @return A 400 when the token is unknown, used or expired.
  */
 export async function confirmTokenPasswordReset(
   db: DbClient,
@@ -70,7 +68,7 @@ export async function confirmTokenPasswordReset(
   // A failed read must not be reported as a bad token: that would tell the
   // user their link had expired when the database was simply down.
   if (error) {
-    return {ok: false, status: 500, error: error.message};
+    throw new UnexpectedFailure('failed to read the reset token', error);
   }
   if (!candidate) {
     return {
@@ -92,7 +90,7 @@ export async function confirmTokenPasswordReset(
         error: COMMON_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
       };
     }
-    return {ok: false, status: 500, error: resetError.message};
+    throw new UnexpectedFailure('failed to reset the password', resetError);
   }
   return {ok: true};
 }

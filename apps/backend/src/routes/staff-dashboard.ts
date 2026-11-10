@@ -6,7 +6,7 @@ import {
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
 import {type Database} from '../lib/db';
-import {internalError} from '../lib/errors';
+import {unwrap} from '../lib/errors';
 import {tournamentDisplayName} from '../lib/tournaments';
 
 /** Shape of a `tournament_entry_summary()` row (snake_case). */
@@ -50,13 +50,10 @@ export const staffDashboardRoute = new Hono<StaffEnv>().get(
     // status. One row comes back per tournament (regions x tournament
     // types), which stays well under Supabase's `max_rows` cap, so unlike
     // the entry CSV export this needs no paging.
-    const {data, error} = await db.rpc('tournament_entry_summary');
-    if (error) {
-      return c.json(
-        internalError('failed to aggregate the dashboard summary', error),
-        500,
-      );
-    }
+    const data = unwrap(
+      await db.rpc('tournament_entry_summary'),
+      'failed to aggregate the dashboard summary',
+    );
     const rows: TournamentEntrySummaryRow[] = data ?? [];
     return c.json(rows.map(rowToSummary));
   },

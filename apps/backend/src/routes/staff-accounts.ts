@@ -6,7 +6,7 @@ import {
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
 import {type Tables} from '../lib/db';
-import {internalError} from '../lib/errors';
+import {UnexpectedFailure, unwrap} from '../lib/errors';
 import {isPasswordHashUsable, UNUSABLE_PASSWORD_HASH} from '../lib/password';
 import {
   badRequest,
@@ -81,16 +81,13 @@ function rowToStaffAccount(row: StaffAccountRow): StaffAccount {
 export const staffAccountsRoute = new Hono<StaffEnv>()
   .get('/accounts', requireGeneralStaff(), async c => {
     const db = c.get('db');
-    const {data, error} = await db
-      .from('staff_accounts')
-      .select(STAFF_ACCOUNT_COLUMNS)
-      .order('created_at', {ascending: true});
-    if (error) {
-      return c.json(
-        internalError('failed to read the staff accounts', error),
-        500,
-      );
-    }
+    const data = unwrap(
+      await db
+        .from('staff_accounts')
+        .select(STAFF_ACCOUNT_COLUMNS)
+        .order('created_at', {ascending: true}),
+      'failed to read the staff accounts',
+    );
     return c.json(data.map(rowToStaffAccount));
   })
   .post(
@@ -177,17 +174,14 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
       // The address is read from the row rather than taken from the request:
       // a reset link must only ever go to the account's own mailbox, so there
       // is nothing for the caller to supply.
-      const {data: account, error} = await db
-        .from('staff_accounts')
-        .select('id, email')
-        .eq('id', c.req.valid('param').id)
-        .maybeSingle();
-      if (error) {
-        return c.json(
-          internalError('failed to read the staff account to reset', error),
-          500,
-        );
-      }
+      const account = unwrap(
+        await db
+          .from('staff_accounts')
+          .select('id, email')
+          .eq('id', c.req.valid('param').id)
+          .maybeSingle(),
+        'failed to read the staff account to reset',
+      );
       if (!account) {
         return c.json({error: 'staff account not found'}, 404);
       }
@@ -209,12 +203,9 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
         if (mailResult.disabled) {
           return c.json({error: 'staff account disabled'}, 409);
         }
-        return c.json(
-          internalError(
-            'failed to send the staff password reset mail',
-            mailResult.error,
-          ),
-          500,
+        throw new UnexpectedFailure(
+          'failed to send the staff password reset mail',
+          mailResult.error,
         );
       }
       return c.json({ok: true});
@@ -245,18 +236,15 @@ export const staffAccountsRoute = new Hono<StaffEnv>()
       // because nothing compares it with a clock: a session is current only
       // if its claim *equals* the column, so all that matters is that the
       // value changes, and a fresh millisecond timestamp does.
-      const {data: account, error} = await db
-        .from('staff_accounts')
-        .update({sessions_valid_from: new Date().toISOString()})
-        .eq('id', c.req.valid('param').id)
-        .select('id')
-        .maybeSingle();
-      if (error) {
-        return c.json(
-          internalError('failed to revoke the staff sessions', error),
-          500,
-        );
-      }
+      const account = unwrap(
+        await db
+          .from('staff_accounts')
+          .update({sessions_valid_from: new Date().toISOString()})
+          .eq('id', c.req.valid('param').id)
+          .select('id')
+          .maybeSingle(),
+        'failed to revoke the staff sessions',
+      );
       if (!account) {
         return c.json({error: 'staff account not found'}, 404);
       }

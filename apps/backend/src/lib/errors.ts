@@ -5,6 +5,7 @@ import type {
   EntryEditErrorCode,
 } from '@regional-quiz/shared';
 import type {Context} from 'hono';
+import {HTTPException} from 'hono/http-exception';
 
 /** The body every unexpected server-side failure answers with. */
 const INTERNAL_ERROR_BODY = {error: 'internal server error'} as const;
@@ -54,47 +55,87 @@ export interface ClientFailure<S extends ClientFailureStatus> {
 }
 
 /**
- * A fault on our side. `error` is free text for the log -- a database or
- * thrown message -- and `respondFailure()` never sends it. Anything a lib
- * function can't name as a refusal is one of these.
+ * An unexpected failure -- one nothing can be done about, a database outage
+ * or a row the code did not expect -- thrown for `app.onError` (`index.ts`)
+ * to log and answer with `internalError()`'s 500. It is not a refusal, so it
+ * is not in a lib function's result type.
+ *
+ * `context` is what was being attempted, for the log line; `cause` is the
+ * underlying error (a Supabase error, say), logged beside it. Neither is
+ * ever sent to the client. The message holds both, for a place that can only
+ * log a message (`createEntryUnauthenticated()`).
  */
-export interface InternalFailure {
-  ok: false;
-  status: 500;
-  error: string;
+export class UnexpectedFailure extends Error {
+  constructor(
+    readonly context: string,
+    readonly cause: unknown,
+  ) {
+    const detail =
+      typeof cause === 'object' &&
+      cause !== null &&
+      'message' in cause &&
+      typeof cause.message === 'string'
+        ? cause.message
+        : undefined;
+    super(detail === undefined ? context : `${context}: ${detail}`);
+    this.name = 'UnexpectedFailure';
+  }
 }
 
 /**
- * How a lib function fails.
- * @template S The statuses it can refuse a client with.
- */
-export type LibFailure<S extends ClientFailureStatus> =
-  ClientFailure<S> | InternalFailure;
-
-/**
- * The result of a lib function whose only failures are on our side.
- * @template T What it gives on success.
- */
-export type InternalResult<T> = {ok: true; value: T} | InternalFailure;
-
-/**
- * Answers a lib function's failure: a refusal with its code and status, a
- * fault with `internalError()`'s body.
+ * The data of a query that must have worked: a failure is thrown as an
+ * `UnexpectedFailure`, which `app.onError` answers with a 500.
  *
- * `S` defaults to `never` so that an `InternalFailure` alone adds nothing but
- * the 500 to the route's type, which `hc<AppType>()` reads.
- * @param c The request's context.
- * @param failure The failure.
- * @param context What was being attempted, for the log line of a fault.
- * @template S The statuses `failure` can refuse a client with.
+ * A failure the caller can name (a constraint violation it answers with a
+ * 409, say) is the caller's to check for first, e.g. with `mapPgError()`;
+ * this is for what is left.
+ * @param result What supabase-js resolved the query to: the data, or the
+ *     error (its `data` is `null` then).
+ * @param context What was being attempted, for the log line.
+ * @return The data.
  */
-export function respondFailure<S extends ClientFailureStatus = never>(
-  c: Context,
-  failure: LibFailure<S>,
+export function unwrap<R extends {data: unknown; error: unknown}>(
+  result: R,
   context: string,
-) {
-  if (failure.status === 500) {
-    return c.json(internalError(context, failure.error), 500);
+): Extract<R, {error: null}>['data'] {
+  if (result.error) {
+    throw new UnexpectedFailure(context, result.error);
   }
+  return result.data;
+}
+
+/**
+ * The app's `onError` (#294, #378): what answers when a handler throws.
+ *
+ * An `HTTPException` is a refusal some middleware chose on purpose -- the
+ * origin check's 403 -- so it keeps the response it carries, as Hono's
+ * default handler would give it. Anything else thrown is a fault on our side,
+ * logged and answered with a 500 whose body is the same whatever it was. An
+ * `UnexpectedFailure` brings its own context and the underlying error to the
+ * log; any other error (a `XSchema.parse()` meeting a database value it did
+ * not expect, say) is logged as it is, under the request it broke.
+ * @param err What was thrown.
+ * @param c The request's context.
+ */
+export function handleError(err: Error, c: Context) {
+  if (err instanceof HTTPException) {
+    return err.getResponse();
+  }
+  if (err instanceof UnexpectedFailure) {
+    return c.json(internalError(err.context, err.cause), 500);
+  }
+  return c.json(internalError(`${c.req.method} ${c.req.path}`, err), 500);
+}
+
+/**
+ * Answers a lib function's refusal with its code and status.
+ * @param c The request's context.
+ * @param failure The refusal.
+ * @template S The statuses `failure` refuses a client with.
+ */
+export function respondFailure<S extends ClientFailureStatus>(
+  c: Context,
+  failure: ClientFailure<S>,
+) {
   return c.json({error: failure.error}, failure.status);
 }

@@ -6,6 +6,7 @@ import {
   type ParticipantLoginInput,
 } from '@regional-quiz/shared';
 import type {Env} from '../types/env';
+import {unwrap} from '../lib/errors';
 import {verifyAccountPassword} from '../lib/password-rehash';
 import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
 import {PARTICIPANT_SESSION_COOKIE} from '../middleware/participant-auth';
@@ -61,15 +62,14 @@ export const participantAuthRoute = new Hono<Env>()
     async c => {
       const {email, password} = c.req.valid('json');
       const db = c.get('db');
-      const {data: participant, error} = await db
-        .from('participants')
-        .select('id, password_hash, password_changed_at, email_verified_at')
-        .eq('email', email)
-        .maybeSingle();
-
-      if (error) {
-        return c.json({error: 'internal server error'}, 500);
-      }
+      const participant = unwrap(
+        await db
+          .from('participants')
+          .select('id, password_hash, password_changed_at, email_verified_at')
+          .eq('email', email)
+          .maybeSingle(),
+        'failed to read the participant to log in',
+      );
 
       // An account whose address was never verified is not anyone's yet:
       // its password is whatever the last unconfirmed entry submitted under

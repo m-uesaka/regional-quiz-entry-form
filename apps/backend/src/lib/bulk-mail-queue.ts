@@ -2,9 +2,11 @@ import type {Bindings} from '../types/env';
 import {createDbClient, type DbClient} from './db';
 import {MailSendError, createMailSender, type SendMailInput} from './mailer';
 import {sendPacedMail, type PacedMailOptions} from './bulk-mail';
+import {UnexpectedFailure} from './errors';
 import {
   discardVerificationToken,
   prepareVerificationResend,
+  type IssuedVerificationMail,
 } from './entry-verification';
 import {
   handleDeferredEntryMail,
@@ -162,22 +164,24 @@ async function fetchBatchJobs(
   const unreadable = new Set<string>();
 
   for (const jobId of new Set(messages.map(message => message.body.jobId))) {
-    const result = await fetchMailJobContent(db, jobId);
-    if (!result.ok) {
-      console.error('failed to read a bulk mail job', {
-        jobId,
-        error: result.error,
-      });
+    let content: MailJobContent | null;
+    try {
+      content = await fetchMailJobContent(db, jobId);
+    } catch (error) {
+      if (!(error instanceof UnexpectedFailure)) {
+        throw error;
+      }
+      console.error('failed to read a bulk mail job', {jobId, error});
       unreadable.add(jobId);
       continue;
     }
-    if (result.value === null) {
+    if (content === null) {
       // The row is gone, so there is nothing to send and no counter to
       // move. Redelivering would only meet the same missing row.
       console.error('bulk mail job no longer exists', {jobId});
       continue;
     }
-    contents.set(jobId, result.value);
+    contents.set(jobId, content);
   }
 
   return {contents, unreadable};
@@ -284,21 +288,22 @@ export async function handleBulkMailQueue(
 
     // The job's row holds no body for a reminder: each mail carries its
     // own link, issued here.
-    const prepared = await prepareVerificationResend(
-      env,
-      db,
-      message.body.entryId,
-    );
-    if (!prepared.ok) {
+    let prepared: IssuedVerificationMail | null;
+    try {
+      prepared = await prepareVerificationResend(env, db, message.body.entryId);
+    } catch (error) {
+      if (!(error instanceof UnexpectedFailure)) {
+        throw error;
+      }
       console.error('failed to prepare a verification resend', {
         jobId: message.body.jobId,
         entryId: message.body.entryId,
-        error: prepared.error,
+        error,
       });
       retryOrFail(message);
       continue;
     }
-    if (prepared.value === null) {
+    if (prepared === null) {
       // Confirmed, cancelled, or given a live link since the reminder was
       // asked for. Counted as failed -- "not sent" -- so the job still adds
       // up to its total.
@@ -306,7 +311,7 @@ export async function handleBulkMailQueue(
       message.ack();
       continue;
     }
-    issuedTokens.set(sendable.length, prepared.value.tokenId);
+    issuedTokens.set(sendable.length, prepared.tokenId);
     sendable.push(message);
     // Keyed by the link rather than the message: each delivery issues a new
     // link, so a body that differs from the last delivery's would be refused
@@ -315,8 +320,8 @@ export async function handleBulkMailQueue(
     // the participant twice, and the first link -- discarded as undelivered
     // -- no longer works.
     inputs.push({
-      ...prepared.value.mail,
-      idempotencyKey: `verification-resend/${prepared.value.tokenId}`,
+      ...prepared.mail,
+      idempotencyKey: `verification-resend/${prepared.tokenId}`,
     });
   }
 
@@ -333,11 +338,15 @@ export async function handleBulkMailQueue(
     if (outcomes[index].ok) {
       continue;
     }
-    const discarded = await discardVerificationToken(db, tokenId);
-    if (!discarded.ok) {
+    try {
+      await discardVerificationToken(db, tokenId);
+    } catch (error) {
+      if (!(error instanceof UnexpectedFailure)) {
+        throw error;
+      }
       console.error('failed to discard an undelivered verification token', {
         jobId: sendable[index].body.jobId,
-        error: discarded.error,
+        error,
       });
       undiscarded.add(index);
     }
@@ -381,12 +390,13 @@ export async function handleBulkMailQueue(
     if (tally.sent === 0 && tally.failed === 0) {
       continue;
     }
-    const result = await recordMailJobProgress(db, jobId, tally);
-    if (!result.ok) {
-      console.error('failed to record bulk mail job progress', {
-        jobId,
-        error: result.error,
-      });
+    try {
+      await recordMailJobProgress(db, jobId, tally);
+    } catch (error) {
+      if (!(error instanceof UnexpectedFailure)) {
+        throw error;
+      }
+      console.error('failed to record bulk mail job progress', {jobId, error});
     }
   }
 }

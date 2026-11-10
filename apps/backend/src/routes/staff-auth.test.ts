@@ -2,6 +2,7 @@ import {afterEach, describe, expect, it} from 'bun:test';
 import {staffAuthRoute} from './staff-auth';
 import {Hono} from 'hono';
 import {dbClient} from '../middleware/db';
+import {handleError} from '../lib/errors';
 import type {Env} from '../types/env';
 import {
   hashPassword,
@@ -25,6 +26,7 @@ import {
 // The route behind the middleware that gives it its database client, as
 // `index.ts` mounts it.
 const routeUnderTest = new Hono<Env>()
+  .onError(handleError)
   .use(dbClient())
   .route('/', staffAuthRoute);
 

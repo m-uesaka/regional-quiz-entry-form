@@ -3,6 +3,7 @@ import {verify} from 'hono/jwt';
 import {participantAuthRoute} from './participant-auth';
 import {Hono} from 'hono';
 import {dbClient} from '../middleware/db';
+import {handleError} from '../lib/errors';
 import type {Env} from '../types/env';
 import {hashPassword, verifyPassword} from '../lib/password';
 import {testBindings, refusingRateLimiter} from '../test-support/bindings';
@@ -15,6 +16,7 @@ import {
 // The route behind the middleware that gives it its database client, as
 // `index.ts` mounts it.
 const routeUnderTest = new Hono<Env>()
+  .onError(handleError)
   .use(dbClient())
   .route('/', participantAuthRoute);
 

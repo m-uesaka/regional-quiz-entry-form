@@ -7,6 +7,7 @@ import {
   type ParticipantClaims,
 } from '@regional-quiz/shared';
 import type {ParticipantEnv} from '../types/env';
+import {unwrap} from '../lib/errors';
 
 export const PARTICIPANT_SESSION_COOKIE = 'participant_session';
 
@@ -51,20 +52,18 @@ export function requireParticipant() {
     // read, a stolen cookie would keep working for the rest of its TTL even
     // after the participant reset their password to lock the thief out.
     const db = c.get('db');
-    const {data: participant, error} = await db
-      .from('participants')
-      .select('password_changed_at, email_verified_at')
-      .eq('id', claims.sub)
-      .maybeSingle();
-    if (error) {
-      // Not a 401: the session may well be fine and we simply couldn't check
-      // it, and answering "unauthorized" would send the participant off to
-      // log in again over a database outage.
-      console.error('failed to check the session against the participant', {
-        error: error.message,
-      });
-      return c.json({error: 'internal server error'}, 500);
-    }
+    // A failed read is thrown, so it is a 500 and not a 401: the session may
+    // well be fine and we simply couldn't check it, and answering
+    // "unauthorized" would send the participant off to log in again over a
+    // database outage.
+    const participant = unwrap(
+      await db
+        .from('participants')
+        .select('password_changed_at, email_verified_at')
+        .eq('id', claims.sub)
+        .maybeSingle(),
+      'failed to check the session against the participant',
+    );
     // A missing row means the participant was deleted after the cookie was
     // issued, which is as much a dead session as a reset one. Otherwise the
     // session is current exactly when it still names the password that is on

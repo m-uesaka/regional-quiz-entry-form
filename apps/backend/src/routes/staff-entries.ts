@@ -27,7 +27,7 @@ import {
   toPageResponse,
   type AllRowsResult,
 } from '../lib/paged-select';
-import {internalError} from '../lib/errors';
+import {UnexpectedFailure, unwrap} from '../lib/errors';
 import {TournamentIdParamSchema, EntryIdParamSchema} from './params';
 import {validate} from '../middleware/validate';
 
@@ -145,7 +145,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
           .range(from, to);
       }, page);
       if (error) {
-        return c.json(internalError('failed to read the entries', error), 500);
+        throw new UnexpectedFailure('failed to read the entries', error);
       }
       return c.json(toPageResponse(rows.map(rowToEntry), total, page));
     },
@@ -162,28 +162,16 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
         tournamentId,
       );
       if (error) {
-        return c.json(
-          internalError('failed to read the entries for the CSV', error),
-          500,
+        throw new UnexpectedFailure(
+          'failed to read the entries for the CSV',
+          error,
         );
       }
 
       // The tournament's custom form fields become the CSV's trailing
       // columns, headed by their `label` in `display_order` — the raw
       // `custom_field_values` keys would be meaningless to staff.
-      const {fieldDefs, error: formFieldDefsError} = await fetchFormFieldDefs(
-        db,
-        tournamentId,
-      );
-      if (formFieldDefsError) {
-        return c.json(
-          internalError(
-            'failed to read the form field defs',
-            formFieldDefsError,
-          ),
-          500,
-        );
-      }
+      const fieldDefs = await fetchFormFieldDefs(db, tournamentId);
 
       const csv = buildEntriesCsv(
         fieldDefs,
@@ -216,14 +204,14 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
     requireStaffForEntry(),
     async c => {
       const db = c.get('db');
-      const {data, error} = await db
-        .from('entries')
-        .select(ENTRY_COLUMNS)
-        .eq('id', c.req.valid('param').entryId)
-        .maybeSingle();
-      if (error) {
-        return c.json(internalError('failed to read the entry', error), 500);
-      }
+      const data = unwrap(
+        await db
+          .from('entries')
+          .select(ENTRY_COLUMNS)
+          .eq('id', c.req.valid('param').entryId)
+          .maybeSingle(),
+        'failed to read the entry',
+      );
       if (!data) {
         return c.json({error: COMMON_ERROR_CODES.ENTRY_NOT_FOUND}, 404);
       }
@@ -232,19 +220,7 @@ export const staffEntriesRoute = new Hono<StaffEnv>()
       // tournament, so the staff UI can render each `customFieldValues`
       // entry under its human-readable label instead of the raw storage
       // key.
-      const {fieldDefs, error: formFieldDefsError} = await fetchFormFieldDefs(
-        db,
-        data.tournament_id,
-      );
-      if (formFieldDefsError) {
-        return c.json(
-          internalError(
-            'failed to read the form field defs',
-            formFieldDefsError,
-          ),
-          500,
-        );
-      }
+      const fieldDefs = await fetchFormFieldDefs(db, data.tournament_id);
 
       return c.json(
         StaffEntryDetailSchema.parse({

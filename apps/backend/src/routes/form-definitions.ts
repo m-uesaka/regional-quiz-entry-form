@@ -9,7 +9,7 @@ import {
   byTournamentIdParam,
   requireOpenEntryPeriodOrStaff,
 } from '../middleware/entry-period';
-import {internalError} from '../lib/errors';
+import {UnexpectedFailure} from '../lib/errors';
 import {
   syncFormFieldDefs,
   TournamentNotFoundError,
@@ -33,16 +33,10 @@ export const formDefinitionsRoute = new Hono<StaffEnv>()
     requireOpenEntryPeriodOrStaff(byTournamentIdParam),
     async c => {
       const db = c.get('db');
-      const {fieldDefs, error} = await fetchFormFieldDefs(
+      const fieldDefs = await fetchFormFieldDefs(
         db,
         c.req.valid('param').tournamentId,
       );
-      if (error) {
-        return c.json(
-          internalError('failed to read the form field defs', error),
-          500,
-        );
-      }
       return c.json(fieldDefs);
     },
   )
@@ -78,10 +72,7 @@ export const formDefinitionsRoute = new Hono<StaffEnv>()
         }
         // Unexpected failures here (Supabase outage, unmapped insert
         // errors, etc.) are server-side, not the client's fault.
-        return c.json(
-          internalError('failed to sync the form field defs', e),
-          500,
-        );
+        throw new UnexpectedFailure('failed to sync the form field defs', e);
       }
 
       return c.json({ok: true});

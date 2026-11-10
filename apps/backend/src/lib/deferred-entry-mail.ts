@@ -42,9 +42,11 @@ import type {EntryNoticeReason} from './entry-notice';
 import type {Bindings} from '../types/env';
 import type {DbClient} from './db';
 import {buildEntryNoticeMail} from './entry-notice';
+import {UnexpectedFailure} from './errors';
 import {
   discardVerificationToken,
   prepareVerificationResend,
+  type IssuedVerificationMail,
 } from './entry-verification';
 import {MailSendError, createMailSender, type SendMailInput} from './mailer';
 import {MAIL_QUEUE_MAX_ATTEMPTS} from './bulk-mail-queue';
@@ -171,26 +173,31 @@ async function handleOne(
   if (body.kind === 'deferred-verification') {
     // Read first, and before the limiter is spent: most of a flood is
     // entries a later submission has already replaced.
-    const prepared = await prepareVerificationResend(
-      env,
-      db,
-      body.entryId,
-      body.withdrawnTournaments,
-    );
-    if (!prepared.ok) {
+    let prepared: IssuedVerificationMail | null;
+    try {
+      prepared = await prepareVerificationResend(
+        env,
+        db,
+        body.entryId,
+        body.withdrawnTournaments,
+      );
+    } catch (error) {
+      if (!(error instanceof UnexpectedFailure)) {
+        throw error;
+      }
       console.error('failed to prepare a deferred verification mail', {
         entryId: body.entryId,
-        error: prepared.error,
+        error,
       });
       later('prepare');
       return;
     }
-    if (prepared.value === null) {
+    if (prepared === null) {
       // Replaced, confirmed, cancelled or given a link since: nothing to do.
       message.ack();
       return;
     }
-    ({mail, tokenId} = prepared.value);
+    ({mail, tokenId} = prepared);
   } else {
     mail = buildEntryNoticeMail(
       env,
@@ -203,10 +210,14 @@ async function handleOne(
 
   const discardToken = async () => {
     if (tokenId === undefined) return;
-    const discarded = await discardVerificationToken(db, tokenId);
-    if (!discarded.ok) {
+    try {
+      await discardVerificationToken(db, tokenId);
+    } catch (error) {
+      if (!(error instanceof UnexpectedFailure)) {
+        throw error;
+      }
       console.error('failed to discard an undelivered verification token', {
-        error: discarded.error,
+        error,
       });
     }
   };

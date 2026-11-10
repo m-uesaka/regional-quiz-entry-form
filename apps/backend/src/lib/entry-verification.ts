@@ -1,7 +1,7 @@
 import {ENTRY_VERIFICATION_TOKEN_TTL_MS} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import {type DbClient, type Tables} from './db';
-import type {InternalResult} from './errors';
+import {UnexpectedFailure, unwrap} from './errors';
 import {createMailSender, type SendMailInput} from './mailer';
 import {fetchAllRows} from './paged-select';
 import {
@@ -161,14 +161,11 @@ export async function holdForDeferredVerification(
 export async function discardVerificationToken(
   db: DbClient,
   tokenId: string,
-): Promise<InternalResult<void>> {
-  const {error} = await db
-    .from('email_verification_tokens')
-    .delete()
-    .eq('id', tokenId);
-  return error
-    ? {ok: false, status: 500, error: error.message}
-    : {ok: true, value: undefined};
+): Promise<void> {
+  unwrap(
+    await db.from('email_verification_tokens').delete().eq('id', tokenId),
+    'failed to discard the verification token',
+  );
 }
 
 /** The columns of a verification token that say whether it still works. */
@@ -205,7 +202,7 @@ function hasLiveToken(tokens: readonly TokenStateRow[], now: Date): boolean {
 export async function fetchResendableEntryIds(
   db: DbClient,
   tournamentId: string,
-): Promise<InternalResult<string[]>> {
+): Promise<string[]> {
   const result = await fetchAllRows((from, to) =>
     db
       .from('entries')
@@ -216,15 +213,15 @@ export async function fetchResendableEntryIds(
       .range(from, to),
   );
   if (result.error) {
-    return {ok: false, status: 500, error: result.error.message};
+    throw new UnexpectedFailure(
+      'failed to read the unconfirmed entries',
+      result.error,
+    );
   }
   const now = new Date();
-  return {
-    ok: true,
-    value: result.rows
-      .filter(row => !hasLiveToken(row.email_verification_tokens, now))
-      .map(row => row.id),
-  };
+  return result.rows
+    .filter(row => !hasLiveToken(row.email_verification_tokens, now))
+    .map(row => row.id);
 }
 
 /**
@@ -247,27 +244,27 @@ export async function prepareVerificationResend(
   db: DbClient,
   entryId: string,
   withdrawnTournaments?: readonly string[],
-): Promise<InternalResult<IssuedVerificationMail | null>> {
-  const {data, error} = await db
-    .from('entries')
-    .select(
-      `
+): Promise<IssuedVerificationMail | null> {
+  const data = unwrap(
+    await db
+      .from('entries')
+      .select(
+        `
         id, status, participants!inner(email),
         tournaments!inner(name, type, capacity, regions!inner(name)),
         email_verification_tokens(expires_at, used_at)
-      `,
-    )
-    .eq('id', entryId)
-    .maybeSingle();
-  if (error) {
-    return {ok: false, status: 500, error: error.message};
-  }
+        `,
+      )
+      .eq('id', entryId)
+      .maybeSingle(),
+    'failed to read the entry to remind',
+  );
   if (
     !data ||
     data.status !== 'pending_verification' ||
     hasLiveToken(data.email_verification_tokens, new Date())
   ) {
-    return {ok: true, value: null};
+    return null;
   }
 
   const {tournaments: tournament} = data;
@@ -285,14 +282,12 @@ export async function prepareVerificationResend(
       tournament.capacity !== null,
       withdrawnTournaments,
     );
-    return {ok: true, value: issued};
+    return issued;
   } catch (issueError) {
-    return {
-      ok: false,
-      status: 500,
-      error:
-        issueError instanceof Error ? issueError.message : String(issueError),
-    };
+    throw new UnexpectedFailure(
+      'failed to issue the verification mail',
+      issueError,
+    );
   }
 }
 

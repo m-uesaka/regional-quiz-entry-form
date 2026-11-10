@@ -6,7 +6,7 @@ import {
 } from '@regional-quiz/shared';
 import type {Env} from '../types/env';
 import {type Tables} from '../lib/db';
-import {internalError} from '../lib/errors';
+import {unwrap} from '../lib/errors';
 import {tournamentDisplayName} from '../lib/tournaments';
 
 /** A `tournaments` row with its region embedded, as selected below. */
@@ -111,25 +111,28 @@ function rowToPortalTournament(
 // are fit to announce.
 export const portalRoute = new Hono<Env>().get('/tournaments', async c => {
   const db = c.get('db');
-  const {data, error} = await db
-    .from('tournaments')
-    .select(
-      `
+  const data = unwrap(
+    await db
+      .from('tournaments')
+      .select(
+        `
         type, name, entry_opens_at, entry_closes_at, entries_paused,
         capacity,
         regions!inner(slug, name, allows_dual_entry),
         regulations(label, priority_starts_at, priority_ends_at,
         closes_with_priority)
       `,
-    )
-    // The order general staff set (`reorder_tournaments()`, 0032); `id`
-    // only breaks a tie, which the column's sequence default never makes.
-    .order('display_order', {ascending: true})
-    .order('id', {ascending: true})
-    .order('display_order', {referencedTable: 'regulations', ascending: true});
-  if (error) {
-    return c.json(internalError('failed to read the tournaments', error), 500);
-  }
+      )
+      // The order general staff set (`reorder_tournaments()`, 0032); `id`
+      // only breaks a tie, which the column's sequence default never makes.
+      .order('display_order', {ascending: true})
+      .order('id', {ascending: true})
+      .order('display_order', {
+        referencedTable: 'regulations',
+        ascending: true,
+      }),
+    'failed to read the tournaments',
+  );
   const now = new Date();
   const tournaments = data
     .map(row => rowToPortalTournament(row, now))
