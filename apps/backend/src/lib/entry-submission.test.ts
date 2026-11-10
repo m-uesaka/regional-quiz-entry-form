@@ -1685,7 +1685,9 @@ describe.skipIf(!dbReachable)(
         return email;
       }
 
-      it('moves the account once every entry in the old region is cancelled', async () => {
+      // Nothing moves `participants.region_id` for it any more (#308): the
+      // column takes no part in the decision (0043) and goes in #309.
+      it('enters the new region once every entry in the old region is cancelled', async () => {
         const oldRegion = await createFixture('move-old');
         const newRegion = await createFixture('move-new');
         const email = await verifiedIn(oldRegion.regionId);
@@ -1698,10 +1700,13 @@ describe.skipIf(!dbReachable)(
         );
 
         expect(result.ok).toBe(true);
-        const [participant] = await sql`
-          select region_id from participants where email = ${email}
+        const [entry] = await sql`
+          select e.status from entries e
+          join participants p on p.id = e.participant_id
+          where p.email = ${email}
+            and e.tournament_id = ${newRegion.tournamentId}
         `;
-        expect(participant.region_id).toBe(newRegion.regionId);
+        expect(entry.status).toBe('pending_verification');
       });
 
       it('lets the participant come back to the region they left', async () => {
@@ -1727,10 +1732,6 @@ describe.skipIf(!dbReachable)(
 
         expect(moved.ok).toBe(true);
         expect(result.ok).toBe(true);
-        const [participant] = await sql`
-          select region_id from participants where email = ${email}
-        `;
-        expect(participant.region_id).toBe(oldRegion.regionId);
       });
 
       describe('for a tournament whose entries have closed', () => {

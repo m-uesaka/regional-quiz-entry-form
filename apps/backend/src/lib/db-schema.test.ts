@@ -125,10 +125,10 @@ describe.skipIf(!dbReachable)(
   },
 );
 
-// The only place the rule of `regions.allows_dual_entry` is enforced, and the
-// backstop for `claim_participant_region()` (migration 0041). `createEntry()`
-// has no check of its own for the former (#200): these tests are what pin the
-// rule down.
+// The only place the rule of `regions.allows_dual_entry` (#200) and the rule
+// against two regions on one question set (#308) are enforced (migration
+// 0041, the latter as redefined in 0043). `createEntry()` has no check of its
+// own for either: these tests are what pin the rules down.
 describe.skipIf(!dbReachable)(
   'check_entry_seat() (local Supabase integration)',
   () => {
@@ -740,9 +740,8 @@ describe.skipIf(!dbReachable)(
       expect(count).toBe(2);
     });
 
-    // The backstop for `claim_participant_region_for_tournament()` (0043): a
-    // submission that passed it just before a concurrent one took a seat in
-    // another region on the same question set.
+    // Nothing checks this ahead of the write (#308): the trigger alone
+    // refuses a seat in another region on the same question set (0043).
     it('refuses a seat while another region on the same question set is held', async () => {
       const {participantId, entryFor} = await seedRegion(false);
       await sql`insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}`;
@@ -993,42 +992,20 @@ describe.skipIf(!dbReachable)(
       expect(regionId).toBe(ownSetRegionId);
     });
 
-    it('moves a participant only while nothing holds their old region', async () => {
-      const {participantId, entryFor} = await seedRegion(false);
-      const [otherRegion] = await sql`
-        insert into regions (slug, name, allows_dual_entry)
-        values (${testRegionSlug + '-claim'}, 'テスト地域', false)
-        returning id
+    // 0055 (#308). `claim_participant_region_for_tournament()` above stays
+    // until `participants.region_id` goes (#309).
+    it('no longer has the region-only claim_participant_region()', async () => {
+      const [{oid}] = await sql`
+        select to_regprocedure('claim_participant_region(uuid, uuid)') as oid
       `;
-      const claim = async () => {
-        const [row] = await sql`
-          select claim_participant_region(
-            ${participantId}, ${otherRegion.id}
-          ) as claimed
-        `;
-        return row.claimed as boolean;
-      };
-      await sql`insert into entries ${sql(entryFor('saikyoi'))}`;
 
-      const whileLive = await claim();
-      await sql`update entries set status = 'cancelled'
-        where participant_id = ${participantId}`;
-      const onceCancelled = await claim();
-      const [{region_id: regionId}] = await sql`
-        select region_id from participants where id = ${participantId}
-      `;
-      await sql`delete from entries where participant_id = ${participantId}`;
-      await sql`delete from participants where id = ${participantId}`;
-      await sql`delete from regions where id = ${otherRegion.id}`;
-
-      expect(whileLive).toBe(false);
-      expect(onceCancelled).toBe(true);
-      expect(regionId).toBe(otherRegion.id);
+      expect(oid).toBeNull();
     });
 
-    // `claim_participant_region_for_tournament()` and `check_entry_seat()`
-    // take the participant row in turn, which is all that keeps these two apart.
-    it('never leaves a participant in two regions when moving concurrently', async () => {
+    // Each write's `check_entry_seat()` takes the participant row in turn,
+    // which is all that keeps these two apart: nothing is checked ahead of
+    // the writes (#308).
+    it('never leaves a participant in two regions when entering both concurrently', async () => {
       const {participantId, entryFor} = await seedRegion(false);
       const [otherRegion] = await sql`
         insert into regions (slug, name, allows_dual_entry)
@@ -1054,26 +1031,12 @@ describe.skipIf(!dbReachable)(
 
       for (let round = 0; round < 20; round++) {
         await sql`delete from entries where participant_id = ${participantId}`;
-        await sql`
-          update participants
-          set region_id = (select id from regions where slug = ${testRegionSlug})
-          where id = ${participantId}
-        `;
         await Promise.all([
           sql`insert into entries ${sql(original)}`.then(() => {}, refused),
-          (async () => {
-            const [{claimed}] = await moving`
-              select claim_participant_region_for_tournament(
-                ${participantId}, ${otherTournament.id}
-              ) as claimed
-            `;
-            if (claimed) {
-              await moving`insert into entries ${moving({
-                ...original,
-                tournament_id: otherTournament.id,
-              })}`;
-            }
-          })().catch(refused),
+          moving`insert into entries ${moving({
+            ...original,
+            tournament_id: otherTournament.id,
+          })}`.then(() => {}, refused),
         ]);
         const [{regions}] = await sql`
           select count(distinct t.region_id)::int as regions
@@ -1090,10 +1053,9 @@ describe.skipIf(!dbReachable)(
       await sql`delete from tournaments where id = ${otherTournament.id}`;
       await sql`delete from regions where id = ${otherRegion.id}`;
 
-      expect(Math.max(...crossRegionCounts)).toBe(1);
-      expect(
-        [...refusals].filter(code => code !== PARTICIPANT_REGION_SQLSTATE),
-      ).toEqual([]);
+      // Exactly one of the two gets the seat, every round.
+      expect(crossRegionCounts).toEqual(Array.from({length: 20}, () => 1));
+      expect([...refusals]).toEqual([PARTICIPANT_REGION_SQLSTATE]);
     });
 
     it('does not count a cancelled entry as occupying the region', async () => {

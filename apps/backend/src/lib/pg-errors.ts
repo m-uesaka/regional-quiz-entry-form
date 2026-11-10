@@ -113,9 +113,11 @@ export const IMPORT_ACTION_STALE_SQLSTATE = 'P0006';
 export const ENTRY_PERIOD_OPEN_SQLSTATE = 'P0007';
 
 /**
- * Raised by `check_entry_seat()` (0040, 0041) for a seat outside the
- * participant's region: a concurrent submission moved the participant to
- * another region after this one last looked.
+ * Raised by `check_entry_seat()` (0041, redefined in 0043) when the
+ * participant already holds a seat in another region's tournament on the
+ * same question set (`participant_holds_conflicting_region()`). That trigger
+ * is the only place the rule is enforced; the name dates from 0040, when it
+ * compared the tournament's region with `participants.region_id`.
  */
 export const PARTICIPANT_REGION_SQLSTATE = 'P0008';
 
