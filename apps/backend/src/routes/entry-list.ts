@@ -1,6 +1,5 @@
 import {Hono} from 'hono';
 import type {Context} from 'hono';
-import {zValidator} from '@hono/zod-validator';
 import {
   EntryListItemSchema,
   PageQuerySchema,
@@ -18,6 +17,7 @@ import {
   type TournamentRow,
 } from '../lib/tournaments';
 import {TournamentIdParamSchema, TournamentBySlugParamSchema} from './params';
+import {validate} from '../middleware/validate';
 
 /**
  * Shape of an `entries` row as selected below (snake_case). The select's
@@ -123,7 +123,7 @@ export const entryListRoute = new Hono<Env>()
   // numbers can already be counted off the published list.
   .get(
     '/:tournamentId/entry-counts',
-    zValidator('param', TournamentIdParamSchema),
+    validate('param', TournamentIdParamSchema),
     async c => {
       const {tournamentId} = c.req.valid('param');
       const [confirmed, waitlisted] = await Promise.all([
@@ -144,8 +144,8 @@ export const entryListRoute = new Hono<Env>()
   )
   .get(
     '/:tournamentId/entry-list',
-    zValidator('param', TournamentIdParamSchema),
-    zValidator('query', PageQuerySchema),
+    validate('param', TournamentIdParamSchema),
+    validate('query', PageQuerySchema),
     async c =>
       respondWithEntryList(
         c,
@@ -161,8 +161,8 @@ export const entryListRoute = new Hono<Env>()
   // exactly when that read starts refusing anyone who isn't staff.
   .get(
     '/:regionSlug/:tournamentSlug/entry-list',
-    zValidator('param', TournamentBySlugParamSchema),
-    zValidator('query', PageQuerySchema),
+    validate('param', TournamentBySlugParamSchema),
+    validate('query', PageQuerySchema),
     async c => {
       const {regionSlug, tournamentSlug} = c.req.valid('param');
       let tournament: TournamentRow | null;

@@ -38,6 +38,15 @@ describe('readErrorMessage', () => {
       ).resolves.toBe('fallback');
     }
   });
+
+  // Codes with no wording of their own, which a page must not show (#294).
+  it('falls back on a schema refusal or an unknown path', async () => {
+    for (const error of ['invalid request', 'not found']) {
+      const res = new Response(JSON.stringify({error}), {status: 400});
+
+      await expect(readErrorMessage(res, 'fallback')).resolves.toBe('fallback');
+    }
+  });
 });
 
 describe('pickApiErrorMessage', () => {

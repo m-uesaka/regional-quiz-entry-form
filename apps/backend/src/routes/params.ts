@@ -1,5 +1,5 @@
 // Path parameter schemas shared by the route modules, for
-// `zValidator('param', ...)`. A malformed id answers 400 there, before it
+// `validate('param', ...)`. A malformed id answers 400 there, before it
 // reaches PostgREST as a `uuid` it cannot cast.
 
 import {TournamentTypeSchema} from '@regional-quiz/shared';

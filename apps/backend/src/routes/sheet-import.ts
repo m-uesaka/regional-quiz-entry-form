@@ -1,5 +1,4 @@
 import {Hono, type Context} from 'hono';
-import {zValidator} from '@hono/zod-validator';
 import {
   RegulationSheetImportRequestSchema,
   SheetImportRequestSchema,
@@ -23,10 +22,11 @@ import {
   previewTournamentImport,
   TournamentIndexError,
 } from '../lib/tournament-bulk-import';
+import {validate} from '../middleware/validate';
 
 export const sheetImportRoute = new Hono<StaffEnv>()
   .use('*', requireGeneralStaff())
-  .post('/preview', zValidator('json', SheetImportRequestSchema), async c => {
+  .post('/preview', validate('json', SheetImportRequestSchema), async c => {
     const {spreadsheetId, tournamentSlug} = c.req.valid('json');
 
     let yaml;
@@ -48,7 +48,7 @@ export const sheetImportRoute = new Hono<StaffEnv>()
   // saves it through `PUT /api/tournaments/:tournamentId/regulations`.
   .post(
     '/regulations/preview',
-    zValidator('json', RegulationSheetImportRequestSchema),
+    validate('json', RegulationSheetImportRequestSchema),
     async c => {
       const {spreadsheetId} = c.req.valid('json');
 
@@ -78,7 +78,7 @@ export const sheetImportRoute = new Hono<StaffEnv>()
   // request as a whole.
   .post(
     '/tournaments/preview',
-    zValidator('json', TournamentBulkImportRequestSchema),
+    validate('json', TournamentBulkImportRequestSchema),
     async c => {
       let rows;
       try {
@@ -102,7 +102,7 @@ export const sheetImportRoute = new Hono<StaffEnv>()
   // deleted fails rather than doing the other.
   .post(
     '/tournaments',
-    zValidator('json', TournamentBulkImportExecuteRequestSchema),
+    validate('json', TournamentBulkImportExecuteRequestSchema),
     async c => {
       const {spreadsheetId, selections} = c.req.valid('json');
       let results;

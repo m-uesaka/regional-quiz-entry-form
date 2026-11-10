@@ -1,5 +1,4 @@
 import {Hono} from 'hono';
-import {zValidator} from '@hono/zod-validator';
 import {
   RegionCreateInputSchema,
   RegionUpdateInputSchema,
@@ -26,6 +25,7 @@ import {
   UNIQUE_VIOLATION_SQLSTATE,
 } from '../lib/pg-errors';
 import {IdParamSchema} from './params';
+import {validate} from '../middleware/validate';
 
 /** Shape of a `regions` row as returned by Supabase. */
 type RegionRow = Pick<
@@ -93,7 +93,7 @@ export const regionsRoute = new Hono<StaffEnv>()
     }
     return c.json(data.map(rowToRegion));
   })
-  .post('/', zValidator('json', RegionCreateInputSchema), async c => {
+  .post('/', validate('json', RegionCreateInputSchema), async c => {
     const db = createDbClient(c.env);
     const {data, error} = await db
       .from('regions')
@@ -121,8 +121,8 @@ export const regionsRoute = new Hono<StaffEnv>()
   })
   .patch(
     '/:id',
-    zValidator('param', IdParamSchema),
-    zValidator('json', RegionUpdateInputSchema),
+    validate('param', IdParamSchema),
+    validate('json', RegionUpdateInputSchema),
     async c => {
       const db = createDbClient(c.env);
       const {data, error} = await db

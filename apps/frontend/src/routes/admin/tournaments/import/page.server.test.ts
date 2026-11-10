@@ -220,7 +220,7 @@ describe('admin tournament import execute action', () => {
 
   it("says the choice was refused when the API's validation rejects it", async () => {
     const event = buildEvent(
-      fakeApi({status: 400, body: {success: false, error: {issues: []}}}),
+      fakeApi({status: 400, body: {error: 'invalid request'}}),
       'abc123',
       [],
       [JSON.stringify(SELECTION)],

@@ -1,5 +1,4 @@
 import {Hono} from 'hono';
-import {zValidator} from '@hono/zod-validator';
 import {
   EntryVerificationInputSchema,
   EntryVerificationResponseSchema,
@@ -7,6 +6,7 @@ import {
 import type {Env} from '../types/env';
 import {confirmEntryByToken} from '../lib/entry-confirmation';
 import {respondFailure} from '../lib/errors';
+import {validate} from '../middleware/validate';
 
 // A POST, not a GET: confirming spends the token and puts the entry on the
 // public list, and a GET is what mail gateways (Outlook Safe Links and the
@@ -15,7 +15,7 @@ import {respondFailure} from '../lib/errors';
 // the form its confirm button submits.
 export const entryVerificationRoute = new Hono<Env>().post(
   '/verify',
-  zValidator('json', EntryVerificationInputSchema),
+  validate('json', EntryVerificationInputSchema),
   async c => {
     const result = await confirmEntryByToken(c.env, c.req.valid('json').token);
     if (!result.ok) {

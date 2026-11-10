@@ -9,6 +9,8 @@ describe('COMMON_ERROR_CODES', () => {
       UNAUTHORIZED: 'unauthorized',
       ENTRY_NOT_FOUND: 'entry not found',
       INVALID_OR_EXPIRED_TOKEN: 'invalid or expired token',
+      INVALID_REQUEST: 'invalid request',
+      NOT_FOUND: 'not found',
     });
   });
 
