@@ -7,6 +7,7 @@ import {
   it,
   spyOn,
 } from 'bun:test';
+import {createDbClient} from './db';
 import {SQL} from 'bun';
 import {
   allowingRateLimiter,
@@ -181,7 +182,7 @@ describe.skipIf(!(await isDbReachable()))(
         fixture,
         emailDomain,
       );
-      await holdForDeferredVerification(envWith(), entryId);
+      await holdForDeferredVerification(createDbClient(envWith()), entryId);
       const [{email}] = await sql`
         select email from participants where id = ${participantId}
       `;

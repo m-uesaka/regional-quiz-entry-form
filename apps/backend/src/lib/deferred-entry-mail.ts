@@ -40,6 +40,7 @@
 
 import type {EntryNoticeReason} from './entry-notice';
 import type {Bindings} from '../types/env';
+import type {DbClient} from './db';
 import {buildEntryNoticeMail} from './entry-notice';
 import {
   discardVerificationToken,
@@ -134,20 +135,23 @@ async function deferredMailAllowed(
  * on the last one.
  * @param messages The batch's deferred entry mails.
  * @param env The Worker bindings.
+ * @param db The database client.
  */
 export async function handleDeferredEntryMail(
   messages: ReadonlyArray<Message<DeferredEntryMailMessage>>,
   env: Bindings,
+  db: DbClient,
 ): Promise<void> {
   const mailer = createMailSender(env);
   for (const message of messages) {
-    await handleOne(message, env, mailer);
+    await handleOne(message, env, db, mailer);
   }
 }
 
 async function handleOne(
   message: Message<DeferredEntryMailMessage>,
   env: Bindings,
+  db: DbClient,
   mailer: ReturnType<typeof createMailSender>,
 ): Promise<void> {
   const body = message.body;
@@ -169,6 +173,7 @@ async function handleOne(
     // entries a later submission has already replaced.
     const prepared = await prepareVerificationResend(
       env,
+      db,
       body.entryId,
       body.withdrawnTournaments,
     );
@@ -198,7 +203,7 @@ async function handleOne(
 
   const discardToken = async () => {
     if (tokenId === undefined) return;
-    const discarded = await discardVerificationToken(env, tokenId);
+    const discarded = await discardVerificationToken(db, tokenId);
     if (!discarded.ok) {
       console.error('failed to discard an undelivered verification token', {
         error: discarded.error,

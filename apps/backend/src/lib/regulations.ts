@@ -2,8 +2,7 @@ import {
   NO_LASTING_REGULATION_MESSAGE,
   type RegulationUpsert,
 } from '@regional-quiz/shared';
-import type {Bindings} from '../types/env';
-import {createDbClient} from './db';
+import {type DbClient} from './db';
 import {
   FOREIGN_KEY_VIOLATION_SQLSTATE,
   NO_LASTING_REGULATION_SQLSTATE,
@@ -67,7 +66,7 @@ export class NoLastingRegulationError extends Error {
  * Unlike `syncFormFieldDefs()` this can't delete and re-insert: `entries`
  * references `regulations` by the composite foreign key `(regulation_id,
  * tournament_id)`, so an existing entry's regulation has to keep its id.
- * @param env The Worker bindings containing the Supabase connection info.
+ * @param db The database client containing the Supabase connection info.
  * @param tournamentId The tournament whose regulations are being saved.
  * @param regulations The regulations as they should look afterwards.
  * @throws {TournamentNotFoundError} If `tournamentId` doesn't exist.
@@ -79,12 +78,10 @@ export class NoLastingRegulationError extends Error {
  *     close once saved.
  */
 export async function syncRegulations(
-  env: Bindings,
+  db: DbClient,
   tournamentId: string,
   regulations: RegulationUpsert[],
 ): Promise<void> {
-  const db = createDbClient(env);
-
   const {error} = await db.rpc('sync_regulations', {
     p_tournament_id: tournamentId,
     p_regulations: regulations,

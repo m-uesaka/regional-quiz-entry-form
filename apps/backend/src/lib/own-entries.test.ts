@@ -1,4 +1,5 @@
 import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
+import {createDbClient} from './db';
 import {SQL} from 'bun';
 import {cancelOwnEntry, updateOwnEntry} from './own-entries';
 import {testBindings} from '../test-support/bindings';
@@ -126,7 +127,7 @@ describe.skipIf(!dbReachable)(
       const fixture = await createEntryFixture('open');
 
       const result = await updateOwnEntry(
-        env,
+        createDbClient(env),
         fixture.participantId,
         fixture.entryId,
         patch,
@@ -151,7 +152,7 @@ describe.skipIf(!dbReachable)(
       });
 
       const result = await updateOwnEntry(
-        env,
+        createDbClient(env),
         fixture.participantId,
         fixture.entryId,
         patch,
@@ -170,7 +171,7 @@ describe.skipIf(!dbReachable)(
       const other = await createEntryFixture('other');
 
       const result = await updateOwnEntry(
-        env,
+        createDbClient(env),
         other.participantId,
         fixture.entryId,
         patch,
@@ -190,7 +191,7 @@ describe.skipIf(!dbReachable)(
       });
 
       const result = await updateOwnEntry(
-        env,
+        createDbClient(env),
         fixture.participantId,
         fixture.entryId,
         patch,
@@ -244,7 +245,7 @@ describe.skipIf(!dbReachable)(
         const [{pid}] = await canceller`select pg_backend_pid() as pid`;
 
         const updating = updateOwnEntry(
-          env,
+          createDbClient(env),
           fixture.participantId,
           fixture.entryId,
           patch,
@@ -272,7 +273,7 @@ describe.skipIf(!dbReachable)(
       const fixture = await createEntryFixture('unknown-field');
 
       const result = await updateOwnEntry(
-        env,
+        createDbClient(env),
         fixture.participantId,
         fixture.entryId,
         {...patch, customFieldValues: {...patch.customFieldValues, junk: 'x'}},
@@ -290,7 +291,7 @@ describe.skipIf(!dbReachable)(
       const fixture = await createEntryFixture('unknown-option');
 
       const result = await updateOwnEntry(
-        env,
+        createDbClient(env),
         fixture.participantId,
         fixture.entryId,
         {...patch, customFieldValues: {t_shirt_size: 'XXL'}},
@@ -360,6 +361,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await cancelOwnEntry(
         env,
+        createDbClient(env),
         confirmed.participantId,
         confirmed.entryId,
       );
@@ -391,6 +393,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await cancelOwnEntry(
         env,
+        createDbClient(env),
         firstWaiting.participantId,
         firstWaiting.entryId,
       );
@@ -428,6 +431,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await cancelOwnEntry(
         env,
+        createDbClient(env),
         secondWaiting.participantId,
         secondWaiting.entryId,
       );
@@ -461,6 +465,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await cancelOwnEntry(
         env,
+        createDbClient(env),
         intruder.participantId,
         owner.entryId,
       );
@@ -488,6 +493,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await cancelOwnEntry(
         env,
+        createDbClient(env),
         unverified.participantId,
         unverified.entryId,
       );
@@ -506,7 +512,12 @@ describe.skipIf(!dbReachable)(
       const fixture = await createFixture('already-cancelled');
       const confirmed = await addEntry(fixture, 'confirmed');
       const waiting = await addEntry(fixture, 'waitlisted', 1);
-      await cancelOwnEntry(env, confirmed.participantId, confirmed.entryId);
+      await cancelOwnEntry(
+        env,
+        createDbClient(env),
+        confirmed.participantId,
+        confirmed.entryId,
+      );
       const [promotedRow] = await sql`
         select status from entries where id = ${waiting.entryId}
       `;
@@ -515,6 +526,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await cancelOwnEntry(
         env,
+        createDbClient(env),
         confirmed.participantId,
         confirmed.entryId,
       );

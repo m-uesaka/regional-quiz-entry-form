@@ -1,7 +1,7 @@
 import type {StaffLoginScope} from '@regional-quiz/shared';
 import type {StaffPasswordResetConfirmInput} from '@regional-quiz/shared/password-policy';
 import type {Bindings} from '../types/env';
-import {createDbClient} from './db';
+import type {DbClient} from './db';
 import {findStaffAccountByScope} from './staff-account-lookup';
 import {createMailSender} from './mailer';
 import {STAFF_ACCOUNT_DISABLED_SQLSTATE} from './pg-errors';
@@ -57,19 +57,19 @@ export type StaffPasswordLinkResult =
  * unique, so there is at most one. An account may be created before that
  * tournament is, in which case it takes the name the tournament would get
  * by default.
- * @param env The Worker bindings.
+ * @param db The database client.
  * @param staffAccountId The account to name.
  * @return E.g. 「「東京最強位」のスタッフアカウント」, or the read's error.
  */
 async function describeStaffAccount(
-  env: Bindings,
+  db: DbClient,
   staffAccountId: string,
 ): Promise<{ok: true; label: string} | {ok: false; error: string}> {
   // The scope of the account, as the setup mail names it. The region's
   // tournaments are embedded whole because `staff_accounts` has no foreign
   // key to `tournaments`; the one of the account's type is picked out below.
   // `regions` is null for `general` staff, who have no region.
-  const {data, error} = await createDbClient(env)
+  const {data, error} = await db
     .from('staff_accounts')
     .select('role, tournament_type, regions(name, tournaments(name, type))')
     .eq('id', staffAccountId)
@@ -104,12 +104,14 @@ async function describeStaffAccount(
  * that staff member needs to know, since the account is unusable until its
  * owner follows the link.
  * @param env The Worker bindings.
+ * @param db The database client.
  * @param staffAccountId The account the link sets the password for.
  * @param email The address to mail it to, i.e. that account's own.
  * @param kind Who asked for the link (see `StaffPasswordLinkKind`).
  */
 export async function sendStaffPasswordLink(
   env: Bindings,
+  db: DbClient,
   staffAccountId: string,
   email: string,
   kind: StaffPasswordLinkKind = 'issued',
@@ -135,13 +137,13 @@ export async function sendStaffPasswordLink(
   //
   // The account is named first, so a failed read leaves no link behind
   // that no mail carries.
-  const account = await describeStaffAccount(env, staffAccountId);
+  const account = await describeStaffAccount(db, staffAccountId);
   if (!account.ok) {
     return {ok: false, disabled: false, error: account.error};
   }
   const ttlMs = kind === 'requested' ? REQUESTED_TOKEN_TTL_MS : TOKEN_TTL_MS;
   const token = generateToken();
-  const {error: issueError} = await createDbClient(env).rpc(
+  const {error: issueError} = await db.rpc(
     kind === 'requested'
       ? 'add_staff_password_link'
       : 'issue_staff_password_link',
@@ -240,16 +242,18 @@ export function staffPasswordMailSubject(
  * link is added beside the account's others rather than replacing them
  * (see `sendStaffPasswordLink()`).
  * @param env The Worker bindings.
+ * @param db The database client.
  * @param email The address a link was requested for.
  * @param scope Which of the address's accounts, as at login.
  */
 export async function requestStaffPasswordReset(
   env: Bindings,
+  db: DbClient,
   email: string,
   scope: StaffLoginScope,
 ): Promise<void> {
   const {data: account, error} = await findStaffAccountByScope(
-    createDbClient(env),
+    db,
     email,
     scope,
     'id',
@@ -266,6 +270,7 @@ export async function requestStaffPasswordReset(
 
   const result = await sendStaffPasswordLink(
     env,
+    db,
     account.id,
     email,
     'requested',
@@ -283,15 +288,15 @@ export async function requestStaffPasswordReset(
  * and burns the link, along with every other one outstanding for the same
  * account. The token check, the update and the locking are
  * `confirmTokenPasswordReset()`'s.
- * @param env The Worker bindings.
+ * @param db The database client.
  * @param input The validated raw token and the password to set.
  */
 export async function confirmStaffPasswordReset(
-  env: Bindings,
+  db: DbClient,
   input: StaffPasswordResetConfirmInput,
 ): Promise<TokenPasswordResetResult> {
   return confirmTokenPasswordReset(
-    env,
+    db,
     {tokenTable: 'staff_password_reset_tokens', rpc: 'reset_staff_password'},
     input,
   );

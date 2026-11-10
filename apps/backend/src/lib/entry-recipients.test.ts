@@ -1,4 +1,5 @@
 import {afterEach, describe, expect, it} from 'bun:test';
+import {createDbClient} from './db';
 import {EntryStatusSchema} from '@regional-quiz/shared';
 import {
   DEFAULT_EXCLUDED_STATUSES,
@@ -45,7 +46,10 @@ describe('fetchTournamentRecipients', () => {
   it('reaches only confirmed and waitlisted entries when no status filter is given', async () => {
     const urls = mockFetch([[row('taro@example.com')]]);
 
-    const result = await fetchTournamentRecipients(ENV, TOURNAMENT_ID);
+    const result = await fetchTournamentRecipients(
+      createDbClient(ENV),
+      TOURNAMENT_ID,
+    );
 
     expect(result).toEqual({ok: true, recipients: ['taro@example.com']});
     expect(urls[0]).toContain(`tournament_id=eq.${TOURNAMENT_ID}`);
@@ -70,7 +74,11 @@ describe('fetchTournamentRecipients', () => {
     for (const statusFilter of [undefined, 'cancelled'] as const) {
       const urls = mockFetch([[row('taro@example.com')]]);
 
-      await fetchTournamentRecipients(ENV, TOURNAMENT_ID, statusFilter);
+      await fetchTournamentRecipients(
+        createDbClient(ENV),
+        TOURNAMENT_ID,
+        statusFilter,
+      );
 
       expect(decodeURIComponent(urls[0])).toContain(
         'participants!inner(email)',
@@ -83,7 +91,7 @@ describe('fetchTournamentRecipients', () => {
     const urls = mockFetch([[row('taro@example.com')]]);
 
     const result = await fetchTournamentRecipients(
-      ENV,
+      createDbClient(ENV),
       TOURNAMENT_ID,
       'cancelled',
     );
@@ -102,7 +110,7 @@ describe('fetchTournamentRecipients', () => {
     ]);
 
     const result = await fetchTournamentRecipients(
-      ENV,
+      createDbClient(ENV),
       TOURNAMENT_ID,
       undefined,
       2,
@@ -132,7 +140,7 @@ describe('fetchTournamentRecipients', () => {
     ]);
 
     const result = await fetchTournamentRecipients(
-      ENV,
+      createDbClient(ENV),
       TOURNAMENT_ID,
       undefined,
       3,
@@ -157,7 +165,7 @@ describe('fetchTournamentRecipients', () => {
     const urls = mockFetch([[row('a@example.com'), row('b@example.com')], []]);
 
     const result = await fetchTournamentRecipients(
-      ENV,
+      createDbClient(ENV),
       TOURNAMENT_ID,
       undefined,
       2,
@@ -175,7 +183,12 @@ describe('fetchTournamentRecipients', () => {
 
     for (const pageSize of [0, -1, 1.5, Number.NaN]) {
       await expect(
-        fetchTournamentRecipients(ENV, TOURNAMENT_ID, undefined, pageSize),
+        fetchTournamentRecipients(
+          createDbClient(ENV),
+          TOURNAMENT_ID,
+          undefined,
+          pageSize,
+        ),
       ).rejects.toThrow(RangeError);
     }
     expect(urls).toEqual([]);
@@ -184,7 +197,10 @@ describe('fetchTournamentRecipients', () => {
   it('de-duplicates an address that appears on several entries', async () => {
     mockFetch([[row('taro@example.com'), row('taro@example.com')]]);
 
-    const result = await fetchTournamentRecipients(ENV, TOURNAMENT_ID);
+    const result = await fetchTournamentRecipients(
+      createDbClient(ENV),
+      TOURNAMENT_ID,
+    );
 
     expect(result).toEqual({ok: true, recipients: ['taro@example.com']});
   });
@@ -192,7 +208,10 @@ describe('fetchTournamentRecipients', () => {
   it('reports a failed query instead of returning a partial list', async () => {
     mockFetch([Response.json({message: 'db is down'}, {status: 500})]);
 
-    const result = await fetchTournamentRecipients(ENV, TOURNAMENT_ID);
+    const result = await fetchTournamentRecipients(
+      createDbClient(ENV),
+      TOURNAMENT_ID,
+    );
 
     expect(result).toEqual({
       ok: false,

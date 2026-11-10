@@ -2,7 +2,6 @@ import {Hono} from 'hono';
 import {TournamentEntryPauseInputSchema} from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireStaffForTournament} from '../middleware/staff-auth';
-import {createDbClient} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {rowToTournament, TOURNAMENT_COLUMNS} from '../lib/tournaments';
 import {TournamentIdParamSchema} from './params';
@@ -21,7 +20,8 @@ export const staffEntryPauseRoute = new Hono<StaffEnv>().put(
   requireStaffForTournament(),
   validate('json', TournamentEntryPauseInputSchema),
   async c => {
-    const {data, error} = await createDbClient(c.env)
+    const {data, error} = await c
+      .get('db')
       .from('tournaments')
       .update({entries_paused: c.req.valid('json').paused})
       .eq('id', c.req.valid('param').tournamentId)

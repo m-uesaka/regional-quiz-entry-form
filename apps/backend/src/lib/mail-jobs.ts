@@ -1,6 +1,5 @@
 import type {StaffMailJob} from '@regional-quiz/shared';
-import type {Bindings} from '../types/env';
-import {createDbClient, type Tables} from './db';
+import {type DbClient, type Tables} from './db';
 import type {InternalResult} from './errors';
 
 /** The content half of a job, which is all the queue consumer reads. */
@@ -40,11 +39,11 @@ function rowToStaffMailJob(row: MailJobRow): StaffMailJob {
  * messages were never enqueued reads as "nothing sent", which is the
  * truth; the other order would have a consumer meet a job id with no row
  * behind it.
- * @param env The Worker bindings.
+ * @param db The database client.
  * @param job The tournament, content, and recipient count of the send.
  */
 export async function createMailJob(
-  env: Bindings,
+  db: DbClient,
   job: {
     tournamentId: string;
     subject: string;
@@ -52,7 +51,6 @@ export async function createMailJob(
     total: number;
   },
 ): Promise<InternalResult<string>> {
-  const db = createDbClient(env);
   const {data, error} = await db
     .from('mail_jobs')
     .insert({
@@ -75,14 +73,13 @@ export async function createMailJob(
  * Only the content is selected: the counters move while the consumer
  * works, and reading them here would invite deciding something from a
  * value that is stale by the time it is used.
- * @param env The Worker bindings.
+ * @param db The database client.
  * @param jobId The job the queue message names.
  */
 export async function fetchMailJobContent(
-  env: Bindings,
+  db: DbClient,
   jobId: string,
 ): Promise<InternalResult<MailJobContent | null>> {
-  const db = createDbClient(env);
   const {data, error} = await db
     .from('mail_jobs')
     .select('id, subject, body_html')
@@ -111,16 +108,15 @@ export async function fetchMailJobContent(
  * this is what the staff endpoint scopes on, so a job id belonging to
  * another region's tournament has to come back as "not found" rather than
  * as a row the caller then has to remember to compare.
- * @param env The Worker bindings.
+ * @param db The database client.
  * @param tournamentId The tournament the caller is authorized for.
  * @param jobId The job to read.
  */
 export async function fetchMailJob(
-  env: Bindings,
+  db: DbClient,
   tournamentId: string,
   jobId: string,
 ): Promise<InternalResult<StaffMailJob | null>> {
-  const db = createDbClient(env);
   const {data, error} = await db
     .from('mail_jobs')
     .select('id, subject, total, sent, failed, created_at, updated_at')
@@ -141,18 +137,17 @@ export async function fetchMailJob(
  * and two batches that both read the same `sent` would both write the same
  * value, losing one batch's worth of deliveries. The function increments
  * inside the database instead.
- * @param env The Worker bindings.
+ * @param db The database client.
  * @param jobId The job the batch belonged to.
  * @param progress How many of the batch's messages were delivered and how
  *     many were given up on. Messages sent back for another delivery
  *     belong to neither, and are counted when they finally settle.
  */
 export async function recordMailJobProgress(
-  env: Bindings,
+  db: DbClient,
   jobId: string,
   progress: {sent: number; failed: number},
 ): Promise<InternalResult<void>> {
-  const db = createDbClient(env);
   const {error} = await db.rpc('record_mail_job_progress', {
     p_job_id: jobId,
     p_sent: progress.sent,

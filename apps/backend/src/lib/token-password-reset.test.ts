@@ -1,4 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
+import {createDbClient} from './db';
 import {COMMON_ERROR_CODES} from '@regional-quiz/shared';
 import {testBindings} from '../test-support/bindings';
 import {verifyPassword} from './password';
@@ -86,7 +87,7 @@ for (const target of TARGETS) {
         () => unexpected(),
       );
 
-      await confirmTokenPasswordReset(env, target, {
+      await confirmTokenPasswordReset(createDbClient(env), target, {
         token: TOKEN,
         newPassword: NEW_PASSWORD,
       });
@@ -104,10 +105,14 @@ for (const target of TARGETS) {
         () => unexpected(),
       );
 
-      const result = await confirmTokenPasswordReset(env, target, {
-        token: TOKEN,
-        newPassword: NEW_PASSWORD,
-      });
+      const result = await confirmTokenPasswordReset(
+        createDbClient(env),
+        target,
+        {
+          token: TOKEN,
+          newPassword: NEW_PASSWORD,
+        },
+      );
 
       expect(result).toEqual({
         ok: false,
@@ -123,10 +128,14 @@ for (const target of TARGETS) {
         () => unexpected(),
       );
 
-      const result = await confirmTokenPasswordReset(env, target, {
-        token: TOKEN,
-        newPassword: NEW_PASSWORD,
-      });
+      const result = await confirmTokenPasswordReset(
+        createDbClient(env),
+        target,
+        {
+          token: TOKEN,
+          newPassword: NEW_PASSWORD,
+        },
+      );
 
       expect(result).toEqual({
         ok: false,
@@ -142,10 +151,14 @@ for (const target of TARGETS) {
         () => new Response(null, {status: 204}),
       );
 
-      const result = await confirmTokenPasswordReset(env, target, {
-        token: TOKEN,
-        newPassword: NEW_PASSWORD,
-      });
+      const result = await confirmTokenPasswordReset(
+        createDbClient(env),
+        target,
+        {
+          token: TOKEN,
+          newPassword: NEW_PASSWORD,
+        },
+      );
 
       expect(result).toEqual({ok: true});
       expect(requests).toHaveLength(2);
@@ -175,10 +188,14 @@ for (const target of TARGETS) {
           ),
       );
 
-      const result = await confirmTokenPasswordReset(env, target, {
-        token: TOKEN,
-        newPassword: NEW_PASSWORD,
-      });
+      const result = await confirmTokenPasswordReset(
+        createDbClient(env),
+        target,
+        {
+          token: TOKEN,
+          newPassword: NEW_PASSWORD,
+        },
+      );
 
       expect(result).toEqual({
         ok: false,
@@ -193,10 +210,14 @@ for (const target of TARGETS) {
         () => Response.json(POSTGREST_ERROR, {status: 500}),
       );
 
-      const result = await confirmTokenPasswordReset(env, target, {
-        token: TOKEN,
-        newPassword: NEW_PASSWORD,
-      });
+      const result = await confirmTokenPasswordReset(
+        createDbClient(env),
+        target,
+        {
+          token: TOKEN,
+          newPassword: NEW_PASSWORD,
+        },
+      );
 
       expect(result).toEqual({
         ok: false,

@@ -1,7 +1,8 @@
-import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
+import {afterEach, beforeEach, describe, expect, it, spyOn} from 'bun:test';
 import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
 import {app} from '../index';
+import * as dbModule from '../lib/db';
 import {entryNoticeSubject} from '../lib/entry-notice';
 import {verificationMailSubject} from '../lib/entry-verification';
 import {hashPassword, verifyPassword} from '../lib/password';
@@ -509,6 +510,22 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     );
 
     expect(keys).toEqual(['entry:email:shared@example.com']);
+  });
+
+  // #310: the up-front check and the background entry (and its mail) used to
+  // make a client each.
+  it('makes one database client for the check and the entry behind it', async () => {
+    mockSupabase({participant: null});
+    const createDbClient = spyOn(dbModule, 'createDbClient');
+    try {
+      const res = await postWithContext(TOURNAMENT_PATH, validBody);
+      await settleBackgroundWork();
+
+      expect(res.status).toBe(202);
+      expect(createDbClient).toHaveBeenCalledTimes(1);
+    } finally {
+      createDbClient.mockRestore();
+    }
   });
 
   it('mails at once for an address whose reset requests used up their budget', async () => {

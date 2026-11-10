@@ -17,7 +17,11 @@ export const entryVerificationRoute = new Hono<Env>().post(
   '/verify',
   validate('json', EntryVerificationInputSchema),
   async c => {
-    const result = await confirmEntryByToken(c.env, c.req.valid('json').token);
+    const result = await confirmEntryByToken(
+      c.env,
+      c.get('db'),
+      c.req.valid('json').token,
+    );
     if (!result.ok) {
       // Only a token the database actually refused is reported as a client
       // error: a 400 is what tells the participant their link is dead and

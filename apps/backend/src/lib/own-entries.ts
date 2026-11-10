@@ -15,7 +15,7 @@ import {
   type EntryEditInput,
 } from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
-import {createDbClient, type DbClient} from './db';
+import {type DbClient} from './db';
 import type {LibFailure} from './errors';
 import {validateCustomFieldValues} from './form-field-defs';
 import {promoteWaitlistedEntries} from './waitlist';
@@ -33,19 +33,17 @@ type CancelOwnEntryResult = {ok: true} | LibFailure<404>;
  * the tournament's entry period has closed or the entry was cancelled, and
  * the custom field answers are checked against the tournament's own form
  * definition rather than trusted from the client.
- * @param env The Worker bindings.
+ * @param db The database client.
  * @param participantId The logged-in participant, from the session cookie.
  * @param entryId The entry to update.
  * @param patch The validated editable fields.
  */
 export async function updateOwnEntry(
-  env: Bindings,
+  db: DbClient,
   participantId: string,
   entryId: string,
   patch: EntryEditInput,
 ): Promise<UpdateOwnEntryResult> {
-  const db = createDbClient(env);
-
   const {data: entry, error: lookupError} = await db
     .from('entries')
     .select(
@@ -172,16 +170,16 @@ async function refusedAfterRace(
  * outstanding verification token (see the migration).
  * Cancelling an already-cancelled entry succeeds without promoting anyone.
  * @param env The Worker bindings.
+ * @param db The database client.
  * @param participantId The logged-in participant, from the session cookie.
  * @param entryId The entry to cancel.
  */
 export async function cancelOwnEntry(
   env: Bindings,
+  db: DbClient,
   participantId: string,
   entryId: string,
 ): Promise<CancelOwnEntryResult> {
-  const db = createDbClient(env);
-
   // The status change, the waitlist renumbering, and the read of the status
   // the entry had beforehand all happen inside one locked transaction, so
   // two concurrent cancellations of the same seat can't both trigger a
@@ -217,7 +215,7 @@ export async function cancelOwnEntry(
       // the free seats under its own tournament lock -- promotes nobody
       // into a seat already taken instead of pushing the tournament over
       // capacity. A mail it couldn't send is logged there.
-      await promoteWaitlistedEntries(env, cancelled.entry_tournament_id);
+      await promoteWaitlistedEntries(env, db, cancelled.entry_tournament_id);
     } catch (promotionError) {
       // The cancellation itself is already committed, so failing the request
       // would tell the participant their cancellation didn't go through when

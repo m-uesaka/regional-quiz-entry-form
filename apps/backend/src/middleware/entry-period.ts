@@ -25,7 +25,7 @@ type TournamentResolver = (c: Context<Env>) => Promise<TournamentRow | null>;
 
 /** For routes keyed by a `:tournamentId` path parameter. */
 export const byTournamentIdParam: TournamentResolver = c =>
-  fetchTournamentById(c.env, c.req.param('tournamentId') ?? '');
+  fetchTournamentById(c.get('db'), c.req.param('tournamentId') ?? '');
 
 /**
  * For the public routes keyed by `:regionSlug` / `:tournamentSlug`. Those
@@ -38,7 +38,7 @@ export const byTournamentSlugParams: TournamentResolver = async c => {
     return null;
   }
   return fetchTournamentBySlug(
-    c.env,
+    c.get('db'),
     c.req.param('regionSlug') ?? '',
     type.data,
   );
@@ -129,7 +129,7 @@ export function requireOpenEntryPeriodOrStaff(
     // stays dead whichever tournament it is aimed at. Checking scope first
     // would answer a revoked 地域スタッフ looking at another region's form
     // with a 403 that never sends them back to log in.
-    const check = await isSessionCurrent(c.env, staff);
+    const check = await isSessionCurrent(c.get('db'), staff);
     if (!check.ok) {
       return c.json({error: 'internal server error'}, 500);
     }

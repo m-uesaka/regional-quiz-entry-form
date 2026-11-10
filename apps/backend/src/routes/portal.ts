@@ -5,7 +5,7 @@ import {
   type PortalTournament,
 } from '@regional-quiz/shared';
 import type {Env} from '../types/env';
-import {createDbClient, type Tables} from '../lib/db';
+import {type Tables} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {tournamentDisplayName} from '../lib/tournaments';
 
@@ -110,7 +110,7 @@ function rowToPortalTournament(
 // means a tournament should only be created once its name and entry period
 // are fit to announce.
 export const portalRoute = new Hono<Env>().get('/tournaments', async c => {
-  const db = createDbClient(c.env);
+  const db = c.get('db');
   const {data, error} = await db
     .from('tournaments')
     .select(

@@ -1,5 +1,8 @@
 import {afterEach, describe, expect, it} from 'bun:test';
 import {passwordResetRoute} from './password-reset';
+import {Hono} from 'hono';
+import {dbClient} from '../middleware/db';
+import type {Env} from '../types/env';
 import type {Bindings} from '../types/env';
 import {
   testBindings,
@@ -8,6 +11,12 @@ import {
   turnstileAwareFetch,
 } from '../test-support/bindings';
 import {TURNSTILE_TOKEN_HEADER} from '../middleware/turnstile';
+
+// The route behind the middleware that gives it its database client, as
+// `index.ts` mounts it.
+const routeUnderTest = new Hono<Env>()
+  .use(dbClient())
+  .route('/', passwordResetRoute);
 
 const ENV = testBindings();
 
@@ -22,12 +31,18 @@ interface MockedTables {
 // can tell what the route did on the response path from what it deferred.
 let requestedUrls: string[] = [];
 
+// Held shut by a test that wants to see the response arrive while the
+// deferred work is still waiting on its first call. Timing alone can't tell
+// "deferred" from "started just before the response" (#310).
+let gate: Promise<void> = Promise.resolve();
+
 /**
  * Answers the PostgREST and Resend calls the route makes with canned rows.
  * @param tables The rows each table's request resolves to.
  */
 function mockFetch(tables: MockedTables): void {
   requestedUrls = [];
+  gate = Promise.resolve();
   // Wrapped so that Turnstile's siteverify is answered by the wrapper rather
   // than by the stub below -- which would otherwise hand `verifyTurnstile` a
   // list of participant rows, read no `success` in it, and turn every test
@@ -35,16 +50,17 @@ function mockFetch(tables: MockedTables): void {
   // `requestedUrls`, which the tests below read as "what the route did on
   // the response path": the challenge is checked before the route is
   // reached at all.
-  globalThis.fetch = turnstileAwareFetch(((input: RequestInfo | URL) => {
+  globalThis.fetch = turnstileAwareFetch((async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString();
     requestedUrls.push(url);
+    await gate;
     if (url.startsWith('https://api.resend.com/')) {
-      return Promise.resolve(new Response(null, {status: 200}));
+      return new Response(null, {status: 200});
     }
     if (url.includes('/password_reset_tokens')) {
-      return Promise.resolve(Response.json(tables.passwordResetTokens ?? []));
+      return Response.json(tables.passwordResetTokens ?? []);
     }
-    return Promise.resolve(Response.json(tables.participants ?? []));
+    return Response.json(tables.participants ?? []);
   }) as unknown as typeof fetch);
 }
 
@@ -81,7 +97,7 @@ async function post(
   if (turnstileToken !== null) {
     headers[TURNSTILE_TOKEN_HEADER] = turnstileToken;
   }
-  return passwordResetRoute.request(
+  return routeUnderTest.request(
     path,
     {method: 'POST', headers, body: JSON.stringify(body)},
     env,
@@ -115,16 +131,23 @@ describe('POST /request', () => {
 
   it('answers a registered email without doing any of the reset work first', async () => {
     mockFetch({participants: [{id: PARTICIPANT_ID}]});
-
-    const res = await post('/request', {email: 'known@example.com'});
+    let release!: () => void;
+    gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
 
     // The point of deferring: had the lookup, the token insert or the Resend
-    // call run before the response, a registered address would take
-    // measurably longer than an unregistered one and the identical body
-    // would not hide which is which.
+    // call been waited on before the response, a registered address would
+    // take measurably longer than an unregistered one and the identical body
+    // would not hide which is which. With the first call held shut, the
+    // response only arrives if nothing waits on the work.
+    const res = await post('/request', {email: 'known@example.com'});
     expect(res.status).toBe(200);
-    expect(requestedUrls).toEqual([]);
+    expect(
+      requestedUrls.some(url => url.startsWith('https://api.resend.com/')),
+    ).toBe(false);
 
+    release();
     await settleBackgroundWork();
     expect(
       requestedUrls.some(url => url.startsWith('https://api.resend.com/')),

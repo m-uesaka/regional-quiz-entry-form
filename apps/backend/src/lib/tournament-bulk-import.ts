@@ -32,16 +32,17 @@ import {
   type WaitlistPromotion,
 } from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
-import {createDbClient, type DbClient} from './db';
+import {type DbClient} from './db';
 import {formFieldDefSyncRows} from './form-definitions';
-import {JST_OFFSET_MS} from './jst';
 import {IMPORT_ACTION_STALE_SQLSTATE} from './pg-errors';
 import {regulationSyncFailure} from './regulations';
+import {describeSheetDatetime, parseSheetDatetime} from './sheet-datetime';
 import {classifySheetImportError} from './sheet-import-errors';
 import {
   cellText,
   fetchEntrySheet,
   fetchSheetValues,
+  isBlankCell,
   SheetFetchError,
 } from './google-sheets';
 import {
@@ -77,13 +78,6 @@ const INDEX_RANGE = 'A1:Z';
 // than one round trip after another.
 const CONCURRENCY = 4;
 
-// `2026/11/04 21:00:00`, `2026/10/31 0:00`, `2026-10-31 21:00`: the sheet's
-// date-time as displayed, read as Japan time. The time is required -- a bare
-// date would leave it open whether entry closes at the start or the end of
-// that day.
-const DATE_TIME_PATTERN =
-  /^(\d{4})[/-](\d{1,2})[/-](\d{1,2})[ T]+(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
-
 // `54`, `1,000`, `54人`. Blank is "no capacity".
 const CAPACITY_PATTERN = /^(\d[\d,]*)人?$/;
 
@@ -94,15 +88,19 @@ const TYPES_BY_LABEL = new Map<string, TournamentType>(
   ]),
 );
 
-/** One row of the 大会一覧 sheet, as written. */
+/**
+ * One row of the 大会一覧 sheet, as written. The sheet is read unformatted
+ * (see `readIndex()`), so the two date-time cells are kept as they arrive --
+ * a serial number or text -- for `parseSheetDatetime()`; the rest is text.
+ */
 export interface TournamentIndexRow {
   /** The row number the sheet shows. */
   row: number;
   regionName: string;
   typeLabel: string;
   capacity: string;
-  entryOpensAt: string;
-  entryClosesAt: string;
+  entryOpensAt: unknown;
+  entryClosesAt: unknown;
   spreadsheetId: string;
 }
 
@@ -153,8 +151,8 @@ export function parseTournamentIndex(
       regionName: cellText(cells[columns.region]),
       typeLabel: cellText(cells[columns.type]),
       capacity: cellText(cells[columns.capacity]),
-      entryOpensAt: cellText(cells[columns.entryOpensAt]),
-      entryClosesAt: cellText(cells[columns.entryClosesAt]),
+      entryOpensAt: cells[columns.entryOpensAt],
+      entryClosesAt: cells[columns.entryClosesAt],
       spreadsheetId: cellText(cells[columns.spreadsheetId]),
     };
     if (
@@ -165,7 +163,7 @@ export function parseTournamentIndex(
         row.entryOpensAt,
         row.entryClosesAt,
         row.spreadsheetId,
-      ].every(text => text === '')
+      ].every(isBlankCell)
     ) {
       return;
     }
@@ -175,30 +173,18 @@ export function parseTournamentIndex(
 }
 
 /**
- * Reads an エントリー開始 / エントリー終了 cell as a Japan-time instant.
- * @param cell The cell as displayed, e.g. `2026/11/04 21:00:00`.
+ * Reads an エントリー開始 / エントリー終了 cell as a Japan-time instant. A
+ * date typed as text must carry a time -- a bare date would leave it open
+ * whether entry closes at the start or the end of that day.
+ * @param cell The unformatted cell: a date serial, or text such as
+ *     `2026/11/04 21:00:00`.
  * @return The instant as an ISO string, or `null` if the cell isn't a
  *     date and time.
  */
-export function parseJstDateTime(cell: string): string | null {
-  const match = DATE_TIME_PATTERN.exec(cell.trim());
-  if (!match) return null;
-  const [year, month, day, hour, minute] = match.slice(1, 6).map(Number);
-  const second = match[6] === undefined ? 0 : Number(match[6]);
-  if (hour > 23 || minute > 59 || second > 59) return null;
-  const date = new Date(Date.UTC(year, month - 1, day));
-  // `Date.UTC` rolls 2026/2/30 over into March rather than refusing it.
-  if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day
-  ) {
-    return null;
-  }
-  // That wall-clock time in Japan, 9 hours earlier in UTC.
-  return new Date(
-    Date.UTC(year, month - 1, day, hour, minute, second) - JST_OFFSET_MS,
-  ).toISOString();
+export function parseJstDateTime(cell: unknown): string | null {
+  return isBlankCell(cell)
+    ? null
+    : parseSheetDatetime(cell, {requireTime: true});
 }
 
 /**
@@ -243,6 +229,7 @@ interface ImportContext {
  * registering it would do, reading every row's entry sheet so a mistake on
  * one shows up now rather than when it is registered. Writes nothing.
  * @param env The Worker bindings.
+ * @param db The database client.
  * @param spreadsheetId The 大会一覧 spreadsheet.
  * @param now The present, which entry must not have closed by.
  * @return One row per row of the sheet, in sheet order.
@@ -252,10 +239,16 @@ interface ImportContext {
  */
 export async function previewTournamentImport(
   env: Bindings,
+  db: DbClient,
   spreadsheetId: string,
   now: Date,
 ): Promise<TournamentImportPreviewRow[]> {
-  const {rows, context, duplicateOf} = await startRun(env, spreadsheetId, now);
+  const {rows, context, duplicateOf} = await startRun(
+    env,
+    db,
+    spreadsheetId,
+    now,
+  );
 
   return mapWithConcurrency(rows, CONCURRENCY, async row => {
     const resolved = await resolveRow(context, row, duplicateOf, 'preview');
@@ -300,6 +293,7 @@ export async function previewTournamentImport(
  * the preview showed (its `fingerprint`); otherwise it fails and staff
  * read the sheet again.
  * @param env The Worker bindings.
+ * @param db The database client.
  * @param spreadsheetId The 大会一覧 spreadsheet.
  * @param selections The rows to register and what to do with each, as the
  *     preview offered.
@@ -311,11 +305,17 @@ export async function previewTournamentImport(
  */
 export async function importTournaments(
   env: Bindings,
+  db: DbClient,
   spreadsheetId: string,
   selections: TournamentImportSelection[],
   now: Date,
 ): Promise<TournamentImportResult[]> {
-  const {rows, context, duplicateOf} = await startRun(env, spreadsheetId, now);
+  const {rows, context, duplicateOf} = await startRun(
+    env,
+    db,
+    spreadsheetId,
+    now,
+  );
 
   return mapWithConcurrency(selections, CONCURRENCY, async selection => {
     const row = rows.find(
@@ -365,9 +365,14 @@ export async function importTournaments(
 }
 
 /** Reads the 大会一覧 sheet and what both steps check its rows against. */
-async function startRun(env: Bindings, spreadsheetId: string, now: Date) {
+async function startRun(
+  env: Bindings,
+  db: DbClient,
+  spreadsheetId: string,
+  now: Date,
+) {
   const rows = await readIndex(env, spreadsheetId);
-  const context = await loadContext(env, now);
+  const context = await loadContext(env, db, now);
   return {rows, context, duplicateOf: duplicateFinder(rows)};
 }
 
@@ -461,14 +466,24 @@ async function readIndex(
       spreadsheetId,
       INDEX_RANGE,
       env.GOOGLE_SHEETS_API_KEY,
+      // Unformatted, with dates as serial numbers, so a date-time arrives
+      // the same whatever locale or display format the sheet uses (as on
+      // the regulation tab). The other columns come as typed: a number
+      // for a number, text for text.
+      {
+        valueRenderOption: 'UNFORMATTED_VALUE',
+        dateTimeRenderOption: 'SERIAL_NUMBER',
+      },
     ),
   );
 }
 
 /** Reads the regions and the tournaments there are now. */
-async function loadContext(env: Bindings, now: Date): Promise<ImportContext> {
-  // One client for the whole run rather than one per row.
-  const db = createDbClient(env);
+async function loadContext(
+  env: Bindings,
+  db: DbClient,
+  now: Date,
+): Promise<ImportContext> {
   const [regionsRead, tournamentsRead] = await Promise.all([
     db.from('regions').select('id, name'),
     db
@@ -569,16 +584,16 @@ async function prepareRow(
   }
   const entryOpensAt = parseJstDateTime(row.entryOpensAt);
   if (entryOpensAt === null) {
-    return `エントリー開始「${row.entryOpensAt}」を日時として読み取れません(例: 2026/11/04 21:00:00)`;
+    return `エントリー開始「${describeSheetDatetime(row.entryOpensAt)}」を日時として読み取れません(例: 2026/11/04 21:00:00)`;
   }
   const entryClosesAt = parseJstDateTime(row.entryClosesAt);
   if (entryClosesAt === null) {
-    return `エントリー終了「${row.entryClosesAt}」を日時として読み取れません(例: 2026/12/16 23:59:59)`;
+    return `エントリー終了「${describeSheetDatetime(row.entryClosesAt)}」を日時として読み取れません(例: 2026/12/16 23:59:59)`;
   }
   if (!isEntryPeriodOrdered(entryOpensAt, entryClosesAt)) {
     // The values as the sheet has them, so staff can find the cells, before
     // the same message the admin form shows.
-    return `エントリー期間「${row.entryOpensAt} 〜 ${row.entryClosesAt}」: ${ENTRY_PERIOD_ORDER_MESSAGE}`;
+    return `エントリー期間「${describeSheetDatetime(row.entryOpensAt)} 〜 ${describeSheetDatetime(row.entryClosesAt)}」: ${ENTRY_PERIOD_ORDER_MESSAGE}`;
   }
   if (Date.parse(entryClosesAt) <= context.now.getTime()) {
     return 'エントリー終了が既に過ぎています';
@@ -695,10 +710,11 @@ async function importRow(
     try {
       promotion = await promoteWaitlistedEntries(
         context.env,
+        context.db,
         data.tournament_id,
         // An overwrite leaves the name as it was, so the one read for the
         // preview is still the one to mail under.
-        {db: context.db, tournamentName: currentName},
+        {tournamentName: currentName},
       );
     } catch (e: unknown) {
       console.error('failed to promote waitlisted entries', {

@@ -1,4 +1,5 @@
 import {afterAll, afterEach, beforeAll, describe, expect, it} from 'bun:test';
+import {createDbClient} from './db';
 import {SQL} from 'bun';
 import {
   ENTRY_PERIOD_ORDER_MESSAGE,
@@ -63,6 +64,21 @@ describe('parseTournamentIndex', () => {
     ]);
   });
 
+  it('reads an unformatted sheet: numbers stay numbers, dates stay serials', () => {
+    const rows = parseTournamentIndex([
+      HEADER,
+      ['北海道', '最強位', 46382, 54, 46330.875, 46372.5, 'name', 'sheet-1'],
+    ]);
+
+    expect(rows[0]).toMatchObject({
+      capacity: '54',
+      entryOpensAt: 46330.875,
+      entryClosesAt: 46372.5,
+      spreadsheetId: 'sheet-1',
+    });
+    expect(parseCapacity(rows[0].capacity)).toBe(54);
+  });
+
   it('copes with the columns being moved', () => {
     const rows = parseTournamentIndex([
       [
@@ -123,14 +139,29 @@ describe('parseJstDateTime', () => {
     );
   });
 
+  it('reads a date serial as Japan time', () => {
+    // 2026-11-04 21:00 and 2026-12-16 23:59:59, as the sheet stores them.
+    expect(parseJstDateTime(46330.875)).toBe('2026-11-04T12:00:00.000Z');
+    expect(parseJstDateTime(46372 + 86399 / 86400)).toBe(
+      '2026-12-16T14:59:59.000Z',
+    );
+    // Midnight is a whole number.
+    expect(parseJstDateTime(46326)).toBe('2026-10-30T15:00:00.000Z');
+  });
+
   it('reads nothing that is not a date and time', () => {
     for (const cell of [
       '',
+      undefined,
+      true,
       '調整中',
+      // The time is required for text, so a bare date is not read.
       '2026/12/16',
       '12/16 23:59',
       '2026/02/30 12:00',
       '2026/12/16 24:00',
+      // A stray number is no date.
+      2026,
     ]) {
       expect(parseJstDateTime(cell)).toBeNull();
     }
@@ -346,7 +377,12 @@ describe.skipIf(!(await isDbReachable()))(
       regionName: string,
       typeLabel: string,
     ): Promise<TournamentImportSelection> {
-      const rows = await previewTournamentImport(env, 'index', NOW);
+      const rows = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
       requestedSheetIds = [];
       const row = rows.find(
         r => r.regionName === regionName && r.typeLabel === typeLabel,
@@ -389,7 +425,12 @@ describe.skipIf(!(await isDbReachable()))(
       };
       stubSheets();
 
-      const [row] = await previewTournamentImport(env, 'index', NOW);
+      const [row] = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
 
       expect(row).toEqual({
         row: 2,
@@ -408,6 +449,68 @@ describe.skipIf(!(await isDbReachable()))(
       expect(await tournamentOf(regionA, 'saikyoi')).toBeUndefined();
     });
 
+    it('reads the 大会一覧 unformatted, with dates as serial numbers', async () => {
+      const row = indexRow(regionA, '最強位', 's1');
+      // What an unformatted read returns: numbers for the capacity and the
+      // date-times, whatever the sheet displays.
+      row[3] = 54;
+      row[4] = 46330.875;
+      row[5] = 46372 + 86399 / 86400;
+      indexValues = [HEADER, row];
+      entrySheets = {
+        s1: {formRows: FORM_ROWS, regulationRows: REGULATION_ROWS},
+      };
+      stubSheets();
+      const sheetsFetch = globalThis.fetch;
+      let indexQuery: URLSearchParams | undefined;
+      globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(
+          input instanceof Request ? input.url : String(input),
+        );
+        if (url.pathname.includes('/spreadsheets/index/')) {
+          indexQuery = url.searchParams;
+        }
+        return sheetsFetch(input as RequestInfo, init);
+      }) as typeof fetch;
+
+      const [previewed] = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
+
+      expect(indexQuery?.get('valueRenderOption')).toBe('UNFORMATTED_VALUE');
+      expect(indexQuery?.get('dateTimeRenderOption')).toBe('SERIAL_NUMBER');
+      expect(previewed).toMatchObject({
+        error: null,
+        capacity: 54,
+        entryOpensAt: OPENS_ISO,
+        entryClosesAt: CLOSES_ISO,
+      });
+    });
+
+    it('names a date-time serial readably when it is refused', async () => {
+      // 2026-11-04 21:00 opens after it closes at 2026-11-04 20:00.
+      const row = indexRow(regionA, '最強位', 's1');
+      row[4] = 46330.875;
+      row[5] = 46330.8333333333;
+      indexValues = [HEADER, row];
+      entrySheets = {
+        s1: {formRows: FORM_ROWS, regulationRows: REGULATION_ROWS},
+      };
+      stubSheets();
+
+      const [previewed] = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
+
+      expect(previewed.error).toContain('2026-11-04 21:00 〜 2026-11-04 20:00');
+    });
+
     it('registers a tournament with its form definition and regulations', async () => {
       indexValues = [
         HEADER,
@@ -420,6 +523,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const [result] = await importTournaments(
         env,
+        createDbClient(env),
         'index',
         [await chosen(regionA, '最強位')],
         NOW,
@@ -486,7 +590,12 @@ describe.skipIf(!(await isDbReachable()))(
       ];
       stubSheets();
 
-      const [row] = await previewTournamentImport(env, 'index', NOW);
+      const [row] = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
 
       expect(row).toMatchObject({
         action: 'overwrite',
@@ -526,6 +635,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const [result] = await importTournaments(
         env,
+        createDbClient(env),
         'index',
         [await chosen(regionA, '最強位')],
         NOW,
@@ -579,7 +689,13 @@ describe.skipIf(!(await isDbReachable()))(
         indexRow(regionA, '最強位', 's1', {capacity: '5'}),
       ];
 
-      const [result] = await importTournaments(env, 'index', [selection], NOW);
+      const [result] = await importTournaments(
+        env,
+        createDbClient(env),
+        'index',
+        [selection],
+        NOW,
+      );
 
       expect(result.outcome).toBe('failed');
       expect(result.error).toContain('内容が変わりました');
@@ -605,7 +721,13 @@ describe.skipIf(!(await isDbReachable()))(
         returning id
       `;
 
-      const [result] = await importTournaments(env, 'index', [selection], NOW);
+      const [result] = await importTournaments(
+        env,
+        createDbClient(env),
+        'index',
+        [selection],
+        NOW,
+      );
 
       expect(result.outcome).toBe('failed');
       expect(result.error).toContain('内容が変わりました');
@@ -648,6 +770,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const results = await importTournaments(
         env,
+        createDbClient(env),
         'index',
         [await chosen(regionB, '最強位')],
         NOW,
@@ -666,6 +789,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const [result] = await importTournaments(
         env,
+        createDbClient(env),
         'index',
         [select(regionB, '新人王', 'create')],
         NOW,
@@ -712,6 +836,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const [result] = await importTournaments(
         env,
+        createDbClient(env),
         'index',
         [await chosen(regionA, '最強位')],
         NOW,
@@ -747,7 +872,12 @@ describe.skipIf(!(await isDbReachable()))(
       };
       stubSheets();
 
-      const rows = await previewTournamentImport(env, 'index', NOW);
+      const rows = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
 
       expect(rows.map(r => [r.row, r.action])).toEqual([
         [2, null],
@@ -775,7 +905,12 @@ describe.skipIf(!(await isDbReachable()))(
         indexRow(regionB, '新人王', 's1', {closes: '2026/12/16'}),
         indexRow(regionA, '新人王', 'missing-tab'),
       ];
-      const single = await previewTournamentImport(env, 'index', NOW);
+      const single = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
       expect(single[0].error).toContain('エントリー開始「調整中」');
       expect(single[1].error).toContain('エントリー終了「2026/12/16」');
       expect(single[2].error).toContain('レギュレーション');
@@ -804,7 +939,12 @@ describe.skipIf(!(await isDbReachable()))(
       };
       stubSheets();
 
-      const rows = await previewTournamentImport(env, 'index', NOW);
+      const rows = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
 
       expect(rows[0].error).toBe(
         `エントリー期間「2026/12/20 0:00 〜 2026/12/10 0:00」: ${ENTRY_PERIOD_ORDER_MESSAGE}`,
@@ -827,6 +967,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const [result] = await importTournaments(
         env,
+        createDbClient(env),
         'index',
         [select(regionB, '新人王', 'create')],
         NOW,
@@ -859,6 +1000,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const [result] = await importTournaments(
         env,
+        createDbClient(env),
         'index',
         [await chosen(regionB, '新人王')],
         NOW,
@@ -890,6 +1032,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const [result] = await importTournaments(
         env,
+        createDbClient(env),
         'index',
         [await chosen(regionB, '新人王')],
         NOW,
@@ -928,7 +1071,12 @@ describe.skipIf(!(await isDbReachable()))(
         entrySheets = {s1: {formRows, regulationRows: REGULATION_ROWS}};
         stubSheets();
 
-        const [row] = await previewTournamentImport(env, 'index', NOW);
+        const [row] = await previewTournamentImport(
+          env,
+          createDbClient(env),
+          'index',
+          NOW,
+        );
 
         expect(row.action).toBeNull();
         expect(row.error).toStartWith(message);
@@ -943,7 +1091,12 @@ describe.skipIf(!(await isDbReachable()))(
       };
       stubSheets();
 
-      const [mistake] = await previewTournamentImport(env, 'index', NOW);
+      const [mistake] = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
 
       expect(mistake.error).toBe(
         'レギュレーション: 2行目: レギュレーション名が空です',
@@ -953,7 +1106,12 @@ describe.skipIf(!(await isDbReachable()))(
       entrySheets = {s1: {formRows: FORM_ROWS, refusedWith: 403}};
       stubSheets();
 
-      const [refused] = await previewTournamentImport(env, 'index', NOW);
+      const [refused] = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
 
       expect(refused.error).toBe('Failed to fetch sheet: 403');
     });
@@ -965,7 +1123,12 @@ describe.skipIf(!(await isDbReachable()))(
       entrySheets = {s1: {formRows: [], rawBody: '<html>not json</html>'}};
       stubSheets();
 
-      const [row] = await previewTournamentImport(env, 'index', NOW);
+      const [row] = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
 
       expect(row.error).toBe(
         '読み込みに失敗しました。時間をおいて再度お試しください',

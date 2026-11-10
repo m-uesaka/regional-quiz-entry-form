@@ -8,8 +8,8 @@ import {
   StaffClaimsSchema,
   type StaffClaims,
 } from '@regional-quiz/shared';
-import type {Bindings, StaffEnv} from '../types/env';
-import {createDbClient, type Tables} from '../lib/db';
+import type {StaffEnv, StaffTournamentEnv} from '../types/env';
+import type {DbClient, Tables} from '../lib/db';
 import {
   fetchTournamentById,
   tournamentLookupFailure,
@@ -87,7 +87,7 @@ export type SessionCheck = {ok: true; current: boolean} | {ok: false};
  *
  * Exported for `middleware/entry-period.ts`, which reads staff claims
  * without requiring a session and so can't use the guards below.
- * @param env The bindings to reach Supabase with.
+ * @param db The database client.
  * @param staff The claims of a token whose signature already verified.
  * @return `ok: false` if the row couldn't be read. Callers answer that with
  *     a 500 rather than a 401: the session may well be fine, and
@@ -95,7 +95,7 @@ export type SessionCheck = {ok: true; current: boolean} | {ok: false};
  *     outage.
  */
 export async function isSessionCurrent(
-  env: Bindings,
+  db: DbClient,
   staff: StaffClaims,
 ): Promise<SessionCheck> {
   // The scope is matched in the same read (#296). The guards decide by the
@@ -104,7 +104,7 @@ export async function isSessionCurrent(
   // general account moved down to regional would keep every region's
   // participants in reach. Filtering on them makes such a session read as
   // no row, the way a deleted account's does, without another round trip.
-  let query = createDbClient(env)
+  let query = db
     .from('staff_accounts')
     .select('sessions_valid_from, disabled_at')
     .eq('id', staff.sub)
@@ -194,8 +194,8 @@ export function requireStaff() {
  *     403 (out of scope), 404 (nothing to be in scope of) or 500 (something
  *     couldn't be read).
  */
-async function authenticateStaff<T>(
-  c: Context<StaffEnv>,
+async function authenticateStaff<T, E extends StaffEnv | StaffTournamentEnv>(
+  c: Context<E>,
   authorize: (
     staff: StaffClaims,
   ) => Authorization<T> | Promise<Authorization<T>>,
@@ -208,7 +208,7 @@ async function authenticateStaff<T>(
     return c.json({error: COMMON_ERROR_CODES.UNAUTHORIZED}, 401);
   }
   const [check, authorization] = await Promise.all([
-    isSessionCurrent(c.env, staff),
+    isSessionCurrent(c.get('db'), staff),
     authorize(staff),
   ]);
   if (!check.ok) {
@@ -280,14 +280,14 @@ export function isInScope(
  * the two apart would let them probe which ids exist.
  */
 export function requireStaffForTournament() {
-  return createMiddleware<StaffEnv>(async (c, next) => {
+  return createMiddleware<StaffTournamentEnv>(async (c, next) => {
     const auth = await authenticateStaff(
       c,
       async (staff): Promise<Authorization<TournamentRow>> => {
         let tournament: TournamentRow | null;
         try {
           tournament = await fetchTournamentById(
-            c.env,
+            c.get('db'),
             c.req.param('tournamentId') ?? '',
           );
         } catch (e: unknown) {
@@ -321,7 +321,8 @@ export function requireStaffForEntry() {
   return createMiddleware<StaffEnv>(async (c, next) => {
     const auth = await authenticateStaff(c, async staff => {
       if (staff.role === 'general') return ALLOWED;
-      const {data: entry, error} = await createDbClient(c.env)
+      const {data: entry, error} = await c
+        .get('db')
         .from('entries')
         .select('tournaments(region_id, type)')
         .eq('id', c.req.param('entryId') ?? '')

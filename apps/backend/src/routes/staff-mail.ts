@@ -5,6 +5,7 @@ import {
   type StaffMailResult,
 } from '@regional-quiz/shared';
 import type {Bindings, StaffEnv} from '../types/env';
+import type {DbClient} from '../lib/db';
 import {requireStaffForTournament} from '../middleware/staff-auth';
 import type {BulkMailMessage} from '../lib/bulk-mail-queue';
 import {fetchTournamentRecipients} from '../lib/entry-recipients';
@@ -19,11 +20,7 @@ import {
 } from '../lib/mail-jobs';
 import {internalError, respondFailure} from '../lib/errors';
 import {hasVisibleText, sanitizeMailHtml} from '../lib/mail-html';
-import {
-  fetchTournamentById,
-  tournamentDisplayName,
-  tournamentLookupFailure,
-} from '../lib/tournaments';
+import {tournamentDisplayName} from '../lib/tournaments';
 import {TournamentIdParamSchema} from './params';
 import {validate} from '../middleware/validate';
 
@@ -49,6 +46,7 @@ export const ENQUEUE_BATCH_SIZE = 100;
  * afresh per batch -- so the list that used to be refused with a 413 over
  * 80 addresses is simply enqueued (Task 10-4).
  * @param env The Worker bindings.
+ * @param db The database client.
  * @param jobId The `mail_jobs` row the messages count against.
  * @param messages The messages to enqueue.
  * @returns The error that stopped the enqueueing, if any. By then the job's
@@ -56,6 +54,7 @@ export const ENQUEUE_BATCH_SIZE = 100;
  */
 async function enqueueMailJob(
   env: Bindings,
+  db: DbClient,
   jobId: string,
   messages: readonly BulkMailMessage[],
 ): Promise<{ok: true} | {ok: false; error: unknown}> {
@@ -70,7 +69,7 @@ async function enqueueMailJob(
       // this the job would sit at `sent + failed < total` forever and read
       // as one that is still running.
       const unqueued = messages.length - start;
-      const recorded = await recordMailJobProgress(env, jobId, {
+      const recorded = await recordMailJobProgress(db, jobId, {
         sent: 0,
         failed: unqueued,
       });
@@ -109,7 +108,7 @@ export const staffMailRoute = new Hono<StaffEnv>()
       }
 
       const result = await fetchTournamentRecipients(
-        c.env,
+        c.get('db'),
         tournamentId,
         statusFilter,
       );
@@ -123,7 +122,7 @@ export const staffMailRoute = new Hono<StaffEnv>()
       // so a consumer that picks a message up the moment it lands has to
       // find it already there. It doubles as the record of the send that
       // the staff screen reads back.
-      const job = await createMailJob(c.env, {
+      const job = await createMailJob(c.get('db'), {
         tournamentId,
         subject,
         bodyHtml,
@@ -136,6 +135,7 @@ export const staffMailRoute = new Hono<StaffEnv>()
 
       const enqueued = await enqueueMailJob(
         c.env,
+        c.get('db'),
         jobId,
         recipients.map(to => ({jobId, to})),
       );
@@ -171,17 +171,11 @@ export const staffMailRoute = new Hono<StaffEnv>()
     async c => {
       const {tournamentId} = c.req.valid('param');
 
-      let tournament;
-      try {
-        tournament = await fetchTournamentById(c.env, tournamentId);
-      } catch (e) {
-        return c.json(tournamentLookupFailure(e), 500);
-      }
-      if (!tournament) {
-        return c.json({error: 'tournament not found'}, 404);
-      }
+      // Read by `requireStaffForTournament()`, which has already answered
+      // 404 for a tournament that does not exist.
+      const tournament = c.get('tournament');
 
-      const entries = await fetchResendableEntryIds(c.env, tournamentId);
+      const entries = await fetchResendableEntryIds(c.get('db'), tournamentId);
       if (!entries.ok) {
         return respondFailure(
           c,
@@ -194,7 +188,7 @@ export const staffMailRoute = new Hono<StaffEnv>()
       // No body: each mail carries its own link, built by the consumer
       // when it issues the token. The subject is the one every mail of the
       // job goes out under, which is what the staff screen shows.
-      const job = await createMailJob(c.env, {
+      const job = await createMailJob(c.get('db'), {
         tournamentId,
         subject: verificationMailSubject(
           tournamentDisplayName(
@@ -213,6 +207,7 @@ export const staffMailRoute = new Hono<StaffEnv>()
 
       const enqueued = await enqueueMailJob(
         c.env,
+        c.get('db'),
         jobId,
         entryIds.map(entryId => ({jobId, entryId})),
       );
@@ -247,7 +242,7 @@ export const staffMailRoute = new Hono<StaffEnv>()
       // Scoped by tournament as well as by id, so a job of a tournament
       // this staff member may not see is a 404 rather than a readable row:
       // the middleware above only vouches for the tournament in the path.
-      const result = await fetchMailJob(c.env, tournamentId, jobId);
+      const result = await fetchMailJob(c.get('db'), tournamentId, jobId);
       if (!result.ok) {
         return respondFailure(c, result, 'failed to read the mail job');
       }
