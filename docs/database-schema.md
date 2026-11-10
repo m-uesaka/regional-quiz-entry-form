@@ -144,14 +144,16 @@ flowchart TB
 
 - `unique (id, tournament_id)`: 一見冗長ですが、これは `entry_regulations` 側の複合外部キー `foreign key (regulation_id, tournament_id) references regulations (id, tournament_id)` を張るために必要です。この複合 FK により、**ある大会のエントリーが別の大会のレギュレーションを参照することが DB レベルで不可能**になります(`0018` より前は同じ複合 FK が `entries` から直接張られていました)。
 - 優先期間の判定ロジックは `packages/shared/src/logic/regulation-eligibility.ts` の `regulationSelectionRefusal()`。「いずれかのレギュレーションの優先期間が現在アクティブなら、選んだ集合にそのうち少なくとも1つが含まれていなければならない。アクティブなものが1つもなければ、選択肢に残っているものの中から何を選んでもよい」という規則です。優先期間は「その条件を満たす参加者だけがエントリーできる」という意味なので、優先対象を1つ選んだうえで他の条件も一緒に申告することは許されます。
-- 一般枠の段階は `closes_with_priority` で決めます(#243)。この設定の枠が 1 つ以上あり、それらの優先期間が**すべて**終わり、どの優先期間も始まった後(`regulation-eligibility.ts` の `arePhasesOver()`)に、次の 2 つが起きます。案内の表示も送信時の検査も同じ判定を使います。
-  - 設定した枠を選択肢から外し、送信も断ります(`selectableRegulations()`)
-  - 設定の無い優先期間のうち、設定した枠のどれかが終わった後に始まったものは、制限でなくなります(`activePriorityRegulations()`)。一般枠に優先期間を設定している既存の大会はこの形です。それより前に始まった優先期間は、終了まで制限が続きます
+- 一般枠の段階は `closes_with_priority` で決めます(#243)。この設定の枠が 1 つ以上あり、それらの優先期間が**すべて**終わり、どの優先期間も始まった後(`regulation-eligibility.ts` の `arePhasesOver()`)に、設定した枠を選択肢から外し、送信も断ります(`selectableRegulations()`)。案内の表示も送信時の検査も同じ判定を使います。設定の無い優先期間は、他の枠の設定に関わらず、開いている間ずっと制限です(`activePriorityRegulations()`)。一般枠のレギュレーションには優先期間を置きません。
 
   枠ごとの終了で外さないのは、`0042` の移行で今の受付条件を保つためです。旧来の推定では、2 段階の優先枠の 1 段階目は 2 段階目の期間中も選べ、優先枠と一般枠の間が空いていれば間も両方選べました。この時点の判定は旧来の推定と同じ式で、設定で変わるのは対象の枠だけです。一般枠の優先期間を空欄にすれば、間は生じません。
 
   設定を列にしているのは、期間が終わっただけでは外せないためです。在住者を優先する期間のように、終わった後も対象者がそのレギュレーションを選ぶ必要がある大会や、レギュレーションが1つだけの大会があります。
-- `0042` のバックフィルは、旧来の `isGeneralPhase()` で実際に枠が外れていた行だけを `true` にしました。旧来の推定は `now` を引数に取りますが、結果が真になるのは「締切(60 秒の許容幅あり)に届く窓があり、そのすべてに、受付開始より後かつ締切に届く前に終わった別の窓が先行する」という時刻によらない条件を満たす大会で、外れる枠は常に「受付開始より後かつ締切に届く前に終わる窓」です。`now` が決めるのは外れる時刻だけで、それは `arePhasesOver()` と同じです。この等価性は、旧来の実装を残した `packages/shared/src/testing/legacy-general-phase.ts` を使い、`legacy-general-phase.test.ts`(判定)と `apps/backend/src/lib/regulations-backfill.test.ts`(SQL)で確かめています。
+- `0042` のバックフィルは、旧来の `isGeneralPhase()` で実際に枠が外れていた行だけを `true` にしました。旧来の推定は `now` を引数に取りますが、結果が真になるのは「締切(60 秒の許容幅あり)に届く窓があり、そのすべてに、受付開始より後かつ締切に届く前に終わった別の窓が先行する」という時刻によらない条件を満たす大会で、外れる枠は常に「受付開始より後かつ締切に届く前に終わる窓」です。`now` が決めるのは外れる時刻だけで、それは `arePhasesOver()` と同じです。この等価性を確かめていたテスト専用の旧実装(`packages/shared/src/testing/legacy-general-phase.ts`)と比較テストは、移行が済んだので #262 で消しました。
+- `0059`(#262)は、旧来の大会が一般枠に置いていた優先期間(優先枠の終了から締切まで)を null にしました。`0042` から `0059` までの Worker は、「設定した枠のどれかが終わった後に始まった、設定の無い優先期間」を `arePhasesOver()` の後は制限から除く特例(`followsClosingPhase()`)を持っていて、旧来の一般枠の期間はこれで制限にならずに済んでいました。#262 でこの特例を消したので、残っている期間は書いたとおりの制限になります。
+  - `0059` が消すのは、適用の時点で「消してもこの先の受付条件が変わらない」と言える期間だけです。特例の対象で、かつ「もう終わっている」か「設定した枠がすべて終わり、どの優先期間も始まっている」期間です。まだ始まっていない期間は消しません。`arePhasesOver()` は「どの優先期間も始まった」を条件に含むので、消すと設定した枠が外れる時刻が早まるためです。
+  - 消さなかった期間は、開いている間、その枠を選ばないとエントリーできない制限になり、優先エントリーの案内にも出ます。該当する行は [`supabase-deployment.md`](./supabase-deployment.md) 5.3 の SQL で確かめます。
+  - 前後で判定が変わらないことは、`apps/backend/src/lib/regulations-backfill.test.ts` が `0059` の文をそのまま実行し、5456 通りの大会について、適用後に判定が変わり得る全時点で確かめています(特例を持つ Worker は全大会で前後一致、特例を消した Worker は特例の対象の期間が残らなかった大会で一致)。
 - `priority_starts_at` / `priority_ends_at` は**両方揃っているときだけ**優先期間として扱われます(片方だけ設定されている行は優先期間なしと同じ扱い)。
 - `check (regulations_priority_window_complete)`(`0014`): 「両方 null」か「両方非 null かつ開始 < 終了」だけを許します。制約追加は既存行も検証するため、`0014` では制約を張る前に不完全な行(片方だけ / 逆順)を両方 null に正規化しています(`regulationSelectionRefusal()` は元々それらを「優先期間なし」として扱っていたので、挙動は変わりません)。片方だけ設定された行を `regulationSelectionRefusal()` が「優先期間なし」として扱ってしまうため、そもそも作らせません。Zod の `RegulationUpsertSchema` にも同じ規則がありますが、SQL を直接叩く運用が残るので DB 側にも持たせています。
 - `index (tournament_id, display_order)`(`0014`): `unique (id, tournament_id)` は先頭列が `id` なので `where tournament_id = ?` には使えません。エントリーフォームの表示のたびに走るクエリなので別途張っています。
@@ -718,3 +720,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0056_participants_region_id_nullable.sql` | `participants.region_id` の廃止の 1 段階目(#309)。列を nullable にし、`take_over_unverified_participant()` が `region_id` を書かないように再定義(`p_region_id` は既定値 `null` で残し、古い Worker の呼び出しも通す) |
 | `0057_refuse_direct_reentry_update.sql` | `cancelled` の行を戻す直接の UPDATE を `check_entry_seat()` が `P0012` で断り、`reenter_cancelled_entry()` からの UPDATE だけを通す(トランザクションローカルの設定値 `app.reentering_entry_id` で見分ける)。再エントリーのロック順をスキーマで保証する(#261) |
 | `0058_tournament_no_key_update_token_cascade.sql` | 大会行を取る 7 つの関数(確定・繰り上げ・キャンセル・失効・リセット・フォーム定義とレギュレーションの同期)のロックを `for update` から `for no key update` にして、同じ大会への新しいエントリーの INSERT を待たせないようにする。`email_verification_tokens.entry_id` の外部キーを `on delete cascade` にし、`reset_tournament_entries()` と `take_over_unverified_participant()` の手書きのトークン削除(と前者の `entries` 行のロック)を外す(#313) |
+| `0059_drop_legacy_general_phase_windows.sql` | 旧来の一般枠の優先期間(`外す` の枠が終わった後に始まった、`外す` の付かない優先期間)のうち、消してもこの先の受付条件が変わらないものを null にする。Worker の特例 `followsClosingPhase()` を消すための準備で、スキーマは変えない(#262) |

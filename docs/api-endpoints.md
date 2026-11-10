@@ -617,7 +617,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
   | `closesWithPriority` | boolean | 優先期間の終了後に選択肢から外すか。**省略すると、既存行は今の値を保ち、新しい行は `false`**。`true` には優先期間が必要 |
 - `displayOrder` は送りません。**配列の並び順がそのまま `display_order`** になるので、並べ替えは配列を並べ替えるだけです。
 - 優先期間は「両方 null」か「両方指定(開始 < 終了)」のみ許容します(Zod と `regulations` の check 制約 `regulations_priority_window_complete` の両方で担保)。
-- `closesWithPriority` の枠の優先期間がすべて終わり、どの優先期間も始まった後は、その枠が選択肢から外れて送信も断られ、外す枠の終了後に始まった他の優先期間は制限でなくなります(#243)。優先対象の選択を求めず、ポータルとエントリーフォームにも優先エントリーの案内を出しません。詳細は [`database-schema.md`](./database-schema.md) の `regulations` を参照してください。
+- `closesWithPriority` の枠の優先期間がすべて終わり、どの優先期間も始まった後は、その枠が選択肢から外れて送信も断られます(#243)。`closesWithPriority` でない枠の優先期間は、開いている間ずっと制限で、ポータルとエントリーフォームに優先エントリーの案内が出ます(#262。一般枠には優先期間を置きません)。詳細は [`database-schema.md`](./database-schema.md) の `regulations` を参照してください。
 - 配列に含まれなかった既存行は削除されますが、**エントリーから参照されている行は削除できません**。`entry_regulations` が複合外部キー `(regulation_id, tournament_id)` で参照しているため、フォーム定義のような delete → insert は使えず、id 指定は update・id 無しは insert・消えた行は「参照が無ければ delete」という差分同期になっています。
 - `regulations` は1件以上必要です(エントリーは必ず1つ以上選ぶため、0件の大会はエントリー不可になる)。
 - 保存後に `closesWithPriority` でない行が1件以上必要です。すべて外れる設定だと、外れた後に選べる枠が無くなるためです。送った値だけでなく、省略して保たれた値も含めて判定します。

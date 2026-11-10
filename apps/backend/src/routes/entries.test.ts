@@ -1233,11 +1233,17 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
       priority_ends_at: priorityEndedAt,
       closes_with_priority: true,
     });
-    const generalPhase = (endsAt: string) => ({
+    const general = {
       id: '99999999-9999-4999-8999-999999999999',
+      priority_starts_at: null,
+      priority_ends_at: null,
+      closes_with_priority: false,
+    };
+    // A window that opens as the phase ends, on a regulation that stays.
+    const laterWindow = (endsAt: string) => ({
+      ...general,
       priority_starts_at: priorityEndedAt,
       priority_ends_at: endsAt,
-      closes_with_priority: false,
     });
     const selectedWithoutWindow = {
       id: validBody.regulationIds[0],
@@ -1254,7 +1260,27 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
           regulations: [
             selectedWithoutWindow,
             {...earlierPhase(otherPhaseId), closes_with_priority: false},
-            generalPhase(new Date(Date.now() + DAY_MS).toISOString()),
+            laterWindow(new Date(Date.now() + DAY_MS).toISOString()),
+          ],
+        }),
+        participant: null,
+      });
+
+      const res = await postWithContext(TOURNAMENT_PATH, validBody);
+      await settleBackgroundWork();
+
+      expect(res.status).toBe(403);
+    });
+
+    // #262: before, a window that followed a marked phase restricted nobody.
+    it('enforces a later window after a phase marked to close too', async () => {
+      mockSupabase({
+        tournament: tournamentRow({
+          entryClosesAt: closesAt,
+          regulations: [
+            selectedWithoutWindow,
+            earlierPhase(otherPhaseId),
+            laterWindow(closesAt),
           ],
         }),
         participant: null,
@@ -1273,7 +1299,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
           regulations: [
             selectedWithoutWindow,
             earlierPhase(otherPhaseId),
-            generalPhase(closesAt),
+            general,
           ],
         }),
         participant: null,
@@ -1289,10 +1315,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
       const recorded = mockSupabase({
         tournament: tournamentRow({
           entryClosesAt: closesAt,
-          regulations: [
-            earlierPhase(validBody.regulationIds[0]),
-            generalPhase(closesAt),
-          ],
+          regulations: [earlierPhase(validBody.regulationIds[0]), general],
         }),
         participant: null,
       });
@@ -1317,10 +1340,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
       mockSupabase({
         tournament: tournamentRow({
           entryClosesAt: closesAt,
-          regulations: [
-            earlierPhase(validBody.regulationIds[0]),
-            generalPhase(closesAt),
-          ],
+          regulations: [earlierPhase(validBody.regulationIds[0]), general],
         }),
         participant: null,
       });
@@ -1343,10 +1363,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
       mockSupabase({
         tournament: tournamentRow({
           entryClosesAt: closesAt,
-          regulations: [
-            earlierPhase(validBody.regulationIds[0]),
-            generalPhase(closesAt),
-          ],
+          regulations: [earlierPhase(validBody.regulationIds[0]), general],
         }),
         participant: null,
       });

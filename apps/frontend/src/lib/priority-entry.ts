@@ -35,8 +35,8 @@ export interface PriorityEntryNotice {
  * apart, or one instant spelt two ways) make one notice rather than two
  * identical-looking lines.
  *
- * A tournament's general phase is normal entry rather than 優先エントリー,
- * and goes unannounced (`activePriorityRegulations()`).
+ * A tournament's general phase has no window open, so it goes unannounced
+ * (`activePriorityRegulations()`).
  *
  * Worked out on the server, like the portal's statuses, so the server
  * rendering and the hydrated page agree.
