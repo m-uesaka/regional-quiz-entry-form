@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest';
 import {
   adoptEarlyInput,
   formErrorMessage,
+  keyedForms,
   remoteFormPageUrl,
 } from './remote-form';
 
@@ -103,5 +104,24 @@ describe('adoptEarlyInput', () => {
     `);
 
     expect(replayedNames(form)).toEqual([]);
+  });
+});
+
+describe('keyedForms', () => {
+  it('asks the form for an instance once per key and keeps handing it out', () => {
+    const asked: string[] = [];
+    const form = {
+      for: (key: string) => {
+        asked.push(key);
+        return {key};
+      },
+    };
+    const formOf = keyedForms(form);
+
+    const tokyo = formOf('tokyo');
+
+    expect(formOf('tokyo')).toBe(tokyo);
+    expect(formOf('osaka')).not.toBe(tokyo);
+    expect(asked).toEqual(['tokyo', 'osaka']);
   });
 });

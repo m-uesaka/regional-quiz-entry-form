@@ -10,12 +10,15 @@
   import {
     adoptEarlyInput,
     formErrorMessage,
+    keyedForms,
     textFieldProps,
   } from '$lib/remote-form';
   import type {PageProps} from './$types';
   import {createRegion, updateRegion} from './regions.remote';
 
   const {data}: PageProps = $props();
+
+  const updateFormOf = keyedForms(updateRegion);
 
   const createError = $derived(
     formErrorMessage(createRegion.fields.allIssues()),
@@ -81,7 +84,7 @@
     {:else}
       <ul class="flex flex-col gap-4">
         {#each data.regions as region (region.id)}
-          {@const update = updateRegion.for(region.id)}
+          {@const update = updateFormOf(region.id)}
           {@const updateError = formErrorMessage(update.fields.allIssues())}
           <li>
             <Card class="gap-4">

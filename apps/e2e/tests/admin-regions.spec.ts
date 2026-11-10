@@ -21,6 +21,11 @@ const SLUG_RULE_MESSAGE =
 // itself is never what a pointer lands on. The check goes to the box anyway.
 const CHECKBOX_CLICK = {force: true};
 
+// How long after the list was loaded again a message is given to disappear
+// in, before it is checked to still be there. The loss this guards against
+// happened within the same frame as the reload.
+const MESSAGE_SETTLE_MS = 300;
+
 let slugCount = 0;
 
 /** A slug no other test in this run has used. */
@@ -282,7 +287,16 @@ test.describe('ハイドレーションの前に入力した値', () => {
     await expect(form.getByLabel('最強位と新人王の両方')).toBeChecked();
     await expect(row.getByLabel('地域名')).toHaveValue('早く打った名前');
 
+    // The save makes the page load its list again, and the message has to
+    // outlive that: for a row the server rendered it once showed for a few
+    // milliseconds and was gone (`keyedForms()` in `$lib/remote-form.ts`).
+    const listReloaded = page.waitForResponse(response =>
+      response.url().includes('__data.json'),
+    );
     await row.getByRole('button', {name: '保存'}).click();
+    await listReloaded;
+    await expect(row.getByLabel('地域名')).toHaveValue('早く打った名前');
+    await page.waitForTimeout(MESSAGE_SETTLE_MS);
     await expect(row.getByText('保存しました')).toBeVisible();
     await expectNoReload(page);
     await page.reload();

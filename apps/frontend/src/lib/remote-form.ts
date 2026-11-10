@@ -135,3 +135,44 @@ export const adoptEarlyInput: Attachment<HTMLFormElement> = form => {
     }
   }
 };
+
+/**
+ * Hands out one instance of a remote form per key, and the same one every
+ * time it is asked for that key:
+ *
+ * ```svelte
+ * <script lang="ts">
+ *   const updateFormOf = keyedForms(updateRegion);
+ * </script>
+ *
+ * {#each data.regions as region (region.id)}
+ *   {@const update = updateFormOf(region.id)}
+ * ```
+ *
+ * `form.for(key)` on its own does not promise that. SvelteKit keeps the
+ * instance only while something it counts is using it, and for a row that
+ * was rendered on the server the count does not hold across the list being
+ * loaded again — which a successful submission triggers. `for(key)` then
+ * returns a fresh instance, and the result the old one had just received is
+ * gone: the row's "saved" message showed for a few milliseconds and vanished
+ * (found by `apps/e2e/tests/admin-regions.spec.ts` on a slow CI runner).
+ * Holding on to the instance for as long as the page lives avoids it.
+ *
+ * Call it once, in the component's `<script>`.
+ *
+ * @param form The remote form, e.g. `updateRegion`.
+ * @return Looks up, or on first use creates, the instance for a key.
+ */
+export function keyedForms<Instance>(form: {
+  for(key: string): Instance;
+}): (key: string) => Instance {
+  const instances = new Map<string, Instance>();
+  return key => {
+    let instance = instances.get(key);
+    if (instance === undefined) {
+      instance = form.for(key);
+      instances.set(key, instance);
+    }
+    return instance;
+  };
+}

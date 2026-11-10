@@ -183,6 +183,12 @@ What it does not do for us, each found by `apps/e2e/tests/admin-regions.spec.ts`
   renders them again from its copy — which a refused submission does, emptying
   them. `{@attach adoptEarlyInput}` on the `<form>`, after the form's own
   spread, replays the missed input. Every remote form needs it.
+- **`form.for(key)` does not keep returning the same instance.** For a row
+  the server rendered, the instance is dropped when the list is loaded again
+  after a successful submission, and the result it had just received goes
+  with it: the row's "saved" message showed for a few milliseconds and
+  vanished. `keyedForms(updateRegion)` holds one instance per key for as long
+  as the page lives. Every screen that uses `for()` needs it.
 - **Without JavaScript, `event.url` carries the form's action.** The browser
   posts to `?/remote=<id>`, so a link back to the page built from `url` (the
   login screen's `redirectTo`) would carry it too. `remoteFormPageUrl()`
