@@ -1,8 +1,9 @@
-import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
+import {afterEach, beforeEach, describe, expect, it, spyOn} from 'bun:test';
 import {sign} from 'hono/jwt';
 import type {Bindings} from '../types/env';
 import {app} from '../index';
 import type {BulkMailMessage} from '../lib/bulk-mail-queue';
+import * as dbModule from '../lib/db';
 import {testBindings, RecordingQueue} from '../test-support/bindings';
 import {ENQUEUE_BATCH_SIZE} from './staff-mail';
 import {
@@ -580,6 +581,25 @@ describe('POST /staff/tournaments/:tournamentId/verification-mail', () => {
 
     expect(res.status).toBe(401);
     expect(queue.sent).toEqual([]);
+  });
+
+  // #310: the session check, the scope check and the handler's own reads
+  // used to make a client each.
+  it('makes one database client for the whole request', async () => {
+    mockFetch({
+      tournament: IN_SCOPE_TOURNAMENT_WITH_NAME,
+      entries: [[pendingEntryRow(ENTRY_ID, [EXPIRED_TOKEN])]],
+    });
+    const cookie = await regionalStaffCookie();
+    const createDbClient = spyOn(dbModule, 'createDbClient');
+    try {
+      const res = await postVerificationMail(cookie);
+
+      expect(res.status).toBe(202);
+      expect(createDbClient).toHaveBeenCalledTimes(1);
+    } finally {
+      createDbClient.mockRestore();
+    }
   });
 
   it('returns 403 for staff outside their scope', async () => {

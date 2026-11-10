@@ -1,4 +1,5 @@
 import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
+import {createDbClient} from './db';
 import {SQL} from 'bun';
 import {confirmPasswordReset, requestPasswordReset} from './password-reset';
 import {hashPassword, verifyPassword} from './password';
@@ -100,7 +101,7 @@ describe.skipIf(!(await isDbReachable()))(
       const participant = await createParticipantFixture();
       const mailsBefore = sentMails.length;
 
-      await requestPasswordReset(env, participant.email);
+      await requestPasswordReset(env, createDbClient(env), participant.email);
 
       expect(sentMails.length).toBe(mailsBefore + 1);
       const mail = sentMails[sentMails.length - 1];
@@ -126,6 +127,7 @@ describe.skipIf(!(await isDbReachable()))(
 
       const result = await requestPasswordReset(
         env,
+        createDbClient(env),
         `unknown-${crypto.randomUUID()}@${testEmailDomain}`,
       );
 
@@ -139,7 +141,7 @@ describe.skipIf(!(await isDbReachable()))(
       const participant = await createParticipantFixture();
       const token = await createTokenFixture(participant.id);
 
-      const result = await confirmPasswordReset(env, {
+      const result = await confirmPasswordReset(createDbClient(env), {
         token,
         newPassword: 'brand-new-password',
       });
@@ -167,7 +169,7 @@ describe.skipIf(!(await isDbReachable()))(
       `;
 
       expect(
-        await confirmPasswordReset(env, {
+        await confirmPasswordReset(createDbClient(env), {
           token,
           newPassword: 'brand-new-password',
         }),
@@ -197,7 +199,7 @@ describe.skipIf(!(await isDbReachable()))(
       });
       const mailsBefore = sentMails.length;
 
-      await requestPasswordReset(env, participant.email);
+      await requestPasswordReset(env, createDbClient(env), participant.email);
 
       expect(sentMails.length).toBe(mailsBefore + 1);
       const mail = sentMails[sentMails.length - 1];
@@ -222,7 +224,7 @@ describe.skipIf(!(await isDbReachable()))(
       const before = await readPasswordHash(participant.id);
 
       expect(
-        await confirmPasswordReset(env, {
+        await confirmPasswordReset(createDbClient(env), {
           token,
           newPassword: 'brand-new-password',
         }),
@@ -238,7 +240,7 @@ describe.skipIf(!(await isDbReachable()))(
       });
       const live = await createTokenFixture(participant.id);
 
-      await requestPasswordReset(env, participant.email);
+      await requestPasswordReset(env, createDbClient(env), participant.email);
 
       // `/request` is unauthenticated and unthrottled, so without this the
       // table grows a row per call forever. Only rows that were already
@@ -261,10 +263,13 @@ describe.skipIf(!(await isDbReachable()))(
       const token = await createTokenFixture(participant.id);
 
       expect(
-        await confirmPasswordReset(env, {token, newPassword: 'first-password'}),
+        await confirmPasswordReset(createDbClient(env), {
+          token,
+          newPassword: 'first-password',
+        }),
       ).toEqual({ok: true});
 
-      const result = await confirmPasswordReset(env, {
+      const result = await confirmPasswordReset(createDbClient(env), {
         token,
         newPassword: 'second-password',
       });
@@ -290,7 +295,7 @@ describe.skipIf(!(await isDbReachable()))(
         expiresAt: '2020-01-01T00:00:00Z',
       });
 
-      const result = await confirmPasswordReset(env, {
+      const result = await confirmPasswordReset(createDbClient(env), {
         token,
         newPassword: 'brand-new-password',
       });
@@ -311,7 +316,7 @@ describe.skipIf(!(await isDbReachable()))(
     });
 
     it('confirmPasswordReset rejects an unknown token', async () => {
-      const result = await confirmPasswordReset(env, {
+      const result = await confirmPasswordReset(createDbClient(env), {
         token: generateToken(),
         newPassword: 'brand-new-password',
       });
@@ -335,11 +340,11 @@ describe.skipIf(!(await isDbReachable()))(
       // deadlock and cost one of them a 500 -- and the loser observes the
       // `used_at` the winner set.
       const results = await Promise.all([
-        confirmPasswordReset(env, {
+        confirmPasswordReset(createDbClient(env), {
           token: firstToken,
           newPassword: 'first-password',
         }),
-        confirmPasswordReset(env, {
+        confirmPasswordReset(createDbClient(env), {
           token: secondToken,
           newPassword: 'second-password',
         }),
@@ -441,13 +446,13 @@ describe.skipIf(!(await isDbReachable()))(
       const otherToken = await createTokenFixture(participant.id);
 
       expect(
-        await confirmPasswordReset(env, {
+        await confirmPasswordReset(createDbClient(env), {
           token: usedToken,
           newPassword: 'brand-new-password',
         }),
       ).toEqual({ok: true});
 
-      const result = await confirmPasswordReset(env, {
+      const result = await confirmPasswordReset(createDbClient(env), {
         token: otherToken,
         newPassword: 'attacker-password',
       });

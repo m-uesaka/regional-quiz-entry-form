@@ -1,6 +1,9 @@
 import {afterEach, describe, expect, it} from 'bun:test';
 import {verify} from 'hono/jwt';
 import {participantAuthRoute} from './participant-auth';
+import {Hono} from 'hono';
+import {dbClient} from '../middleware/db';
+import type {Env} from '../types/env';
 import {hashPassword, verifyPassword} from '../lib/password';
 import {testBindings, refusingRateLimiter} from '../test-support/bindings';
 import {
@@ -8,6 +11,12 @@ import {
   legacyHashPassword,
   mockAccountFetchWithRehash,
 } from '../test-support/password';
+
+// The route behind the middleware that gives it its database client, as
+// `index.ts` mounts it.
+const routeUnderTest = new Hono<Env>()
+  .use(dbClient())
+  .route('/', participantAuthRoute);
 
 const ENV = testBindings();
 
@@ -40,7 +49,7 @@ describe('POST /login', () => {
       email_verified_at: VERIFIED_AT,
     });
 
-    const res = await participantAuthRoute.request(
+    const res = await routeUnderTest.request(
       '/login',
       {
         method: 'POST',
@@ -78,7 +87,7 @@ describe('POST /login', () => {
       password_hash: await hashPassword('correct-password'),
     });
 
-    const res = await participantAuthRoute.request(
+    const res = await routeUnderTest.request(
       '/login',
       {
         method: 'POST',
@@ -106,7 +115,7 @@ describe('POST /login', () => {
       email_verified_at: null,
     });
 
-    const res = await participantAuthRoute.request(
+    const res = await routeUnderTest.request(
       '/login',
       {
         method: 'POST',
@@ -129,7 +138,7 @@ describe('POST /login', () => {
   it('returns 401 for a non-existent email', async () => {
     mockParticipantFetch(null);
 
-    const res = await participantAuthRoute.request(
+    const res = await routeUnderTest.request(
       '/login',
       {
         method: 'POST',
@@ -155,7 +164,7 @@ describe('POST /login', () => {
       email_verified_at: VERIFIED_AT,
     });
 
-    const res = await participantAuthRoute.request(
+    const res = await routeUnderTest.request(
       '/login',
       {
         method: 'POST',
@@ -189,7 +198,7 @@ describe('POST /login', () => {
       },
     };
 
-    await participantAuthRoute.request(
+    await routeUnderTest.request(
       '/login',
       {
         method: 'POST',
@@ -219,7 +228,7 @@ describe('POST /login', () => {
       password: string,
       ctx: ExecutionContext,
     ): Promise<Response> {
-      return participantAuthRoute.request(
+      return routeUnderTest.request(
         '/login',
         {
           method: 'POST',
@@ -346,7 +355,7 @@ function cookieAttributes(header: string): string[] {
 
 /** Logs out, optionally carrying the session cookie a browser would hold. */
 async function logout(sessionCookie?: string): Promise<Response> {
-  return participantAuthRoute.request(
+  return routeUnderTest.request(
     '/logout',
     {
       method: 'POST',
@@ -374,7 +383,7 @@ describe('POST /logout', () => {
       email_verified_at: VERIFIED_AT,
     });
 
-    const res = await participantAuthRoute.request(
+    const res = await routeUnderTest.request(
       '/login',
       {
         method: 'POST',

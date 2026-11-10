@@ -1,5 +1,4 @@
-import type {Bindings} from '../types/env';
-import {createDbClient} from './db';
+import type {DbClient} from './db';
 import {
   DUMMY_PASSWORD_HASH,
   hashPassword,
@@ -26,21 +25,21 @@ export type PasswordTable = 'participants' | 'staff_accounts';
  * one would silently undo the reset. `password_changed_at` is deliberately
  * left alone: the password has not changed, and bumping it would end the
  * participant's sessions -- including the one this login just issued.
- * @param env The Worker bindings.
+ * @param db The database client.
  * @param table The table the account lives in.
  * @param id The account's id.
  * @param password The plaintext the login just verified.
  * @param storedHash The hash it was verified against.
  */
 export async function rehashPassword(
-  env: Bindings,
+  db: DbClient,
   table: PasswordTable,
   id: string,
   password: string,
   storedHash: string,
 ): Promise<void> {
   try {
-    const {error} = await createDbClient(env)
+    const {error} = await db
       .from(table)
       .update({password_hash: await hashPassword(password)})
       .eq('id', id)
@@ -83,7 +82,7 @@ export interface PasswordAccount {
  * - A correct password on an older hash hands `rehashPassword()` to `defer`,
  *   with the hash it was verified against, so the caller decides when it
  *   runs (after the response, or before carrying on) but not whether.
- * @param env The Worker bindings.
+ * @param db The database client.
  * @param table The table `account` was read from.
  * @param account The account the address belongs to, or `null` if none.
  * @param password The submitted password.
@@ -91,7 +90,7 @@ export interface PasswordAccount {
  * @return Whether `account` exists and `password` is its password.
  */
 export async function verifyAccountPassword(
-  env: Bindings,
+  db: DbClient,
   table: PasswordTable,
   account: PasswordAccount | null,
   password: string,
@@ -104,7 +103,7 @@ export async function verifyAccountPassword(
   const {valid, needsRehash} = await verifyPassword(password, storedHash);
   if (!account || !valid) return false;
   if (needsRehash) {
-    defer(rehashPassword(env, table, account.id, password, storedHash));
+    defer(rehashPassword(db, table, account.id, password, storedHash));
   }
   return true;
 }

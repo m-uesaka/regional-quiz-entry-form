@@ -19,12 +19,7 @@ import {
 } from '@regional-quiz/shared';
 import {isCommonPassword} from '@regional-quiz/shared/password-policy';
 import type {Bindings} from '../types/env';
-import {
-  createDbClient,
-  type DbClient,
-  type Tables,
-  type TablesInsert,
-} from './db';
+import {type DbClient, type Tables, type TablesInsert} from './db';
 import {sendEntryNoticeEmail, type EntryNoticeReason} from './entry-notice';
 import {
   holdForDeferredVerification,
@@ -349,14 +344,15 @@ async function rollbackEntry(
  */
 export async function createEntry(
   env: Bindings,
+  db: DbClient,
   tournamentId: string,
   input: EntryInput,
 ): Promise<CreateEntryResult> {
-  const check = await checkEntrySubmission(env, tournamentId, input);
+  const check = await checkEntrySubmission(db, tournamentId, input);
   if (!check.ok) {
     return check;
   }
-  return createEntryAfterCheck(env, check.tournament, input);
+  return createEntryAfterCheck(env, db, check.tournament, input);
 }
 
 /**
@@ -372,12 +368,10 @@ export async function createEntry(
  * @param submission The parts of the submission checked here.
  */
 export async function checkEntrySubmission(
-  env: Bindings,
+  db: DbClient,
   tournamentId: string,
   submission: Pick<EntrySessionInput, 'regulationIds' | 'customFieldValues'>,
 ): Promise<EntrySubmissionCheck> {
-  const db = createDbClient(env);
-
   const {data: tournament, error: tournamentError} = await db
     .from('tournaments')
     .select(
@@ -478,12 +472,11 @@ export async function checkEntrySubmission(
  */
 async function createEntryAfterCheck(
   env: Bindings,
+  db: DbClient,
   tournament: EntryTournamentRow,
   input: EntryInput,
   delivery: EntryMailDelivery = 'now',
 ): Promise<AddressEntryResult> {
-  const db = createDbClient(env);
-
   const {data: existingParticipant, error: participantError} = await db
     .from('participants')
     .select(PARTICIPANT_COLUMNS)
@@ -511,6 +504,7 @@ async function createEntryAfterCheck(
     // this tournament doesn't conflict with.
     return enterTournament(
       env,
+      db,
       tournament,
       existingParticipant.id,
       input.email,
@@ -558,6 +552,7 @@ async function createEntryAfterCheck(
       }
       return enterTournament(
         env,
+        db,
         tournament,
         created.id,
         input.email,
@@ -587,6 +582,7 @@ async function createEntryAfterCheck(
       );
       const entered = await enterTournament(
         env,
+        db,
         tournament,
         existingParticipant.id,
         input.email,
@@ -628,6 +624,7 @@ async function createEntryAfterCheck(
     }
     return enterVerifiedParticipant(
       env,
+      db,
       tournament,
       verifiedParticipant,
       input,
@@ -637,6 +634,7 @@ async function createEntryAfterCheck(
 
   return enterVerifiedParticipant(
     env,
+    db,
     tournament,
     existingParticipant,
     input,
@@ -654,6 +652,7 @@ async function createEntryAfterCheck(
  */
 async function enterVerifiedParticipant(
   env: Bindings,
+  db: DbClient,
   tournament: EntryTournamentRow,
   participant: ParticipantRow,
   input: EntryInput,
@@ -671,7 +670,7 @@ async function enterVerifiedParticipant(
   // (#117); it never rejects, so the entry goes ahead whatever happens to it.
   let upgrade: Promise<void> | undefined;
   const valid = await verifyAccountPassword(
-    env,
+    db,
     'participants',
     participant,
     input.password,
@@ -685,6 +684,7 @@ async function enterVerifiedParticipant(
   await upgrade;
   return enterTournament(
     env,
+    db,
     tournament,
     participant.id,
     input.email,
@@ -813,6 +813,7 @@ function withdrawnWithoutReplacement(
  */
 async function enterTournament(
   env: Bindings,
+  db: DbClient,
   tournament: EntryTournamentRow,
   participantId: string,
   email: string,
@@ -823,7 +824,6 @@ async function enterTournament(
   },
   delivery: EntryMailDelivery = 'now',
 ): Promise<CreateEntryResult> {
-  const db = createDbClient(env);
   const tournamentId = tournament.id;
 
   const lapsed = await lapseExpiredPendingEntries(db, participantId);
@@ -920,6 +920,7 @@ async function completeWrittenEntry(
 
   return mailVerificationLink(
     env,
+    db,
     entryId,
     email,
     tournament,
@@ -1193,6 +1194,7 @@ async function storeEntryRegulations(
  */
 async function mailVerificationLink(
   env: Bindings,
+  db: DbClient,
   entryId: string,
   email: string,
   tournament: EntryTournamentRow,
@@ -1204,7 +1206,7 @@ async function mailVerificationLink(
       // Written now, mailed later (`lib/deferred-entry-mail.ts`). A failure
       // to hold or enqueue it is a mail that will never go out, so it rolls
       // the entry back like a failed send.
-      await holdForDeferredVerification(env, entryId);
+      await holdForDeferredVerification(db, entryId);
       await deferEntryMail(env, {
         kind: 'deferred-verification',
         entryId,
@@ -1215,6 +1217,7 @@ async function mailVerificationLink(
     }
     await sendVerificationEmail(
       env,
+      db,
       entryId,
       email,
       tournamentDisplayName(
@@ -1330,6 +1333,7 @@ export type EntryMailDelivery = 'now' | 'deferred';
  */
 export async function createEntryUnauthenticated(
   env: Bindings,
+  db: DbClient,
   tournament: EntryTournamentRow,
   input: EntryInput,
   delivery: EntryMailDelivery = 'now',
@@ -1340,7 +1344,7 @@ export async function createEntryUnauthenticated(
   // treated like any other failure on our side.
   let result: AddressEntryResult;
   try {
-    result = await createEntryAfterCheck(env, tournament, input, delivery);
+    result = await createEntryAfterCheck(env, db, tournament, input, delivery);
   } catch (e) {
     result = {
       ok: false,
@@ -1456,17 +1460,17 @@ async function sendEntryNotice(
  */
 export async function createEntryForParticipant(
   env: Bindings,
+  db: DbClient,
   tournamentId: string,
   participantId: string,
   input: EntrySessionInput,
 ): Promise<CreateEntryResult> {
-  const check = await checkEntrySubmission(env, tournamentId, input);
+  const check = await checkEntrySubmission(db, tournamentId, input);
   if (!check.ok) {
     return check;
   }
   const {tournament} = check;
 
-  const db = createDbClient(env);
   const {data: participant, error} = await db
     .from('participants')
     .select('email')
@@ -1482,6 +1486,7 @@ export async function createEntryForParticipant(
   }
   return enterTournament(
     env,
+    db,
     tournament,
     participantId,
     participant.email,

@@ -5,7 +5,7 @@ import {
 } from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
-import {createDbClient, type Database} from '../lib/db';
+import {type Database} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {tournamentDisplayName} from '../lib/tournaments';
 
@@ -43,7 +43,7 @@ export const staffDashboardRoute = new Hono<StaffEnv>().get(
   '/dashboard',
   requireGeneralStaff(),
   async c => {
-    const db = createDbClient(c.env);
+    const db = c.get('db');
     // Aggregating in the DB keeps this to one round trip: counting in the
     // Worker would mean either one `entries` query per tournament or
     // pulling every entry row across every region just to bucket it by

@@ -1,4 +1,5 @@
 import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
+import {createDbClient} from './db';
 import {SQL} from 'bun';
 import {
   createMailJob,
@@ -62,7 +63,7 @@ describe.skipIf(!(await isDbReachable()))(
     });
 
     async function newJob(total = 10): Promise<string> {
-      const created = await createMailJob(env, {
+      const created = await createMailJob(createDbClient(env), {
         tournamentId,
         total,
         ...CONTENT,
@@ -79,7 +80,7 @@ describe.skipIf(!(await isDbReachable()))(
       // The body is deliberately absent: it is read back through
       // `fetchMailJobContent()` below, not through the row this endpoint
       // is polled for.
-      const job = await fetchMailJob(env, tournamentId, jobId);
+      const job = await fetchMailJob(createDbClient(env), tournamentId, jobId);
 
       expect(job).toEqual({
         ok: true,
@@ -99,7 +100,7 @@ describe.skipIf(!(await isDbReachable()))(
     it('reads back the content the consumer sends', async () => {
       const jobId = await newJob();
 
-      const content = await fetchMailJobContent(env, jobId);
+      const content = await fetchMailJobContent(createDbClient(env), jobId);
 
       expect(content).toEqual({
         ok: true,
@@ -114,11 +115,15 @@ describe.skipIf(!(await isDbReachable()))(
     it('reports an unknown job as absent rather than as an error', async () => {
       // The consumer tells the two apart: a missing row means there is
       // nothing to send, while an error means try again later.
-      expect(await fetchMailJobContent(env, UNKNOWN_ID)).toEqual({
+      expect(
+        await fetchMailJobContent(createDbClient(env), UNKNOWN_ID),
+      ).toEqual({
         ok: true,
         value: null,
       });
-      expect(await fetchMailJob(env, tournamentId, UNKNOWN_ID)).toEqual({
+      expect(
+        await fetchMailJob(createDbClient(env), tournamentId, UNKNOWN_ID),
+      ).toEqual({
         ok: true,
         value: null,
       });
@@ -129,7 +134,9 @@ describe.skipIf(!(await isDbReachable()))(
 
       // What makes the staff endpoint's scope check hold: the job is
       // looked up by tournament as well as by id.
-      expect(await fetchMailJob(env, otherTournamentId, jobId)).toEqual({
+      expect(
+        await fetchMailJob(createDbClient(env), otherTournamentId, jobId),
+      ).toEqual({
         ok: true,
         value: null,
       });
@@ -138,10 +145,16 @@ describe.skipIf(!(await isDbReachable()))(
     it('adds each batch to the counters instead of overwriting them', async () => {
       const jobId = await newJob();
 
-      await recordMailJobProgress(env, jobId, {sent: 3, failed: 1});
-      await recordMailJobProgress(env, jobId, {sent: 2, failed: 0});
+      await recordMailJobProgress(createDbClient(env), jobId, {
+        sent: 3,
+        failed: 1,
+      });
+      await recordMailJobProgress(createDbClient(env), jobId, {
+        sent: 2,
+        failed: 0,
+      });
 
-      const job = await fetchMailJob(env, tournamentId, jobId);
+      const job = await fetchMailJob(createDbClient(env), tournamentId, jobId);
       expect(job.ok && job.value).toMatchObject({sent: 5, failed: 1});
     });
 
@@ -154,21 +167,35 @@ describe.skipIf(!(await isDbReachable()))(
       // racing like this would land well short of ten.
       await Promise.all(
         Array.from({length: 10}, () =>
-          recordMailJobProgress(env, jobId, {sent: 1, failed: 0}),
+          recordMailJobProgress(createDbClient(env), jobId, {
+            sent: 1,
+            failed: 0,
+          }),
         ),
       );
 
-      const job = await fetchMailJob(env, tournamentId, jobId);
+      const job = await fetchMailJob(createDbClient(env), tournamentId, jobId);
       expect(job.ok && job.value).toMatchObject({sent: 10, failed: 0});
     });
 
     it('moves `updated_at` so a stalled send can be told from a slow one', async () => {
       const jobId = await newJob();
-      const before = await fetchMailJob(env, tournamentId, jobId);
+      const before = await fetchMailJob(
+        createDbClient(env),
+        tournamentId,
+        jobId,
+      );
 
-      await recordMailJobProgress(env, jobId, {sent: 1, failed: 0});
+      await recordMailJobProgress(createDbClient(env), jobId, {
+        sent: 1,
+        failed: 0,
+      });
 
-      const after = await fetchMailJob(env, tournamentId, jobId);
+      const after = await fetchMailJob(
+        createDbClient(env),
+        tournamentId,
+        jobId,
+      );
       expect(
         Date.parse(after.ok && after.value ? after.value.updatedAt : ''),
       ).toBeGreaterThan(
@@ -180,7 +207,10 @@ describe.skipIf(!(await isDbReachable()))(
       // Failing the batch over a deleted row would have the consumer
       // retry -- and so re-send -- messages that were delivered.
       expect(
-        await recordMailJobProgress(env, UNKNOWN_ID, {sent: 1, failed: 0}),
+        await recordMailJobProgress(createDbClient(env), UNKNOWN_ID, {
+          sent: 1,
+          failed: 0,
+        }),
       ).toEqual({ok: true, value: undefined});
     });
   },

@@ -1,4 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
+import {dbClient} from './middleware/db';
 import {Hono} from 'hono';
 import {sign} from 'hono/jwt';
 import type {Env, StaffEnv} from './types/env';
@@ -745,6 +746,7 @@ describe('route authorization coverage, tried on known mistakes', () => {
   /** A one-route app under `/api`, and a policy for its single route. */
   function appWith(build: (api: Hono<StaffEnv>) => Hono<StaffEnv>): ApiApp {
     const api = new Hono<Env>().basePath('/api');
+    api.use('*', dbClient());
     api.route('/', build(new Hono<StaffEnv>()));
     return api as unknown as ApiApp;
   }
@@ -841,6 +843,7 @@ describe('route authorization coverage, tried on known mistakes', () => {
 
   it('accepts a form route behind its entry-period gate', async () => {
     const hono = new Hono<Env>().basePath('/api');
+    hono.use('*', dbClient());
     hono.get(
       '/form/:tournamentId',
       requireOpenEntryPeriodOrStaff(byTournamentIdParam),
@@ -901,6 +904,8 @@ describe('route authorization coverage, tried on known mistakes', () => {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars -- the unused `next` is the point.
       api.get('/two-args', (c, _next) => c.json({ok: true})),
     );
-    expect(collectRoutes(hono, []).unrecognized).toEqual(['GET /api/two-args']);
+    expect(collectRoutes(hono, ['ALL /api/*']).unrecognized).toEqual([
+      'GET /api/two-args',
+    ]);
   });
 });

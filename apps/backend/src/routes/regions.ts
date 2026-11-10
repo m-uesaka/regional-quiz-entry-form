@@ -8,12 +8,7 @@ import {
 } from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
-import {
-  createDbClient,
-  type Tables,
-  type TablesInsert,
-  type TablesUpdate,
-} from '../lib/db';
+import {type Tables, type TablesInsert, type TablesUpdate} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {
   DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
@@ -83,7 +78,7 @@ function toRegionUpdate(input: RegionUpdateInput): TablesUpdate<'regions'> {
 export const regionsRoute = new Hono<StaffEnv>()
   .use('*', requireGeneralStaff())
   .get('/', async c => {
-    const db = createDbClient(c.env);
+    const db = c.get('db');
     const {data, error} = await db
       .from('regions')
       .select(REGION_COLUMNS)
@@ -94,7 +89,7 @@ export const regionsRoute = new Hono<StaffEnv>()
     return c.json(data.map(rowToRegion));
   })
   .post('/', validate('json', RegionCreateInputSchema), async c => {
-    const db = createDbClient(c.env);
+    const db = c.get('db');
     const {data, error} = await db
       .from('regions')
       .insert(toRegionInsert(c.req.valid('json')))
@@ -124,7 +119,7 @@ export const regionsRoute = new Hono<StaffEnv>()
     validate('param', IdParamSchema),
     validate('json', RegionUpdateInputSchema),
     async c => {
-      const db = createDbClient(c.env);
+      const db = c.get('db');
       const {data, error} = await db
         .from('regions')
         .update(toRegionUpdate(c.req.valid('json')))

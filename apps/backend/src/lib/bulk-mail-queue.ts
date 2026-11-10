@@ -1,4 +1,5 @@
 import type {Bindings} from '../types/env';
+import {createDbClient, type DbClient} from './db';
 import {MailSendError, createMailSender, type SendMailInput} from './mailer';
 import {sendPacedMail, type PacedMailOptions} from './bulk-mail';
 import {
@@ -143,7 +144,7 @@ function isRetryable(error: unknown): boolean {
  * A batch can hold messages from more than one bulk send (two staff
  * members sending at the same time), so the jobs are collected first and
  * looked up once each rather than once per message.
- * @param env The Worker bindings.
+ * @param db The database client.
  * @param messages The batch being handled.
  * @returns The content of each job that could be read. A job whose row is
  *     missing is absent from the map; a job whose lookup failed is
@@ -151,7 +152,7 @@ function isRetryable(error: unknown): boolean {
  *     again rather than dropped.
  */
 async function fetchBatchJobs(
-  env: Bindings,
+  db: DbClient,
   messages: ReadonlyArray<{body: JobMailMessage}>,
 ): Promise<{
   contents: Map<string, MailJobContent>;
@@ -161,7 +162,7 @@ async function fetchBatchJobs(
   const unreadable = new Set<string>();
 
   for (const jobId of new Set(messages.map(message => message.body.jobId))) {
-    const result = await fetchMailJobContent(env, jobId);
+    const result = await fetchMailJobContent(db, jobId);
     if (!result.ok) {
       console.error('failed to read a bulk mail job', {
         jobId,
@@ -210,6 +211,8 @@ export async function handleBulkMailQueue(
 ): Promise<void> {
   // The deferred entry mails belong to no job and are settled on their own
   // terms (`lib/deferred-entry-mail.ts`); everything below is about jobs.
+  // The one client every read and write of this invocation shares (#310).
+  const db = createDbClient(env);
   const deferred: Array<Message<DeferredEntryMailMessage>> = [];
   const jobMessages: Array<Message<JobMailMessage>> = [];
   for (const message of batch.messages) {
@@ -220,13 +223,13 @@ export async function handleBulkMailQueue(
     }
   }
   if (deferred.length > 0) {
-    await handleDeferredEntryMail(deferred, env);
+    await handleDeferredEntryMail(deferred, env, db);
   }
   if (jobMessages.length === 0) {
     return;
   }
 
-  const {contents, unreadable} = await fetchBatchJobs(env, jobMessages);
+  const {contents, unreadable} = await fetchBatchJobs(db, jobMessages);
 
   // Only the messages there is something to send for reach the mailer;
   // `sendable` keeps each one's place so the outcomes can be matched back
@@ -281,7 +284,11 @@ export async function handleBulkMailQueue(
 
     // The job's row holds no body for a reminder: each mail carries its
     // own link, issued here.
-    const prepared = await prepareVerificationResend(env, message.body.entryId);
+    const prepared = await prepareVerificationResend(
+      env,
+      db,
+      message.body.entryId,
+    );
     if (!prepared.ok) {
       console.error('failed to prepare a verification resend', {
         jobId: message.body.jobId,
@@ -326,7 +333,7 @@ export async function handleBulkMailQueue(
     if (outcomes[index].ok) {
       continue;
     }
-    const discarded = await discardVerificationToken(env, tokenId);
+    const discarded = await discardVerificationToken(db, tokenId);
     if (!discarded.ok) {
       console.error('failed to discard an undelivered verification token', {
         jobId: sendable[index].body.jobId,
@@ -374,7 +381,7 @@ export async function handleBulkMailQueue(
     if (tally.sent === 0 && tally.failed === 0) {
       continue;
     }
-    const result = await recordMailJobProgress(env, jobId, tally);
+    const result = await recordMailJobProgress(db, jobId, tally);
     if (!result.ok) {
       console.error('failed to record bulk mail job progress', {
         jobId,

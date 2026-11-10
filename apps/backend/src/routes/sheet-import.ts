@@ -84,6 +84,7 @@ export const sheetImportRoute = new Hono<StaffEnv>()
       try {
         rows = await previewTournamentImport(
           c.env,
+          c.get('db'),
           c.req.valid('json').spreadsheetId,
           new Date(),
         );
@@ -109,6 +110,7 @@ export const sheetImportRoute = new Hono<StaffEnv>()
       try {
         results = await importTournaments(
           c.env,
+          c.get('db'),
           spreadsheetId,
           selections,
           new Date(),

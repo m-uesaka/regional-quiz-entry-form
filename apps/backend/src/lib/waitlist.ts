@@ -1,6 +1,6 @@
 import type {WaitlistPromotion} from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
-import {createDbClient, type DbClient} from './db';
+import {type DbClient} from './db';
 import {createMailSender} from './mailer';
 import {buildSystemMail, systemMailSubject} from './system-mail';
 import {tournamentDisplayName} from './tournaments';
@@ -31,8 +31,9 @@ const MAIL_CONCURRENCY = 5;
  * fails is logged and counted rather than thrown: throwing would report
  * the promotions as not having happened.
  * @param env The Worker bindings.
+ * @param db The database client.
  * @param tournamentId The tournament a seat may have come free in.
- * @param options A client to reuse, and the tournament's display name if
+ * @param options The tournament's display name if
  *     the caller already knows it (otherwise it is read for the mail).
  * @return How many entries were promoted, and how many of their mails
  *     could not be sent.
@@ -40,14 +41,15 @@ const MAIL_CONCURRENCY = 5;
  */
 export async function promoteWaitlistedEntries(
   env: Bindings,
+  db: DbClient,
   tournamentId: string,
   options: {
-    db?: DbClient;
     tournamentName?: string;
   } = {},
 ): Promise<WaitlistPromotion> {
   const {promotedEntryIds, mailFailedCount} = await promoteAndNotify(
     env,
+    db,
     tournamentId,
     options,
   );
@@ -68,6 +70,7 @@ export async function promoteWaitlistedEntries(
  * reports it as confirmed, the same as a confirmation that went straight
  * into a seat (and that sends no mail either).
  * @param env The Worker bindings.
+ * @param db The database client.
  * @param tournamentId The queued entry's tournament.
  * @param entryId The entry that was just queued.
  * @return Whether `entryId` itself was promoted.
@@ -75,10 +78,11 @@ export async function promoteWaitlistedEntries(
  */
 export async function promoteAfterWaitlistedConfirmation(
   env: Bindings,
+  db: DbClient,
   tournamentId: string,
   entryId: string,
 ): Promise<boolean> {
-  const {promotedEntryIds} = await promoteAndNotify(env, tournamentId, {
+  const {promotedEntryIds} = await promoteAndNotify(env, db, tournamentId, {
     unmailedEntryId: entryId,
   });
   return promotedEntryIds.includes(entryId);
@@ -87,8 +91,9 @@ export async function promoteAfterWaitlistedConfirmation(
 /**
  * The promotion both of the above run.
  * @param env The Worker bindings.
+ * @param db The database client.
  * @param tournamentId The tournament to promote in.
- * @param options A client to reuse, the tournament's display name if
+ * @param options The tournament's display name if
  *     known, and an entry whose participant is told some other way and is
  *     not mailed if it is promoted.
  * @return The promoted entries, in waitlist order, and how many of the
@@ -97,14 +102,13 @@ export async function promoteAfterWaitlistedConfirmation(
  */
 async function promoteAndNotify(
   env: Bindings,
+  db: DbClient,
   tournamentId: string,
   options: {
-    db?: DbClient;
     tournamentName?: string;
     unmailedEntryId?: string;
   },
 ): Promise<{promotedEntryIds: string[]; mailFailedCount: number}> {
-  const db = options.db ?? createDbClient(env);
   const {data, error} = await db.rpc('promote_waitlisted_entries', {
     p_tournament_id: tournamentId,
   });

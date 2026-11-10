@@ -1,4 +1,5 @@
 import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
+import {createDbClient} from './db';
 import {SQL} from 'bun';
 import type {FormDefinitionYaml, TournamentType} from '@regional-quiz/shared';
 import {
@@ -116,7 +117,11 @@ describe.skipIf(!(await isDbReachable()))(
         'saikyoi',
       );
 
-      await syncFormFieldDefs(env, tournamentId, definitionFor('saikyoi'));
+      await syncFormFieldDefs(
+        createDbClient(env),
+        tournamentId,
+        definitionFor('saikyoi'),
+      );
 
       expect(await fieldKeysOf(tournamentId)).toEqual(['new_field']);
     });
@@ -128,7 +133,11 @@ describe.skipIf(!(await isDbReachable()))(
       );
 
       await expect(
-        syncFormFieldDefs(env, tournamentId, definitionFor('shinjinou')),
+        syncFormFieldDefs(
+          createDbClient(env),
+          tournamentId,
+          definitionFor('shinjinou'),
+        ),
       ).rejects.toBeInstanceOf(TournamentSlugMismatchError);
 
       // The whole point of the check: the existing definitions must survive,
@@ -142,7 +151,7 @@ describe.skipIf(!(await isDbReachable()))(
     it('rejects an unknown tournament ID', async () => {
       await expect(
         syncFormFieldDefs(
-          env,
+          createDbClient(env),
           '00000000-0000-0000-0000-000000000000',
           definitionFor('saikyoi'),
         ),

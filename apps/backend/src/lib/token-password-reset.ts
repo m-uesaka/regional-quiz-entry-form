@@ -3,8 +3,7 @@ import type {
   PasswordResetConfirmInput,
   StaffPasswordResetConfirmInput,
 } from '@regional-quiz/shared/password-policy';
-import type {Bindings} from '../types/env';
-import {createDbClient} from './db';
+import {type DbClient} from './db';
 import type {LibFailure} from './errors';
 import {hashPassword} from './password';
 import {INVALID_TOKEN_SQLSTATE} from './pg-errors';
@@ -42,18 +41,17 @@ export type TokenPasswordResetResult = {ok: true} | LibFailure<400>;
  * stays usable. That function also locks the account, so two confirmations
  * presenting two links for it are applied one after the other and the second
  * is refused as already used (see the migrations for the locking order).
- * @param env The Worker bindings.
+ * @param db The database client.
  * @param target The token table and redeeming function of the flow.
  * @param input The validated raw token and the new password.
  * @return A 400 when the token is unknown, used or expired, a 500 when the
  *     database failed.
  */
 export async function confirmTokenPasswordReset(
-  env: Bindings,
+  db: DbClient,
   target: TokenPasswordResetTarget,
   input: TokenPasswordResetInput,
 ): Promise<TokenPasswordResetResult> {
-  const db = createDbClient(env);
   const tokenHash = await hashToken(input.token);
 
   // A cheap look at the token before the password is hashed: PBKDF2 is

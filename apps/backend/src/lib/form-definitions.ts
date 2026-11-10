@@ -3,8 +3,7 @@ import {
   type FormDefinitionYaml,
   type TournamentType,
 } from '@regional-quiz/shared';
-import type {Bindings} from '../types/env';
-import {createDbClient, type TablesInsert} from './db';
+import {type DbClient, type TablesInsert} from './db';
 import {TOURNAMENT_NOT_FOUND_SQLSTATE} from './pg-errors';
 import {TournamentNotFoundError} from './tournament-errors';
 
@@ -76,7 +75,7 @@ export class TournamentSlugMismatchError extends Error {
  * That's accepted: the check exists to catch a staff member uploading the
  * wrong file, not to enforce an invariant against concurrent edits, and the
  * outcome of losing that race is the same as having no check at all.
- * @param env The Worker bindings containing the Supabase connection info.
+ * @param db The database client containing the Supabase connection info.
  * @param tournamentId The tournament the fields belong to.
  * @param definition The parsed form definition YAML.
  * @throws {TournamentNotFoundError} If `tournamentId` doesn't exist.
@@ -84,12 +83,10 @@ export class TournamentSlugMismatchError extends Error {
  *     `tournamentSlug` doesn't match the tournament's type.
  */
 export async function syncFormFieldDefs(
-  env: Bindings,
+  db: DbClient,
   tournamentId: string,
   definition: FormDefinitionYaml,
 ): Promise<void> {
-  const db = createDbClient(env);
-
   const {data: tournament, error: tournamentError} = await db
     .from('tournaments')
     .select('type')

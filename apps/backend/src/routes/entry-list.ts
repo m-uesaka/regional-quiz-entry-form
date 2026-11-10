@@ -8,7 +8,7 @@ import {
   type PageQuery,
 } from '@regional-quiz/shared';
 import type {Env} from '../types/env';
-import {createDbClient, type Tables} from '../lib/db';
+import {type Tables} from '../lib/db';
 import {fetchPage, toPageResponse} from '../lib/paged-select';
 import {internalError} from '../lib/errors';
 import {
@@ -63,7 +63,7 @@ async function respondWithEntryList(
   tournamentId: string,
   page: PageQuery,
 ) {
-  const db = createDbClient(c.env);
+  const db = c.get('db');
   // One page rather than every entry: the list page's `load` result is
   // embedded in the SSR'd HTML, so answering with all of them made the page
   // grow with the tournament's size. `count: 'exact'` brings the total in
@@ -110,7 +110,8 @@ async function countEntries(
   tournamentId: string,
   status: 'confirmed' | 'waitlisted',
 ) {
-  return createDbClient(c.env)
+  return c
+    .get('db')
     .from('entries')
     .select('id', {count: 'exact', head: true})
     .eq('tournament_id', tournamentId)
@@ -168,7 +169,7 @@ export const entryListRoute = new Hono<Env>()
       let tournament: TournamentRow | null;
       try {
         tournament = await fetchTournamentBySlug(
-          c.env,
+          c.get('db'),
           regionSlug,
           tournamentSlug,
         );

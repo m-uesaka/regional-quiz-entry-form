@@ -1,4 +1,5 @@
 import {afterAll, beforeAll, describe, expect, it, spyOn} from 'bun:test';
+import {createDbClient} from './db';
 import {SQL} from 'bun';
 import type {EntryInput, TournamentType} from '@regional-quiz/shared';
 import {
@@ -231,6 +232,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         fixture.tournamentId,
         validInput({regulationIds: [fixture.regulationId]}),
       );
@@ -252,6 +254,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         fixture.tournamentId,
         validInput({regulationIds: [otherRegulation.id as string]}),
       );
@@ -276,6 +279,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         fixture.tournamentId,
         validInput({
           regulationIds: [otherRegulation.id as string, fixture.regulationId],
@@ -290,6 +294,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         fixture.tournamentId,
         validInput({regulationIds: []}),
       );
@@ -308,6 +313,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         fixture.tournamentId,
         validInput({
           regulationIds: [fixture.regulationId, secondRegulation.id as string],
@@ -336,6 +342,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         fixture.tournamentId,
         validInput({
           regulationIds: [fixture.regulationId, otherTournament.regulationId],
@@ -369,6 +376,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         fixtureB.tournamentId,
         validInput({email, regulationIds: [fixtureB.regulationId]}),
       );
@@ -388,6 +396,7 @@ describe.skipIf(!dbReachable)(
       // stopped first.
       const result = await createEntry(
         env,
+        createDbClient(env),
         fixture.tournamentId,
         validInput({
           name: 'あ'.repeat(101),
@@ -410,6 +419,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         fixture.tournamentId,
         validInput({
           email,
@@ -431,11 +441,20 @@ describe.skipIf(!dbReachable)(
       tournamentId: string,
       input: EntryInput,
     ): Promise<Awaited<ReturnType<typeof createEntryUnauthenticated>>> {
-      const check = await checkEntrySubmission(env, tournamentId, input);
+      const check = await checkEntrySubmission(
+        createDbClient(env),
+        tournamentId,
+        input,
+      );
       if (!check.ok) {
         throw new Error(`the submission was refused: ${check.error}`);
       }
-      return createEntryUnauthenticated(env, check.tournament, input);
+      return createEntryUnauthenticated(
+        env,
+        createDbClient(env),
+        check.tournament,
+        input,
+      );
     }
 
     it('createEntryUnauthenticated notifies by mail instead of failing on a wrong password', async () => {
@@ -529,6 +548,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         fixture.tournamentId,
         validInput({regulationIds: [fixture.regulationId]}),
       );
@@ -563,6 +583,7 @@ describe.skipIf(!dbReachable)(
       try {
         const failedResult = await createEntry(
           env,
+          createDbClient(env),
           fixture.tournamentId,
           input,
         );
@@ -579,7 +600,12 @@ describe.skipIf(!dbReachable)(
       }
 
       mailSendCount = 0;
-      const retryResult = await createEntry(env, fixture.tournamentId, input);
+      const retryResult = await createEntry(
+        env,
+        createDbClient(env),
+        fixture.tournamentId,
+        input,
+      );
 
       expect(retryResult.ok).toBe(true);
       expect(mailSendCount).toBe(1);
@@ -616,7 +642,12 @@ describe.skipIf(!dbReachable)(
       const consoleError = spyOn(console, 'error').mockImplementation(() => {});
 
       try {
-        const result = await createEntry(env, fixture.tournamentId, input);
+        const result = await createEntry(
+          env,
+          createDbClient(env),
+          fixture.tournamentId,
+          input,
+        );
 
         expect(result.ok).toBe(false);
         expect(!result.ok && result.status).toBe(500);
@@ -634,6 +665,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         fixture.tournamentId,
         validInput({
           regulationIds: [fixture.regulationId],
@@ -655,6 +687,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         fixture.tournamentId,
         validInput({
           regulationIds: [fixture.regulationId],
@@ -683,7 +716,12 @@ describe.skipIf(!dbReachable)(
         customFieldValues: {t_shirt_size: 'M', junk: 'x'},
       });
 
-      const result = await createEntry(env, fixture.tournamentId, input);
+      const result = await createEntry(
+        env,
+        createDbClient(env),
+        fixture.tournamentId,
+        input,
+      );
 
       expect(result.ok).toBe(false);
       expect(!result.ok && result.status).toBe(400);
@@ -705,6 +743,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         fixture.tournamentId,
         validInput({
           regulationIds: [fixture.regulationId],
@@ -722,6 +761,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         fixture.tournamentId,
         validInput({
           regulationIds: [fixture.regulationId],
@@ -739,6 +779,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         fixture.tournamentId,
         validInput({
           regulationIds: [fixture.regulationId],
@@ -753,11 +794,21 @@ describe.skipIf(!dbReachable)(
     it('rejects a second entry for a tournament the participant is already in', async () => {
       const fixture = await createFixture('duplicate');
       const input = validInput({regulationIds: [fixture.regulationId]});
-      const firstResult = await createEntry(env, fixture.tournamentId, input);
+      const firstResult = await createEntry(
+        env,
+        createDbClient(env),
+        fixture.tournamentId,
+        input,
+      );
       expect(firstResult.ok).toBe(true);
       await verifyAddress(input.email);
 
-      const secondResult = await createEntry(env, fixture.tournamentId, input);
+      const secondResult = await createEntry(
+        env,
+        createDbClient(env),
+        fixture.tournamentId,
+        input,
+      );
 
       expect(secondResult.ok).toBe(false);
       expect(!secondResult.ok && secondResult.status).toBe(409);
@@ -766,7 +817,12 @@ describe.skipIf(!dbReachable)(
     it('reuses the same entry row with pending_verification status after cancellation', async () => {
       const fixture = await createFixture('re-entry');
       const input = validInput({regulationIds: [fixture.regulationId]});
-      const firstResult = await createEntry(env, fixture.tournamentId, input);
+      const firstResult = await createEntry(
+        env,
+        createDbClient(env),
+        fixture.tournamentId,
+        input,
+      );
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
       await verifyAddress(input.email);
@@ -780,6 +836,7 @@ describe.skipIf(!dbReachable)(
       mailSendCount = 0;
       const reEntryResult = await createEntry(
         env,
+        createDbClient(env),
         fixture.tournamentId,
         // A re-entry is a fresh submission of the form, so its contents may
         // differ from the cancelled entry's.
@@ -806,7 +863,12 @@ describe.skipIf(!dbReachable)(
     it('restores the cancellation when the re-entry verification email fails', async () => {
       const fixture = await createFixture('re-entry-mail-failure');
       const input = validInput({regulationIds: [fixture.regulationId]});
-      const firstResult = await createEntry(env, fixture.tournamentId, input);
+      const firstResult = await createEntry(
+        env,
+        createDbClient(env),
+        fixture.tournamentId,
+        input,
+      );
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
       await verifyAddress(input.email);
@@ -843,13 +905,18 @@ describe.skipIf(!dbReachable)(
       }) as typeof fetch;
 
       try {
-        const failedResult = await createEntry(env, fixture.tournamentId, {
-          // A re-entry submits its own form contents, which the reuse update
-          // writes over the cancelled entry's before the mail is attempted.
-          ...input,
-          displayName: '再エントリー太郎',
-          freeText: '再エントリーの備考',
-        });
+        const failedResult = await createEntry(
+          env,
+          createDbClient(env),
+          fixture.tournamentId,
+          {
+            // A re-entry submits its own form contents, which the reuse update
+            // writes over the cancelled entry's before the mail is attempted.
+            ...input,
+            displayName: '再エントリー太郎',
+            freeText: '再エントリーの備考',
+          },
+        );
 
         expect(failedResult.ok).toBe(false);
         expect(!failedResult.ok && failedResult.status).toBe(500);
@@ -881,6 +948,7 @@ describe.skipIf(!dbReachable)(
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       const firstResult = await createEntry(
         env,
+        createDbClient(env),
         saikyoi.tournamentId,
         validInput({email, regulationIds: [saikyoi.regulationId]}),
       );
@@ -894,6 +962,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         shinjinou.tournamentId,
         validInput({email, regulationIds: [shinjinou.regulationId]}),
       );
@@ -917,6 +986,7 @@ describe.skipIf(!dbReachable)(
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       const firstResult = await createEntry(
         env,
+        createDbClient(env),
         saikyoi.tournamentId,
         validInput({email, regulationIds: [saikyoi.regulationId]}),
       );
@@ -945,6 +1015,7 @@ describe.skipIf(!dbReachable)(
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       const firstResult = await createEntry(
         env,
+        createDbClient(env),
         saikyoi.tournamentId,
         validInput({email, regulationIds: [saikyoi.regulationId]}),
       );
@@ -954,6 +1025,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntryForParticipant(
         env,
+        createDbClient(env),
         shinjinou.tournamentId,
         await participantIdOf(email),
         validInput({regulationIds: [shinjinou.regulationId]}),
@@ -985,7 +1057,12 @@ describe.skipIf(!dbReachable)(
           email,
           regulationIds: [saikyoi.regulationId],
         });
-        const cancelled = await createEntry(env, saikyoi.tournamentId, input);
+        const cancelled = await createEntry(
+          env,
+          createDbClient(env),
+          saikyoi.tournamentId,
+          input,
+        );
         if (!cancelled.ok) throw new Error(cancelled.error);
         if (verified) {
           await verifyAddress(email);
@@ -1004,10 +1081,15 @@ describe.skipIf(!dbReachable)(
             (${cancelled.entry.id}, ${crypto.randomUUID()}, now() - interval '1 hour'),
             (${cancelled.entry.id}, ${'live-' + crypto.randomUUID()}, now() + interval '1 hour')
         `;
-        const held = await createEntry(env, shinjinou.tournamentId, {
-          ...input,
-          regulationIds: [shinjinou.regulationId],
-        });
+        const held = await createEntry(
+          env,
+          createDbClient(env),
+          shinjinou.tournamentId,
+          {
+            ...input,
+            regulationIds: [shinjinou.regulationId],
+          },
+        );
         if (!held.ok) throw new Error(held.error);
         mailSendCount = 0;
         return {
@@ -1053,10 +1135,15 @@ describe.skipIf(!dbReachable)(
         const seat = await holdOtherTournament('re-entry-dual-off');
         const before = await readState(seat.cancelledEntryId, seat.input.email);
 
-        const result = await createEntry(env, seat.tournamentId, {
-          ...seat.input,
-          displayName: '再エントリー太郎',
-        });
+        const result = await createEntry(
+          env,
+          createDbClient(env),
+          seat.tournamentId,
+          {
+            ...seat.input,
+            displayName: '再エントリー太郎',
+          },
+        );
 
         expect(result.ok).toBe(false);
         expect(!result.ok && result.status).toBe(409);
@@ -1077,7 +1164,12 @@ describe.skipIf(!dbReachable)(
         });
         const before = await readState(seat.cancelledEntryId, seat.input.email);
 
-        const result = await createEntry(env, seat.tournamentId, seat.input);
+        const result = await createEntry(
+          env,
+          createDbClient(env),
+          seat.tournamentId,
+          seat.input,
+        );
 
         expect(!result.ok && result.error).toBe(
           'already entered another tournament in this region',
@@ -1110,6 +1202,7 @@ describe.skipIf(!dbReachable)(
 
         const result = await createEntryForParticipant(
           env,
+          createDbClient(env),
           seat.tournamentId,
           await participantIdOf(seat.input.email),
           seat.input,
@@ -1128,7 +1221,12 @@ describe.skipIf(!dbReachable)(
 
       it('goes through with a fresh link once the other entry is cancelled', async () => {
         const seat = await holdOtherTournament('re-entry-dual-off-retry');
-        const refused = await createEntry(env, seat.tournamentId, seat.input);
+        const refused = await createEntry(
+          env,
+          createDbClient(env),
+          seat.tournamentId,
+          seat.input,
+        );
         const before = await tokenHashes(seat.cancelledEntryId);
         await sql`
           update entries set status = 'cancelled', cancelled_at = now()
@@ -1136,7 +1234,12 @@ describe.skipIf(!dbReachable)(
         `;
         mailSendCount = 0;
 
-        const result = await createEntry(env, seat.tournamentId, seat.input);
+        const result = await createEntry(
+          env,
+          createDbClient(env),
+          seat.tournamentId,
+          seat.input,
+        );
 
         expect(refused.ok).toBe(false);
         expect(result.ok).toBe(true);
@@ -1159,6 +1262,7 @@ describe.skipIf(!dbReachable)(
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       const firstResult = await createEntry(
         env,
+        createDbClient(env),
         saikyoi.tournamentId,
         validInput({email, regulationIds: [saikyoi.regulationId]}),
       );
@@ -1166,6 +1270,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         shinjinou.tournamentId,
         validInput({email, regulationIds: [shinjinou.regulationId]}),
       );
@@ -1181,6 +1286,7 @@ describe.skipIf(!dbReachable)(
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       const firstResult = await createEntry(
         env,
+        createDbClient(env),
         saikyoi.tournamentId,
         validInput({email, regulationIds: [saikyoi.regulationId]}),
       );
@@ -1195,6 +1301,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         shinjinou.tournamentId,
         validInput({email, regulationIds: [shinjinou.regulationId]}),
       );
@@ -1212,6 +1319,7 @@ describe.skipIf(!dbReachable)(
       // "hold both seats and never follow either link" case.
       const firstResult = await createEntry(
         env,
+        createDbClient(env),
         saikyoi.tournamentId,
         validInput({email, regulationIds: [saikyoi.regulationId]}),
       );
@@ -1225,6 +1333,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         shinjinou.tournamentId,
         validInput({email, regulationIds: [shinjinou.regulationId]}),
       );
@@ -1248,11 +1357,21 @@ describe.skipIf(!dbReachable)(
     it('refuses re-entry while the verification link is still valid', async () => {
       const fixture = await createFixture('pending-valid');
       const input = validInput({regulationIds: [fixture.regulationId]});
-      const firstResult = await createEntry(env, fixture.tournamentId, input);
+      const firstResult = await createEntry(
+        env,
+        createDbClient(env),
+        fixture.tournamentId,
+        input,
+      );
       expect(firstResult.ok).toBe(true);
       await verifyAddress(input.email);
 
-      const result = await createEntry(env, fixture.tournamentId, input);
+      const result = await createEntry(
+        env,
+        createDbClient(env),
+        fixture.tournamentId,
+        input,
+      );
 
       expect(result.ok).toBe(false);
       expect(!result.ok && result.status).toBe(409);
@@ -1262,9 +1381,16 @@ describe.skipIf(!dbReachable)(
     it('createEntryUnauthenticated tells the owner the entry is still pending', async () => {
       const fixture = await createFixture('unauth-pending-valid');
       const input = validInput({regulationIds: [fixture.regulationId]});
-      expect((await createEntry(env, fixture.tournamentId, input)).ok).toBe(
-        true,
-      );
+      expect(
+        (
+          await createEntry(
+            env,
+            createDbClient(env),
+            fixture.tournamentId,
+            input,
+          )
+        ).ok,
+      ).toBe(true);
       await verifyAddress(input.email);
       mailSendCount = 0;
 
@@ -1280,17 +1406,27 @@ describe.skipIf(!dbReachable)(
     it('reuses an entry whose verification link expired, with a new link', async () => {
       const fixture = await createFixture('pending-expired');
       const input = validInput({regulationIds: [fixture.regulationId]});
-      const firstResult = await createEntry(env, fixture.tournamentId, input);
+      const firstResult = await createEntry(
+        env,
+        createDbClient(env),
+        fixture.tournamentId,
+        input,
+      );
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
       await verifyAddress(input.email);
       await expireVerificationLinks(firstResult.entry.id);
       mailSendCount = 0;
 
-      const result = await createEntry(env, fixture.tournamentId, {
-        ...input,
-        displayName: '再エントリー太郎',
-      });
+      const result = await createEntry(
+        env,
+        createDbClient(env),
+        fixture.tournamentId,
+        {
+          ...input,
+          displayName: '再エントリー太郎',
+        },
+      );
 
       expect(result.ok).toBe(true);
       expect(result.ok && result.entry.id).toBe(firstResult.entry.id);
@@ -1320,6 +1456,7 @@ describe.skipIf(!dbReachable)(
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       const firstResult = await createEntry(
         env,
+        createDbClient(env),
         saikyoi.tournamentId,
         validInput({email, regulationIds: [saikyoi.regulationId]}),
       );
@@ -1330,6 +1467,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         shinjinou.tournamentId,
         validInput({email, regulationIds: [shinjinou.regulationId]}),
       );
@@ -1353,6 +1491,7 @@ describe.skipIf(!dbReachable)(
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       const firstResult = await createEntry(
         env,
+        createDbClient(env),
         saikyoi.tournamentId,
         validInput({email, regulationIds: [saikyoi.regulationId]}),
       );
@@ -1366,6 +1505,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         shinjinou.tournamentId,
         validInput({email, regulationIds: [shinjinou.regulationId]}),
       );
@@ -1384,7 +1524,12 @@ describe.skipIf(!dbReachable)(
     it('reuses a pending entry left with no link for a link lifetime', async () => {
       const fixture = await createFixture('pending-no-token-stale');
       const input = validInput({regulationIds: [fixture.regulationId]});
-      const firstResult = await createEntry(env, fixture.tournamentId, input);
+      const firstResult = await createEntry(
+        env,
+        createDbClient(env),
+        fixture.tournamentId,
+        input,
+      );
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
       await verifyAddress(input.email);
@@ -1407,7 +1552,12 @@ describe.skipIf(!dbReachable)(
       `;
       mailSendCount = 0;
 
-      const result = await createEntry(env, fixture.tournamentId, input);
+      const result = await createEntry(
+        env,
+        createDbClient(env),
+        fixture.tournamentId,
+        input,
+      );
 
       expect(result.ok).toBe(true);
       expect(result.ok && result.entry.id).toBe(stale.id);
@@ -1421,7 +1571,12 @@ describe.skipIf(!dbReachable)(
     it('leaves a confirmed entry alone when its link has expired', async () => {
       const fixture = await createFixture('confirmed-expired');
       const input = validInput({regulationIds: [fixture.regulationId]});
-      const firstResult = await createEntry(env, fixture.tournamentId, input);
+      const firstResult = await createEntry(
+        env,
+        createDbClient(env),
+        fixture.tournamentId,
+        input,
+      );
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
       await verifyAddress(input.email);
@@ -1431,7 +1586,12 @@ describe.skipIf(!dbReachable)(
       `;
       await expireVerificationLinks(firstResult.entry.id);
 
-      const result = await createEntry(env, fixture.tournamentId, input);
+      const result = await createEntry(
+        env,
+        createDbClient(env),
+        fixture.tournamentId,
+        input,
+      );
 
       expect(!result.ok && result.error).toBe('already entered');
       const [row] = await sql`
@@ -1463,6 +1623,7 @@ describe.skipIf(!dbReachable)(
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       const first = await createEntry(
         env,
+        createDbClient(env),
         far.tournamentId,
         validInput({
           email,
@@ -1482,6 +1643,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         near.tournamentId,
         validInput({email, regulationIds: [near.regulationId]}),
       );
@@ -1522,6 +1684,7 @@ describe.skipIf(!dbReachable)(
         (
           await createEntry(
             env,
+            createDbClient(env),
             saikyoi.tournamentId,
             validInput({
               email,
@@ -1537,12 +1700,14 @@ describe.skipIf(!dbReachable)(
       // an entry nobody confirmed.
       const same = await createEntry(
         env,
+        createDbClient(env),
         saikyoi.tournamentId,
         validInput({email, regulationIds: [saikyoi.regulationId]}),
       );
       expect(same.ok).toBe(true);
       const other = await createEntry(
         env,
+        createDbClient(env),
         shinjinou.tournamentId,
         validInput({
           email,
@@ -1571,6 +1736,7 @@ describe.skipIf(!dbReachable)(
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       const first = await createEntry(
         env,
+        createDbClient(env),
         saikyoi.tournamentId,
         validInput({email, regulationIds: [saikyoi.regulationId]}),
       );
@@ -1579,6 +1745,7 @@ describe.skipIf(!dbReachable)(
 
       const second = await createEntry(
         env,
+        createDbClient(env),
         shinjinou.tournamentId,
         validInput({email, regulationIds: [shinjinou.regulationId]}),
       );
@@ -1603,6 +1770,7 @@ describe.skipIf(!dbReachable)(
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       const first = await createEntry(
         env,
+        createDbClient(env),
         far.tournamentId,
         validInput({email, regulationIds: [far.regulationId]}),
       );
@@ -1610,6 +1778,7 @@ describe.skipIf(!dbReachable)(
 
       const second = await createEntry(
         env,
+        createDbClient(env),
         near.tournamentId,
         validInput({email, regulationIds: [near.regulationId]}),
       );
@@ -1640,6 +1809,7 @@ describe.skipIf(!dbReachable)(
         (
           await createEntry(
             env,
+            createDbClient(env),
             far.tournamentId,
             validInput({email, regulationIds: [far.regulationId]}),
           )
@@ -1648,6 +1818,7 @@ describe.skipIf(!dbReachable)(
 
       const second = await createEntry(
         env,
+        createDbClient(env),
         near.tournamentId,
         validInput({email, regulationIds: [near.regulationId]}),
       );
@@ -1709,6 +1880,7 @@ describe.skipIf(!dbReachable)(
 
         const result = await createEntry(
           env,
+          createDbClient(env),
           newRegion.tournamentId,
           validInput({email, regulationIds: [newRegion.regulationId]}),
         );
@@ -1730,6 +1902,7 @@ describe.skipIf(!dbReachable)(
         await enterAsConfirmed(email, oldRegion.tournamentId, 'cancelled');
         const moved = await createEntry(
           env,
+          createDbClient(env),
           newRegion.tournamentId,
           validInput({email, regulationIds: [newRegion.regulationId]}),
         );
@@ -1740,6 +1913,7 @@ describe.skipIf(!dbReachable)(
 
         const result = await createEntry(
           env,
+          createDbClient(env),
           oldRegion.tournamentId,
           validInput({email, regulationIds: [oldRegion.regulationId]}),
         );
@@ -1783,6 +1957,7 @@ describe.skipIf(!dbReachable)(
           `;
           return createEntry(
             env,
+            createDbClient(env),
             open.tournamentId,
             validInput({email, regulationIds: [open.regulationId]}),
           );
@@ -1842,6 +2017,7 @@ describe.skipIf(!dbReachable)(
 
         const result = await createEntry(
           env,
+          createDbClient(env),
           newRegion.tournamentId,
           validInput({email, regulationIds: [newRegion.regulationId]}),
         );
@@ -1869,6 +2045,7 @@ describe.skipIf(!dbReachable)(
 
         const result = await createEntry(
           env,
+          createDbClient(env),
           newRegion.tournamentId,
           validInput({email, regulationIds: [newRegion.regulationId]}),
         );
@@ -1894,6 +2071,7 @@ describe.skipIf(!dbReachable)(
 
       const otherRegion = await createEntry(
         env,
+        createDbClient(env),
         near.tournamentId,
         validInput({
           email,
@@ -1904,6 +2082,7 @@ describe.skipIf(!dbReachable)(
       );
       const wrongPassword = await createEntry(
         env,
+        createDbClient(env),
         near.tournamentId,
         validInput({email, regulationIds: [near.regulationId]}),
       );
@@ -1926,6 +2105,7 @@ describe.skipIf(!dbReachable)(
 
       const result = await createEntry(
         env,
+        createDbClient(env),
         fixture.tournamentId,
         validInput({
           email,
@@ -1971,7 +2151,12 @@ describe.skipIf(!dbReachable)(
 
       let result: Awaited<ReturnType<typeof createEntry>>;
       try {
-        result = await createEntry(env, fixture.tournamentId, input);
+        result = await createEntry(
+          env,
+          createDbClient(env),
+          fixture.tournamentId,
+          input,
+        );
       } finally {
         globalThis.fetch = previousFetch;
       }
@@ -1994,7 +2179,12 @@ describe.skipIf(!dbReachable)(
         allowsDualEntry: false,
       });
       const input = validInput({regulationIds: [fixture.regulationId]});
-      const firstResult = await createEntry(env, fixture.tournamentId, input);
+      const firstResult = await createEntry(
+        env,
+        createDbClient(env),
+        fixture.tournamentId,
+        input,
+      );
       expect(firstResult.ok).toBe(true);
       if (!firstResult.ok) return;
       await verifyAddress(input.email);
@@ -2003,7 +2193,12 @@ describe.skipIf(!dbReachable)(
         where id = ${firstResult.entry.id}
       `;
 
-      const result = await createEntry(env, fixture.tournamentId, input);
+      const result = await createEntry(
+        env,
+        createDbClient(env),
+        fixture.tournamentId,
+        input,
+      );
 
       expect(result.ok).toBe(true);
       expect(result.ok && result.entry.id).toBe(firstResult.entry.id);

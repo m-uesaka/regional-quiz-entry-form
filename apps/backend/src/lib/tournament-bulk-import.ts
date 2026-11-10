@@ -32,7 +32,7 @@ import {
   type WaitlistPromotion,
 } from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
-import {createDbClient, type DbClient} from './db';
+import {type DbClient} from './db';
 import {formFieldDefSyncRows} from './form-definitions';
 import {JST_OFFSET_MS} from './jst';
 import {IMPORT_ACTION_STALE_SQLSTATE} from './pg-errors';
@@ -243,6 +243,7 @@ interface ImportContext {
  * registering it would do, reading every row's entry sheet so a mistake on
  * one shows up now rather than when it is registered. Writes nothing.
  * @param env The Worker bindings.
+ * @param db The database client.
  * @param spreadsheetId The 大会一覧 spreadsheet.
  * @param now The present, which entry must not have closed by.
  * @return One row per row of the sheet, in sheet order.
@@ -252,10 +253,16 @@ interface ImportContext {
  */
 export async function previewTournamentImport(
   env: Bindings,
+  db: DbClient,
   spreadsheetId: string,
   now: Date,
 ): Promise<TournamentImportPreviewRow[]> {
-  const {rows, context, duplicateOf} = await startRun(env, spreadsheetId, now);
+  const {rows, context, duplicateOf} = await startRun(
+    env,
+    db,
+    spreadsheetId,
+    now,
+  );
 
   return mapWithConcurrency(rows, CONCURRENCY, async row => {
     const resolved = await resolveRow(context, row, duplicateOf, 'preview');
@@ -300,6 +307,7 @@ export async function previewTournamentImport(
  * the preview showed (its `fingerprint`); otherwise it fails and staff
  * read the sheet again.
  * @param env The Worker bindings.
+ * @param db The database client.
  * @param spreadsheetId The 大会一覧 spreadsheet.
  * @param selections The rows to register and what to do with each, as the
  *     preview offered.
@@ -311,11 +319,17 @@ export async function previewTournamentImport(
  */
 export async function importTournaments(
   env: Bindings,
+  db: DbClient,
   spreadsheetId: string,
   selections: TournamentImportSelection[],
   now: Date,
 ): Promise<TournamentImportResult[]> {
-  const {rows, context, duplicateOf} = await startRun(env, spreadsheetId, now);
+  const {rows, context, duplicateOf} = await startRun(
+    env,
+    db,
+    spreadsheetId,
+    now,
+  );
 
   return mapWithConcurrency(selections, CONCURRENCY, async selection => {
     const row = rows.find(
@@ -365,9 +379,14 @@ export async function importTournaments(
 }
 
 /** Reads the 大会一覧 sheet and what both steps check its rows against. */
-async function startRun(env: Bindings, spreadsheetId: string, now: Date) {
+async function startRun(
+  env: Bindings,
+  db: DbClient,
+  spreadsheetId: string,
+  now: Date,
+) {
   const rows = await readIndex(env, spreadsheetId);
-  const context = await loadContext(env, now);
+  const context = await loadContext(env, db, now);
   return {rows, context, duplicateOf: duplicateFinder(rows)};
 }
 
@@ -466,9 +485,11 @@ async function readIndex(
 }
 
 /** Reads the regions and the tournaments there are now. */
-async function loadContext(env: Bindings, now: Date): Promise<ImportContext> {
-  // One client for the whole run rather than one per row.
-  const db = createDbClient(env);
+async function loadContext(
+  env: Bindings,
+  db: DbClient,
+  now: Date,
+): Promise<ImportContext> {
   const [regionsRead, tournamentsRead] = await Promise.all([
     db.from('regions').select('id, name'),
     db
@@ -695,10 +716,11 @@ async function importRow(
     try {
       promotion = await promoteWaitlistedEntries(
         context.env,
+        context.db,
         data.tournament_id,
         // An overwrite leaves the name as it was, so the one read for the
         // preview is still the one to mail under.
-        {db: context.db, tournamentName: currentName},
+        {tournamentName: currentName},
       );
     } catch (e: unknown) {
       console.error('failed to promote waitlisted entries', {

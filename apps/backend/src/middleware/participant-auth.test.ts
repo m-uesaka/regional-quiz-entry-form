@@ -1,4 +1,5 @@
 import {afterEach, describe, expect, it} from 'bun:test';
+import {dbClient} from './db';
 import {Hono} from 'hono';
 import {sign} from 'hono/jwt';
 import {
@@ -55,9 +56,11 @@ function cookieHeader(token: string): {Cookie: string} {
 
 describe('requireParticipant', () => {
   const originalFetch = globalThis.fetch;
-  const app = new Hono<ParticipantEnv>().get('/x', requireParticipant(), c =>
-    c.json({participantId: c.get('participantId')}),
-  );
+  const app = new Hono<ParticipantEnv>()
+    .use(dbClient())
+    .get('/x', requireParticipant(), c =>
+      c.json({participantId: c.get('participantId')}),
+    );
 
   afterEach(() => {
     globalThis.fetch = originalFetch;

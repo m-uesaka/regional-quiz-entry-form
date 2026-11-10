@@ -20,7 +20,7 @@ import {
   byTournamentSlugParams,
   requireOpenEntryPeriodOrStaff,
 } from '../middleware/entry-period';
-import {createDbClient, type TablesInsert, type TablesUpdate} from '../lib/db';
+import {type TablesInsert, type TablesUpdate} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {FORM_FIELD_DEF_COLUMNS, toFormFieldDef} from '../lib/form-field-defs';
 import {
@@ -167,7 +167,7 @@ function toTournamentUpdate(
 // which sub-app originally registered it.
 export const tournamentsRoute = new Hono<StaffEnv>()
   .get('/', requireGeneralStaff(), async c => {
-    const db = createDbClient(c.env);
+    const db = c.get('db');
     const {data, error} = await db
       .from('tournaments')
       .select(TOURNAMENT_COLUMNS)
@@ -197,7 +197,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
     requireGeneralStaff(),
     validate('json', TournamentOrderInputSchema),
     async c => {
-      const {error} = await createDbClient(c.env).rpc('reorder_tournaments', {
+      const {error} = await c.get('db').rpc('reorder_tournaments', {
         p_tournament_ids: c.req.valid('json').tournamentIds,
       });
       if (error) {
@@ -223,7 +223,8 @@ export const tournamentsRoute = new Hono<StaffEnv>()
   // which the edit screen stopped fetching (#123). Registered before `/:id`,
   // which would otherwise take `question-sets` for an id and refuse it.
   .get('/question-sets', requireGeneralStaff(), async c => {
-    const {data, error} = await createDbClient(c.env)
+    const {data, error} = await c
+      .get('db')
       .from('tournaments')
       .select('question_set')
       .not('question_set', 'is', null);
@@ -259,7 +260,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
     requireGeneralStaff(),
     validate('param', IdParamSchema),
     async c => {
-      const db = createDbClient(c.env);
+      const db = c.get('db');
       const {data, error} = await db
         .from('tournaments')
         .select(
@@ -294,7 +295,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
     requireGeneralStaff(),
     validate('json', TournamentCreateInputSchema),
     async c => {
-      const db = createDbClient(c.env);
+      const db = c.get('db');
       const {data, error} = await db
         .from('tournaments')
         .insert(toTournamentInsert(c.req.valid('json')))
@@ -317,7 +318,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
     validate('param', IdParamSchema),
     validate('json', TournamentUpdateInputSchema),
     async c => {
-      const db = createDbClient(c.env);
+      const db = c.get('db');
       const {id} = c.req.valid('param');
       const input = c.req.valid('json');
       const {data, error} = await db
@@ -350,7 +351,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
       };
       if (input.capacity !== undefined) {
         try {
-          promotion = await promoteWaitlistedEntries(c.env, id, {db});
+          promotion = await promoteWaitlistedEntries(c.env, db, id);
         } catch (e: unknown) {
           // The update is already committed, so failing the request would
           // tell staff it didn't go through. `promotion: null` says the
@@ -378,7 +379,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
     requireGeneralStaff(),
     validate('param', IdParamSchema),
     async c => {
-      const db = createDbClient(c.env);
+      const db = c.get('db');
       const {data, error} = await db
         .from('tournaments')
         .delete()
@@ -420,13 +421,10 @@ export const tournamentsRoute = new Hono<StaffEnv>()
     validate('param', IdParamSchema),
     validate('json', TournamentResetInputSchema),
     async c => {
-      const {data, error} = await createDbClient(c.env).rpc(
-        'reset_tournament_entries',
-        {
-          p_tournament_id: c.req.valid('param').id,
-          p_delete_participants: c.req.valid('json').deleteParticipants,
-        },
-      );
+      const {data, error} = await c.get('db').rpc('reset_tournament_entries', {
+        p_tournament_id: c.req.valid('param').id,
+        p_delete_participants: c.req.valid('json').deleteParticipants,
+      });
       if (error) {
         const {body, status} = mapPgError(
           error,

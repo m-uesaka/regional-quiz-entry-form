@@ -7,7 +7,6 @@ import {
   type ParticipantClaims,
 } from '@regional-quiz/shared';
 import type {ParticipantEnv} from '../types/env';
-import {createDbClient} from '../lib/db';
 
 export const PARTICIPANT_SESSION_COOKIE = 'participant_session';
 
@@ -51,7 +50,7 @@ export function requireParticipant() {
     // is only visible in `participants.password_changed_at`. Without this
     // read, a stolen cookie would keep working for the rest of its TTL even
     // after the participant reset their password to lock the thief out.
-    const db = createDbClient(c.env);
+    const db = c.get('db');
     const {data: participant, error} = await db
       .from('participants')
       .select('password_changed_at, email_verified_at')
