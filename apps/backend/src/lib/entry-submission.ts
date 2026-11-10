@@ -137,10 +137,12 @@ const PARTICIPANT_COLUMNS = 'id, password_hash, email_verified_at';
 /**
  * The participant's existing entry for the tournament, if there is one.
  *
- * Every column `reenter_cancelled_entry()` (migrations 0041, 0052) overwrites is
- * selected, not just the ones the reuse decision is made on, so a re-entry
- * that fails afterwards can put the row back exactly as it was. A column added
- * to that function's `set` list has to be added here and to `rollbackEntry()`.
+ * Every column `reenter_cancelled_entry()` (migrations 0041, 0052, 0057)
+ * overwrites is selected, not just the ones the reuse decision is made on, so
+ * a re-entry that fails afterwards can put the row back exactly as it was. A
+ * column added to that function's `set` list has to be added here and to
+ * `rollbackEntry()`; the test of a re-entry whose mail fails compares the
+ * whole row, so one that was missed fails there.
  */
 interface ExistingEntryRow extends Pick<
   Tables<'entries'>,

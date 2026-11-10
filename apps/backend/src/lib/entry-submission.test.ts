@@ -816,6 +816,17 @@ describe.skipIf(!dbReachable)(
             confirmed_at = now()
         where id = ${firstResult.entry.id}
       `;
+      // The whole row, whatever its columns: a column
+      // `reenter_cancelled_entry()` came to overwrite without
+      // `rollbackEntry()` restoring it shows up here (#261).
+      const wholeRow = async () => {
+        const [{entry}] = await sql`
+          select to_jsonb(e) - 'updated_at' as entry
+          from entries e where e.id = ${firstResult.entry.id}
+        `;
+        return entry;
+      };
+      const cancelledRow = await wholeRow();
       const previousFetch = globalThis.fetch;
       globalThis.fetch = (async (
         requestInput: RequestInfo | URL,
@@ -842,6 +853,7 @@ describe.skipIf(!dbReachable)(
 
         expect(failedResult.ok).toBe(false);
         expect(!failedResult.ok && failedResult.status).toBe(500);
+        expect(await wholeRow()).toEqual(cancelledRow);
         // The row the re-entry reused is still there, back in the
         // cancellation it came from rather than deleted — and carrying the
         // original entry's contents, not the failed re-entry's.

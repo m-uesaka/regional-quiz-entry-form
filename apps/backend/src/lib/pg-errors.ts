@@ -141,6 +141,15 @@ export const DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE = 'P0010';
 export const TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE = 'P0011';
 
 /**
+ * Raised by `check_entry_seat()` (0057) when an update written straight to
+ * `entries` takes a cancelled row back, instead of going through
+ * `reenter_cancelled_entry()`, which takes the participant row first. No
+ * code path of the Worker does that, so no route names this code: it is
+ * answered as any unexpected failure, with a 500.
+ */
+export const DIRECT_REENTRY_SQLSTATE = 'P0012';
+
+/**
  * What a tournament or region write refused with
  * `DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE` is answered with: shown as it is
  * above the admin form.

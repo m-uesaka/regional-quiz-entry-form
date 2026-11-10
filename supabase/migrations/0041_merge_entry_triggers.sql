@@ -46,6 +46,10 @@
 -- デッドロックは Worker の入れ替えで消える)。トリガの交換は、新しいトリガを
 -- 張ってから古いトリガを外す順にする。どの時点でも少なくとも 1 組の検査が
 -- 効いていて、検査のない隙間ができない。
+--
+-- (追記、#261)古い Worker が消えた後、0057 で `cancelled` の行を戻す直接の
+-- UPDATE を `P0012` で断るようにした。上の表の `reenter_cancelled_entry()` の
+-- 順(P → Tk → E)は、それ以降は呼び出し側の規律ではなくトリガが保証する。
 create function check_entry_seat()
 returns trigger
 language plpgsql

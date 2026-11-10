@@ -414,7 +414,7 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | `take_over_unverified_participant(uuid, text, uuid)` | `0034`(現在の本体は `0056`) | `lib/entry-submission.ts` | 未確認の参加者アカウントのパスワードを上書きし、それまでのエントリーを削除する。3 つ目の引数 `p_region_id` は古い Worker のために受け取るだけで使わない(既定値 `null`。#309 の 2 段階目で引数ごと削除する) |
 | `claim_participant_region_for_tournament(uuid, uuid)` | `0043` | (旧 Worker のみ) | 確認済みの参加者の地域を、同じ問題セットの別の地域に押さえるエントリーが無ければエントリーする大会の地域に移す。#308 で Worker から呼ばなくなった。デプロイ中の古い Worker のために残しており、`participants.region_id` の列と合わせて #309 の 2 段階目で削除する |
 | `participant_holds_conflicting_region(uuid, uuid)` | `0043`(`0046`・`0052` で再定義) | `check_entry_seat()` | 参加者が、その大会とは別の地域で同じ問題セットの大会の枠を押さえているか(ロックは取らない) |
-| `reenter_cancelled_entry(uuid, uuid, text, text, text, text, jsonb)` | `0041`(`0052` で再定義) | `lib/entry-submission.ts` | 参加者行をロックしてから、キャンセル済みのエントリー行を再エントリーとして上書きする |
+| `reenter_cancelled_entry(uuid, uuid, text, text, text, text, jsonb)` | `0041`(`0052`・`0057` で再定義) | `lib/entry-submission.ts` | 参加者行をロックしてから、キャンセル済みのエントリー行を再エントリーとして上書きする。`cancelled` の行を戻せるのはこの関数だけ(`0057`) |
 | `reset_tournament_entries(uuid, boolean)` | `0038` | `routes/tournaments.ts` | 大会のエントリーを全件削除し、指定があれば他の大会にエントリーが残っていない参加者アカウントも削除する |
 | `tournament_entry_summary()` | `0013` | `routes/staff-dashboard.ts` | 全大会のエントリー件数をステータス別に集計する(読み取り専用) |
 | `sync_regulations(uuid, jsonb)` | `0014`(`0018`・`0042` で再定義) | `lib/regulations.ts` | 大会のレギュレーションを差分同期する(update / insert / 参照が無ければ delete) |
@@ -436,6 +436,7 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | `reset_tournament_entries()` | 大会行 → `entries` 行 → 参加者行(参加者も消すとき) |
 
 - 参加者行を取る経路は、どれも**最初に**取ります。強さは `for no key update` で揃えているので、同じ参加者の書き込みはここで直列化され、外部キー検査の `for key share` とは衝突しません。例外は `reset_participant_password()` と `reset_tournament_entries()` の `for update` です。前者は `entries` に書きません。
+- 再エントリーの順は、呼び出し側の規律ではなくスキーマが守ります(`0057`、#261)。`cancelled` の行を `cancelled` 以外にする UPDATE は `reenter_cancelled_entry()` からのものだけが通り、テーブルへの直接の UPDATE は `check_entry_seat()` が `P0012` で断ります。直接の UPDATE は `entries` 行を先に取るので、通すと「`entries` 行 → 参加者行」になり、`take_over_unverified_participant()` とデッドロックするためです。
 - `cancel_own_entry()` / `lapse_expired_pending_entries()` / `promote_waitlisted_entries()` は参加者行を取りません。大会行を持ったまま、既に枠を持つ行のステータスを変えるので、そこで参加者行を取ると、参加者行を持って大会行を待つ INSERT や確定と逆順になります。`check_entry_seat()` が枠を取る書き込みしか検査しないのはこのためです。
 - `reset_tournament_entries()` だけが上の順に反します。確定や上書きとの逆順は `0038` からのものですが、再エントリーとの逆順は `0041` で新しく生じました(以前の直接の UPDATE は `entries` 行 → 参加者行で、リセットと同じ順でした)。リセットは受付期間外にしか動かず(`P0007`)、エントリーの INSERT と再エントリーは受付期間内にしか始まらないので、重なるのは受付終了の瞬間の行き違いに限られます。起きると `40P01` で片方が中断され、再エントリーは 500 に、リセットは全体が巻き戻ります。どちらもやり直せて、データは壊れません。
 
@@ -539,13 +540,14 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 1. 参加者行を `for no key update` でロックする。
 2. `p_entry_id` の行が `p_participant_id` のもので `cancelled` なら、その行の使用済みと期限切れのトークンを削除する。有効なトークンは残す。
-3. **別の文で**、同じ条件で、入力の値と `pending_verification` で行を上書きする。`waitlist_position` / `email_verified_at` / `confirmed_at` / `cancelled_at` は null に戻すので、新しく入れた行と同じ状態から始まります。
+3. **別の文で**、同じ条件で、入力の値と `pending_verification` で行を上書きする。`waitlist_position` / `email_verified_at` / `confirmed_at` / `cancelled_at` は null に戻すので、新しく入れた行と同じ状態から始まります。この UPDATE の前後で、トランザクションローカルの設定値 `app.reentering_entry_id` に対象のエントリー ID を入れて空に戻します(`0057`)。
 
 - 関数にしたのはロック順のためです。`entries` への直接の UPDATE は BEFORE ROW トリガが動く前に行をロックするので、トリガの中で参加者行を取ると「`entries` 行 → 参加者行」になり、`take_over_unverified_participant()` とデッドロックしました。先に参加者行を取れば、上書きとはそこで直列化されます。
+- `cancelled` の行を戻せるのはこの関数だけです(`0057`、#261)。`check_entry_seat()` は、設定値 `app.reentering_entry_id` が UPDATE される行の ID と一致するときだけ通し、それ以外は `P0012` で断ります。行の ID と突き合わせ、UPDATE の直後に空へ戻すので、通るのは引数の 1 行へのこの 1 文だけです。この設定値は `set_config()` を実行できれば誰でも書けますが、Worker は PostgREST 経由(`service_role`)でしか書かず、PostgREST からは `public` の関数しか呼べないので、テーブルへの UPDATE と同じトランザクションで立てる手段がありません。SQL を直接流せる接続(SQL Editor など)からは立てられますが、その接続はトリガを外すこともできます。セキュリティの境界ではなくコードの書き間違いに対するガードで、立てても地域と重複エントリーの検査(`P0008` / `P0005`)はそのまま行われます。
 - 待っている間に行が `cancelled` でなくなっていれば(同時の再エントリーが取った、上書きが消した)0 行を返します。`setof entries` を返すので、呼び出し側は INSERT と同じ `.select('id').single()` で受けられ、0 行は `PGRST116` として `concurrent submission` の 409 になります。
 - 地域と重複エントリーの検査は `check_entry_seat()` のままなので、`P0008` / `P0005` はそのまま呼び出し側に返ります。トークンの削除も同じトランザクションなので、断られた再エントリーは何も残しません。
 - トークンの削除とステータスの変更が一度に見えるので、新しいリンクを書くまでの間、行は「確定待ちでトークンが無い」状態になります。これが同じ参加者の同時の送信の `lapse_expired_pending_entries()` に、作成中で期限切れではないと伝えます。
-- 上書きする列を増やすときは、失敗時に元へ戻す `ExistingEntryRow` と `rollbackEntry()`(`lib/entry-submission.ts`)も同じ列に揃えます。
+- 上書きする列を増やすときは、失敗時に元へ戻す `ExistingEntryRow` と `rollbackEntry()`(`lib/entry-submission.ts`)も同じ列に揃えます。揃え忘れは、メール送信に失敗した再エントリーのテスト(`entry-submission.test.ts`)が行全体を再エントリーの前と比べて検出します。`rollbackEntry()` は行を `cancelled` に戻す直接の UPDATE で、枠を取らないので `P0012` の対象になりません。
 
 ### claim_participant_region_for_tournament(p_participant_id, p_tournament_id)
 
@@ -627,7 +629,7 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 `entries` の before insert or update トリガ `entries_check_seat` の本体です(`0041`、#242。`0017` の `check_region_dual_entry()` と `0040` の `check_participant_region()` を統合)。`db.rpc()` からは呼び出しません。重複エントリーの判定はここだけにあり、TypeScript 側に事前チェックはありません(#200)。
 
-**枠を取る書き込みだけ**を検査します(INSERT と、`cancelled` の行を再利用する再エントリーの UPDATE)。既に枠を持つ行のステータス変更(`pending_verification` → `confirmed`、キャンセル待ちの繰り上げ、キャンセル)は枠を取ったときに検査済みで、しかも `cancel_own_entry()` などが大会行のロックを持ったまま実行するため、そこで参加者行を取るとデッドロックを招きます(上の「エントリーまわりのロック順」)。
+**枠を取る書き込みだけ**を検査します(INSERT と、`cancelled` の行を再利用する再エントリーの UPDATE)。再エントリーの UPDATE は `reenter_cancelled_entry()` からのものだけを通し、テーブルへの直接の UPDATE は、参加者行を取りに行く前に SQLSTATE `P0012`(`a cancelled entry is re-entered only through reenter_cancelled_entry()`)で断ります(`0057`、#261。見分け方は `reenter_cancelled_entry()` の項)。Worker にこの経路はないので、API は `P0012` を特定のエラーに対応付けず、起きれば 500 になります(`lib/pg-errors.ts` の `DIRECT_REENTRY_SQLSTATE`)。行を `cancelled` にする UPDATE と、`cancelled` のままの行への UPDATE は、これまでどおり検査なしで通ります。既に枠を持つ行のステータス変更(`pending_verification` → `confirmed`、キャンセル待ちの繰り上げ、キャンセル)は枠を取ったときに検査済みで、しかも `cancel_own_entry()` などが大会行のロックを持ったまま実行するため、そこで参加者行を取るとデッドロックを招きます(上の「エントリーまわりのロック順」)。
 
 参加者行を `for no key update` でロックしてから、次の順に検査します。地域行ではなく参加者行なのは、同じ地域の無関係な申し込みまで直列化しないためです。続けて大会行を `for key share` でロックしてから大会の地域を読みます(`0050`、#284)。大会の地域・種別を変える UPDATE は大会行を `for update` で取るので、未コミットの移動と同時に来たエントリーは移動のコミットを待ち、移った先の地域で検査されます(ロックしないと移動前の地域で検査を通り、そのまま移った先に入っていました)。
 
@@ -636,7 +638,7 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 `P0005` と `P0008` は PostgREST では HTTP 500 として返り、Supabase の API ログにも 500 と記録されます。`enterTournament()` は SQLSTATE を見て 409 に変換するので、利用者への応答は変わりません。通常の拒否なので、API のエラー率を見るときはこの分を割り引きます。
 
-検査は `entries` への直接の UPDATE でも同じように動きます。マイグレーションは Worker のデプロイより先に走るので、`0041` の適用後もしばらくは、再エントリーを直接 UPDATE で書く古い Worker が動いているためです。
+`0041` から `0056` までは、`cancelled` の行を戻す直接の UPDATE も同じように検査して通していました。`0041` の適用後しばらくは、再エントリーを直接 UPDATE で書く古い Worker が動いていたためです。その Worker が消えたので、`0057` で断るようにしました。
 
 ### マイグレーションを修正するときの注意
 
@@ -711,3 +713,4 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 | `0045_dual_entry_question_sets.sql` | 問題セットの比較 `same_question_set()` と、重複エントリーを認める地域で最強位と新人王に同じ問題セットを設定できないようにするトリガ 2 つ。既に矛盾している地域があれば適用を止める |
 | `0046_common_question_sets_per_type.sql` | `participant_holds_conflicting_region()` を `same_question_set()` で再定義し、共通問題(`null`)を最強位用と新人王用で別の問題セットとして比べる |
 | `0056_participants_region_id_nullable.sql` | `participants.region_id` の廃止の 1 段階目(#309)。列を nullable にし、`take_over_unverified_participant()` が `region_id` を書かないように再定義(`p_region_id` は既定値 `null` で残し、古い Worker の呼び出しも通す) |
+| `0057_refuse_direct_reentry_update.sql` | `cancelled` の行を戻す直接の UPDATE を `check_entry_seat()` が `P0012` で断り、`reenter_cancelled_entry()` からの UPDATE だけを通す(トランザクションローカルの設定値 `app.reentering_entry_id` で見分ける)。再エントリーのロック順をスキーマで保証する(#261) |
