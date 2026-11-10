@@ -12,6 +12,7 @@ import {
   entryListPath,
   loginParticipantThroughForm,
   followVerificationLink,
+  mypageEntryStatus,
   submitEntryForm,
 } from '../support/ui';
 
@@ -61,21 +62,17 @@ test('a cancellation promotes the waitlisted entry behind it', async ({
     ]);
 
     await loginParticipantThroughForm(waitlistedPage, queued);
-    await expect(
-      waitlistedPage.getByText('ステータス: waitlisted'),
-    ).toBeVisible();
+    await expect(mypageEntryStatus(waitlistedPage, 'waitlisted')).toBeVisible();
 
     await loginParticipantThroughForm(page, seated);
     await cancelEntryThroughMypage(page);
-    await expect(page.getByText('ステータス: cancelled')).toBeVisible();
+    await expect(mypageEntryStatus(page, 'cancelled')).toBeVisible();
 
     // The promotion happens inside the cancelling request (see
     // `cancelOwnEntry()`), so the freed seat is already the queued
     // participant's the next time their mypage is loaded.
     await waitlistedPage.reload();
-    await expect(
-      waitlistedPage.getByText('ステータス: confirmed'),
-    ).toBeVisible();
+    await expect(mypageEntryStatus(waitlistedPage, 'confirmed')).toBeVisible();
 
     // And they are told, rather than having to notice on their own.
     const notification = await waitForMail(

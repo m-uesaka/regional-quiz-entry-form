@@ -12,6 +12,7 @@ import {
   loginParticipantThroughForm,
   logoutParticipantThroughButton,
   MYPAGE_PATH,
+  mypageEntryStatus,
   openVerificationLink,
   followVerificationLink,
   PARTICIPANT_LOGIN_PATH,
@@ -51,7 +52,7 @@ test('an entry is confirmed through its mailed link and shows up on mypage', asy
   await expect(
     page.getByRole('heading', {name: SHINJINOU.name, level: 2}),
   ).toBeVisible();
-  await expect(page.getByText('ステータス: confirmed')).toBeVisible();
+  await expect(mypageEntryStatus(page, 'confirmed')).toBeVisible();
 
   // Confirmed, so the entry is now the participant's public listing too.
   await page.goto(entryListPath(SHINJINOU));

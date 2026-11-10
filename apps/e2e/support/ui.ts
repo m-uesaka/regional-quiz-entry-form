@@ -11,7 +11,12 @@ import {
   type Locator,
   type Page,
 } from '@playwright/test';
-import {isFreeTextFieldType, labelPlainText} from '@regional-quiz/shared';
+import {
+  ENTRY_STATUS_LABELS,
+  isFreeTextFieldType,
+  labelPlainText,
+  type EntryStatus,
+} from '@regional-quiz/shared';
 import {
   extractVerificationUrl,
   verificationMailSubject,
@@ -479,6 +484,21 @@ export async function loginStaffThroughForm(
   await fillField(page.getByLabel('パスワード'), staff.password);
   await page.getByRole('button', {name: 'ログイン'}).click();
   await page.waitForURL(url => !url.pathname.startsWith(STAFF_LOGIN_PATH));
+}
+
+/**
+ * The status line mypage shows for an entry in `status`, read the way the
+ * participant reads it: by its Japanese label, not the internal code (#304).
+ *
+ * Exact, because one label can contain another (`キャンセル` is a prefix of
+ * `キャンセル待ち`).
+ * @param page The page to look on, already on mypage.
+ * @param status The status the entry is expected to be in.
+ */
+export function mypageEntryStatus(page: Page, status: EntryStatus): Locator {
+  return page.getByText(`ステータス: ${ENTRY_STATUS_LABELS[status]}`, {
+    exact: true,
+  });
 }
 
 /**
