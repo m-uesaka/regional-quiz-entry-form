@@ -1,9 +1,12 @@
 import {error, fail, redirect} from '@sveltejs/kit';
 import {
   formFieldDefsToYaml,
+  RegionSlugSchema,
   TournamentResetInputSchema,
   TournamentSchema,
+  TournamentTypeSchema,
   type DashboardTournamentSummary,
+  type Tournament,
   type TournamentResetResponse,
   type WaitlistPromotion,
 } from '@regional-quiz/shared';
@@ -14,6 +17,10 @@ import {
   isResetConfirmation,
   RESET_CONFIRMATION_WORD,
 } from '$lib/tournament-form';
+import {
+  dropCachedEntryList,
+  promotionMayChangeEntryList,
+} from '$lib/server/entry-list-cache';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
 import {INVALID_INPUT_MESSAGE} from '$lib/form-errors';
 import type {TournamentFormValues} from '$lib/types/tournament-form';
@@ -116,14 +123,15 @@ export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
 };
 
 export const actions = {
-  update: async ({params, request, fetch, cookies, url}) => {
+  update: async ({params, request, fetch, cookies, platform, url}) => {
     const values = readTournamentFormValues(await request.formData());
     const parsed = parseTournamentFormValues(values);
     if (!parsed.ok) {
       return updateFailure(400, values, parsed.error);
     }
 
-    const res = await createApiClient(fetch).api.tournaments[':id'].$patch({
+    const api = createApiClient(fetch);
+    const res = await api.api.tournaments[':id'].$patch({
       param: {id: params.id},
       json: parsed.input,
     });
@@ -150,6 +158,14 @@ export const actions = {
       return updateFailure(502, values, '大会の更新に失敗しました');
     }
 
+    const {promotion, ...tournament} = await res.json();
+    // Seats the save freed went to the waitlist, which the public list
+    // shows as confirmed now, so its cached copy goes (#307). A save that
+    // promoted nobody leaves the list as it was and costs no extra read.
+    if (promotionMayChangeEntryList(promotion)) {
+      await dropCachedListOf(api, platform, url.origin, tournament);
+    }
+
     // `load` re-reads the tournament after the action, so the saved values —
     // the tournament type the import panel below the form is keyed on
     // included — come back from the server rather than being carried here.
@@ -157,7 +173,7 @@ export const actions = {
       saved: true,
       error: null,
       values: null,
-      promotion: (await res.json()).promotion,
+      promotion,
     } satisfies TournamentUpdateActionResult;
   },
   delete: async ({params, request, fetch, cookies, url}) => {
@@ -191,7 +207,7 @@ export const actions = {
     // Nothing is left to show here, so the list is where the next step is.
     redirect(303, '/admin/tournaments?deleted');
   },
-  reset: async ({params, request, fetch, cookies, url}) => {
+  reset: async ({params, request, fetch, cookies, platform, url}) => {
     const formData = await request.formData();
     // The page asks for both before the button does anything; a post without
     // them got past the browser's own checks.
@@ -249,12 +265,60 @@ export const actions = {
       return resetFailure(502, '参加者データのリセットに失敗しました');
     }
 
+    // Every entry is gone from the public list, so its cached copy goes
+    // (#307). Which list that is travels with the form, from the same `load`
+    // data the page renders, rather than costing a read here. It is only
+    // trusted to name a cache entry: a forged pair drops some other list
+    // early, which costs one extra backend read.
+    const list = {
+      regionSlug: RegionSlugSchema.safeParse(formData.get('regionSlug')),
+      type: TournamentTypeSchema.safeParse(formData.get('tournamentType')),
+    };
+    if (list.regionSlug.success && list.type.success) {
+      await dropCachedEntryList(platform, url.origin, {
+        regionSlug: list.regionSlug.data,
+        type: list.type.data,
+      });
+    }
+
     return {
       reset: await res.json(),
       resetError: null,
     } satisfies TournamentResetActionResult;
   },
 } satisfies Actions;
+
+/**
+ * Drops the cached public list of a tournament the API has just answered
+ * with. The tournament carries its region's id, not the slug the list is
+ * keyed on, so the regions are read for it; if they can't be, the list
+ * catches up when its cached copy expires.
+ * @param api The API client to read the regions with.
+ * @param platform The request's platform, absent under `vite dev`.
+ * @param origin The request's origin, which the cache keys are under.
+ * @param tournament The tournament as saved.
+ */
+async function dropCachedListOf(
+  api: ReturnType<typeof createApiClient>,
+  platform: App.Platform | undefined,
+  origin: string,
+  tournament: Pick<Tournament, 'regionId' | 'type'>,
+): Promise<void> {
+  // Nothing is cached without one (`vite dev`), so nothing needs reading.
+  if (!platform) {
+    return;
+  }
+  const res = await api.api.regions.$get().catch(() => null);
+  const regionSlug = res?.ok
+    ? (await res.json()).find(region => region.id === tournament.regionId)?.slug
+    : undefined;
+  if (regionSlug !== undefined) {
+    await dropCachedEntryList(platform, origin, {
+      regionSlug,
+      type: tournament.type,
+    });
+  }
+}
 
 /**
  * How many entries a tournament has, cancelled ones included: any of them
