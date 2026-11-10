@@ -317,6 +317,11 @@ export async function handleBulkMailQueue(
 
   // A reminder's link that never went out must not count as live, or the
   // retry below -- and every later reminder -- would pass the entry over.
+  // A reminder whose link could not be discarded is not retried (#343): its
+  // redelivery would find that link still live, send nothing and close the
+  // message out as failed anyway, so it is settled as failed here, where
+  // the log can say why.
+  const undiscarded = new Set<number>();
   for (const [index, tokenId] of issuedTokens) {
     if (outcomes[index].ok) {
       continue;
@@ -327,6 +332,7 @@ export async function handleBulkMailQueue(
         jobId: sendable[index].body.jobId,
         error: discarded.error,
       });
+      undiscarded.add(index);
     }
   }
 
@@ -346,8 +352,14 @@ export async function handleBulkMailQueue(
     // delivery `retryOrFail()` closes it out as failed rather than leaving
     // the job short of `total` in the dead letter queue.
     if (isRetryable(outcome.error)) {
-      retryOrFail(message);
-      return;
+      if (!undiscarded.has(index)) {
+        retryOrFail(message);
+        return;
+      }
+      console.error(
+        'giving up on a verification resend whose undelivered link is still live',
+        {jobId: message.body.jobId, messageId: message.id},
+      );
     }
     tally.failed++;
     message.ack();

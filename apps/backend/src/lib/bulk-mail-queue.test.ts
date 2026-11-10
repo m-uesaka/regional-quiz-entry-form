@@ -123,6 +123,7 @@ function mockFetch(
     unavailable = [],
     unreachable = [],
     entries = [],
+    tokenDeleteFails = false,
   }: {
     rejected?: readonly string[];
     throttled?: readonly string[];
@@ -130,6 +131,8 @@ function mockFetch(
     unreachable?: readonly string[];
     /** The `entries` rows a verification resend reads, or a failure. */
     entries?: unknown[] | Response;
+    /** Whether deleting a verification token fails. */
+    tokenDeleteFails?: boolean;
   } = {},
 ): FetchLog {
   const log: FetchLog = {
@@ -183,7 +186,11 @@ function mockFetch(
     if (url.includes('/rest/v1/email_verification_tokens')) {
       if (init?.method === 'DELETE') {
         log.tokenDeletes.push(url);
-        return Promise.resolve(new Response(null, {status: 204}));
+        return Promise.resolve(
+          tokenDeleteFails
+            ? Response.json({message: 'db is down'}, {status: 500})
+            : new Response(null, {status: 204}),
+        );
       }
       log.tokenInserts.push(
         JSON.parse(String(init?.body)) as Record<string, unknown>,
@@ -626,6 +633,48 @@ describe('handleBulkMailQueue', () => {
       expect(messages[0].acked).toBe(false);
       expect(messages[0].retried).toBe(true);
       expect(log.progress).toEqual([]);
+    });
+
+    it('gives up on a failed reminder whose link could not be discarded', async () => {
+      for (const failure of ['throttled', 'unavailable', 'unreachable']) {
+        const log = mockFetch([resendJob()], {
+          entries: [pendingEntryRow()],
+          [failure]: ['hanako@example.com'],
+          tokenDeleteFails: true,
+        });
+        const messages = [new FakeMessage({jobId: JOB_ID, entryId: ENTRY_ID})];
+
+        await handleBulkMailQueue(batchOf(messages), ENV, NO_RETRIES);
+
+        // The undelivered link is still live, so a redelivery would pass
+        // the entry over unsent: settled as failed now instead (#343).
+        expect(log.tokenDeletes).toHaveLength(1);
+        expect(messages[0].retried).toBe(false);
+        expect(messages[0].acked).toBe(true);
+        expect(log.progress).toEqual([
+          {p_job_id: JOB_ID, p_sent: 0, p_failed: 1},
+        ]);
+      }
+    });
+
+    it('still retries the other messages when one link cannot be discarded', async () => {
+      const log = mockFetch([resendJob(), jobRow(OTHER_JOB_ID)], {
+        entries: [pendingEntryRow()],
+        throttled: ['hanako@example.com', 'taro@example.com'],
+        tokenDeleteFails: true,
+      });
+      const messages = [
+        new FakeMessage({jobId: JOB_ID, entryId: ENTRY_ID}),
+        new FakeMessage({jobId: OTHER_JOB_ID, to: 'taro@example.com'}),
+      ];
+
+      await handleBulkMailQueue(batchOf(messages), ENV, NO_RETRIES);
+
+      expect(log.mails).toHaveLength(2);
+      expect(messages[0].acked).toBe(true);
+      expect(messages[0].retried).toBe(false);
+      expect(messages[1].retried).toBe(true);
+      expect(messages[1].acked).toBe(false);
     });
 
     it('retries a reminder whose entry cannot be read', async () => {
