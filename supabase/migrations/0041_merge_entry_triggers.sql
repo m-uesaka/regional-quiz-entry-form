@@ -50,6 +50,16 @@
 -- (追記、#261)古い Worker が消えた後、0057 で `cancelled` の行を戻す直接の
 -- UPDATE を `P0012` で断るようにした。上の表の `reenter_cancelled_entry()` の
 -- 順(P → Tk → E)は、それ以降は呼び出し側の規律ではなくトリガが保証する。
+--
+-- (追記、#313)0058 で、上の表の関数が取る T を `for update` から
+-- `for no key update` にした。関数どうし(と大会行の UPDATE)は今までどおり
+-- T で直列化されるが、INSERT と再エントリーの T(key share)とは衝突しなく
+-- なった。key share が待つのは、大会の地域・種別の変更(0050)と大会の削除
+-- だけ。表の順そのものは変わらない。同じ 0058 で確認トークンの外部キーを
+-- `on delete cascade` にしたので、`reset_tournament_entries()` は E を先に
+-- `for update` で取るのをやめ、E の削除が Tk を連れて消す(T → E → Tk → P)。
+-- `take_over_unverified_participant()` は、Tk を先に取る順(P → Tk → E)を
+-- 保つためにトークン行のロックを残している。
 create function check_entry_seat()
 returns trigger
 language plpgsql
