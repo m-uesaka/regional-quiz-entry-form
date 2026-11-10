@@ -507,10 +507,6 @@ export type Database = {
           previous_status: Database["public"]["Enums"]["entry_status"]
         }[]
       }
-      claim_participant_region: {
-        Args: { p_participant_id: string; p_region_id: string }
-        Returns: boolean
-      }
       claim_participant_region_for_tournament: {
         Args: { p_participant_id: string; p_tournament_id: string }
         Returns: boolean

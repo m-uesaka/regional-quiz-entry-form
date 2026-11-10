@@ -1,0 +1,18 @@
+-- 0040 の `claim_participant_region(uuid, uuid)` を消す(#308)。
+--
+-- 0043 が、地域だけを見るこの関数を大会単位の
+-- `claim_participant_region_for_tournament()` に置き換えたとき、デプロイ中の
+-- 古い Worker が呼び続けられるように残し、「次のマイグレーションで消す」と
+-- していた。その Worker はとうに入れ替わっており、どの Worker からも
+-- 呼ばれていない(0052 も削除予定として本体を触っていない)。
+--
+-- 地域をまたいだ参加の判定は、参加者行のロックの下で
+-- `participant_holds_conflicting_region()` を呼ぶトリガ `check_entry_seat()`
+-- (0041、現在の本体は 0050)が行い、`P0008` で断る。この関数を消しても判定は
+-- 変わらない。
+--
+-- `claim_participant_region_for_tournament()` は消さない。このマイグレーションと
+-- 同じリリースの Worker から呼ばなくなるが(判定はトリガの繰り返しだった)、
+-- マイグレーションは Worker より先に走るので、デプロイ中の古い Worker が
+-- まだ呼ぶ。`participants.region_id` の廃止(#309)と合わせて消す。
+drop function claim_participant_region(uuid, uuid);

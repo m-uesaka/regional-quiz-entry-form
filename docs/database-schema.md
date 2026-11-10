@@ -178,14 +178,14 @@ flowchart TB
 | カラム | 型 | 制約 | 説明 |
 | --- | --- | --- | --- |
 | `id` | uuid | PK | |
-| `region_id` | uuid | not null, FK → `regions.id` | 所属地域。確認済みの参加者は、次のエントリーで `claim_participant_region()`(`0040`)が移せる場合に移す |
+| `region_id` | uuid | not null, FK → `regions.id` | アカウントを作った(または未確認のまま上書きした)エントリーの地域。`0043` 以降は判定に使わず、#308 以降は Worker がエントリーのたびに移すこともしない(列の廃止は #309) |
 | `email` | text | not null, **unique(全体)**, check `email = lower(email)` | ログイン ID。小文字で保存(#133) |
 | `password_hash` | text | not null | PBKDF2-SHA256 ハッシュ。`pbkdf2-sha256$<反復回数>$<16バイトのソルトの hex>$<32バイトのハッシュの hex>` の形式(現行 10 万回)。`$` を含まない `{ソルト}:{ハッシュ}` は旧形式(10 万回)として読み、次のログインで新形式に書き換わります |
 | `password_changed_at` | timestamptz | not null, default `now()` | パスワードが最後に変わった時刻(`0011` で追加)。セッション失効の判定に使います |
 | `email_verified_at` | timestamptz | nullable | アドレスの持ち主に確かめられた時刻(`0034` で追加、#189)。最初にエントリーを確認メールのリンクで確定した時刻で、null の間は「未確認」 |
 | `created_at` | timestamptz | not null, default `now()` | |
 
-- `email` は地域ごとではなく**システム全体で一意**です。そのため、別の地域の大会に参加している参加者は、ほかの地域の大会にエントリーできません(地域が移る条件は `claim_participant_region()` を参照)。未ログインのエントリーでは、その旨をそのアドレスへメールで伝え(応答は他の場合と同じ `202`。#117)、ログイン中のエントリーでは 409(`already registered in another region`)を返します。この制限は**確認済みのアカウントにだけ**かかります(下記)。
+- `email` は地域ごとではなく**システム全体で一意**です。そのため、別の地域の大会に参加している参加者は、ほかの地域の大会にエントリーできません(正確には、同じ問題セットの別の地域の大会に枠を押さえている間です。条件は `check_entry_seat()` を参照)。未ログインのエントリーでは、その旨をそのアドレスへメールで伝え(応答は他の場合と同じ `202`。#117)、ログイン中のエントリーでは 409(`already registered in another region`)を返します。この制限は**確認済みのアカウントにだけ**かかります(下記)。
 - 参加者行は匿名エントリーの時点で(確認メールのリンクが踏まれる前に)作られるため、`email_verified_at` で**確認済みかどうか**を区別します(#189)。確認済みになるのは `confirm_entry_by_token()` でエントリーを確定したときだけで、パスワード再設定では確認済みになりません(再設定は地域を変えないため)。未確認のアカウントは:
   - ログインできません(資格情報の誤りと同じ 401)。発行済みのセッションも `requireParticipant()` が拒否します。
   - 次の匿名エントリーで、パスワードと地域が今のものと同じでなければ**上書き**されます(`take_over_unverified_participant()`)。地域の制限やパスワード照合で断られることはありません。
@@ -412,9 +412,8 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | `cancel_own_entry(uuid, uuid)` | `0006` | `lib/own-entries.ts` | 参加者自身のエントリーをキャンセルする |
 | `reset_participant_password(text, text)` | `0009` → `0010` で再定義 | `lib/password-reset.ts` | 再設定トークンを消費してパスワードを更新し、残りのトークンを焼き捨てる |
 | `take_over_unverified_participant(uuid, text, uuid)` | `0034` | `lib/entry-submission.ts` | 未確認の参加者アカウントのパスワードと地域を上書きし、それまでのエントリーを削除する |
-| `claim_participant_region(uuid, uuid)` | `0040` | (旧 Worker のみ) | 地域だけを見る旧版。デプロイ中の古い Worker のために残しており、次のマイグレーションで削除する |
-| `claim_participant_region_for_tournament(uuid, uuid)` | `0043` | `lib/entry-submission.ts` | 確認済みの参加者の地域を、同じ問題セットの別の地域に押さえるエントリーが無ければエントリーする大会の地域に移す |
-| `participant_holds_conflicting_region(uuid, uuid)` | `0043`(`0046`・`0052` で再定義) | `lib/entry-submission.ts`、`check_entry_seat()` | 参加者が、その大会とは別の地域で同じ問題セットの大会の枠を押さえているか(ロックは取らない) |
+| `claim_participant_region_for_tournament(uuid, uuid)` | `0043` | (旧 Worker のみ) | 確認済みの参加者の地域を、同じ問題セットの別の地域に押さえるエントリーが無ければエントリーする大会の地域に移す。#308 で Worker から呼ばなくなった。デプロイ中の古い Worker のために残しており、`participants.region_id` の廃止(#309)と合わせて削除する |
+| `participant_holds_conflicting_region(uuid, uuid)` | `0043`(`0046`・`0052` で再定義) | `check_entry_seat()` | 参加者が、その大会とは別の地域で同じ問題セットの大会の枠を押さえているか(ロックは取らない) |
 | `reenter_cancelled_entry(uuid, uuid, text, text, text, text, jsonb)` | `0041`(`0052` で再定義) | `lib/entry-submission.ts` | 参加者行をロックしてから、キャンセル済みのエントリー行を再エントリーとして上書きする |
 | `reset_tournament_entries(uuid, boolean)` | `0038` | `routes/tournaments.ts` | 大会のエントリーを全件削除し、指定があれば他の大会にエントリーが残っていない参加者アカウントも削除する |
 | `tournament_entry_summary()` | `0013` | `routes/staff-dashboard.ts` | 全大会のエントリー件数をステータス別に集計する(読み取り専用) |
@@ -548,12 +547,14 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 ### claim_participant_region_for_tournament(p_participant_id, p_tournament_id)
 
-確認済みの参加者の `region_id` を、エントリーする大会の地域に移します(#236 の `0040` の `claim_participant_region()` を `0043` で大会単位にしたもの)。`enterTournament()` がエントリーを書く前に、期限切れの確定待ちを取り消してから `claimTournamentRegion()` の段階で呼びます。参加者行を `for no key update` でロックした後の別の文で、**エントリーする大会と問題セットが同じ別の地域の大会**に次のエントリーが無いことを確かめます(`participant_holds_conflicting_region()`)。
+**#308 以降、Worker からは呼びません。** 判定はトリガ `check_entry_seat()` が同じ `participant_holds_conflicting_region()` を参加者行のロックの下で呼んで行うので、書き込みの前にここで確かめるのはその繰り返しでした(この関数のロックは RPC の終わりで外れるので、書き込みまでの間を守ってもいませんでした)。デプロイ中の古い Worker が呼ぶので関数は残してあり、`participants.region_id` の廃止(#309)と合わせて削除します。以下は関数そのものの説明で、地域を押さえるエントリーの条件はトリガの判定と同じです。
+
+確認済みの参加者の `region_id` を、エントリーする大会の地域に移します(#236 の `0040` の `claim_participant_region()` を `0043` で大会単位にしたもの。`0040` の関数は `0055` で削除)。参加者行を `for no key update` でロックした後の別の文で、**エントリーする大会と問題セットが同じ別の地域の大会**に次のエントリーが無いことを確かめます(`participant_holds_conflicting_region()`)。
 
 - `cancelled` 以外のエントリー
 - 大会の受付終了より後にキャンセルした、確定済みだったエントリー(`confirmed_at` が null でなく、`cancelled_at > entry_closes_at`)。`0052`(#287)より前は `email_verified_at` で見ていたため、キャンセル待ちのまま受付終了後に取り消した(一度も席を得なかった)エントリーも数えていました。`0052` より前に受付終了後に取り消された行は、確定済みだったかキャンセル待ちだったかを区別できないので、`email_verified_at` があれば確定済みだったものとして `confirmed_at` を埋めています(これまでと同じ判定)
 
-あれば何も変えずに `false` を返し、呼び出し側は `already registered in another region` で断ります。なければ地域を移して(もともとその地域なら何もせずに) `true` を返します。キャンセルには期限が無いので、後者を数えないと、大会に出た後でキャンセルして別の地域の大会にも出られてしまいます。
+あれば何も変えずに `false` を返します。なければ地域を移して(もともとその地域なら何もせずに) `true` を返します。キャンセルには期限が無いので、後者を数えないと、大会に出た後でキャンセルして別の地域の大会にも出られてしまいます。
 
 ### reset_participant_password(p_token_hash, p_password_hash)
 
@@ -628,7 +629,7 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 参加者行を `for no key update` でロックしてから、次の順に検査します。地域行ではなく参加者行なのは、同じ地域の無関係な申し込みまで直列化しないためです。続けて大会行を `for key share` でロックしてから大会の地域を読みます(`0050`、#284)。大会の地域・種別を変える UPDATE は大会行を `for update` で取るので、未コミットの移動と同時に来たエントリーは移動のコミットを待ち、移った先の地域で検査されます(ロックしないと移動前の地域で検査を通り、そのまま移った先に入っていました)。
 
-1. **地域をまたいだ参加。** 同じ問題セットの別の地域の大会に枠を押さえるエントリーがあれば(`participant_holds_conflicting_region()`)SQLSTATE `P0008`(`participant belongs to another region`)。`0043` までは参加者の地域(`participants.region_id`)と大会の地域の一致を見ていましたが、問題セットが違えば複数の地域に参加できるようになったので、エントリーそのものを見ます。`claim_participant_region_for_tournament()` の確認からエントリーの書き込みまでの間に、別の送信が別の地域の枠を取った場合の裏付けです。参加者行で直列化されるので、どちらが先でも後の側が先のエントリーを見て断ります。`enterTournament()` は `already registered in another region` の 409 にします(実際に枠があるので、やり直しを促す `concurrent submission` にはしません)。
+1. **地域をまたいだ参加。** 同じ問題セットの別の地域の大会に枠を押さえるエントリーがあれば(`participant_holds_conflicting_region()`)SQLSTATE `P0008`(`participant belongs to another region`)。`0043` までは参加者の地域(`participants.region_id`)と大会の地域の一致を見ていましたが、問題セットが違えば複数の地域に参加できるようになったので、エントリーそのものを見ます。この規則を判定するのはここだけで、アプリケーションは書き込みの前に確かめません(#308。以前は `claim_participant_region_for_tournament()` で先に確かめていましたが、このトリガの繰り返しでした)。参加者行で直列化されるので、別の地域への送信が同時に来ても、どちらが先でも後の側が先のエントリーを見て断ります。`enterTournament()` は `already registered in another region` の 409 にします(実際に枠があるので、やり直しを促す `concurrent submission` にはしません)。
 2. **重複エントリー。** `regions.allows_dual_entry` が `false` の地域で、同じ地域の別の大会に `cancelled` 以外のエントリーがあれば SQLSTATE `P0005`(`already entered another tournament in this region`)。アプリケーション側で「数える → 書く」と、地域の 2 大会への申し込みが同時に来たときに両方が 0 件を数えて両方とも通り、片方を取り消す経路も無いまま 2 枠を占有してしまいます。数えるのも書くのも参加者行のロックの下で行うので、この窓がありません。2 つ目のトランザクションは参加者行で待たされ、1 つ目のコミット後にその行を見て弾かれます。`enterTournament()` はこれを 409 `already entered another tournament in this region` に変換します(未認証の経路では案内メール `dual-entry` になります)。
 
 `P0005` と `P0008` は PostgREST では HTTP 500 として返り、Supabase の API ログにも 500 と記録されます。`enterTournament()` は SQLSTATE を見て 409 に変換するので、利用者への応答は変わりません。通常の拒否なので、API のエラー率を見るときはこの分を割り引きます。

@@ -260,10 +260,6 @@ interface MockSupabase {
   mails: SentMail[];
   /** The arguments each `take_over_unverified_participant()` call got. */
   takeOvers: Array<Record<string, unknown>>;
-  /** The arguments each `claim_participant_region_for_tournament()` call got. */
-  regionClaims: Array<Record<string, unknown>>;
-  /** The arguments each `participant_holds_conflicting_region()` call got. */
-  conflictChecks: Array<Record<string, unknown>>;
   /** The arguments each `reenter_cancelled_entry()` call got. */
   reentries: Array<Record<string, unknown>>;
 }
@@ -295,13 +291,13 @@ function mockSupabase(options: {
    */
   verifiedMeanwhile?: Record<string, unknown>;
   /**
-   * Makes `claim_participant_region_for_tournament()` refuse and
-   * `participant_holds_conflicting_region()` answer true: the participant
-   * has an entry in another region on the same question set that isn't
-   * cancelled.
+   * The SQLSTATE the entry write is refused with, if it is. Nothing is asked
+   * of the database ahead of the write (#308) -- the mock throws on a call
+   * it doesn't know, `claim_participant_region_for_tournament()` and
+   * `participant_holds_conflicting_region()` included -- so
+   * `PARTICIPANT_REGION_SQLSTATE` here is how a participant holding a seat
+   * in another region on the same question set looks.
    */
-  activeElsewhere?: boolean;
-  /** The SQLSTATE the entry write is refused with, if it is. */
   entryWriteErrorCode?: string;
   /** The SQLSTATE storing the entry's regulations is refused with, if it is. */
   regulationsWriteErrorCode?: string;
@@ -314,8 +310,6 @@ function mockSupabase(options: {
     calls: [],
     mails: [],
     takeOvers: [],
-    regionClaims: [],
-    conflictChecks: [],
     reentries: [],
   };
   const tournament = options.tournament ?? tournamentRow();
@@ -392,16 +386,6 @@ function mockSupabase(options: {
       // Nothing of this participant's has a lapsed verification link.
       case 'POST rpc/lapse_expired_pending_entries':
         return Response.json([]);
-      case 'POST rpc/claim_participant_region_for_tournament': {
-        const args = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        recorded.regionClaims.push(args);
-        return Response.json(!options.activeElsewhere);
-      }
-      case 'POST rpc/participant_holds_conflicting_region': {
-        const args = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        recorded.conflictChecks.push(args);
-        return Response.json(Boolean(options.activeElsewhere));
-      }
       case 'GET entries':
         return rows(options.cancelledEntry ? [options.cancelledEntry] : []);
       case 'POST rpc/reenter_cancelled_entry':
@@ -717,7 +701,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
   it('mails the owner instead of answering when the address is in another region', async () => {
     const recorded = mockSupabase({
       participant: await registeredParticipant({regionId: OTHER_REGION_ID}),
-      activeElsewhere: true,
+      entryWriteErrorCode: PARTICIPANT_REGION_SQLSTATE,
     });
 
     const res = await observable(
@@ -729,9 +713,10 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     expect(recorded.mails).toHaveLength(1);
     expect(recorded.mails[0].subject).toBe(entryNoticeSubject(TOURNAMENT_NAME));
     expect(recorded.mails[0].html).toContain('別の地域');
+    // The refused write left nothing behind, so there is nothing to undo.
     expect(recorded.calls).not.toContainEqual({
       table: 'entries',
-      method: 'POST',
+      method: 'DELETE',
     });
   });
 
@@ -744,16 +729,13 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     await postWithContext(TOURNAMENT_PATH, validBody);
     await settleBackgroundWork();
 
-    expect(recorded.regionClaims).toEqual([
-      {p_participant_id: PARTICIPANT_ID, p_tournament_id: TOURNAMENT_ID},
-    ]);
     expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
     expect(recorded.mails[0].subject).toBe(
       verificationMailSubject(TOURNAMENT_NAME),
     );
   });
 
-  it('never moves a verified account for a wrong password', async () => {
+  it('never writes an entry to a verified account for a wrong password', async () => {
     const recorded = mockSupabase({
       participant: await registeredParticipant({
         regionId: OTHER_REGION_ID,
@@ -764,7 +746,10 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     await postWithContext(TOURNAMENT_PATH, validBody);
     await settleBackgroundWork();
 
-    expect(recorded.regionClaims).toHaveLength(0);
+    expect(recorded.calls).not.toContainEqual({
+      table: 'entries',
+      method: 'POST',
+    });
     expect(recorded.mails[0].html).toContain('パスワード');
   });
 
@@ -921,8 +906,6 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     // Nothing in the answer says the address was in any particular state.
     expect(res).toEqual({status: 202, body: JSON.stringify({ok: true})});
     expect(recorded.takeOvers).toHaveLength(1);
-    // The takeover settled the region, so nothing claims it again.
-    expect(recorded.regionClaims).toHaveLength(0);
     const [takeOver] = recorded.takeOvers;
     expect(takeOver.p_participant_id).toBe(PARTICIPANT_ID);
     expect(takeOver.p_region_id).toBe(REGION_ID);
@@ -1091,9 +1074,6 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     await settleBackgroundWork();
 
     expect(recorded.takeOvers).toHaveLength(0);
-    // Asked even in its own region: question sets are per tournament, so
-    // the account's own region can conflict too.
-    expect(recorded.conflictChecks).toHaveLength(1);
     expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
     expect(recorded.mails[0].subject).toBe(
       verificationMailSubject(TOURNAMENT_NAME),
@@ -1114,13 +1094,11 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     await postWithContext(TOURNAMENT_PATH, validBody);
     await settleBackgroundWork();
 
-    expect(recorded.conflictChecks).toEqual([
-      {p_participant_id: PARTICIPANT_ID, p_tournament_id: TOURNAMENT_ID},
-    ]);
-    // Lapsed first, so a pending entry whose link expired doesn't count.
+    // Lapsed before the write, so a pending entry whose link expired doesn't
+    // count for the trigger.
     const tables = recorded.calls.map(call => call.table);
     expect(tables.indexOf('rpc/lapse_expired_pending_entries')).toBeLessThan(
-      tables.indexOf('rpc/participant_holds_conflicting_region'),
+      tables.indexOf('entries'),
     );
     expect(recorded.takeOvers).toHaveLength(0);
     expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
@@ -1138,7 +1116,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
         regionId: OTHER_REGION_ID,
         verified: false,
       }),
-      activeElsewhere: true,
+      entryWriteErrorCode: PARTICIPANT_REGION_SQLSTATE,
     });
 
     const res = await observable(
@@ -1147,11 +1125,11 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     await settleBackgroundWork();
 
     expect(res).toEqual({status: 202, body: JSON.stringify({ok: true})});
-    expect(recorded.conflictChecks).toHaveLength(1);
     expect(recorded.takeOvers).toHaveLength(0);
+    // The refused write left nothing behind, so there is nothing to undo.
     expect(recorded.calls).not.toContainEqual({
       table: 'entries',
-      method: 'POST',
+      method: 'DELETE',
     });
     expect(recorded.mails).toHaveLength(1);
     expect(recorded.mails[0].subject).toBe(entryNoticeSubject(TOURNAMENT_NAME));
@@ -1227,7 +1205,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
   it('never takes over a verified account', async () => {
     const recorded = mockSupabase({
       participant: await registeredParticipant({regionId: OTHER_REGION_ID}),
-      activeElsewhere: true,
+      entryWriteErrorCode: PARTICIPANT_REGION_SQLSTATE,
     });
 
     await postWithContext(TOURNAMENT_PATH, validBody);
@@ -1513,7 +1491,7 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
   it('still reports errors directly for a logged-in participant', async () => {
     const recorded = mockSupabase({
       participant: await registeredParticipant({regionId: OTHER_REGION_ID}),
-      activeElsewhere: true,
+      entryWriteErrorCode: PARTICIPANT_REGION_SQLSTATE,
     });
 
     const res = await postWithContext(
@@ -1541,9 +1519,6 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
     );
 
     expect(res.status).toBe(201);
-    expect(recorded.regionClaims).toEqual([
-      {p_participant_id: PARTICIPANT_ID, p_tournament_id: TOURNAMENT_ID},
-    ]);
     expect(recorded.calls).toContainEqual({table: 'entries', method: 'POST'});
   });
 
