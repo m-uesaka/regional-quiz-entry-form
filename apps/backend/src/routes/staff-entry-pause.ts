@@ -2,7 +2,7 @@ import {Hono} from 'hono';
 import {TournamentEntryPauseInputSchema} from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireStaffForTournament} from '../middleware/staff-auth';
-import {internalError} from '../lib/errors';
+import {unwrap} from '../lib/errors';
 import {rowToTournament, TOURNAMENT_COLUMNS} from '../lib/tournaments';
 import {TournamentIdParamSchema} from './params';
 import {validate} from '../middleware/validate';
@@ -20,19 +20,16 @@ export const staffEntryPauseRoute = new Hono<StaffEnv>().put(
   requireStaffForTournament(),
   validate('json', TournamentEntryPauseInputSchema),
   async c => {
-    const {data, error} = await c
-      .get('db')
-      .from('tournaments')
-      .update({entries_paused: c.req.valid('json').paused})
-      .eq('id', c.req.valid('param').tournamentId)
-      .select(TOURNAMENT_COLUMNS)
-      .maybeSingle();
-    if (error) {
-      return c.json(
-        internalError('failed to pause or resume the entries', error),
-        500,
-      );
-    }
+    const data = unwrap(
+      await c
+        .get('db')
+        .from('tournaments')
+        .update({entries_paused: c.req.valid('json').paused})
+        .eq('id', c.req.valid('param').tournamentId)
+        .select(TOURNAMENT_COLUMNS)
+        .maybeSingle(),
+      'failed to pause or resume the entries',
+    );
     // Only when the tournament was deleted after the guard read it.
     if (!data) {
       return c.json({error: 'tournament not found'}, 404);

@@ -13,7 +13,7 @@ import {
 import {StaffPasswordResetConfirmInputSchema} from '@regional-quiz/shared/password-policy';
 import type {Env} from '../types/env';
 import {verifyAccountPassword} from '../lib/password-rehash';
-import {respondFailure} from '../lib/errors';
+import {respondFailure, unwrap} from '../lib/errors';
 import {findStaffAccountByScope} from '../lib/staff-account-lookup';
 import {
   confirmStaffPasswordReset,
@@ -75,19 +75,18 @@ export const staffAuthRoute = new Hono<Env>()
       //
       // `regions` is null for `general` staff, who have no `region_id`. Only
       // its slug is read: the staff screens are keyed by it.
-      const {data: staff, error} = await findStaffAccountByScope(
-        c.get('db'),
-        email,
-        scope,
-        `
-          id, password_hash, role, region_id, tournament_type,
-          sessions_valid_from, regions(slug)
-        `,
+      const staff = unwrap(
+        await findStaffAccountByScope(
+          c.get('db'),
+          email,
+          scope,
+          `
+            id, password_hash, role, region_id, tournament_type,
+            sessions_valid_from, regions(slug)
+          `,
+        ),
+        'failed to read the staff account to log in',
       );
-
-      if (error) {
-        return c.json({error: 'internal server error'}, 500);
-      }
 
       // An account created by `POST /api/staff/accounts` whose owner hasn't
       // followed their invite link yet carries an unusable placeholder hash,
@@ -184,11 +183,7 @@ export const staffAuthRoute = new Hono<Env>()
         c.req.valid('json'),
       );
       if (!result.ok) {
-        return respondFailure(
-          c,
-          result,
-          'failed to confirm the staff password reset',
-        );
+        return respondFailure(c, result);
       }
       return c.json({ok: true});
     },

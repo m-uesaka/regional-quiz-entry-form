@@ -10,7 +10,6 @@ import type {Env} from '../types/env';
 import {
   fetchTournamentById,
   fetchTournamentBySlug,
-  tournamentLookupFailure,
   type TournamentRow,
 } from '../lib/tournaments';
 import {
@@ -76,12 +75,7 @@ export function requireOpenEntryPeriodOrStaff(
   resolveTournament: TournamentResolver,
 ) {
   return createMiddleware<Env>(async (c, next) => {
-    let tournament: TournamentRow | null;
-    try {
-      tournament = await resolveTournament(c);
-    } catch (e: unknown) {
-      return c.json(tournamentLookupFailure(e), 500);
-    }
+    const tournament = await resolveTournament(c);
     if (!tournament) {
       return c.json({error: 'tournament not found'}, 404);
     }
@@ -129,11 +123,7 @@ export function requireOpenEntryPeriodOrStaff(
     // stays dead whichever tournament it is aimed at. Checking scope first
     // would answer a revoked 地域スタッフ looking at another region's form
     // with a 403 that never sends them back to log in.
-    const check = await isSessionCurrent(c.get('db'), staff);
-    if (!check.ok) {
-      return c.json({error: 'internal server error'}, 500);
-    }
-    if (!check.current) {
+    if (!(await isSessionCurrent(c.get('db'), staff))) {
       return c.json({error: 'staff session expired'}, 401);
     }
     if (!isInScope(staff, tournament)) {

@@ -5,7 +5,7 @@ import {
   type TournamentType,
 } from '@regional-quiz/shared';
 import {type DbClient, type Tables} from './db';
-import {internalError} from './errors';
+import {unwrap} from './errors';
 
 /**
  * Shape of a `tournaments` row as returned by Supabase (snake_case). `name`
@@ -77,34 +77,11 @@ export function rowToTournament(row: TournamentRow): Tournament {
 }
 
 /**
- * Thrown when Supabase itself failed, as opposed to answering that there is
- * no such tournament. The two are told apart by the callers — a missing
- * tournament is a 404, an unreachable database a 500 — and a thrown error
- * is what lets a resolver keep the plain `TournamentRow | null` return type
- * the entry-period middleware expects.
- */
-export class TournamentLookupError extends Error {
-  constructor(readonly cause: unknown) {
-    super('failed to read the tournament');
-    this.name = 'TournamentLookupError';
-  }
-}
-
-/**
- * Logs a failed tournament read and returns the body to answer it with.
- *
- * Shared by every caller of the lookups below, so the log line is the same
- * whichever route or guard hit the outage, and a `TournamentLookupError` is
- * unwrapped to the Supabase error it carries.
- * @param e What the lookup threw.
- */
-export function tournamentLookupFailure(e: unknown): {error: string} {
-  const cause = e instanceof TournamentLookupError ? e.cause : e;
-  return internalError('failed to read the tournament', cause);
-}
-
-/**
  * Reads one tournament by its primary key.
+ *
+ * A failure of Supabase itself, as opposed to its answering that there is no
+ * such tournament, is thrown (`unwrap()`): a missing tournament is a 404 the
+ * caller answers, an unreachable database a 500 `app.onError` answers.
  * @param db The database client.
  * @param tournamentId The tournament's UUID.
  * @return The row, or `null` if no tournament has that id.
@@ -113,15 +90,14 @@ export async function fetchTournamentById(
   db: DbClient,
   tournamentId: string,
 ): Promise<TournamentRow | null> {
-  const {data, error} = await db
-    .from('tournaments')
-    .select(TOURNAMENT_COLUMNS)
-    .eq('id', tournamentId)
-    .maybeSingle();
-  if (error) {
-    throw new TournamentLookupError(error);
-  }
-  return data;
+  return unwrap(
+    await db
+      .from('tournaments')
+      .select(TOURNAMENT_COLUMNS)
+      .eq('id', tournamentId)
+      .maybeSingle(),
+    'failed to read the tournament',
+  );
 }
 
 /**
@@ -145,14 +121,13 @@ export async function fetchTournamentBySlug(
   regionSlug: string,
   tournamentSlug: TournamentType,
 ): Promise<TournamentRow | null> {
-  const {data, error} = await db
-    .from('tournaments')
-    .select(`${TOURNAMENT_OWN_COLUMNS}, regions!inner(name)` as const)
-    .eq('regions.slug', regionSlug)
-    .eq('type', tournamentSlug)
-    .maybeSingle();
-  if (error) {
-    throw new TournamentLookupError(error);
-  }
-  return data;
+  return unwrap(
+    await db
+      .from('tournaments')
+      .select(`${TOURNAMENT_OWN_COLUMNS}, regions!inner(name)` as const)
+      .eq('regions.slug', regionSlug)
+      .eq('type', tournamentSlug)
+      .maybeSingle(),
+    'failed to read the tournament',
+  );
 }

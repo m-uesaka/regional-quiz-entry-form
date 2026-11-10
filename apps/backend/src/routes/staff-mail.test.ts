@@ -78,18 +78,16 @@ const EXECUTION_CTX = {
   passThroughOnException(): void {},
 } as unknown as ExecutionContext;
 
-/** A `mail_jobs` row as the progress endpoint selects it. */
+/** A `mail_jobs` row as the progress endpoint selects it, under the aliases of its select. */
 function jobRow(overrides: Record<string, unknown> = {}) {
   return {
-    id: JOB_ID,
-    tournament_id: TOURNAMENT_ID,
+    jobId: JOB_ID,
     subject: MAIL_INPUT.subject,
-    body_html: MAIL_INPUT.body,
     total: 3,
     sent: 2,
     failed: 1,
-    created_at: '2026-08-29T00:00:00Z',
-    updated_at: '2026-08-29T00:01:00Z',
+    createdAt: '2026-08-29T00:00:00Z',
+    updatedAt: '2026-08-29T00:01:00Z',
     ...overrides,
   };
 }

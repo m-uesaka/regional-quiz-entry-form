@@ -8,8 +8,8 @@ import {
 } from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireGeneralStaff} from '../middleware/staff-auth';
-import {type Tables, type TablesInsert, type TablesUpdate} from '../lib/db';
-import {internalError} from '../lib/errors';
+import {type TablesInsert, type TablesUpdate} from '../lib/db';
+import {unwrap} from '../lib/errors';
 import {
   DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
   DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE,
@@ -22,28 +22,17 @@ import {
 import {IdParamSchema} from './params';
 import {validate} from '../middleware/validate';
 
-/** Shape of a `regions` row as returned by Supabase. */
-type RegionRow = Pick<
-  Tables<'regions'>,
-  'id' | 'slug' | 'name' | 'allows_dual_entry'
->;
-
-/** The columns of `RegionRow`, for every select in this file. */
-const REGION_COLUMNS = 'id, slug, name, allows_dual_entry';
-
-// Rows are mapped rather than re-parsed with `RegionSchema`: the slug rules
-// live in the create schema, not in the column, so a row written before this
-// API existed (or straight through Supabase) may not satisfy them — and a
-// read that rejects data already in the table would answer 500 for a region
-// the staff can otherwise use fine.
-function rowToRegion(row: RegionRow): Region {
-  return {
-    id: row.id,
-    slug: row.slug,
-    name: row.name,
-    allowsDualEntry: row.allows_dual_entry,
-  };
-}
+/**
+ * The columns of a region, aliased to the API's names, for every select in
+ * this file.
+ *
+ * Rows are not re-parsed with `RegionSchema`: the slug rules live in the
+ * create schema, not in the column, so a row written before this API existed
+ * (or straight through Supabase) may not satisfy them — and a read that
+ * rejects data already in the table would answer 500 for a region the staff
+ * can otherwise use fine. The select's result is the `Region` itself.
+ */
+const REGION_COLUMNS = 'id, slug, name, allowsDualEntry:allows_dual_entry';
 
 /**
  * Turns a create body into the columns Supabase writes. Every column is
@@ -79,14 +68,14 @@ export const regionsRoute = new Hono<StaffEnv>()
   .use('*', requireGeneralStaff())
   .get('/', async c => {
     const db = c.get('db');
-    const {data, error} = await db
-      .from('regions')
-      .select(REGION_COLUMNS)
-      .order('name', {ascending: true});
-    if (error) {
-      return c.json(internalError('failed to read the regions', error), 500);
-    }
-    return c.json(data.map(rowToRegion));
+    const regions: Region[] = unwrap(
+      await db
+        .from('regions')
+        .select(REGION_COLUMNS)
+        .order('name', {ascending: true}),
+      'failed to read the regions',
+    );
+    return c.json(regions);
   })
   .post('/', validate('json', RegionCreateInputSchema), async c => {
     const db = c.get('db');
@@ -112,7 +101,7 @@ export const regionsRoute = new Hono<StaffEnv>()
       );
       return c.json(body, status);
     }
-    return c.json(rowToRegion(data), 201);
+    return c.json(data satisfies Region, 201);
   })
   .patch(
     '/:id',
@@ -147,6 +136,6 @@ export const regionsRoute = new Hono<StaffEnv>()
         );
         return c.json(body, status);
       }
-      return c.json(rowToRegion(data));
+      return c.json(data satisfies Region);
     },
   );

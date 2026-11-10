@@ -1,4 +1,4 @@
-import {afterEach, describe, expect, it} from 'bun:test';
+import {afterEach, describe, expect, it, spyOn} from 'bun:test';
 import {testBindings} from '../test-support/bindings';
 import {MAIL_FROM_NAME} from './mailer';
 import {
@@ -14,9 +14,9 @@ const ENV = testBindings();
 const JOB_ID = '55555555-5555-5555-5555-555555555555';
 const OTHER_JOB_ID = '66666666-6666-6666-6666-666666666666';
 
-/** A `mail_jobs` row as the consumer's content lookup selects it. */
+/** A `mail_jobs` row as the consumer's content lookup selects it, under the aliases of its select. */
 function jobRow(id: string, subject = '大会のご案内') {
-  return {id, subject, body_html: `<p>${subject}</p>`};
+  return {id, subject, bodyHtml: `<p>${subject}</p>`};
 }
 
 class FakeMessage implements Message<BulkMailMessage> {
@@ -124,6 +124,8 @@ function mockFetch(
     unreachable = [],
     entries = [],
     tokenDeleteFails = false,
+    tokenInsertFails = false,
+    progressFails = false,
   }: {
     rejected?: readonly string[];
     throttled?: readonly string[];
@@ -133,6 +135,10 @@ function mockFetch(
     entries?: unknown[] | Response;
     /** Whether deleting a verification token fails. */
     tokenDeleteFails?: boolean;
+    /** Whether storing a new verification token fails. */
+    tokenInsertFails?: boolean;
+    /** Whether recording a job's progress fails. */
+    progressFails?: boolean;
   } = {},
 ): FetchLog {
   const log: FetchLog = {
@@ -175,7 +181,11 @@ function mockFetch(
 
     if (url.includes('/rpc/record_mail_job_progress')) {
       log.progress.push(JSON.parse(String(init?.body)) as ProgressCall);
-      return Promise.resolve(Response.json(null));
+      return Promise.resolve(
+        progressFails
+          ? Response.json({message: 'db is down'}, {status: 500})
+          : Response.json(null),
+      );
     }
 
     if (url.includes('/rest/v1/entries')) {
@@ -195,7 +205,11 @@ function mockFetch(
       log.tokenInserts.push(
         JSON.parse(String(init?.body)) as Record<string, unknown>,
       );
-      return Promise.resolve(Response.json({id: TOKEN_ID}));
+      return Promise.resolve(
+        tokenInsertFails
+          ? Response.json({message: 'db is down'}, {status: 500})
+          : Response.json({id: TOKEN_ID}),
+      );
     }
 
     log.jobLookups.push(url);
@@ -529,6 +543,29 @@ describe('handleBulkMailQueue', () => {
     expect(log.progress).toEqual([{p_job_id: JOB_ID, p_sent: 0, p_failed: 1}]);
   });
 
+  it('still acks what it sent when the counters cannot be recorded', async () => {
+    // Throwing would have the platform redeliver the whole batch and send
+    // the mail again; the failure is only logged.
+    const consoleError = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const log = mockFetch([jobRow(JOB_ID)], {progressFails: true});
+      const messages = [
+        new FakeMessage({jobId: JOB_ID, to: 'taro@example.com'}),
+      ];
+
+      await handleBulkMailQueue(batchOf(messages), ENV);
+
+      expect(log.mails).toHaveLength(1);
+      expect(messages[0].acked).toBe(true);
+      expect(messages[0].retried).toBe(false);
+      expect(consoleError.mock.calls.map(call => call[0])).toContain(
+        'failed to record bulk mail job progress',
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it('reports nothing for a batch it sent nothing from', async () => {
     const log = mockFetch([]);
 
@@ -540,7 +577,7 @@ describe('handleBulkMailQueue', () => {
   describe('a verification resend', () => {
     const resendJob = () => ({
       ...jobRow(JOB_ID, '【地域クイズ最強位・新人王】確認'),
-      body_html: '',
+      bodyHtml: '',
     });
 
     it('sends the entry a fresh confirmation link', async () => {
@@ -680,6 +717,22 @@ describe('handleBulkMailQueue', () => {
     it('retries a reminder whose entry cannot be read', async () => {
       const log = mockFetch([resendJob()], {
         entries: Response.json({message: 'db is down'}, {status: 500}),
+      });
+      const messages = [new FakeMessage({jobId: JOB_ID, entryId: ENTRY_ID})];
+
+      await handleBulkMailQueue(batchOf(messages), ENV);
+
+      expect(log.mails).toEqual([]);
+      expect(messages[0].acked).toBe(false);
+      expect(messages[0].retried).toBe(true);
+    });
+
+    it('retries a reminder whose new link cannot be stored', async () => {
+      // Issuing the link fails after the entry was read, which comes back as
+      // a thrown failure of its own rather than of the first read.
+      const log = mockFetch([resendJob()], {
+        entries: [pendingEntryRow()],
+        tokenInsertFails: true,
       });
       const messages = [new FakeMessage({jobId: JOB_ID, entryId: ENTRY_ID})];
 

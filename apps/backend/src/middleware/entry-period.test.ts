@@ -1,5 +1,6 @@
 import {afterEach, beforeEach, describe, expect, it} from 'bun:test';
 import {dbClient} from './db';
+import {handleError} from '../lib/errors';
 import {Hono} from 'hono';
 import {sign} from 'hono/jwt';
 import type {StaffClaims} from '@regional-quiz/shared';
@@ -40,11 +41,14 @@ afterEach(() => {
  * @param tournament The row the resolver should answer with.
  */
 function gatedApp(tournament: TournamentRow) {
-  return new Hono<Env>().use(dbClient()).get(
-    '/',
-    requireOpenEntryPeriodOrStaff(async () => tournament),
-    c => c.json({entryPeriodStaff: c.get('entryPeriodStaff') ?? null}),
-  );
+  return new Hono<Env>()
+    .onError(handleError)
+    .use(dbClient())
+    .get(
+      '/',
+      requireOpenEntryPeriodOrStaff(async () => tournament),
+      c => c.json({entryPeriodStaff: c.get('entryPeriodStaff') ?? null}),
+    );
 }
 
 async function regionalStaffCookie(regionId: string): Promise<string> {

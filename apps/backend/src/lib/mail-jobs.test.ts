@@ -63,15 +63,11 @@ describe.skipIf(!(await isDbReachable()))(
     });
 
     async function newJob(total = 10): Promise<string> {
-      const created = await createMailJob(createDbClient(env), {
+      return createMailJob(createDbClient(env), {
         tournamentId,
         total,
         ...CONTENT,
       });
-      if (!created.ok) {
-        throw new Error(created.error);
-      }
-      return created.value;
     }
 
     it('records a send with its content and recipient count', async () => {
@@ -83,17 +79,14 @@ describe.skipIf(!(await isDbReachable()))(
       const job = await fetchMailJob(createDbClient(env), tournamentId, jobId);
 
       expect(job).toEqual({
-        ok: true,
-        value: {
-          jobId,
-          subject: CONTENT.subject,
-          total: 7,
-          sent: 0,
-          failed: 0,
-          // Written by the database, so only their presence is asserted.
-          createdAt: expect.any(String),
-          updatedAt: expect.any(String),
-        },
+        jobId,
+        subject: CONTENT.subject,
+        total: 7,
+        sent: 0,
+        failed: 0,
+        // Written by the database, so only their presence is asserted.
+        createdAt: expect.any(String),
+        updatedAt: expect.any(String),
       });
     });
 
@@ -103,12 +96,9 @@ describe.skipIf(!(await isDbReachable()))(
       const content = await fetchMailJobContent(createDbClient(env), jobId);
 
       expect(content).toEqual({
-        ok: true,
-        value: {
-          id: jobId,
-          subject: CONTENT.subject,
-          bodyHtml: CONTENT.bodyHtml,
-        },
+        id: jobId,
+        subject: CONTENT.subject,
+        bodyHtml: CONTENT.bodyHtml,
       });
     });
 
@@ -117,16 +107,10 @@ describe.skipIf(!(await isDbReachable()))(
       // nothing to send, while an error means try again later.
       expect(
         await fetchMailJobContent(createDbClient(env), UNKNOWN_ID),
-      ).toEqual({
-        ok: true,
-        value: null,
-      });
+      ).toBeNull();
       expect(
         await fetchMailJob(createDbClient(env), tournamentId, UNKNOWN_ID),
-      ).toEqual({
-        ok: true,
-        value: null,
-      });
+      ).toBeNull();
     });
 
     it('hides a job belonging to another tournament', async () => {
@@ -136,10 +120,7 @@ describe.skipIf(!(await isDbReachable()))(
       // looked up by tournament as well as by id.
       expect(
         await fetchMailJob(createDbClient(env), otherTournamentId, jobId),
-      ).toEqual({
-        ok: true,
-        value: null,
-      });
+      ).toBeNull();
     });
 
     it('adds each batch to the counters instead of overwriting them', async () => {
@@ -155,7 +136,7 @@ describe.skipIf(!(await isDbReachable()))(
       });
 
       const job = await fetchMailJob(createDbClient(env), tournamentId, jobId);
-      expect(job.ok && job.value).toMatchObject({sent: 5, failed: 1});
+      expect(job).toMatchObject({sent: 5, failed: 1});
     });
 
     it('loses no increment when batches report at the same time', async () => {
@@ -175,7 +156,7 @@ describe.skipIf(!(await isDbReachable()))(
       );
 
       const job = await fetchMailJob(createDbClient(env), tournamentId, jobId);
-      expect(job.ok && job.value).toMatchObject({sent: 10, failed: 0});
+      expect(job).toMatchObject({sent: 10, failed: 0});
     });
 
     it('moves `updated_at` so a stalled send can be told from a slow one', async () => {
@@ -196,22 +177,20 @@ describe.skipIf(!(await isDbReachable()))(
         tournamentId,
         jobId,
       );
-      expect(
-        Date.parse(after.ok && after.value ? after.value.updatedAt : ''),
-      ).toBeGreaterThan(
-        Date.parse(before.ok && before.value ? before.value.updatedAt : ''),
+      expect(Date.parse(after?.updatedAt ?? '')).toBeGreaterThan(
+        Date.parse(before?.updatedAt ?? ''),
       );
     });
 
     it('ignores progress reported for a job that is gone', async () => {
       // Failing the batch over a deleted row would have the consumer
       // retry -- and so re-send -- messages that were delivered.
-      expect(
-        await recordMailJobProgress(createDbClient(env), UNKNOWN_ID, {
+      await expect(
+        recordMailJobProgress(createDbClient(env), UNKNOWN_ID, {
           sent: 1,
           failed: 0,
         }),
-      ).toEqual({ok: true, value: undefined});
+      ).resolves.toBeUndefined();
     });
   },
 );

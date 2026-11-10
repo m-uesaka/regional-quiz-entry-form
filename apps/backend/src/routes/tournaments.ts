@@ -21,7 +21,7 @@ import {
   requireOpenEntryPeriodOrStaff,
 } from '../middleware/entry-period';
 import {type TablesInsert, type TablesUpdate} from '../lib/db';
-import {internalError} from '../lib/errors';
+import {unwrap} from '../lib/errors';
 import {FORM_FIELD_DEF_COLUMNS, toFormFieldDef} from '../lib/form-field-defs';
 import {
   badRequest,
@@ -168,18 +168,15 @@ function toTournamentUpdate(
 export const tournamentsRoute = new Hono<StaffEnv>()
   .get('/', requireGeneralStaff(), async c => {
     const db = c.get('db');
-    const {data, error} = await db
-      .from('tournaments')
-      .select(TOURNAMENT_COLUMNS)
-      // The order general staff set with `PUT /order` below.
-      .order('display_order', {ascending: true})
-      .order('id', {ascending: true});
-    if (error) {
-      return c.json(
-        internalError('failed to read the tournaments', error),
-        500,
-      );
-    }
+    const data = unwrap(
+      await db
+        .from('tournaments')
+        .select(TOURNAMENT_COLUMNS)
+        // The order general staff set with `PUT /order` below.
+        .order('display_order', {ascending: true})
+        .order('id', {ascending: true}),
+      'failed to read the tournaments',
+    );
     return c.json(data.map(rowToTournament));
   })
   // Sets the order every tournament list is shown in -- the portal, the
@@ -223,17 +220,14 @@ export const tournamentsRoute = new Hono<StaffEnv>()
   // which the edit screen stopped fetching (#123). Registered before `/:id`,
   // which would otherwise take `question-sets` for an id and refuse it.
   .get('/question-sets', requireGeneralStaff(), async c => {
-    const {data, error} = await c
-      .get('db')
-      .from('tournaments')
-      .select('question_set')
-      .not('question_set', 'is', null);
-    if (error) {
-      return c.json(
-        internalError('failed to read the question sets', error),
-        500,
-      );
-    }
+    const data = unwrap(
+      await c
+        .get('db')
+        .from('tournaments')
+        .select('question_set')
+        .not('question_set', 'is', null),
+      'failed to read the question sets',
+    );
     // `.not('is', null)` above keeps nulls out; the filter is only for the
     // column's nullable type.
     const names = new Set(
@@ -261,23 +255,20 @@ export const tournamentsRoute = new Hono<StaffEnv>()
     validate('param', IdParamSchema),
     async c => {
       const db = c.get('db');
-      const {data, error} = await db
-        .from('tournaments')
-        .select(
-          `${TOURNAMENT_COLUMNS}, form_field_defs(${FORM_FIELD_DEF_COLUMNS})` as const,
-        )
-        .eq('id', c.req.valid('param').id)
-        .order('display_order', {
-          referencedTable: 'form_field_defs',
-          ascending: true,
-        })
-        .maybeSingle();
-      if (error) {
-        return c.json(
-          internalError('failed to read the tournament', error),
-          500,
-        );
-      }
+      const data = unwrap(
+        await db
+          .from('tournaments')
+          .select(
+            `${TOURNAMENT_COLUMNS}, form_field_defs(${FORM_FIELD_DEF_COLUMNS})` as const,
+          )
+          .eq('id', c.req.valid('param').id)
+          .order('display_order', {
+            referencedTable: 'form_field_defs',
+            ascending: true,
+          })
+          .maybeSingle(),
+        'failed to read the tournament',
+      );
       if (!data) {
         return c.json({error: 'tournament not found'}, 404);
       }

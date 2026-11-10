@@ -10,7 +10,7 @@ import type {ParticipantEnv} from '../types/env';
 import {requireParticipant} from '../middleware/participant-auth';
 import {type Tables} from '../lib/db';
 import {cancelOwnEntry, updateOwnEntry} from '../lib/own-entries';
-import {internalError, respondFailure} from '../lib/errors';
+import {respondFailure, unwrap} from '../lib/errors';
 import {tournamentDisplayName} from '../lib/tournaments';
 import {fetchFormFieldDefs} from '../lib/form-field-defs';
 import {
@@ -67,47 +67,35 @@ export const mypageRoute = new Hono<ParticipantEnv>()
   .use('*', requireParticipant())
   .get('/entries', async c => {
     const db = c.get('db');
-    const {data, error} = await db
-      .from('entries')
-      .select(LIST_COLUMNS)
-      .eq('participant_id', c.get('participantId'));
-    if (error) {
-      return c.json(
-        internalError('failed to read the own entries', error),
-        500,
-      );
-    }
-    return c.json((data ?? []).map(rowToMypageEntry));
+    const data = unwrap(
+      await db
+        .from('entries')
+        .select(LIST_COLUMNS)
+        .eq('participant_id', c.get('participantId')),
+      'failed to read the own entries',
+    );
+    return c.json(data.map(rowToMypageEntry));
   })
   .get('/entries/:entryId', validate('param', EntryIdParamSchema), async c => {
     const db = c.get('db');
     // Scoped to the session's participant so another participant's entry
     // is indistinguishable from a nonexistent one.
-    const {data, error} = await db
-      .from('entries')
-      .select(DETAIL_COLUMNS)
-      .eq('id', c.req.valid('param').entryId)
-      .eq('participant_id', c.get('participantId'))
-      .maybeSingle();
-    if (error) {
-      return c.json(internalError('failed to read the own entry', error), 500);
-    }
+    const data = unwrap(
+      await db
+        .from('entries')
+        .select(DETAIL_COLUMNS)
+        .eq('id', c.req.valid('param').entryId)
+        .eq('participant_id', c.get('participantId'))
+        .maybeSingle(),
+      'failed to read the own entry',
+    );
     if (!data) {
       return c.json({error: COMMON_ERROR_CODES.ENTRY_NOT_FOUND}, 404);
     }
 
     // The tournament's custom form fields, so the edit screen can
     // re-render the same form the entry was submitted through.
-    const {fieldDefs, error: formFieldDefsError} = await fetchFormFieldDefs(
-      db,
-      data.tournament_id,
-    );
-    if (formFieldDefsError) {
-      return c.json(
-        internalError('failed to read the form field defs', formFieldDefsError),
-        500,
-      );
-    }
+    const fieldDefs = await fetchFormFieldDefs(db, data.tournament_id);
 
     return c.json(
       MypageEntryDetailSchema.parse({
@@ -134,7 +122,7 @@ export const mypageRoute = new Hono<ParticipantEnv>()
         c.req.valid('json'),
       );
       if (!result.ok) {
-        return respondFailure(c, result, 'failed to update the own entry');
+        return respondFailure(c, result);
       }
       return c.json({ok: true});
     },
@@ -150,7 +138,7 @@ export const mypageRoute = new Hono<ParticipantEnv>()
         c.req.valid('param').entryId,
       );
       if (!result.ok) {
-        return respondFailure(c, result, 'failed to cancel the own entry');
+        return respondFailure(c, result);
       }
       return c.json({ok: true});
     },

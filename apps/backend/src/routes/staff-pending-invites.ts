@@ -2,7 +2,7 @@ import {Hono} from 'hono';
 import {StaffPendingInvitesSchema} from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireStaff} from '../middleware/staff-auth';
-import {internalError} from '../lib/errors';
+import {unwrap} from '../lib/errors';
 import {findPendingInviteScopes} from '../lib/staff-account-lookup';
 
 // Which of the logged-in address's other accounts still wait on their
@@ -21,33 +21,20 @@ export const staffPendingInvitesRoute = new Hono<StaffEnv>().get(
   async c => {
     const db = c.get('db');
     const staff = c.get('staff');
-    const {data: account, error} = await db
-      .from('staff_accounts')
-      .select('email')
-      .eq('id', staff.sub)
-      .maybeSingle();
-    if (error) {
-      return c.json(
-        internalError('failed to read the staff account', error),
-        500,
-      );
-    }
+    const account = unwrap(
+      await db
+        .from('staff_accounts')
+        .select('email')
+        .eq('id', staff.sub)
+        .maybeSingle(),
+      'failed to read the staff account',
+    );
     // The session check has just found the row, so it is only missing if
     // the account was deleted in between: there is nothing to warn about.
     if (!account) {
       return c.json(StaffPendingInvitesSchema.parse({scopes: []}));
     }
-    const {scopes, error: lookupError} = await findPendingInviteScopes(
-      db,
-      account.email,
-      staff.sub,
-    );
-    if (lookupError) {
-      return c.json(
-        internalError('failed to read the pending staff invites', lookupError),
-        500,
-      );
-    }
+    const scopes = await findPendingInviteScopes(db, account.email, staff.sub);
     return c.json(StaffPendingInvitesSchema.parse({scopes}));
   },
 );

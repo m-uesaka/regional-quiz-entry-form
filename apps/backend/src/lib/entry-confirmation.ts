@@ -4,7 +4,7 @@ import {
 } from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
 import type {DbClient} from './db';
-import type {LibFailure} from './errors';
+import {UnexpectedFailure, type ClientFailure} from './errors';
 import {INVALID_TOKEN_SQLSTATE} from './pg-errors';
 import {hashToken} from './token';
 import {promoteAfterWaitlistedConfirmation} from './waitlist';
@@ -12,11 +12,12 @@ import {promoteAfterWaitlistedConfirmation} from './waitlist';
 /**
  * The 400 is the participant's problem -- the token is unknown, expired,
  * already used, or its entry is no longer awaiting verification -- and is the
- * only failure the caller may present as "this link is no longer valid". The
- * 500 is everything else (a Supabase outage, a timeout, a malformed response):
- * the token may well still be good, so the caller must report a server fault
- * instead, or the participant is told to enter again while their entry sits
- * in `pending_verification` and a re-entry is refused as a duplicate.
+ * only failure the caller may present as "this link is no longer valid".
+ * Everything else (a Supabase outage, a timeout, a malformed response) is
+ * thrown as an `UnexpectedFailure` and so answered as a server fault: the
+ * token may well still be good, and the participant must not be told to enter
+ * again while their entry sits in `pending_verification` and a re-entry is
+ * refused as a duplicate.
  */
 type ConfirmResult =
   | {
@@ -25,7 +26,7 @@ type ConfirmResult =
       entryStatus: 'confirmed' | 'waitlisted';
       tournament: EntryVerificationTournament | null;
     }
-  | LibFailure<400>;
+  | ClientFailure<400>;
 
 /**
  * Confirms the `entries` row a verification token was issued for.
@@ -69,7 +70,7 @@ export async function confirmEntryByToken(
         error: COMMON_ERROR_CODES.INVALID_OR_EXPIRED_TOKEN,
       };
     }
-    return {ok: false, status: 500, error: error.message};
+    throw new UnexpectedFailure('failed to confirm the entry', error);
   }
 
   const entry = await readConfirmedEntry(db, tokenHash);

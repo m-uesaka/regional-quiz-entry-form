@@ -1,4 +1,4 @@
-import {type ClientFailureStatus, internalError} from './errors';
+import {type ClientFailureStatus, UnexpectedFailure} from './errors';
 
 // The codes a Postgres or PostgREST failure can carry that this backend
 // tells apart, gathered here so each is defined once (#199).
@@ -263,7 +263,8 @@ function constraintNamed(message: string | undefined): string | null {
  * Turns a failure supabase-js returned into the route's response: the entry
  * of `table` for its code and the constraint it names (`constraintKey()`),
  * else for its code alone, or -- for anything the route can't name --
- * `internalError()`'s body with a 500, logging the failure.
+ * thrown as an `UnexpectedFailure`, which `app.onError` logs and answers
+ * with a 500.
  *
  * Returned rather than answered, so that the route's `c.json(body, status)`
  * keeps the statuses `hc<AppType>()` reads.
@@ -276,7 +277,7 @@ export function mapPgError<S extends ClientFailureStatus>(
   error: {code?: string; message?: string},
   table: PgErrorTable<S>,
   context: string,
-): {body: {error: string}; status: S | 500} {
+): {body: {error: string}; status: S} {
   const answerFor = (key: string) =>
     Object.hasOwn(table, key) ? table[key] : undefined;
   const constraint = constraintNamed(error.message);
@@ -290,5 +291,5 @@ export function mapPgError<S extends ClientFailureStatus>(
   if (answer !== undefined) {
     return {body: {error: answer.error}, status: answer.status};
   }
-  return {body: internalError(context, error), status: 500};
+  throw new UnexpectedFailure(context, error);
 }

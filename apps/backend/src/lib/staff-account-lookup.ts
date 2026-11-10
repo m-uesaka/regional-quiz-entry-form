@@ -3,6 +3,7 @@ import {
   type StaffLoginScope,
 } from '@regional-quiz/shared';
 import type {DbClient} from './db';
+import {unwrap} from './errors';
 import {isPasswordHashUsable} from './password';
 
 /**
@@ -49,30 +50,26 @@ export async function findStaffAccountByScope<Columns extends string>(
  * @param db The Supabase client to read with.
  * @param email The address of the account the caller is logged in to.
  * @param loggedInId That account, which is left out.
- * @return The scopes in the order `StaffLoginScopeSchema` lists them, or the
- *     error the read failed with.
+ * @return The scopes in the order `StaffLoginScopeSchema` lists them.
  */
 export async function findPendingInviteScopes(
   db: DbClient,
   email: string,
   loggedInId: string,
-): Promise<
-  {scopes: StaffLoginScope[]; error: null} | {scopes: null; error: unknown}
-> {
-  const {data, error} = await db
-    .from('staff_accounts')
-    .select('tournament_type, password_hash')
-    .eq('email', email)
-    .is('disabled_at', null)
-    .neq('id', loggedInId);
-  if (error) return {scopes: null, error};
+): Promise<StaffLoginScope[]> {
+  const data = unwrap(
+    await db
+      .from('staff_accounts')
+      .select('tournament_type, password_hash')
+      .eq('email', email)
+      .is('disabled_at', null)
+      .neq('id', loggedInId),
+    'failed to read the pending staff invites',
+  );
   const pending = new Set<StaffLoginScope>(
     data
       .filter(account => !isPasswordHashUsable(account.password_hash))
       .map(account => account.tournament_type ?? 'general'),
   );
-  return {
-    scopes: StaffLoginScopeSchema.options.filter(scope => pending.has(scope)),
-    error: null,
-  };
+  return StaffLoginScopeSchema.options.filter(scope => pending.has(scope));
 }

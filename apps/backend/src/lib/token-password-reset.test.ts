@@ -128,19 +128,14 @@ for (const target of TARGETS) {
         () => unexpected(),
       );
 
-      const result = await confirmTokenPasswordReset(
-        createDbClient(env),
-        target,
-        {
+      await expect(
+        confirmTokenPasswordReset(createDbClient(env), target, {
           token: TOKEN,
           newPassword: NEW_PASSWORD,
-        },
-      );
-
-      expect(result).toEqual({
-        ok: false,
-        status: 500,
-        error: POSTGREST_ERROR.message,
+        }),
+      ).rejects.toMatchObject({
+        context: 'failed to read the reset token',
+        cause: POSTGREST_ERROR,
       });
       expect(requests).toHaveLength(1);
     });
@@ -210,19 +205,14 @@ for (const target of TARGETS) {
         () => Response.json(POSTGREST_ERROR, {status: 500}),
       );
 
-      const result = await confirmTokenPasswordReset(
-        createDbClient(env),
-        target,
-        {
+      await expect(
+        confirmTokenPasswordReset(createDbClient(env), target, {
           token: TOKEN,
           newPassword: NEW_PASSWORD,
-        },
-      );
-
-      expect(result).toEqual({
-        ok: false,
-        status: 500,
-        error: POSTGREST_ERROR.message,
+        }),
+      ).rejects.toMatchObject({
+        context: 'failed to reset the password',
+        cause: POSTGREST_ERROR,
       });
     });
   });

@@ -1,15 +1,18 @@
 import {afterEach, beforeEach, describe, expect, it, spyOn} from 'bun:test';
 import {COMMON_ERROR_CODES, ENTRY_ERROR_CODES} from '@regional-quiz/shared';
-import {Hono, type TypedResponse} from 'hono';
-import {respondFailure, type InternalFailure, type LibFailure} from './errors';
+import {Hono} from 'hono';
+import {
+  respondFailure,
+  UnexpectedFailure,
+  unwrap,
+  type ClientFailure,
+} from './errors';
 
 /** Answers a request with `failure`, the way a route does. */
 async function request(
-  failure: LibFailure<400 | 403 | 404>,
+  failure: ClientFailure<400 | 403 | 404>,
 ): Promise<{status: number; body: unknown}> {
-  const app = new Hono().get('/', c =>
-    respondFailure(c, failure, 'failed to do the thing'),
-  );
+  const app = new Hono().get('/', c => respondFailure(c, failure));
   const res = await app.request('/');
   return {status: res.status, body: await res.json()};
 }
@@ -60,29 +63,13 @@ describe('respondFailure', () => {
       error: 'custom field is required: shirt_size',
     });
   });
-
-  it('logs a fault and keeps its message out of the response', async () => {
-    const {status, body} = await request({
-      ok: false,
-      status: 500,
-      error: 'relation "entries" does not exist',
-    });
-
-    expect(status).toBe(500);
-    expect(body).toEqual({error: 'internal server error'});
-    expect(consoleError).toHaveBeenCalledWith(
-      'failed to do the thing',
-      'relation "entries" does not exist',
-    );
-  });
 });
 
 // Checked by `tsc --noEmit`, which is what keeps a database message out of a
 // 4xx: nothing at runtime tells one string from another.
-describe('LibFailure', () => {
-  it('holds only a code in a refusal, and free text only in a 500', () => {
-    const failures: Array<LibFailure<400 | 403>> = [
-      {ok: false, status: 500, error: 'duplicate key value'},
+describe('ClientFailure', () => {
+  it('holds only a code in a refusal', () => {
+    const failures: Array<ClientFailure<400 | 403>> = [
       {ok: false, status: 403, error: ENTRY_ERROR_CODES.ENTRIES_PAUSED},
       // @ts-expect-error A free string can't be a refusal's `error`.
       {ok: false, status: 400, error: 'duplicate key value'},
@@ -94,19 +81,33 @@ describe('LibFailure', () => {
       {ok: false, status: 404, error: COMMON_ERROR_CODES.ENTRY_NOT_FOUND},
     ];
 
-    expect(failures).toHaveLength(6);
+    expect(failures).toHaveLength(5);
+  });
+});
+
+describe('unwrap', () => {
+  it('gives the data of a query that worked', () => {
+    expect(unwrap({data: [1, 2], error: null}, 'failed to read')).toEqual([
+      1, 2,
+    ]);
+    expect(unwrap({data: null, error: null}, 'failed to read')).toBeNull();
   });
 
-  it('adds only the 500 to the type of a route with no refusals', () => {
-    type StatusOf<R> =
-      R extends TypedResponse<unknown, infer S, 'json'> ? S : never;
-    type Statuses = StatusOf<ReturnType<typeof respondFailure<never>>>;
+  it('throws a failed query with its context and the error', () => {
+    const error = {message: 'relation "entries" does not exist', code: '42P01'};
 
-    const internal: InternalFailure = {ok: false, status: 500, error: 'down'};
-    const status: Statuses = internal.status;
-    // @ts-expect-error No refusal, so no 4xx.
-    const refusal: Statuses = 404;
+    let thrown: unknown;
+    try {
+      unwrap({data: null, error}, 'failed to read the entries');
+    } catch (e) {
+      thrown = e;
+    }
 
-    expect<unknown[]>([status, refusal]).toEqual([500, 404]);
+    expect(thrown).toBeInstanceOf(UnexpectedFailure);
+    expect(thrown).toMatchObject({
+      context: 'failed to read the entries',
+      cause: error,
+      message: 'failed to read the entries: relation "entries" does not exist',
+    });
   });
 });

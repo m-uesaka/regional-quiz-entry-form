@@ -1,5 +1,6 @@
 import {afterEach, describe, expect, it} from 'bun:test';
 import {dbClient} from './db';
+import {handleError} from '../lib/errors';
 import {Hono} from 'hono';
 import {sign} from 'hono/jwt';
 import {
@@ -57,6 +58,7 @@ function cookieHeader(token: string): {Cookie: string} {
 describe('requireParticipant', () => {
   const originalFetch = globalThis.fetch;
   const app = new Hono<ParticipantEnv>()
+    .onError(handleError)
     .use(dbClient())
     .get('/x', requireParticipant(), c =>
       c.json({participantId: c.get('participantId')}),

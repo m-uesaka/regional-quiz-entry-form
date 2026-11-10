@@ -9,6 +9,7 @@ import {
 } from 'bun:test';
 import {dbClient} from './db';
 import {createDbClient} from '../lib/db';
+import {handleError} from '../lib/errors';
 import {SQL} from 'bun';
 import {Hono} from 'hono';
 import type {StaffClaims} from '@regional-quiz/shared';
@@ -104,6 +105,7 @@ describe('requireStaffForTournament', () => {
   });
 
   const app = new Hono<StaffEnv>()
+    .onError(handleError)
     .use(dbClient())
     .get('/tournaments/:tournamentId/x', requireStaffForTournament(), c =>
       c.json({staff: c.get('staff')}),
@@ -184,6 +186,7 @@ describe('requireStaffForTournament', () => {
   // The handler gets the row the scope check passed, so it neither reads it
   // again nor risks seeing a different version of it (#123).
   const appExposingTournament = new Hono<StaffEnv>()
+    .onError(handleError)
     .use(dbClient())
     .get('/tournaments/:tournamentId/x', requireStaffForTournament(), c =>
       c.json({tournament: c.get('tournament') ?? null}),
@@ -543,6 +546,7 @@ describe('requireStaffForEntry', () => {
   });
 
   const app = new Hono<StaffEnv>()
+    .onError(handleError)
     .use(dbClient())
     .get('/entries/:entryId/x', requireStaffForEntry(), c =>
       c.json({staff: c.get('staff')}),
@@ -684,6 +688,7 @@ describe('requireGeneralStaff', () => {
   });
 
   const app = new Hono<StaffEnv>()
+    .onError(handleError)
     .use(dbClient())
     .get('/x', requireGeneralStaff(), c => c.json({staff: c.get('staff')}));
 
@@ -875,10 +880,7 @@ describe.skipIf(!(await isDbReachable()))(
     it('keeps a session whose claims match the account', async () => {
       const claims = await regionalAccount();
 
-      expect(await isSessionCurrent(createDbClient(env), claims)).toEqual({
-        ok: true,
-        current: true,
-      });
+      expect(await isSessionCurrent(createDbClient(env), claims)).toBe(true);
     });
 
     it('ends the session once the region or the type changes', async () => {
@@ -893,14 +895,8 @@ describe.skipIf(!(await isDbReachable()))(
         where id = ${retyped.sub}
       `;
 
-      expect(await isSessionCurrent(createDbClient(env), moved)).toEqual({
-        ok: true,
-        current: false,
-      });
-      expect(await isSessionCurrent(createDbClient(env), retyped)).toEqual({
-        ok: true,
-        current: false,
-      });
+      expect(await isSessionCurrent(createDbClient(env), moved)).toBe(false);
+      expect(await isSessionCurrent(createDbClient(env), retyped)).toBe(false);
     });
 
     it('ends the session of an account whose role changed', async () => {
@@ -911,10 +907,7 @@ describe.skipIf(!(await isDbReachable()))(
         where id = ${claims.sub}
       `;
 
-      expect(await isSessionCurrent(createDbClient(env), claims)).toEqual({
-        ok: true,
-        current: false,
-      });
+      expect(await isSessionCurrent(createDbClient(env), claims)).toBe(false);
       // A general session against that account is current: the claims match.
       expect(
         await isSessionCurrent(createDbClient(env), {
@@ -923,7 +916,7 @@ describe.skipIf(!(await isDbReachable()))(
           regionId: null,
           tournamentType: null,
         }),
-      ).toEqual({ok: true, current: true});
+      ).toBe(true);
     });
   },
 );

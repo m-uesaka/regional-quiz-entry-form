@@ -65,11 +65,7 @@ export const passwordResetRoute = new Hono<Env>()
         c.req.valid('json'),
       );
       if (!result.ok) {
-        return respondFailure(
-          c,
-          result,
-          'failed to confirm the password reset',
-        );
+        return respondFailure(c, result);
       }
       return c.json({ok: true});
     },

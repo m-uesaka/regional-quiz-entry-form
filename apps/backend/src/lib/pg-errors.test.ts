@@ -1,4 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, spyOn} from 'bun:test';
+import {UnexpectedFailure} from './errors';
 import {
   badRequest,
   CHECK_VIOLATION_SQLSTATE,
@@ -64,16 +65,17 @@ describe('mapPgError', () => {
     expect(consoleError).not.toHaveBeenCalled();
   });
 
-  it('answers any other code with a logged generic 500', () => {
+  it('throws any other code as an unexpected failure carrying the error', () => {
     const error = {code: '23514', message: 'violates check constraint "x"'};
 
-    expect(mapPgError(error, table, 'failed to create the region')).toEqual({
-      body: {error: 'internal server error'},
-      status: 500,
-    });
-    expect(consoleError).toHaveBeenCalledWith(
-      'failed to create the region',
-      error,
+    expect(() =>
+      mapPgError(error, table, 'failed to create the region'),
+    ).toThrow(
+      expect.objectContaining({
+        constructor: UnexpectedFailure,
+        context: 'failed to create the region',
+        cause: error,
+      }),
     );
   });
 
@@ -100,7 +102,7 @@ describe('mapPgError', () => {
       expect(consoleError).not.toHaveBeenCalled();
     });
 
-    it('answers any other constraint, or none, with a logged 500', () => {
+    it('throws any other constraint, or none', () => {
       for (const error of [
         violating('tournaments_question_set_format'),
         // A longer name that starts with the one the entry names.
@@ -109,9 +111,10 @@ describe('mapPgError', () => {
         {code: CHECK_VIOLATION_SQLSTATE, message: 'no constraint named'},
         {code: CHECK_VIOLATION_SQLSTATE},
       ]) {
-        expect(mapPgError(error, checks, 'failed').status).toBe(500);
+        expect(() => mapPgError(error, checks, 'failed')).toThrow(
+          UnexpectedFailure,
+        );
       }
-      expect(consoleError).toHaveBeenCalledTimes(5);
     });
 
     it('does not read the constraint off the details', () => {
@@ -121,15 +124,19 @@ describe('mapPgError', () => {
         details:
           'Failing row contains (constraint "tournaments_entry_period_ordered").',
       };
-      expect(mapPgError(error, checks, 'failed').status).toBe(500);
+      expect(() => mapPgError(error, checks, 'failed')).toThrow(
+        UnexpectedFailure,
+      );
     });
   });
 
-  it('answers an error without a code with a generic 500', () => {
-    expect(mapPgError({}, table, 'failed').status).toBe(500);
+  it('throws an error without a code', () => {
+    expect(() => mapPgError({}, table, 'failed')).toThrow(UnexpectedFailure);
   });
 
   it('does not read codes off the prototype', () => {
-    expect(mapPgError({code: 'toString'}, table, 'failed').status).toBe(500);
+    expect(() => mapPgError({code: 'toString'}, table, 'failed')).toThrow(
+      UnexpectedFailure,
+    );
   });
 });

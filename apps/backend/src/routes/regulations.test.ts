@@ -122,21 +122,21 @@ describe('GET /tournaments/:tournamentId/regulations (mocked Supabase)', () => {
     mockRegulationsFetch([
       {
         id: '22222222-2222-2222-2222-222222222222',
-        tournament_id: tournamentId,
+        tournamentId,
         label: '一般の部',
-        priority_starts_at: '2026-01-01T00:00:00+00:00',
-        priority_ends_at: '2026-01-08T00:00:00+00:00',
-        closes_with_priority: true,
-        display_order: 0,
+        priorityStartsAt: '2026-01-01T00:00:00+00:00',
+        priorityEndsAt: '2026-01-08T00:00:00+00:00',
+        closesWithPriority: true,
+        displayOrder: 0,
       },
       {
         id: '33333333-3333-3333-3333-333333333333',
-        tournament_id: tournamentId,
+        tournamentId,
         label: '学生の部',
-        priority_starts_at: null,
-        priority_ends_at: null,
-        closes_with_priority: false,
-        display_order: 1,
+        priorityStartsAt: null,
+        priorityEndsAt: null,
+        closesWithPriority: false,
+        displayOrder: 1,
       },
     ]);
 
