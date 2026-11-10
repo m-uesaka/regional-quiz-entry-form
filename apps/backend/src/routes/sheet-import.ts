@@ -37,8 +37,7 @@ export const sheetImportRoute = new Hono<StaffEnv>()
       );
       yaml = sheetRowsToYaml(tournamentSlug, rows);
     } catch (e: unknown) {
-      const failure = classifySheetImportError(e);
-      return c.json({error: failure.error}, failure.status);
+      return sheetFailure(c, e, 'failed to preview the form definition sheet');
     }
 
     return c.json({yaml});
@@ -61,8 +60,7 @@ export const sheetImportRoute = new Hono<StaffEnv>()
         );
         regulations = sheetValuesToRegulations(rows);
       } catch (e: unknown) {
-        const failure = classifySheetImportError(e);
-        return c.json({error: failure.error}, failure.status);
+        return sheetFailure(c, e, 'failed to preview the regulation sheet');
       }
 
       return c.json({regulations});
@@ -122,6 +120,24 @@ export const sheetImportRoute = new Hono<StaffEnv>()
       return c.json(body);
     },
   );
+
+/**
+ * The answer for an entry sheet that couldn't be previewed: the sheet's or
+ * Google's fault as `classifySheetImportError()` words it, or a logged 500
+ * for anything else, whose raw message is not for staff.
+ * @param c The request context.
+ * @param e What was thrown.
+ * @param message What to log for anything that isn't the sheet's fault.
+ */
+function sheetFailure(c: Context<StaffEnv>, e: unknown, message: string) {
+  let failure;
+  try {
+    failure = classifySheetImportError(e);
+  } catch {
+    return c.json(internalError(message, e), 500);
+  }
+  return c.json({error: failure.error}, failure.status);
+}
 
 /**
  * The answer for a 大会一覧 sheet that couldn't be used as a whole.

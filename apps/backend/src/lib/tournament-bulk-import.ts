@@ -544,6 +544,8 @@ function tournamentKey(regionId: string, type: TournamentType): string {
 /**
  * Reads and checks one row of the 大会一覧 sheet and its entry sheet.
  * @return The row ready to write, or why it can't be registered.
+ * @throws What reading the entry sheet threw, if it is neither the sheet's
+ *     nor Google's fault (see `classifySheetImportError()`).
  */
 async function prepareRow(
   context: ImportContext,
@@ -620,6 +622,8 @@ async function prepareRow(
     if (e instanceof RegulationSheetError) {
       return `レギュレーション: ${e.message}`;
     }
+    // Anything that isn't the sheet's or Google's fault is thrown again,
+    // for `resolveRow()` to log and answer with its generic message.
     return classifySheetImportError(e).error;
   }
 }
