@@ -38,6 +38,7 @@ flowchart LR
 | `apps/backend/src/lib/sheet-to-form-definition.ts` | `fetchSheetRows()`(フォーム定義タブの取得)・`formRowsToFields()`(行データ→項目定義。行・列を示す日本語のエラー)・`sheetRowsToYaml()`(行データ→YAML変換) |
 | `apps/backend/src/lib/sheet-to-regulations.ts` | `fetchRegulationSheetValues()`(「レギュレーション」シートの取得)・`sheetValuesToRegulations()`(行データ→レギュレーション配列) |
 | `apps/backend/src/routes/sheet-import.ts` | `POST /api/sheet-import/preview`(フォーム定義)・`POST /api/sheet-import/regulations/preview`(レギュレーション)・`POST /api/sheet-import/tournaments/preview`・`POST /api/sheet-import/tournaments`(大会一覧からの一括登録の確認と登録、#168)。統括スタッフ限定 |
+| `apps/backend/src/lib/sheet-datetime.ts` | 日時セルの読み取り(`parseSheetDatetime()`)。レギュレーションと大会一覧で共通。シリアル値と文字列の両方を日本時間として読む |
 | `apps/backend/src/lib/tournament-bulk-import.ts` | 大会一覧の読み取り(`parseTournamentIndex()`)・定員と日時の読み取り(`parseCapacity()` / `parseJstDateTime()`)・確認(`previewTournamentImport()`)・選んだ行の登録(`importTournaments()`) |
 | `apps/frontend/src/routes/admin/tournaments/import/` | 一括登録の画面 |
 | `apps/backend/src/routes/form-definitions.ts` | `PUT /api/form-definitions/:tournamentId`。プレビュー済み YAML をパース・検証して保存処理に渡す(Task 2-2)。統括スタッフ限定 |
@@ -264,7 +265,7 @@ bunx wrangler secret put GOOGLE_SHEETS_API_KEY --env production
 - `地域` は地域の画面で登録した**地域名と完全に一致**させる。
 - `種別` は `最強位` / `新人王` のどちらか。
 - `定員` は 1 以上の整数(`54`)。**空欄は定員なし**。
-- `エントリー開始` / `エントリー終了` は `2026/11/04 21:00:00` のように**年/月/日 時:分(:秒)**の形で、日本時間として読む(`2026-11-04 21:00` も可。時刻は省略できない)。開始が終了より後の行・終了が既に過ぎている行は登録できない。
+- `エントリー開始` / `エントリー終了` は `2026/11/04 21:00:00` のように**年/月/日 時:分(:秒)**の形で、日本時間として読む(`2026-11-04 21:00` も可。時刻は省略できない)。大会一覧は `UNFORMATTED_VALUE` + `SERIAL_NUMBER` で読むので、日時セルはシートの表示形式やロケールに依らず読める(日付・時刻の書式のセルならそのまま、文字列のセルなら上の形)。ただし書式が「日付」だけのセルはシリアル値が 0:00 になり、0:00 の日時と区別できないため、0:00 として登録される(文字列で書いた日付だけのセルは時刻がないので登録できない)。開始が終了より後の行・終了が既に過ぎている行は登録できない。
 - `スプレッドシートID` はその大会の入力シート(5 章・6 章の書式)。ID の代わりに URL を書いてもよい。大会一覧と同じく「リンクを知っている全員が閲覧可」にしておくこと。
 - 同じ地域・種別の行が 2 つ以上あると、どちらが正しいか決められないので**どちらも登録しない**。
 
