@@ -1,5 +1,6 @@
 import {z} from 'zod';
 import {EntryStatusSchema} from './entry';
+import {maxCodePoints, wellFormedText} from './text';
 
 // Bounds on what staff may compose. They exist to keep a single request
 // from turning into an unbounded payload for the mail provider, not to
@@ -45,8 +46,22 @@ export type StaffMailStatusFilter = z.infer<typeof StaffMailStatusFilterSchema>;
  * are mailed.
  */
 export const StaffMailInputSchema = z.object({
-  subject: z.string().min(1).max(STAFF_MAIL_SUBJECT_MAX_LENGTH),
-  body: z.string().min(1).max(STAFF_MAIL_BODY_MAX_LENGTH),
+  subject: wellFormedText(
+    maxCodePoints(
+      z.string().min(1),
+      STAFF_MAIL_SUBJECT_MAX_LENGTH,
+      `件名は${STAFF_MAIL_SUBJECT_MAX_LENGTH}文字以内で入力してください`,
+    ),
+    '件名',
+  ),
+  body: wellFormedText(
+    maxCodePoints(
+      z.string().min(1),
+      STAFF_MAIL_BODY_MAX_LENGTH,
+      `本文は${STAFF_MAIL_BODY_MAX_LENGTH}文字以内で入力してください`,
+    ),
+    '本文',
+  ),
   statusFilter: StaffMailStatusFilterSchema.optional(),
 });
 export type StaffMailInput = z.infer<typeof StaffMailInputSchema>;

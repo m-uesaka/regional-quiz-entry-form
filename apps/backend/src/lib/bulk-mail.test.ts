@@ -201,6 +201,35 @@ describe('sendPacedMail', () => {
     expect(attempts).toBe(1);
   });
 
+  it('hands a provider fault or network error back without retrying it', async () => {
+    for (const failure of [
+      new MailSendError(503),
+      new MailSendError(undefined, undefined, {cause: new TypeError('down')}),
+    ]) {
+      let attempts = 0;
+      const failing: MailSender = {
+        send: () => {
+          attempts++;
+          return Promise.reject(failure);
+        },
+      };
+
+      const [outcome] = await sendPacedMail(
+        failing,
+        messagesTo('a@example.com'),
+        {retryBaseDelayMs: 1},
+      );
+
+      // Retried by the queue a while later rather than here: each attempt
+      // at a send whose answer was lost risks a second copy, and an outage
+      // seldom clears within the in-place backoff anyway.
+      expect(attempts).toBe(1);
+      // The error travels with the outcome so the queue consumer can see
+      // it is transient.
+      expect(outcome).toEqual({ok: false, error: failure});
+    }
+  });
+
   it('rejects a retry budget that is not a whole number of retries', async () => {
     const mailer = new RecordingMailSender();
 

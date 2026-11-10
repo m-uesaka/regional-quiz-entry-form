@@ -1,8 +1,11 @@
 import {error, fail, redirect} from '@sveltejs/kit';
 import {
   formFieldDefsToYaml,
+  RegionSlugSchema,
   TournamentResetInputSchema,
-  TournamentSchema,
+  TournamentTypeSchema,
+  type DashboardTournamentSummary,
+  type Tournament,
   type TournamentResetResponse,
   type WaitlistPromotion,
 } from '@regional-quiz/shared';
@@ -13,7 +16,15 @@ import {
   isResetConfirmation,
   RESET_CONFIRMATION_WORD,
 } from '$lib/tournament-form';
+import {
+  dropCachedEntryList,
+  promotionMayChangeEntryList,
+} from '$lib/server/entry-list-cache';
 import {redirectToStaffLogin} from '$lib/server/staff-session';
+import {
+  fetchTournamentById,
+  parseTournamentId,
+} from '$lib/server/tournament-by-id';
 import {INVALID_INPUT_MESSAGE} from '$lib/form-errors';
 import type {TournamentFormValues} from '$lib/types/tournament-form';
 import type {Actions, PageServerLoad} from './$types';
@@ -55,46 +66,61 @@ interface TournamentResetActionResult {
 // `+page.ts` calling the API from the client): `/api/*` is only routed to
 // the backend Worker for requests the frontend makes itself until Task 9-5
 // lands, so a client-side call would 404 in production.
-export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
-  // An id that isn't a UUID names no tournament, and is answered here
-  // rather than sent on to come back as the API's 400 -- which would then be
-  // indistinguishable from any other request the API refused.
-  if (!TournamentSchema.shape.id.safeParse(params.id).success) {
-    error(404, '大会が見つかりません');
-  }
+export const load: PageServerLoad = async event => {
+  const {params, fetch, cookies, url} = event;
+  // Checked before any of the reads below is sent, so a malformed id asks
+  // the API nothing.
+  parseTournamentId(params.id);
 
   const api = createApiClient(fetch);
   // Only the tournament being edited, not the whole list to `find` it in
   // (#123). Its form fields come in the same response rather than from
   // `GET /api/form-definitions/:tournamentId`, whose entry-period gate would
   // read the tournament a second time.
+  const tournamentRead = fetchTournamentById(event, {
+    failureMessage: '大会情報の取得に失敗しました',
+  });
+  // Its refusal is thrown only once the regions read has had its say below;
+  // until then it must not count as unhandled.
+  tournamentRead.catch(() => {});
   // The 問題セット names already in use come from their own small read, not
   // the list, which the form suggests so a name isn't typed slightly
   // differently (0043).
-  const [tournamentRes, regionsRes, questionSetsRes] = await Promise.all([
-    api.api.tournaments[':id'].$get({param: {id: params.id}}),
+  // Whether it has entries comes from the general-staff dashboard's counts,
+  // the one read that already has them: a tournament with entries can't move
+  // to another region or type (#284), so the form locks those up front.
+  const [regionsRes, questionSetsRes, dashboardRes] = await Promise.all([
     api.api.regions.$get(),
     // A request that fails outright, not only one answered with an error,
     // must not take the page down with it.
     api.api.tournaments['question-sets'].$get().catch(() => null),
+    api.api.staff.dashboard.$get().catch(() => null),
   ]);
-  if (isUnauthorized(tournamentRes) || isUnauthorized(regionsRes)) {
+  // An expired session either read reports wins; after it, the tournament
+  // read's refusal (404 for no such tournament) over the regions read
+  // failing.
+  if (isUnauthorized(regionsRes)) {
     redirectToStaffLogin(cookies, url);
   }
-  if (tournamentRes.status === 404) {
-    error(404, '大会が見つかりません');
-  }
-  if (!tournamentRes.ok || !regionsRes.ok) {
+  const {tournament, customName, formFieldDefs} = await tournamentRead;
+  if (!regionsRes.ok) {
     error(502, '大会情報の取得に失敗しました');
   }
 
-  const {tournament, customName, formFieldDefs} = await tournamentRes.json();
   return {
     tournament,
     customName,
     regions: await regionsRes.json(),
     // Only suggestions: a failed read leaves them out rather than the page.
     questionSets: questionSetsRes?.ok ? await questionSetsRes.json() : [],
+    // A failed read leaves the controls open: the API still refuses the
+    // move (409), as it does for an entry that arrives after this render.
+    hasEntries: dashboardRes?.ok
+      ? (await dashboardRes.json()).some(
+          summary =>
+            summary.tournamentId === tournament.id && entryCount(summary) > 0,
+        )
+      : false,
     // Written out as the YAML the editor works on, so editing starts from
     // what is stored rather than from a blank page or the spreadsheet.
     formDefinitionYaml: formFieldDefsToYaml(tournament.type, formFieldDefs),
@@ -102,14 +128,15 @@ export const load: PageServerLoad = async ({params, fetch, cookies, url}) => {
 };
 
 export const actions = {
-  update: async ({params, request, fetch, cookies, url}) => {
+  update: async ({params, request, fetch, cookies, platform, url}) => {
     const values = readTournamentFormValues(await request.formData());
     const parsed = parseTournamentFormValues(values);
     if (!parsed.ok) {
       return updateFailure(400, values, parsed.error);
     }
 
-    const res = await createApiClient(fetch).api.tournaments[':id'].$patch({
+    const api = createApiClient(fetch);
+    const res = await api.api.tournaments[':id'].$patch({
       param: {id: params.id},
       json: parsed.input,
     });
@@ -119,7 +146,8 @@ export const actions = {
       }
       // A constraint the database refused -- 400 for a region that doesn't
       // exist or an entry period that doesn't open before it closes (#285),
-      // 409 for a second tournament of the same type in it (#199) --
+      // 409 for a second tournament of the same type in it (#199) or for a
+      // region or type changed while the tournament has entries (#284) --
       // which the API words in Japanese itself, so it is shown rather than
       // replaced.
       if (res.status === 400 || res.status === 409) {
@@ -135,6 +163,14 @@ export const actions = {
       return updateFailure(502, values, '大会の更新に失敗しました');
     }
 
+    const {promotion, ...tournament} = await res.json();
+    // Seats the save freed went to the waitlist, which the public list
+    // shows as confirmed now, so its cached copy goes (#307). A save that
+    // promoted nobody leaves the list as it was and costs no extra read.
+    if (promotionMayChangeEntryList(promotion)) {
+      await dropCachedListOf(api, platform, url.origin, tournament);
+    }
+
     // `load` re-reads the tournament after the action, so the saved values —
     // the tournament type the import panel below the form is keyed on
     // included — come back from the server rather than being carried here.
@@ -142,7 +178,7 @@ export const actions = {
       saved: true,
       error: null,
       values: null,
-      promotion: (await res.json()).promotion,
+      promotion,
     } satisfies TournamentUpdateActionResult;
   },
   delete: async ({params, request, fetch, cookies, url}) => {
@@ -176,7 +212,7 @@ export const actions = {
     // Nothing is left to show here, so the list is where the next step is.
     redirect(303, '/admin/tournaments?deleted');
   },
-  reset: async ({params, request, fetch, cookies, url}) => {
+  reset: async ({params, request, fetch, cookies, platform, url}) => {
     const formData = await request.formData();
     // The page asks for both before the button does anything; a post without
     // them got past the browser's own checks.
@@ -234,12 +270,74 @@ export const actions = {
       return resetFailure(502, '参加者データのリセットに失敗しました');
     }
 
+    // Every entry is gone from the public list, so its cached copy goes
+    // (#307). Which list that is travels with the form, from the same `load`
+    // data the page renders, rather than costing a read here. It is only
+    // trusted to name a cache entry: a forged pair drops some other list
+    // early, which costs one extra backend read.
+    const list = {
+      regionSlug: RegionSlugSchema.safeParse(formData.get('regionSlug')),
+      type: TournamentTypeSchema.safeParse(formData.get('tournamentType')),
+    };
+    if (list.regionSlug.success && list.type.success) {
+      await dropCachedEntryList(platform, url.origin, {
+        regionSlug: list.regionSlug.data,
+        type: list.type.data,
+      });
+    }
+
     return {
       reset: await res.json(),
       resetError: null,
     } satisfies TournamentResetActionResult;
   },
 } satisfies Actions;
+
+/**
+ * Drops the cached public list of a tournament the API has just answered
+ * with. The tournament carries its region's id, not the slug the list is
+ * keyed on, so the regions are read for it; if they can't be, the list
+ * catches up when its cached copy expires.
+ * @param api The API client to read the regions with.
+ * @param platform The request's platform, absent under `vite dev`.
+ * @param origin The request's origin, which the cache keys are under.
+ * @param tournament The tournament as saved.
+ */
+async function dropCachedListOf(
+  api: ReturnType<typeof createApiClient>,
+  platform: App.Platform | undefined,
+  origin: string,
+  tournament: Pick<Tournament, 'regionId' | 'type'>,
+): Promise<void> {
+  // Nothing is cached without one (`vite dev`), so nothing needs reading.
+  if (!platform) {
+    return;
+  }
+  const res = await api.api.regions.$get().catch(() => null);
+  const regionSlug = res?.ok
+    ? (await res.json()).find(region => region.id === tournament.regionId)?.slug
+    : undefined;
+  if (regionSlug !== undefined) {
+    await dropCachedEntryList(platform, origin, {
+      regionSlug,
+      type: tournament.type,
+    });
+  }
+}
+
+/**
+ * How many entries a tournament has, cancelled ones included: any of them
+ * locks its region and type (0050).
+ * @param summary The tournament's row of the dashboard.
+ */
+function entryCount(summary: DashboardTournamentSummary): number {
+  return (
+    summary.confirmedCount +
+    summary.waitlistedCount +
+    summary.pendingVerificationCount +
+    summary.cancelledCount
+  );
+}
 
 /**
  * Refuses a delete, with the message to show in the delete section.

@@ -1,8 +1,74 @@
 import {render, screen} from '@testing-library/svelte';
-import {describe, expect, it} from 'vitest';
-import type {Region, StaffClaims, Tournament} from '@regional-quiz/shared';
+import userEvent from '@testing-library/user-event';
+import {afterEach, describe, expect, it, vi} from 'vitest';
+import {
+  TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE,
+  type Region,
+  type StaffClaims,
+  type Tournament,
+} from '@regional-quiz/shared';
+import type {SubmitFunction} from '@sveltejs/kit';
+import {RESET_CONFIRMATION_WORD} from '$lib/tournament-form';
 import Page from './+page.svelte';
 import type {PageProps} from './$types';
+
+// The forms `use:enhance` was put on, with the callback each was given.
+// Outside a running app the real action would reach for a router that
+// isn't there, so what is checked is that each form is enhanced and how
+// it asks for the update.
+const enhancedForms = vi.hoisted(
+  () => new Map<HTMLFormElement, SubmitFunction | undefined>(),
+);
+vi.mock('$app/forms', () => ({
+  enhance: (form: HTMLFormElement, submit?: SubmitFunction) => {
+    enhancedForms.set(form, submit);
+  },
+}));
+
+afterEach(() => {
+  enhancedForms.clear();
+});
+
+type SubmitInput = Parameters<SubmitFunction>[0];
+type SubmitCallback = Exclude<Awaited<ReturnType<SubmitFunction>>, void>;
+type SubmitResult = Parameters<SubmitCallback>[0]['result'];
+
+/**
+ * Starts the enhanced submission of the form holding the named button, as
+ * `use:enhance` would on a submit.
+ * @param buttonName The form's submit button.
+ * @return The form, whether the submission was cancelled, and the callback
+ *     to hand the action's answer to.
+ */
+async function startSubmit(buttonName: string) {
+  const form = screen
+    .getByRole('button', {name: buttonName})
+    .closest('form') as HTMLFormElement;
+  const cancel = vi.fn();
+  const callback = await enhancedForms.get(form)?.({
+    cancel,
+    formElement: form,
+  } as unknown as SubmitInput);
+  return {form, cancel, callback: callback as SubmitCallback | undefined};
+}
+
+/**
+ * Hands the action's answer to a started submission.
+ * @param callback What `startSubmit` returned.
+ * @param result The answer.
+ * @return The `update` stand-in it was given.
+ */
+async function answer(
+  callback: SubmitCallback | undefined,
+  result: SubmitResult,
+) {
+  const update = vi.fn();
+  await callback?.({
+    result,
+    update,
+  } as unknown as Parameters<SubmitCallback>[0]);
+  return update;
+}
 
 const TOURNAMENT: Tournament = {
   id: '00000000-0000-0000-0000-000000000001',
@@ -63,6 +129,7 @@ function renderPage(
   tournament: Tournament = TOURNAMENT,
   form: PageProps['form'] = null,
   customName: string | null = tournament.name,
+  hasEntries = false,
 ) {
   return render(Page, {
     props: {
@@ -73,6 +140,7 @@ function renderPage(
         customName,
         regions: REGIONS,
         questionSets: QUESTION_SETS,
+        hasEntries,
         formDefinitionYaml: FORM_DEFINITION_YAML,
       },
       form,
@@ -212,6 +280,73 @@ describe('admin tournament edit +page.svelte', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
+  // #284: the database refuses to move a tournament with entries, so the
+  // controls say so up front instead of the save failing as a whole.
+  it('locks the region and type of a tournament with entries', () => {
+    renderPage(TOURNAMENT, null, TOURNAMENT.name, true);
+
+    const region = screen.getByLabelText('地域');
+    const type = screen.getByLabelText('種別');
+    expect(region).toBeDisabled();
+    expect(type).toBeDisabled();
+    expect(region).toHaveAccessibleDescription(
+      'エントリーがあるため、地域と種別は変更できません。',
+    );
+    expect(type).toHaveAccessibleDescription(
+      'エントリーがあるため、地域と種別は変更できません。',
+    );
+    expect(screen.getByLabelText(/大会名/)).toBeEnabled();
+    // Disabled controls aren't submitted; the stored values go in their
+    // place, once each, so the save neither fails validation nor moves it.
+    const form = screen
+      .getByRole('button', {name: '更新'})
+      .closest('form') as HTMLFormElement;
+    const submitted = new FormData(form);
+    expect(submitted.getAll('regionId')).toEqual([TOURNAMENT.regionId]);
+    expect(submitted.getAll('type')).toEqual([TOURNAMENT.type]);
+  });
+
+  it('leaves the region and type of a tournament without entries open', () => {
+    renderPage();
+
+    expect(screen.getByLabelText('地域')).toBeEnabled();
+    expect(screen.getByLabelText('種別')).toBeEnabled();
+    expect(
+      screen.queryByText('エントリーがあるため、地域と種別は変更できません。'),
+    ).not.toBeInTheDocument();
+  });
+
+  // The page was rendered before the first entry arrived, so the move went
+  // out and was refused (409); `load` now knows of the entries.
+  it('shows the stored region and type after a move refused for its entries', () => {
+    renderPage(
+      TOURNAMENT,
+      {
+        saved: false,
+        promotion: null,
+        error: TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE,
+        values: {
+          regionId: REGIONS[1].id,
+          type: 'shinjinou',
+          name: '書きかけの大会名',
+          capacity: '',
+          entryOpensAt: '2026-01-01T09:00',
+          entryClosesAt: '2026-02-01T09:00',
+          questionSet: '',
+        },
+      },
+      TOURNAMENT.name,
+      true,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE,
+    );
+    expect(screen.getByLabelText('地域')).toHaveValue(TOURNAMENT.regionId);
+    expect(screen.getByLabelText('種別')).toHaveValue(TOURNAMENT.type);
+    expect(screen.getByLabelText(/大会名/)).toHaveValue('書きかけの大会名');
+  });
+
   // The previewed YAML carries the tournament's type as its
   // `tournamentSlug`, and the API refuses an upload whose slug doesn't match
   // the target tournament — so the panel follows the type `load` last read
@@ -228,6 +363,7 @@ describe('admin tournament edit +page.svelte', () => {
         customName: TOURNAMENT.name,
         regions: REGIONS,
         questionSets: QUESTION_SETS,
+        hasEntries: false,
         formDefinitionYaml: 'tournamentSlug: shinjinou\nfields: []\n',
       },
       form: {
@@ -260,6 +396,7 @@ describe('admin tournament edit +page.svelte', () => {
         customName: OTHER_TOURNAMENT.name,
         regions: REGIONS,
         questionSets: QUESTION_SETS,
+        hasEntries: false,
         formDefinitionYaml: 'tournamentSlug: shinjinou\nfields: []\n',
       },
       form: null,
@@ -271,10 +408,182 @@ describe('admin tournament edit +page.svelte', () => {
     );
     expect(screen.getByLabelText(/定員/)).toHaveValue(null);
     expect(screen.getByLabelText('種別')).toHaveValue('shinjinou');
-    expect(screen.getByPlaceholderText('スプレッドシートID')).toHaveValue('');
+    expect(
+      screen.getByLabelText('スプレッドシート(URL または ID)'),
+    ).toHaveValue('');
     expect(screen.getByText(/対象: 新人王/)).toBeInTheDocument();
     expect(screen.getByLabelText('YAML')).toHaveValue(
       'tournamentSlug: shinjinou\nfields: []\n',
+    );
+  });
+
+  // A plain post would load the page afresh, re-seeding the YAML editor
+  // from the stored definition and throwing the draft away (#303).
+  it('sends every form through `use:enhance`', () => {
+    renderPage();
+
+    for (const name of ['更新', '参加者データをリセット', '大会を削除']) {
+      const form = screen.getByRole('button', {name}).closest('form');
+      expect(enhancedForms.has(form as HTMLFormElement)).toBe(true);
+    }
+  });
+
+  // The controls take `value` rather than `bind:value`, so a reset would
+  // put back what the page was first rendered with.
+  it('keeps the tournament form as typed after a save', async () => {
+    renderPage();
+    const {callback} = await startSubmit('更新');
+
+    const update = await answer(callback, {type: 'success', status: 200});
+
+    expect(update).toHaveBeenCalledExactlyOnceWith({reset: false});
+  });
+
+  // `applyAction` would swap the page for `+error.svelte`, and the YAML
+  // draft with it.
+  it('reports an update action that failed outright on the page', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.type(screen.getByLabelText('YAML'), '# 手で直した');
+    const {callback} = await startSubmit('更新');
+
+    const update = await answer(callback, {
+      type: 'error',
+      error: new Error('fetch failed'),
+    });
+
+    expect(update).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(
+        '送信に失敗しました。時間をおいてもう一度お試しください',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('YAML')).toHaveValue(
+      `${FORM_DEFINITION_YAML}# 手で直した`,
+    );
+  });
+
+  it('sends the update once while the first is still out', async () => {
+    renderPage();
+    const first = await startSubmit('更新');
+
+    expect(screen.getByRole('button', {name: '更新'})).toBeDisabled();
+    const second = await startSubmit('更新');
+    expect(second.cancel).toHaveBeenCalledOnce();
+    expect(first.cancel).not.toHaveBeenCalled();
+
+    await answer(first.callback, {type: 'success', status: 200});
+    expect(screen.getByRole('button', {name: '更新'})).toBeEnabled();
+  });
+
+  it('clears the reset safeguards after a refused reset', async () => {
+    const user = userEvent.setup();
+    renderPage({
+      ...TOURNAMENT,
+      entryOpensAt: '2025-01-01T00:00:00.000Z',
+      entryClosesAt: '2025-02-01T00:00:00.000Z',
+    });
+    await user.click(screen.getByLabelText('参加者アカウントも削除する'));
+    await user.type(
+      screen.getByLabelText(/確認のため/),
+      RESET_CONFIRMATION_WORD,
+    );
+    const {callback} = await startSubmit('参加者データをリセット');
+
+    await answer(callback, {
+      type: 'failure',
+      status: 502,
+      data: {reset: null, resetError: '参加者データのリセットに失敗しました'},
+    });
+
+    expect(
+      screen.getByLabelText('参加者アカウントも削除する'),
+    ).not.toBeChecked();
+    expect(screen.getByLabelText(/確認のため/)).toHaveValue('');
+  });
+
+  it('clears the delete tick after a refused delete', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByLabelText('この大会を削除する'));
+    const {callback} = await startSubmit('大会を削除');
+
+    await answer(callback, {
+      type: 'failure',
+      status: 409,
+      data: {deleteError: 'エントリーがある大会は削除できません'},
+    });
+
+    expect(screen.getByLabelText('この大会を削除する')).not.toBeChecked();
+  });
+
+  it('keeps a refused save on the tournament form across a reset', async () => {
+    const values = {
+      regionId: TOURNAMENT.regionId,
+      type: 'saikyoi' as const,
+      name: '直している大会名',
+      capacity: '64',
+      questionSet: '宮崎',
+      entryOpensAt: '2026-01-01T09:00',
+      entryClosesAt: '2026-02-01T09:00',
+    };
+    const {rerender} = renderPage(TOURNAMENT, {
+      saved: false,
+      error: '問題セットが重複しています',
+      values,
+      promotion: null,
+    });
+
+    await rerender({
+      params: {id: TOURNAMENT.id},
+      data: {
+        staff: STAFF,
+        tournament: TOURNAMENT,
+        customName: TOURNAMENT.name,
+        regions: REGIONS,
+        questionSets: QUESTION_SETS,
+        hasEntries: false,
+        formDefinitionYaml: FORM_DEFINITION_YAML,
+      },
+      form: {reset: null, resetError: '参加者データのリセットに失敗しました'},
+    });
+
+    expect(screen.getByLabelText(/大会名/)).toHaveValue('直している大会名');
+    expect(screen.getByText('問題セットが重複しています')).toBeInTheDocument();
+  });
+
+  it('keeps an unsaved YAML draft across a saved update', async () => {
+    const user = userEvent.setup();
+    const {rerender} = renderPage();
+    await user.type(screen.getByLabelText('YAML'), '# 手で直した');
+
+    // What the enhanced update leaves behind: `load` re-read, with the
+    // saved name, and the action's result.
+    await rerender({
+      params: {id: TOURNAMENT.id},
+      data: {
+        staff: STAFF,
+        tournament: {...TOURNAMENT, name: '第1回テスト最強位(改)'},
+        customName: '第1回テスト最強位(改)',
+        regions: REGIONS,
+        questionSets: QUESTION_SETS,
+        hasEntries: false,
+        formDefinitionYaml: FORM_DEFINITION_YAML,
+      },
+      form: {
+        saved: true,
+        error: null,
+        values: null,
+        promotion: {promotedCount: 0, mailFailedCount: 0},
+      },
+    });
+
+    expect(screen.getByRole('status')).toHaveTextContent('更新しました');
+    expect(screen.getByLabelText(/大会名/)).toHaveValue(
+      '第1回テスト最強位(改)',
+    );
+    expect(screen.getByLabelText('YAML')).toHaveValue(
+      `${FORM_DEFINITION_YAML}# 手で直した`,
     );
   });
 
@@ -324,6 +633,18 @@ describe('admin tournament edit +page.svelte', () => {
     expect(
       screen.getByLabelText('確認のため「リセット」と入力してください'),
     ).toBeRequired();
+  });
+
+  // So the action can drop the list's cached copy without a read (#307).
+  it('names the public list the reset empties', () => {
+    renderPage(OTHER_TOURNAMENT);
+
+    const form = screen
+      .getByRole('button', {name: '参加者データをリセット'})
+      .closest('form') as HTMLFormElement;
+    const data = new FormData(form);
+    expect(data.get('regionSlug')).toBe('osaka');
+    expect(data.get('tournamentType')).toBe('shinjinou');
   });
 
   it('warns that a bulk mail still being sent goes out after a reset', () => {

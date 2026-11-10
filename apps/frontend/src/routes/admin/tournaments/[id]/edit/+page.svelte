@@ -1,4 +1,6 @@
 <script lang="ts">
+  import {enhance} from '$app/forms';
+  import {InPlaceForm} from '$lib/in-place-form.svelte';
   import TournamentEditor from '$lib/components/TournamentEditor.svelte';
   import PageContainer from '$lib/components/layout/PageContainer.svelte';
   import PageHeader from '$lib/components/layout/PageHeader.svelte';
@@ -19,7 +21,23 @@
 
   // `form` is whichever action answered last; each section reads only its
   // own action's result.
-  const updateResult = $derived(form?.saved === undefined ? null : form);
+  // A refused update outlives the other actions' answers: the tournament
+  // form shows what it carried, and going back to the stored tournament
+  // when the reset or delete answers would overwrite the fixes being typed
+  // into it. A successful one has nothing to keep -- the form already shows
+  // what `load` re-read -- and a navigation (`form` back to null) drops it.
+  type UpdateResult = Extract<NonNullable<typeof form>, {saved: boolean}>;
+  let refusedUpdate: UpdateResult | null = null;
+  const updateResult = $derived.by((): UpdateResult | null => {
+    if (form?.saved !== undefined) {
+      refusedUpdate = form.saved ? null : form;
+      return form;
+    }
+    if (!form) {
+      refusedUpdate = null;
+    }
+    return refusedUpdate;
+  });
   const deleteError = $derived(form?.deleteError ?? null);
   const resetResult = $derived(form?.reset ?? null);
   // As of when the page was rendered. The API decides again when the reset
@@ -48,6 +66,17 @@
     return lines.join('');
   });
   const resetError = $derived(form?.resetError ?? null);
+  // Names the public list the reset empties, so the action can drop its
+  // cached copy (#307) without reading the tournament again.
+  const regionSlug = $derived(
+    data.regions.find(region => region.id === data.tournament.regionId)?.slug,
+  );
+
+  // Both safeguards are cleared after a refusal as well, as the page load
+  // these forms used to cause did: a refused attempt mustn't leave the next
+  // one a single stray click away.
+  const resetSubmission = new InPlaceForm({resetOnRefusal: true});
+  const deleteSubmission = new InPlaceForm({resetOnRefusal: true});
 </script>
 
 <PageContainer>
@@ -65,6 +94,7 @@
       formDefinitionYaml={data.formDefinitionYaml}
       regions={data.regions}
       questionSets={data.questionSets}
+      regionTypeLocked={data.hasEntries}
       result={updateResult}
     />
   {/key}
@@ -105,14 +135,29 @@
     {#if resetError}
       <FlashMessage kind="error">{resetError}</FlashMessage>
     {/if}
+    {#if resetSubmission.error}
+      <FlashMessage kind="error">{resetSubmission.error}</FlashMessage>
+    {/if}
 
     <!-- A form action like the delete above. Neither choice is preselected,
          so whether the accounts go too is always picked on purpose, and the
          button waits for a typed word rather than a tick (see
          `RESET_CONFIRMATION_WORD`). The word is checked by the action rather
          than a `pattern`, which would refuse the trailing full-width space an
-         IME leaves behind. -->
-    <form method="POST" action="?/reset" class="flex flex-col gap-3">
+         IME leaves behind. Sent with `use:enhance`, like the tournament form
+         above, so the form definition's unsaved YAML draft survives the
+         `load` re-run (#303); any answer clears the choice and the typed
+         word, as a page load would. -->
+    <form
+      method="POST"
+      action="?/reset"
+      class="flex flex-col gap-3"
+      use:enhance={resetSubmission.submit}
+    >
+      {#if regionSlug}
+        <input type="hidden" name="regionSlug" value={regionSlug} />
+      {/if}
+      <input type="hidden" name="tournamentType" value={data.tournament.type} />
       <fieldset class="flex flex-col gap-2">
         <legend class="mb-1 text-sm font-bold">参加者アカウント</legend>
         <div class="flex items-center gap-2">
@@ -149,7 +194,11 @@
         />
       </div>
       <div class="flex flex-wrap gap-2">
-        <Button type="submit" variant="danger" disabled={entryPeriodOpen}>
+        <Button
+          type="submit"
+          variant="danger"
+          disabled={entryPeriodOpen || resetSubmission.pending}
+        >
           参加者データをリセット
         </Button>
       </div>
@@ -165,17 +214,34 @@
     {#if deleteError}
       <FlashMessage kind="error">{deleteError}</FlashMessage>
     {/if}
+    {#if deleteSubmission.error}
+      <FlashMessage kind="error">{deleteSubmission.error}</FlashMessage>
+    {/if}
 
     <!-- A form action, like the update above, and behind a required tick
          rather than a `confirm()` dialog, so it works without JavaScript and
-         cannot go off on a single stray click. -->
-    <form method="POST" action="?/delete" class="flex flex-col gap-3">
+         cannot go off on a single stray click. Sent with `use:enhance` so a
+         refused delete keeps the form definition's unsaved YAML draft (#303)
+         and clears the tick; a successful one redirects to the list, which the draft's guard lets
+         through since the definition went with the tournament. -->
+    <form
+      method="POST"
+      action="?/delete"
+      class="flex flex-col gap-3"
+      use:enhance={deleteSubmission.submit}
+    >
       <div class="flex items-center gap-2">
         <Checkbox id="tournament-delete-confirm" name="confirm" required />
         <Label for="tournament-delete-confirm">この大会を削除する</Label>
       </div>
       <div class="flex flex-wrap gap-2">
-        <Button type="submit" variant="danger">大会を削除</Button>
+        <Button
+          type="submit"
+          variant="danger"
+          disabled={deleteSubmission.pending}
+        >
+          大会を削除
+        </Button>
       </div>
     </form>
   </Card>

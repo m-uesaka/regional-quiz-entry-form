@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {maxCodePoints, wellFormedText} from './text';
 
 // A region slug is used verbatim as one segment of the public entry form URL
 // (`/{regionSlug}/{tournamentSlug}/entry`), so characters that mean something
@@ -13,10 +14,25 @@ export const RegionSlugSchema = z.string().regex(/^[a-z][a-z0-9-]{1,30}$/, {
     'slug は英小文字で始まり、英小文字・数字・ハイフンのみで、2〜31 文字にしてください',
 });
 
+/** The longest a region's name may be, in code points. */
+export const REGION_NAME_MAX_LENGTH = 100;
+
 export const RegionSchema = z.object({
   id: z.string().uuid(),
   slug: RegionSlugSchema,
-  name: z.string().min(1).max(100),
+  // Trimmed: the bulk import looks a region up by its name exactly as the
+  // sheet's trimmed cell has it, and the default tournament name is built
+  // from it, so a trailing space made the region impossible to find and
+  // doubled the space in 「東京  最強位」 (#300). Blank once trimmed is
+  // refused rather than stored as a nameless region.
+  name: wellFormedText(
+    maxCodePoints(
+      z.string().trim().min(1, {message: '地域名を入力してください'}),
+      REGION_NAME_MAX_LENGTH,
+      `地域名は${REGION_NAME_MAX_LENGTH}文字以内で入力してください`,
+    ),
+    '地域名',
+  ),
   // Whether a participant may hold an entry in both of the region's
   // tournaments at once. requirements.md says only that regions where both
   // are allowed *exist*, so this is a per-region setting rather than a

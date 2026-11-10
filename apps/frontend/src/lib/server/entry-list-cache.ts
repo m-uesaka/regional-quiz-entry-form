@@ -3,6 +3,7 @@ import {
   type EntryListItem,
   type Page,
   type TournamentType,
+  type WaitlistPromotion,
 } from '@regional-quiz/shared';
 
 /**
@@ -12,9 +13,10 @@ import {
  * The list is read most right before the deadline, and everyone reads the
  * same thing, so this much staleness buys back the Worker → Supabase
  * round-trips for every render in between. The writes this site makes
- * itself -- a confirmation, a cancellation, an edit -- drop the list right
- * away (`dropCachedEntryList`), so the TTL only bounds what those can't
- * reach: other data centers, whose caches are separate.
+ * itself -- a confirmation, a cancellation, an edit, and on the staff side
+ * a reset, or a capacity change that promotes the waitlist (#307) -- drop
+ * the list right away (`dropCachedEntryList`), so the TTL only bounds what
+ * those can't reach: other data centers, whose caches are separate.
  *
  * The cache lives in the frontend rather than in the backend Worker because
  * SSR reaches the Worker through its `*.workers.dev` origin (`BACKEND_URL`),
@@ -140,4 +142,17 @@ export async function dropCachedEntryList(
   } catch {
     // See above: the TTL bounds the staleness.
   }
+}
+
+/**
+ * Whether promoting the waitlist into freed seats (#223) may have changed
+ * a list: it confirmed someone, or it failed, which leaves unsaid how far
+ * it got. Nothing else a tournament save or overwrite changes is on the
+ * list, so a promotion of nobody leaves it as it was.
+ * @param promotion What the promotion came to, as the API answers it.
+ */
+export function promotionMayChangeEntryList(
+  promotion: WaitlistPromotion | null,
+): boolean {
+  return promotion === null || promotion.promotedCount > 0;
 }

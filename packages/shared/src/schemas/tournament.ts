@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {codePointLength, wellFormedText} from './text';
 
 export const TournamentTypeSchema = z.enum(['saikyoi', 'shinjinou']);
 export type TournamentType = z.infer<typeof TournamentTypeSchema>;
@@ -32,7 +33,7 @@ export const QuestionSetInputSchema = z
       .string()
       // Code points, not the UTF-16 units `.max()` counts: a kanji outside
       // the BMP (𠮷) is one character to the database.
-      .refine(value => [...value].length <= QUESTION_SET_MAX_LENGTH, {
+      .refine(value => codePointLength(value) <= QUESTION_SET_MAX_LENGTH, {
         message: `問題セットは${QUESTION_SET_MAX_LENGTH}文字以内で入力してください`,
       })
       .refine(value => !/\s/.test(value), {
@@ -134,7 +135,7 @@ const TournamentInputFieldsSchema = TournamentSchema.omit({
   // with the rest of the tournament's settings.
   entriesPaused: true,
 }).extend({
-  name: z.string().trim().default(''),
+  name: wellFormedText(z.string().trim(), '大会名').default(''),
   questionSet: QuestionSetInputSchema.default(null),
 });
 
@@ -234,6 +235,16 @@ export const TournamentUpdateResponseSchema = TournamentSchema.extend({
 export type TournamentUpdateResponse = z.infer<
   typeof TournamentUpdateResponseSchema
 >;
+
+// What `PATCH /api/tournaments/:id` answers (409) when it would move a
+// tournament that has entries to another region or type (#284): the entries
+// would follow without the dual-entry checks they were accepted under, so
+// the database refuses it (`tournaments_lock_region_type_with_entries`,
+// 0050). Shown as it is above the admin form. Deleting the entries with the
+// participant data reset lifts it, but the reset is refused while the entry
+// period is open (`P0007`, 0038), hence the condition in the wording.
+export const TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE =
+  'エントリーがある大会の地域・種別は変更できません。受付期間外であれば、参加者データをリセットしてエントリーを消した後に変更できます';
 
 // Japanese display labels for each tournament type, shared so staff-facing
 // screens don't each carry their own copy of the wording.

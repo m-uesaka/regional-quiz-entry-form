@@ -29,7 +29,7 @@ const res = await api.api.tournaments[':regionSlug'][':tournamentSlug'].$get({
 });
 ```
 
-パスパラメータの型もバックエンドの `zValidator` から推論されます。例えば `tournamentSlug` は `string` ではなく `'saikyoi' | 'shinjinou'` のリテラルユニオンなので、生のルートパラメータは `TournamentTypeSchema.safeParse()` などで絞り込んでから渡す必要があります。
+パスパラメータの型もバックエンドの `validate()`(`zValidator()` のラッパー)から推論されます。例えば `tournamentSlug` は `string` ではなく `'saikyoi' | 'shinjinou'` のリテラルユニオンなので、生のルートパラメータは `TournamentTypeSchema.safeParse()` などで絞り込んでから渡す必要があります。
 
 ### 認証方式
 
@@ -47,7 +47,7 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 どちらのセッションも、署名の検証に加えて**リクエストごとに DB 参照が 1 回入ります**(セッションの失効)。
 
 - **参加者**: `pwdChangedAt` はログイン時点の `participants.password_changed_at`(エポックミリ秒)で、`requireParticipant()` が毎リクエストその列を読み直し、**値が動いていたら 401** にします。パスワード再設定でこの列が更新されるため、再設定前に発行された Cookie(盗まれたものを含む)はその時点で使えなくなります。ステートレスな JWT のままだと、パスワードを変えても攻撃者のアクセスが最大 7 日間続いてしまいます。
-- **スタッフ**(Task 11-3): `sessionsValidFrom` はログイン時点の `staff_accounts.sessions_valid_from`(エポックミリ秒)で、スタッフ用のミドルウェアすべて(`requireGeneralStaff()` / `requireStaffForTournament()` / `requireStaffForEntry()`、期間外の `requireOpenEntryPeriodOrStaff()`)が毎リクエストその列を読み直し、**値が動いていたら 401** にします。この列は統括スタッフの明示的な無効化(`POST /api/staff/accounts/:id/revoke-sessions`、12 章)とパスワード再設定(`reset_staff_password()`)で進みます。スタッフの Cookie は参加者全員の氏名・ふりがな・メールアドレスに届くので、漏れたときに 12 時間止められないことの影響は参加者セッションより大きく、列名を `password_changed_at` にしていないのは端末紛失・Cookie の漏洩などパスワード変更以外でも切れるようにするためです。ただし切れるのはセッションだけで、**パスワードを知っている人の再ログインは止められません**。締め出すにはアカウントを無効化します(`POST /api/staff/accounts/:id/disable`、12 章)。無効化されたアカウントのセッションは、この列の値にかかわらず 401 です(`staff_accounts.disabled_at` も同じ読み取りで見ています)。
+- **スタッフ**(Task 11-3): `sessionsValidFrom` はログイン時点の `staff_accounts.sessions_valid_from`(エポックミリ秒)で、スタッフ用のミドルウェアすべて(`requireStaff()` / `requireGeneralStaff()` / `requireStaffForTournament()` / `requireStaffForEntry()`、期間外の `requireOpenEntryPeriodOrStaff()`)が毎リクエストその列を読み直し、**値が動いていたら 401** にします。この列は統括スタッフの明示的な無効化(`POST /api/staff/accounts/:id/revoke-sessions`、12 章)とパスワード再設定(`reset_staff_password()`)で進みます。スタッフの Cookie は参加者全員の氏名・ふりがな・メールアドレスに届くので、漏れたときに 12 時間止められないことの影響は参加者セッションより大きく、列名を `password_changed_at` にしていないのは端末紛失・Cookie の漏洩などパスワード変更以外でも切れるようにするためです。ただし切れるのはセッションだけで、**パスワードを知っている人の再ログインは止められません**。締め出すにはアカウントを無効化します(`POST /api/staff/accounts/:id/disable`、12 章)。無効化されたアカウントのセッションは、この列の値にかかわらず 401 です(`staff_accounts.disabled_at` も同じ読み取りで見ています)。同じ読み取りで、クレームの `role` / `regionId` / `tournamentType` がアカウントの `role` / `region_id` / `tournament_type` と一致することも確かめ、一致しなければ 401 にします(#296)。担当範囲の判定はクレームで行うため、SQL などでアカウントの役割や担当を変えたときに、古い権限のセッションが残らないようにするためです。再ログインすれば今の値でクレームが発行されます。
 
 どちらも、**列を読めなかったときは 401 ではなく 500** を返します。セッション自体は正しいかもしれず、DB 障害でログイン画面に追い返すべきではないためです。行が消えている(アカウント削除)場合は失効と同じく 401 です。`sessionsValidFrom` を持たない古いスタッフ Cookie(Task 11-3 以前に発行されたもの)はクレームの形の検証で落ち、未ログインと同じ扱いになります。
 
@@ -83,7 +83,7 @@ Cookie 属性は `httpOnly` / `secure` / `sameSite: 'Lax'` です。
 2. `isAcceptingEntries()`(`packages/shared`。期間内で、かつ一時中断(`entries_paused`、`0039`)されていない)が真なら、セッションを見ずに通過
 3. 受付中でなければ `staff_session` を読む。`staff_session` が**付いているのに検証できなかった**場合(期限切れ・改竄)は **401** `{"error": "staff session expired"}`。セッションが切れただけのスタッフをログイン画面に戻すためで、セッションを最初から持たない訪問者(4 の 403)と区別する必要があるのはこの点です
 4. セッションが無ければ **403** `{"error": "entry period closed"}`。期間内だが一時中断中のときは `{"error": "entries paused"}`(フォーム側で「一時中断しています」と出し分けるため。6 も同じ)
-5. セッションの失効を確かめる(`staff_accounts.sessions_valid_from`)。失効していれば 3 と同じ **401** `{"error": "staff session expired"}`、列を読めなければ **500**
+5. セッションの失効を確かめる(`staff_accounts.sessions_valid_from`、`disabled_at`、クレームの役割・担当とアカウントの一致)。失効していれば 3 と同じ **401** `{"error": "staff session expired"}`、列を読めなければ **500**
 6. 担当スタッフでなければ **403** `{"error": "entry period closed"}`
 
 失効の確認を範囲の確認より先にしているのは、スタッフ用ミドルウェアと同じ理由です。失効したセッションは対象の大会にかかわらず死んでいるので、他地域のフォームを開いた場合でも 403 ではなく 401 で返し、ログイン画面に戻します。
@@ -110,6 +110,16 @@ IP 鍵は、IPv4 はアドレスそのまま、IPv6 は**先頭 /64**(`2001:db8:
 
 `X-Client-IP` が届いたのにシークレットが一致しない場合(バックエンド側にシークレットが設定されているときのみ)は、`console.warn` で警告を出します(シークレットの値は出しません)。これが出ていれば、Worker と Pages のシークレットがずれていて、全利用者が 1 つのバケツを共有している状態です。Service Binding ではなく共有シークレットにしたのは、`vite dev` / E2E を含めてどこでも同じ `fetch(BACKEND_URL)` 1 本の経路で済むためです。
 
+メール鍵には**エンドポイント名を付けます**(`emailKey(endpoint, email)`。名前は `EmailKeyEndpoint` の固定の一覧から選ぶ)。同じ limiter を複数のエンドポイントが共有しているので、名前が無いと、たとえば被害者のアドレスでパスワード再設定申請を連打されただけで、その人のエントリー送信まで 429 になってしまうためです(#295)。代わりに 1 つの受信箱に届きうる件数はエンドポイントの数だけ増えます(本番ではエントリー・参加者の再設定・スタッフの再設定でそれぞれ 3 回、合わせて 1 分に 9 回。名前を付ける前は、エントリーと参加者の再設定が枠を共有していたので 6 回)が、上限があることに変わりはありません。なお、**同じエンドポイントを被害者のアドレスで連打されると、そのエンドポイントの枠は尽きます**。パスワード再設定申請(参加者・スタッフ)では、これを設計上の判断として残しています。メール鍵の上限はメール爆撃を止めるためのもので、宛先の持ち主を締め出せない上限は宛先ごとの上限になりません。攻撃側は 1 回ごとに Turnstile を解く必要があり、止めれば上限の期間内に解消します。
+
+**エントリー送信だけは、メール鍵の上限を超えても 429 にしません**(#346)。先着順の大会の受付開始直後に被害者のアドレスで送り続けられると、本人のエントリーが攻撃の続く限り 429 になるためです。
+- メール鍵は、大会・受付期間・レギュレーション・追加項目の検査(`checkEntrySubmission()`、アドレスに依存しない検査)を**通った後**に数えます。存在しない大会や締め切った大会あての送信では、被害者の枠は減りません
+- 上限を超えた送信も、いつもどおり 202 を返してエントリーを書きます(応答は上限内と同じなので、宛先が攻撃されていることも分かりません)。違うのはメールだけで、確認リンクのメールも、エントリーできなかった理由のお知らせも、すぐには送らず一斉メールのキュー(`BULK_MAIL_QUEUE`)に 60 秒遅らせて積みます(`lib/deferred-entry-mail.ts`)
+- キューから取り出したときに送るのは、**そのエントリーにまだリンクが要るときだけ**です。未確認のアドレスは新しい送信のたびに乗っ取られ、それまでのエントリーは消える(`take_over_unverified_participant()`)ので、連打されても届くのは最後の送信のメールだけになります(最後に送った人のエントリーが残るのは、すぐ送る場合と同じ)
+- 遅らせたメールは、エントリー送信とは別のメール鍵(`entry-deferred-mail`、同じ上限)で数えます。同じ鍵だと、枠を埋め続ける攻撃側の送信が本人のメールまで止めてしまうためです。この鍵でも上限を超えていれば 60 秒後に取り出し直し、キューの最後の試行でも送れなければ諦めます(ログに残す)。1 つの受信箱に届きうる件数は、エントリー送信の分とこの分で 1 分に 2 倍になります
+- 確認リンクのトークンは、スタッフの確認メールの再送と同じく、送る直前に発行します(使えるトークンをキューに置かない)。待っている間のエントリーには**期限切れのダミーのトークン**を付けておきます(`holdForDeferredVerification()`)。メールが送れずに終わっても、本人が次にエントリーを送れば、期限切れのリンクと同じく取り消されて(`lapse_expired_pending_entries()`)エントリーし直せます。トークンが 1 つも無いエントリーは、最後の書き込みから 24 時間経つまで書き込み途中として取り消しの対象外なので、ダミーが無いとその間「確認メールを確認してください」と言われ続けてしまいます
+- ログインしている参加者のエントリー送信(`/entries/session`)には、もともとメール鍵の上限を掛けていません
+
 **鍵ごとに別の limiter に載せています。** Rate Limiting binding は上限を binding 単位でしか持てないので、IP 鍵とメール鍵に別々の数字を与えるには binding を分けるしかありません。
 
 | エンドポイント | 鍵 | limiter | 上限(本番) | Turnstile |
@@ -119,10 +129,10 @@ IP 鍵は、IPv4 はアドレスそのまま、IPv6 は**先頭 /64**(`2001:db8:
 | `POST /api/auth/participant/login` | `ip:` | `LOGIN_IP_RATE_LIMITER` | 10 回 / 60 秒 | なし |
 | `POST /api/auth/participant/login` | `participant-login:email:` | `LOGIN_EMAIL_RATE_LIMITER` | 60 回 / 60 秒 | なし |
 | `POST /api/tournaments/:tournamentId/entries` | `ip:` | `MAIL_TRIGGER_IP_RATE_LIMITER` | 20 回 / 60 秒 | **必須** |
-| `POST /api/tournaments/:tournamentId/entries` | `email:` | `MAIL_TRIGGER_EMAIL_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
+| `POST /api/tournaments/:tournamentId/entries` | `entry:email:` | `MAIL_TRIGGER_EMAIL_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
 | `POST /api/tournaments/:tournamentId/entries/session` | `ip:` | `MAIL_TRIGGER_IP_RATE_LIMITER` | 20 回 / 60 秒 | **必須** |
 | `POST /api/auth/participant/password-reset/request` | `ip:` | `MAIL_TRIGGER_IP_RATE_LIMITER` | 20 回 / 60 秒 | **必須** |
-| `POST /api/auth/participant/password-reset/request` | `email:` | `MAIL_TRIGGER_EMAIL_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
+| `POST /api/auth/participant/password-reset/request` | `participant-password-reset:email:` | `MAIL_TRIGGER_EMAIL_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
 | `POST /api/auth/staff/password-reset/request` | `ip:` | `MAIL_TRIGGER_IP_RATE_LIMITER` | 20 回 / 60 秒 | **必須** |
 | `POST /api/auth/staff/password-reset/request` | `staff-password-reset:email:` | `MAIL_TRIGGER_EMAIL_RATE_LIMITER` | 3 回 / 60 秒 | **必須** |
 
@@ -139,6 +149,8 @@ IP 鍵は、IPv4 はアドレスそのまま、IPv6 は**先頭 /64**(`2001:db8:
 メールを送る 2 本は、上記に加えて **Turnstile のトークン**を要求します。トークンはリクエストボディではなく **`cf-turnstile-response` ヘッダ**で受け取ります(送信のたびに使い捨てるものなので、`packages/shared` のスキーマ — マイページの編集フォームや DB への insert も組み立てる — には入れません)。フロントエンドはウィジェットがフォームに差し込む同名の hidden control を読み、ヘッダに載せ替えます。載せる前に `$lib/turnstile.ts` の `readTurnstileToken()` を通し、**HTTP ヘッダに載らない値(改行・制御文字・非 ASCII・極端に長い値)は空文字に落とします**。フォームアクションには直接 POST できるので、この control の値は呼び出し側の任意です。そのまま渡すと `new Request()` が `TypeError` を投げ、Turnstile が返すべき 400 ではなく 500 のエラーページになります。空文字はトークン無しと同じ扱い(fail closed の 400)です。
 
 検証は `lib/turnstile.ts` の `verifyTurnstile()` が Cloudflare の siteverify API に対して行い、**トークンが無い場合・無効な場合・siteverify に到達できない場合のいずれも 400 `{"error": "turnstile verification failed"}`** で落とします(fail closed)。Cloudflare 側の一時障害で素通しになると、そのままメール爆撃の口が開くためです。3 者を区別しないのは、どれも「もう一度ウィジェットを解いてやり直す」で直るからです。
+
+**解いた場所とフォームも確かめます**(#297)。siteverify の応答の `hostname` が `FRONTEND_URL`(と `CSRF_TRUSTED_ORIGINS`)のホスト名のどれかでなければ、同じく 400 です。sitekey の許可ホストに staging と本番を共用で入れている場合に、staging で解いたトークンを本番で使えないようにするためです。また、ウィジェットはフォームごとに `action`(`TURNSTILE_ACTIONS`: エントリー `entry`、参加者の再設定 `password-reset`、スタッフの再設定 `staff-password-reset`)を付けて描画し、別のフォームの `action` を持つトークンは 400 にします。`action` の無いトークンは通します(バックエンドがフロントエンドより先にデプロイされる間に、古いページで解かれたトークンのため)。Cloudflare のテスト用シークレット(ローカル開発と E2E)の応答はダミーなので、ホスト名と `action` は確かめません。`remoteip` は送りません(理由は `lib/turnstile.ts` のコメント)。
 
 **トークンは使い捨てです。** siteverify に一度通したトークンを再送すると Cloudflare は `timeout-or-duplicate` を返すため、この 2 本のフォームは送信が拒否された(429・401・400 など何であれ)たびにウィジェットを描き直します。フロントエンドの 2 つのフォームは `use:enhance` + `fail()` でその場に再描画されるだけなので、放っておくと hidden control に使用済みトークンが残り、次の送信が「本当の失敗理由」ではなく Turnstile の 400 で落ちてしまいます。`$lib/components/Turnstile.svelte` が `reset()` を公開し、各フォームの `enhance` コールバックがこれを呼びます。
 
@@ -181,15 +193,27 @@ IP 鍵は、IPv4 はアドレスそのまま、IPv6 は**先頭 /64**(`2001:db8:
 
 ### エラー応答の形式
 
-エラーは基本的に `{"error": "メッセージ"}` の形です。ただし `@hono/zod-validator` によるバリデーション失敗だけは例外で、ライブラリ既定の `{"success": false, "error": <ZodError>}` が 400 で返ります。
+エラーはすべて `{"error": "メッセージ"}` の形で、`error` は常に文字列です(#294)。次の 3 つは個々のルートではなくアプリ全体(`apps/backend/src/index.ts`)で決めています。`error` の値は `packages/shared` の `COMMON_ERROR_CODES` にあります。
 
-成功か失敗かの判定には `res.ok` / `res.status` をそのまま使って構いません。問題はエラー側の内訳で、400 は文字列エラー(`{"error": "メッセージ"}`)と Zod のバリデーションエラー(`{"success": false, "error": <ZodError>}`)の**どちらでも返りうる**ため、ステータスだけでは2つのエラー形式を区別できません。しかもこの2つは構造的に重なっている(どちらも `error` フィールドを持つ)ので、本文を読むときは**フィールドの有無と型**で絞り込んでください。
+| 状況 | ステータス | 本文 |
+| --- | --- | --- |
+| パスパラメータ・クエリ・本文がルートの Zod スキーマに合わない | `400` | `{"error": "invalid request"}`(`COMMON_ERROR_CODES.INVALID_REQUEST`) |
+| どのルートにも当たらないパス | `404` | `{"error": "not found"}`(`COMMON_ERROR_CODES.NOT_FOUND`) |
+| ハンドラが応答を返さずに例外を投げた(DB の想定外の値で `XSchema.parse()` が失敗した等) | `500` | `{"error": "internal server error"}`(`internalError()` と同じ。原因は `console.error` に記録) |
+
+バリデーションは `@hono/zod-validator` の `zValidator()` を直接使わず、`apps/backend/src/middleware/validate.ts` の `validate(target, schema)` を通します。ライブラリ既定の `{"success": false, "error": <ZodError>}` を返さないためです。Zod の issues は応答に載せません。フロントエンドは同じ `packages/shared` のスキーマで送信前に検査しているので、項目ごとの文言はそちらで出せます。
+
+ミドルウェアが `HTTPException` として投げる拒否(オリジンチェックの 403 など)は、この 500 にはせず、その例外が持つ応答をそのまま返します。
+
+`invalid request` と `not found` はコードだけで、画面にそのまま出す文言ではありません。フロントエンドの `readErrorMessage()`(`apps/frontend/src/lib/api.ts`)はこの 2 つを受け取ったときも呼び出し側の fallback を返します。
+
+成功か失敗かの判定には `res.ok` / `res.status` をそのまま使って構いません。1 つのステータスが複数の拒否を表すことがある(400 は `invalid request` のほかにルート固有の文言も返る)ので、内訳は `error` の文字列で見分けてください。`hc` のレスポンス型は本文の和になるため、成功時の本文と区別するときはフィールドの有無で絞り込みます。
 
 ```ts
 const body = await res.json();
 if ('yaml' in body) {
   previewYaml = body.yaml;
-} else if ('error' in body && typeof body.error === 'string') {
+} else if ('error' in body && isShowableError(body.error)) {
   previewError = body.error;
 }
 ```
@@ -220,7 +244,7 @@ Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts
 
 ## 2. エンドポイント一覧
 
-「認可」列が「なし」(または「期間中はなし」)で始まる行は、無認証で到達できるルートです。この表は登録済みのルート、および `apps/backend/src/routes-authz.test.ts` の認可方針(`ROUTE_POLICIES`)と**一致することをテストで確かめています**(「なし」→ 公開、「期間中はなし」→ 期間ゲート、「統括スタッフ」「スタッフ(担当範囲)」「参加者」→ それぞれのガード)。ルートを足したら、この表にも行を足してください(理由は [`database-schema.md`](./database-schema.md) 4 章)。
+「認可」列が「なし」(または「期間中はなし」)で始まる行は、無認証で到達できるルートです。この表は登録済みのルート、および `apps/backend/src/routes-authz.test.ts` の認可方針(`ROUTE_POLICIES`)と**一致することをテストで確かめています**(「なし」→ 公開、「期間中はなし」→ 期間ゲート、「統括スタッフ」「スタッフ(担当範囲)」「スタッフ(全員)」「参加者」→ それぞれのガード)。ルートを足したら、この表にも行を足してください(理由は [`database-schema.md`](./database-schema.md) 4 章)。
 
 | メソッド | パス | 認可 |
 | --- | --- | --- |
@@ -273,6 +297,7 @@ Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts
 | POST | `/api/staff/accounts/:id/revoke-sessions` | 統括スタッフ |
 | POST | `/api/staff/accounts/:id/disable` | 統括スタッフ |
 | POST | `/api/staff/accounts/:id/enable` | 統括スタッフ |
+| GET | `/api/staff/pending-invites` | スタッフ(全員) |
 | GET | `/api/mypage/entries` | 参加者 |
 | GET | `/api/mypage/entries/:entryId` | 参加者(本人) |
 | PATCH | `/api/mypage/entries/:entryId` | 参加者(本人) |
@@ -293,7 +318,7 @@ Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts
 
 - リクエスト: `StaffLoginInputSchema` — `{email: string(email), scope: "saikyoi" | "shinjinou" | "general", password: string(min 1, max 1024)}`(ログインには下記のパスワードポリシーを**適用しません**。ポリシー導入前に設定したパスワードでもログインできる必要があるためです。上限も新規設定時の 256 文字より緩い 1024 文字(`LOGIN_PASSWORD_MAX_LENGTH`)にしています。256 文字の上限ができる前は上限が無かったためで、上限自体は PBKDF2 の計算量を守るために残しています)
 - `200`: `StaffLoginResponseSchema` — `{"ok": true, "role": "regional" | "general", "regionSlug": string | null, "tournamentType": "saikyoi" | "shinjinou" | null}`
-- `401`: `{"error": "invalid credentials"}`
+- `401`: `{"error": "invalid credentials"}`(パスワード未設定(招待メールのリンク待ち)のアカウントも同じ。ログイン画面はその旨を添えて表示します)
 - `429`: `{"error": "too many requests"}`(`Retry-After: 60`。1 章「レート制限と Turnstile」を参照)
 - `500`: `{"error": "internal server error"}`
 
@@ -309,13 +334,24 @@ Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts
 
 `regionSlug` / `tournamentType` は `regional` スタッフの担当範囲で、`general` スタッフでは両方 `null` です。スタッフ画面は `/staff/{regionSlug}/{tournamentType}/entries` のように**スラッグ**で引くため、JWT クレームが持つ `regionId` ではなく `regions` を join したスラッグを返しています。ログイン画面(`/staff/login`)はこれを見て、`general` を `/staff/dashboard` へ、`regional` を担当大会のエントリー一覧へリダイレクトします。
 
+### `GET /api/staff/pending-invites`
+
+ログイン中のスタッフと**同じメールアドレス**の他のアカウント(無効化されていないもの)のうち、パスワード未設定(招待メールのリンク待ち)のものの区分を返します。`routes/staff-pending-invites.ts`。認可は `requireStaff()`(統括・地域を問わず、生きたセッションがあれば可)。
+
+- `200`: `StaffPendingInvitesSchema` — `{"scopes": ("saikyoi" | "shinjinou" | "general")[]}`(`StaffLoginScopeSchema` の順)
+- `401` / `500`
+
+ログインは区分で選んだ 1 つのアカウントに入るだけなので、最強位は設定済み・新人王は招待待ち、という人が最強位でログインしても新人王のことは何も分からず、空のエントリー一覧を見て戸惑うことになります。スタッフ画面(`/staff`・`/admin` のレイアウト)はこれを読み込みのたびに問い合わせ、招待待ちのアカウントが残っている間は警告を出します。読み出しに失敗した場合、フロントエンドは警告を出さないだけで画面は表示します。
+
+招待待ちのアカウントにはログインできない(どのパスワードとも一致しない)ため、この情報を得られるのはそのアドレスの別のアカウントでパスワードを証明した本人だけで、どのアドレスがどのアカウントを持つかを探る手段にはなりません。
+
 ### `POST /api/auth/staff/password-reset/request`
 
 パスワードを忘れたスタッフが、自分で再設定リンクを申し込みます(#175)。参加者側の `POST /api/auth/participant/password-reset/request` のスタッフ版で、防御(レート制限 + Turnstile、`waitUntil()` による応答時間の平準化、登録の有無によらず同じ応答)も同じです。
 
 - リクエスト: `StaffPasswordResetRequestInputSchema` — `{email: string(email), scope: 'saikyoi' | 'shinjinou' | 'general'}`、および `cf-turnstile-response` ヘッダ。1 つのアドレスが最強位・新人王の 2 アカウントを持ち得るため(#166)、ログインと同じく `scope` でアカウントを指定します
 - `200`: `{"ok": true}`
-- `400`: 本文が不正(zValidator)、または `{"error": "turnstile verification failed"}`
+- `400`: 本文が不正(`validate()`)、または `{"error": "turnstile verification failed"}`
 - `429`: `{"error": "too many requests"}`(`Retry-After: 60`)
 
 `lib/staff-password-reset.ts` の `requestStaffPasswordReset()` が、該当する**無効化されていない**アカウントがあれば `sendStaffPasswordLink()` で有効期限 **1 時間**のリンクを `FRONTEND_URL/staff/password-reset?token=...` 宛てに送ります(統括スタッフが発行する招待・再発行リンクは 24 時間。本人が待っているリンクなので参加者側と同じ長さにしています)。招待済みでまだパスワードを設定していないアカウントも対象で、新しいリンクを自分で取り直せます。アカウントの検索はログインと同じ `findStaffAccountByScope()`(`lib/staff-account-lookup.ts`)です。
@@ -355,7 +391,7 @@ Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts
 
 - リクエスト: `PasswordResetRequestInputSchema` — `{email: string(email)}`、および `cf-turnstile-response` ヘッダ
 - `200`: `{"ok": true}`
-- `400`: メール形式が不正(zValidator)、または `{"error": "turnstile verification failed"}`
+- `400`: メール形式が不正(`validate()`)、または `{"error": "turnstile verification failed"}`
 - `429`: `{"error": "too many requests"}`(`Retry-After: 60`)
 
 メールアドレスが未登録の場合、トークンの保存に失敗した場合、メール送信に失敗した場合のいずれも、送信できた場合と同じ `200 {"ok": true}` を返します。内部的な失敗は `console.error` に記録されます。
@@ -408,7 +444,7 @@ Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts
   - `name` は 1〜100 文字
   - `allowsDualEntry` は省略可で、既定は `false`(最強位・新人王のどちらか一方のみ)。省略時に許可側へ倒さないのは、この設定を意識しなかった地域が黙って重複エントリーを受け付けてしまわないようにするためです
 - `201`: 作成された `Region`
-- `400`: バリデーション違反(`zValidator`)
+- `400`: バリデーション違反(`validate()`)
 - `409`: `{"error": "slug already in use"}` — slug の重複(Postgres の `23505`)。スタッフが直せる入力ミスなので 500 ではなくこれを返します
 - `401` / `403`
 - `500`: `{"error": "internal server error"}`
@@ -420,7 +456,7 @@ Postgres / PostgREST のエラーコードは `apps/backend/src/lib/pg-errors.ts
 - パス: `id` は UUID
 - リクエスト: `RegionUpdateInputSchema` — `{name?, allowsDualEntry?}`(両方省略した空の body は 400)
 - `200`: 更新後の `Region`
-- `400`: バリデーション違反(`zValidator`)
+- `400`: バリデーション違反(`validate()`)
 - `404`: `{"error": "region not found"}`(Supabase の `PGRST116` を変換)
 - `409`: `{"error": "重複エントリーを認める地域では、最強位と新人王に同じ問題セットを設定できません"}` — 最強位と新人王に同じ問題セット(名前を設定したもの)が付いている地域で、`allowsDualEntry` を `true` にしようとした(SQLSTATE `P0010`、`0045`)。管理画面はこの文言をそのまま表示します
 - `401` / `403`
@@ -715,9 +751,9 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 
 **確認メールの期限切れ(#172)。** 確認リンク(24 時間)を開かないまま期限が切れたエントリーは、もう確定できないのに `pending_verification` のまま残り、同じ大会への再エントリーを `already entered` で、重複参加を許さない地域ではもう一方の大会へのエントリーも断っていました。そこで 4. で、その参加者の確定待ちエントリーのうち**確認トークンが 1 つ以上あり、そのどれもが使用済みか期限切れのもの**を `cancelled` にし(残っていたトークンも使用済みにする)、以後は参加者自身のキャンセルと同じ扱いにしています。同じ大会なら行が再利用されて新しい確認メールが届き、もう一方の大会の枠も空きます。リンクがまだ有効な確定待ちは今までどおり断り、未ログインの経路では不受理通知(`pending-verification`)で「確認メールのリンクを開く / 見当たらなければマイページでキャンセルしてから再エントリー」を案内します。
 
-トークンが 1 つも無い確定待ちは取り消しません。同じ参加者の別の送信が行を書き込み、まだ確認トークンを書いていない途中のエントリーだからです(確認メールの送信に失敗した行はロールバックで消すか元に戻すので、トークン無しのまま残ることはありません)。キャンセル済みの行を再利用するときは、更新の前にその行の**使用済み・期限切れのトークンを消す**ので、再利用中の行もトークン無しの状態を経て新しいトークンが書かれます(同時に同じ行を再利用した別の送信の、有効なトークンは消しません)。
+トークンが 1 つも無い確定待ちは取り消しません。同じ参加者の別の送信が行を書き込み、まだ確認トークンを書いていない途中のエントリーだからです。ただし、行が最後に書き込まれてから(`updated_at`)確認リンクの有効期限(24 時間)を過ぎていれば取り消します(`0054`、#290)。確認メールの送信に失敗した行はロールバックで消すか元に戻しますが、ロールバックは REST の別々の文なので、その削除も失敗するとリンクの届いていない確定待ちがトークン無しで残るためです(削除の失敗は `console.error` に残します)。キャンセル済みの行を再利用するときは、更新の前にその行の**使用済み・期限切れのトークンを消す**ので、再利用中の行もトークン無しの状態を経て新しいトークンが書かれます(同時に同じ行を再利用した別の送信の、有効なトークンは消しません)。
 
-`lapse_expired_pending_entries()`(`supabase/migrations/0030_lapse_expired_pending_entries.sql`)は、候補をロック無しで絞り込んでから(期限内のリンクがある確定待ちにはロックを取らない)、候補ごとに `confirm_entry_by_token()` / `cancel_own_entry()` と同じ順(確認トークン → 大会の行)でロックを取り、状態とトークンを大会のロックの下で読み直します。確認と同時に走っても、確認が先ならもう確定待ちではないので触らず、こちらが先なら確認側は期限切れトークンとして断ります。候補は大会 id 順に処理するので、別々の参加者の呼び出しが大会の行を逆順に取り合ってデッドロックすることもありません。定期的な掃除(Cron)にしていないのは、期限切れの確定待ちが邪魔をするのは同じ参加者の次のエントリーだけだからです。
+`lapse_expired_pending_entries()`(`supabase/migrations/0030_lapse_expired_pending_entries.sql`、`0054_lapse_tokenless_stale_pending_entries.sql` で再定義)は、候補をロック無しで絞り込んでから(期限内のリンクがある確定待ちにはロックを取らない)、候補ごとに `confirm_entry_by_token()` / `cancel_own_entry()` と同じ順(確認トークン → 大会の行)でロックを取り、状態とトークンを大会のロックの下で読み直します。確認と同時に走っても、確認が先ならもう確定待ちではないので触らず、こちらが先なら確認側は期限切れトークンとして断ります。候補は大会 id 順に処理するので、別々の参加者の呼び出しが大会の行を逆順に取り合ってデッドロックすることもありません。定期的な掃除(Cron)にしていないのは、期限切れの確定待ちが邪魔をするのは同じ参加者の次のエントリーだけだからです。
 
 メール送信に失敗した場合はエントリーを**ロールバック**します。放置すると、参加者は使えるリンクを受け取っていないのに一意制約や「already entered」で再試行を永久に阻まれるためです。ロールバックは「確認トークンの削除 → 新規行なら削除 / 再利用行なら元の値へ復元」の順に行います(トークンが FK で参照している間はエントリーを削除できないため)。再利用行は削除ではなく**キャンセル状態へ復元**することで、元のエントリーの記録が消えないようにしています。
 
@@ -1016,7 +1052,9 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 送信は宛先ごとに 1 通ずつ行います(受信者同士にアドレスが見えないように)。1 件がプロバイダに拒否されても送信全体は止めず、残りの宛先には送り切ります。同じアドレスは重複排除され、1 通しか届きません。
 
-コンシューマ内の送信は `lib/bulk-mail.ts` の `sendPacedMail()` が担い、メールプロバイダのレート制限に合わせて**同時 5 通・バッチ間 1 秒**でならします。プロバイダから **429(レート制限)が返った送信はリトライします**(既定 3 回、`Retry-After` があればそれに従い、なければジッタ付きの指数バックオフ。1 回の待機は最大 5 秒)。それでも 429 のままなら、そのメッセージは **ack せずキューへ戻します**(30 秒後に再配信)。レート制限はアドレスの良し悪しとは無関係だからです。逆に**アドレス自体を拒否された場合は ack して失敗として記録**します。何度配信しても同じ答えしか返らないためです。キューの再配信は 3 回まで(`wrangler.toml` の `max_retries`)で、最後の配信でも 429 だったメッセージは失敗として計上します(そうしないと `sent + failed` が `total` に届かず、いつまでも送信中に見えます)。なお、この再送は一斉メールだけの挙動です。確認メール・パスワード再設定・繰り上げ通知の単発送信はリクエストの中で待たれるため、応答を数秒止めるよりは失敗させる方を選んでいます。
+コンシューマ内の送信は `lib/bulk-mail.ts` の `sendPacedMail()` が担い、メールプロバイダのレート制限に合わせて**同時 5 通・バッチ間 1 秒**でならします。プロバイダから **429(レート制限)が返った送信はリトライします**(既定 3 回、`Retry-After` があればそれに従い、なければジッタ付きの指数バックオフ。1 回の待機は最大 5 秒)。それでも 429 のままなら、そのメッセージは **ack せずキューへ戻します**。プロバイダ側の障害(5xx)・タイムアウト(408)・応答のないネットワークエラー、同じ冪等性キーの送信が処理中であること(409 `concurrent_idempotent_requests`)も同じく、その場では待たずにキューへ戻します。どれもアドレスの良し悪しとは無関係だからです。再配信までの待ち時間は 30 秒から配信ごとに倍になります(30・60・120 秒。`queueRetryDelaySeconds()`)。固定の 30 秒だと 90 秒を超える障害で全員が失敗になるためで、倍にすると約 3 分半の障害まで乗り切れます。逆に**アドレス自体を拒否された場合は ack して失敗として記録**します。何度配信しても同じ答えしか返らないためです。キューの再配信は 3 回まで(`wrangler.toml` の `max_retries`)で、最後の配信でも失敗したメッセージは失敗として計上します(そうしないと `sent + failed` が `total` に届かず、いつまでも送信中に見えます)。
+
+5xx やネットワークエラーは「送れなかった」ことの証明にはなりません(送れたのに応答だけが失われた可能性がある)。そのため一斉メールは Resend の **`Idempotency-Key`** を付けて送ります。通常の一斉メールはキューのメッセージ ID から作ったキー(`bulk-mail/<message id>`)で、再配信しても同じキー・同じ本文になるので、24 時間以内の再送は Resend 側で 1 通にまとめられます。確認メールの再送は配信のたびに新しいリンクを発行して本文が変わるため、キーはリンクのトークンから作ります(`verification-resend/<token id>`)。これで 1 回の配信の中での再試行は 1 通にまとまりますが、再配信をまたぐと 2 通届くことがあり、その場合 1 通目のリンクは無効です。なお、この再送は一斉メールだけの挙動です。確認メール・パスワード再設定・繰り上げ通知の単発送信はリクエストの中で待たれるため、応答を数秒止めるよりは失敗させる方を選んでいます。
 
 宛先の取得(`lib/entry-recipients.ts`)は `.range()` で**ページングします**。PostgREST は 1 レスポンスの行数を `db-max-rows` で打ち切るため、単純な SELECT では大きな大会の宛先が黙って途中までしか取れず、「全員に送ったつもりで一部にしか届かない」状態になります。
 
@@ -1110,7 +1148,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
   - `{role: 'general', email}`
   - `{role: 'regional', email, regionId, tournamentType}`
 - `201`: 作成された `StaffAccount`(`passwordSet` は必ず `false`)
-- `400`: バリデーション違反(`zValidator`)、または `{"error": "unknown region"}`(存在しない `regionId` = Postgres の `23503`)
+- `400`: バリデーション違反(`validate()`)、または `{"error": "unknown region"}`(存在しない `regionId` = Postgres の `23503`)
 - `409`: `{"error": "email already in use"}`(Postgres の `23505`。同じアドレスで同じ担当種別のアカウント、または同じアドレスの統括スタッフが既にある)
 
 一意なのは `(email, tournament_type)` の組です(#166)。同じアドレスで最強位と新人王のアカウントを 1 つずつ作れます。統括スタッフ(`tournament_type` が null)はアドレスごとに 1 つです。アドレスは小文字にしてから保存します(#133)。
@@ -1131,7 +1169,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 - パス: `id` は UUID
 - `200`: `{"ok": true}`
-- `400`: バリデーション違反(`zValidator`)
+- `400`: バリデーション違反(`validate()`)
 - `404`: `{"error": "staff account not found"}`
 - `409`: `{"error": "staff account disabled"}`(無効化されたアカウント。先に有効化してください。判定は DB 関数 `issue_staff_password_link()`(`0027`)がアカウント行をロックしてから行い、古いリンクの削除と新しいリンクの追加も同じトランザクションで行うので、無効化と同時に走っても無効なアカウントにリンクが残ることはありません)
 - `401` / `403`
@@ -1149,7 +1187,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 - パス: `id` は UUID
 - `200`: `{"ok": true}`
-- `400`: バリデーション違反(`zValidator`)
+- `400`: バリデーション違反(`validate()`)
 - `404`: `{"error": "staff account not found"}`
 - `401` / `403`(`regional` スタッフは不可)
 - `500`: `{"error": "internal server error"}`
@@ -1168,7 +1206,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 - パス: `id` は UUID
 - `200`: `{"ok": true}`(既に無効なアカウントでも 200。`disabledAt` は最初に無効化した時刻のまま)
-- `400`: バリデーション違反(`zValidator`)
+- `400`: バリデーション違反(`validate()`)
 - `404`: `{"error": "staff account not found"}`
 - `409`: `{"error": "cannot disable your own account"}`(自分自身)、`{"error": "cannot disable the last general staff account"}`(有効な統括スタッフが残らなくなる)
 - `401` / `403`
@@ -1188,7 +1226,7 @@ Google スプレッドシートを読み取り、フォーム定義 YAML を生�
 
 - パス: `id` は UUID
 - `200`: `{"ok": true}`
-- `400`: バリデーション違反(`zValidator`)
+- `400`: バリデーション違反(`validate()`)
 - `404`: `{"error": "staff account not found"}`
 - `401` / `403`
 - `500`: `{"error": "internal server error"}`

@@ -130,7 +130,7 @@ describe('admin tournament order +page.server action', () => {
       buildActionEvent(fakePut(bodies), formData),
     );
 
-    expect(result).toEqual({saved: true, error: null});
+    expect(result).toEqual({saved: true, error: null, order: null});
     expect(bodies).toEqual([{tournamentIds: [C, A, B]}]);
   });
 
@@ -146,21 +146,33 @@ describe('admin tournament order +page.server action', () => {
 
     expect(result).toMatchObject({
       status: 409,
-      data: {saved: false, error: '大会が追加または削除されました'},
+      data: {
+        saved: false,
+        error: '大会が追加または削除されました',
+        order: null,
+      },
     });
   });
 
-  it('reports any other failure as a failed save', async () => {
+  it('reports any other failure as a failed save, handing back the order', async () => {
     const result = await actions.default(
       buildActionEvent(
         fakePut([], () => jsonResponse({error: 'boom'}, 500)),
-        orderForm([[A, '1']]),
+        orderForm([
+          [A, '1'],
+          [B, '2'],
+          [C, '1'],
+        ]),
       ),
     );
 
     expect(result).toMatchObject({
       status: 502,
-      data: {saved: false, error: '表示順の保存に失敗しました'},
+      data: {
+        saved: false,
+        error: '表示順の保存に失敗しました',
+        order: [C, A, B],
+      },
     });
   });
 
@@ -173,7 +185,7 @@ describe('admin tournament order +page.server action', () => {
 
     expect(result).toMatchObject({
       status: 400,
-      data: {saved: false, error: '並べ替える大会がありません'},
+      data: {saved: false, error: '並べ替える大会がありません', order: []},
     });
     expect(bodies).toEqual([]);
   });
@@ -192,7 +204,11 @@ describe('admin tournament order +page.server action', () => {
 
     expect(result).toMatchObject({
       status: 400,
-      data: {saved: false, error: '大会の id が重複しています'},
+      data: {
+        saved: false,
+        error: '大会の id が重複しています',
+        order: [A, A],
+      },
     });
     expect(bodies).toEqual([]);
   });

@@ -1,4 +1,4 @@
-import {afterAll, beforeAll, describe, expect, it} from 'bun:test';
+import {afterAll, beforeAll, describe, expect, it, spyOn} from 'bun:test';
 import {SQL} from 'bun';
 import type {EntryInput, TournamentType} from '@regional-quiz/shared';
 import {
@@ -164,11 +164,15 @@ describe.skipIf(!dbReachable)(
       tournamentId: string,
       status = 'confirmed',
     ): Promise<void> {
+      // A waitlisted entry needs a position, and only it may have one (0051).
+      const waitlistPosition = status === 'waitlisted' ? 1 : null;
       await sql`
         insert into entries (
-          participant_id, tournament_id, name, furigana, display_name, status
+          participant_id, tournament_id, name, furigana, display_name, status,
+          waitlist_position
         )
-        select id, ${tournamentId}, '山田太郎', 'ヤマダタロウ', '太郎', ${status}::entry_status
+        select id, ${tournamentId}, '山田太郎', 'ヤマダタロウ', '太郎', ${status}::entry_status,
+            ${waitlistPosition}::integer
           from participants where email = ${email}
       `;
     }
@@ -581,6 +585,50 @@ describe.skipIf(!dbReachable)(
       expect(mailSendCount).toBe(1);
     });
 
+    it('logs a rollback whose deletes fail', async () => {
+      const fixture = await createFixture('rollback-delete-failure');
+      const input = validInput({regulationIds: [fixture.regulationId]});
+      const previousFetch = globalThis.fetch;
+      globalThis.fetch = (async (
+        requestInput: RequestInfo | URL,
+        init?: RequestInit,
+      ) => {
+        const url =
+          typeof requestInput === 'string'
+            ? requestInput
+            : requestInput.toString();
+        if (url.startsWith('https://api.resend.com/')) {
+          return new Response(null, {status: 502});
+        }
+        const {pathname} = new URL(url);
+        if (
+          init?.method === 'DELETE' &&
+          (pathname === '/rest/v1/email_verification_tokens' ||
+            pathname === '/rest/v1/entries')
+        ) {
+          return Response.json(
+            {code: '08006', message: 'connection failure'},
+            {status: 503},
+          );
+        }
+        return previousFetch(requestInput, init);
+      }) as typeof fetch;
+      const consoleError = spyOn(console, 'error').mockImplementation(() => {});
+
+      try {
+        const result = await createEntry(env, fixture.tournamentId, input);
+
+        expect(result.ok).toBe(false);
+        expect(!result.ok && result.status).toBe(500);
+        const messages = consoleError.mock.calls.map(call => call[0]);
+        expect(messages).toContain('failed to delete the verification tokens');
+        expect(messages).toContain('failed to delete the entry');
+      } finally {
+        consoleError.mockRestore();
+        globalThis.fetch = previousFetch;
+      }
+    });
+
     it('accepts empty answers when the tournament defines no custom fields', async () => {
       const fixture = await createFixture('no-custom-fields');
 
@@ -724,7 +772,8 @@ describe.skipIf(!dbReachable)(
       await verifyAddress(input.email);
       await sql`
         update entries
-        set status = 'cancelled', cancelled_at = now(), email_verified_at = now()
+        set status = 'cancelled', cancelled_at = now(), email_verified_at = now(),
+            confirmed_at = now()
         where id = ${firstResult.entry.id}
       `;
 
@@ -742,7 +791,8 @@ describe.skipIf(!dbReachable)(
       expect(reEntryResult.entry.id).toBe(firstResult.entry.id);
       expect(mailSendCount).toBe(1);
       const rows = await sql`
-        select id, status, display_name, cancelled_at, email_verified_at
+        select id, status, display_name, cancelled_at, email_verified_at,
+               confirmed_at
         from entries where tournament_id = ${fixture.tournamentId}
       `;
       expect(rows.length).toBe(1);
@@ -750,6 +800,7 @@ describe.skipIf(!dbReachable)(
       expect(rows[0].display_name).toBe('再エントリー太郎');
       expect(rows[0].cancelled_at).toBeNull();
       expect(rows[0].email_verified_at).toBeNull();
+      expect(rows[0].confirmed_at).toBeNull();
     });
 
     it('restores the cancellation when the re-entry verification email fails', async () => {
@@ -761,7 +812,8 @@ describe.skipIf(!dbReachable)(
       await verifyAddress(input.email);
       await sql`
         update entries
-        set status = 'cancelled', cancelled_at = now(), email_verified_at = now()
+        set status = 'cancelled', cancelled_at = now(), email_verified_at = now(),
+            confirmed_at = now()
         where id = ${firstResult.entry.id}
       `;
       const previousFetch = globalThis.fetch;
@@ -795,7 +847,7 @@ describe.skipIf(!dbReachable)(
         // original entry's contents, not the failed re-entry's.
         const rows = await sql`
           select id, status, cancelled_at, display_name, free_text,
-                 email_verified_at
+                 email_verified_at, confirmed_at
           from entries where tournament_id = ${fixture.tournamentId}
         `;
         expect(rows.length).toBe(1);
@@ -805,6 +857,8 @@ describe.skipIf(!dbReachable)(
         expect(rows[0].display_name).toBe(input.displayName);
         expect(rows[0].free_text).toBe(input.freeText ?? null);
         expect(rows[0].email_verified_at).not.toBeNull();
+        // Still holding its region, as it did before the re-entry (0052).
+        expect(rows[0].confirmed_at).not.toBeNull();
       } finally {
         globalThis.fetch = previousFetch;
       }
@@ -1312,6 +1366,47 @@ describe.skipIf(!dbReachable)(
       expect(row.status).toBe('pending_verification');
     });
 
+    // What a rollback whose deletes failed leaves behind (#290): a pending
+    // entry whose link never went out. Once it has gone a link lifetime
+    // untouched it is no longer one being written, and is lapsed like an
+    // entry whose link ran out.
+    it('reuses a pending entry left with no link for a link lifetime', async () => {
+      const fixture = await createFixture('pending-no-token-stale');
+      const input = validInput({regulationIds: [fixture.regulationId]});
+      const firstResult = await createEntry(env, fixture.tournamentId, input);
+      expect(firstResult.ok).toBe(true);
+      if (!firstResult.ok) return;
+      await verifyAddress(input.email);
+      await sql`
+        delete from email_verification_tokens
+        where entry_id = ${firstResult.entry.id}
+      `;
+      // Written directly rather than updated: `entries_set_updated_at`
+      // would move `updated_at` back to now on an update.
+      await sql`delete from entries where id = ${firstResult.entry.id}`;
+      const [stale] = await sql`
+        insert into entries (
+          participant_id, tournament_id, name, furigana, display_name,
+          created_at, updated_at
+        )
+        select id, ${fixture.tournamentId}, '山田太郎', 'ヤマダタロウ', '太郎',
+            now() - interval '25 hours', now() - interval '25 hours'
+          from participants where email = ${input.email}
+        returning id
+      `;
+      mailSendCount = 0;
+
+      const result = await createEntry(env, fixture.tournamentId, input);
+
+      expect(result.ok).toBe(true);
+      expect(result.ok && result.entry.id).toBe(stale.id);
+      expect(mailSendCount).toBe(1);
+      const [row] = await sql`
+        select status from entries where id = ${stale.id}
+      `;
+      expect(row.status).toBe('pending_verification');
+    });
+
     it('leaves a confirmed entry alone when its link has expired', async () => {
       const fixture = await createFixture('confirmed-expired');
       const input = validInput({regulationIds: [fixture.regulationId]});
@@ -1646,12 +1741,17 @@ describe.skipIf(!dbReachable)(
          * has them enter a tournament in another region.
          * @param suffix The region slug suffix, as in `createFixture()`.
          * @param cancelledAt When the entry was cancelled.
-         * @param verifiedAt When it was confirmed, or null if it never was.
+         * @param verifiedAt When its link was followed, or null if it never
+         *     was.
+         * @param confirmedAt When it took a seat, or null if it never did.
+         *     Following the link also sets `verifiedAt` for an entry that
+         *     only joined the waitlist (#287).
          */
         async function enterAfterCancelling(
           suffix: string,
           cancelledAt: string,
           verifiedAt: string | null,
+          confirmedAt: string | null = verifiedAt,
         ) {
           const closed = await createFixture(`${suffix}-closed`, {
             entryClosesAt: closedAt,
@@ -1662,7 +1762,8 @@ describe.skipIf(!dbReachable)(
           await sql`
             update entries
             set cancelled_at = ${cancelledAt},
-                email_verified_at = ${verifiedAt}
+                email_verified_at = ${verifiedAt},
+                confirmed_at = ${confirmedAt}
             where tournament_id = ${closed.tournamentId}
           `;
           return createEntry(
@@ -1698,6 +1799,19 @@ describe.skipIf(!dbReachable)(
           const result = await enterAfterCancelling(
             'unconfirmed',
             '2020-07-01T00:00:00Z',
+            null,
+          );
+
+          expect(result.ok).toBe(true);
+        });
+
+        // Verified, but only ever on the waitlist: it never had a seat to
+        // give up, so it holds no region either (#287).
+        it('allows it after a waitlisted entry cancelled past the close', async () => {
+          const result = await enterAfterCancelling(
+            'waitlisted-late',
+            '2020-07-01T00:00:00Z',
+            '2020-05-01T00:00:00Z',
             null,
           );
 

@@ -1,5 +1,6 @@
 import type {Bindings} from '../types/env';
-import {createMailSender} from './mailer';
+import {describeWithdrawnEntries} from './entry-verification';
+import {createMailSender, type SendMailInput} from './mailer';
 import {
   buildSystemMail,
   systemMailSubject,
@@ -109,18 +110,61 @@ function reasonBlocks(
  * @param email The address the submission was made under.
  * @param tournamentName The tournament it tried to enter.
  * @param reason Why it wasn't entered.
+ * @param withdrawnTournaments The display names of the tournaments whose
+ *     pending entries the submission withdrew by taking the unverified
+ *     account over before it failed (#291), or omit when it withdrew none.
+ *     Empty when the names couldn't be read, which is still worth telling.
  */
 export async function sendEntryNoticeEmail(
   env: Bindings,
   email: string,
   tournamentName: string,
   reason: EntryNoticeReason,
+  withdrawnTournaments?: readonly string[],
 ): Promise<void> {
   await createMailSender(env).send(
-    buildSystemMail(email, entryNoticeSubject(tournamentName), [
-      `「${tournamentName}」へのエントリーを受け付けられませんでした。`,
-      ...reasonBlocks(reason, env.FRONTEND_URL),
-      'このエントリーに心当たりがない場合は、このメールを破棄してください。',
-    ]),
+    buildEntryNoticeMail(
+      env,
+      email,
+      tournamentName,
+      reason,
+      withdrawnTournaments,
+    ),
+  );
+}
+
+/**
+ * The mail `sendEntryNoticeEmail()` sends, built without sending it, for a
+ * notice sent later from the queue (#346).
+ *
+ * Takes the same arguments as `sendEntryNoticeEmail()`.
+ */
+export function buildEntryNoticeMail(
+  env: Pick<Bindings, 'FRONTEND_URL'>,
+  email: string,
+  tournamentName: string,
+  reason: EntryNoticeReason,
+  withdrawnTournaments?: readonly string[],
+): SendMailInput {
+  return buildSystemMail(email, entryNoticeSubject(tournamentName), [
+    `「${tournamentName}」へのエントリーを受け付けられませんでした。`,
+    ...reasonBlocks(reason, env.FRONTEND_URL),
+    ...(withdrawnTournaments ? [withdrawalNotice(withdrawnTournaments)] : []),
+    'このエントリーに心当たりがない場合は、このメールを破棄してください。',
+  ]);
+}
+
+/**
+ * Tells the owner of the address which pending entries the submission took
+ * with it: the takeover that withdrew them can't be undone, so they are gone
+ * even though this submission wasn't entered either -- which, without this,
+ * nothing would tell them (#291).
+ * @param tournamentNames The withdrawn tournaments' display names, or empty
+ *     when they couldn't be read.
+ */
+function withdrawalNotice(tournamentNames: readonly string[]): string {
+  return (
+    describeWithdrawnEntries(tournamentNames) +
+    '取り消したエントリーへの参加を引き続き希望する場合は、エントリーフォームからもう一度エントリーしてください。'
   );
 }

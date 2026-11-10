@@ -2,11 +2,18 @@ import {describe, expect, it} from 'vitest';
 import type {HttpError} from '@sveltejs/kit';
 import {
   ENTRY_PERIOD_ORDER_MESSAGE,
+  TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE,
+  type DashboardTournamentSummary,
   type FormFieldDef,
   type Region,
   type Tournament,
+  type WaitlistPromotion,
 } from '@regional-quiz/shared';
 import {fakeCookies} from '../../../../../test-support/fake-cookies';
+import {
+  fakePlatform,
+  TOKYO_SAIKYOI_LIST_KEY,
+} from '../../../../../test-support/fake-platform';
 import {
   fakeFetch,
   type FakeRoute,
@@ -46,6 +53,21 @@ const FORM_FIELD_DEFS: FormFieldDef[] = [
   },
 ];
 
+/** The dashboard's row for `TOURNAMENT`, which has no entries. */
+const SUMMARY: DashboardTournamentSummary = {
+  tournamentId: TOURNAMENT.id,
+  tournamentName: TOURNAMENT.name,
+  tournamentType: TOURNAMENT.type,
+  regionId: TOKYO.id,
+  regionSlug: TOKYO.slug,
+  regionName: TOKYO.name,
+  capacity: TOURNAMENT.capacity,
+  confirmedCount: 0,
+  waitlistedCount: 0,
+  pendingVerificationCount: 0,
+  cancelledCount: 0,
+};
+
 const PROMOTION = {promotedCount: 2, mailFailedCount: 0};
 const RESET_RESPONSE = {
   deletedEntryCount: 5,
@@ -60,6 +82,9 @@ const RESET_RESPONSE = {
  * @param options.error The `{error}` message to answer a refusal with.
  * @param options.tournaments The tournaments `GET /api/tournaments/:id` can
  *     find.
+ * @param options.summaries What `GET /api/staff/dashboard` answers with.
+ * @param options.regionsStatus The status to answer `GET /api/regions` with.
+ * @param options.promotion What a PATCH says the promotion came to.
  * @param options.calls Collects the requests sent.
  */
 function fakeApi(
@@ -67,12 +92,26 @@ function fakeApi(
     status?: number;
     error?: string;
     tournaments?: Tournament[];
+    summaries?: DashboardTournamentSummary[];
+    regionsStatus?: number;
+    promotion?: WaitlistPromotion | null;
     calls?: RecordedRequest[];
   } = {},
 ): typeof fetch {
   const tournaments = options.tournaments ?? [TOURNAMENT];
+  const regionsStatus = options.regionsStatus ?? 200;
   const reads: FakeRoute[] = [
-    {method: 'GET', url: /^\/api\/regions$/, body: [TOKYO]},
+    {
+      method: 'GET',
+      url: /^\/api\/regions$/,
+      status: regionsStatus,
+      body: regionsStatus === 200 ? [TOKYO] : {error: 'nope'},
+    },
+    {
+      method: 'GET',
+      url: '/api/staff/dashboard',
+      body: options.summaries ?? [SUMMARY],
+    },
     // Before the `:id` read, whose pattern this path matches too.
     {method: 'GET', url: '/api/tournaments/question-sets', body: ['宮崎']},
     {
@@ -93,13 +132,24 @@ function fakeApi(
     },
   ];
   return fakeFetch(
-    [...reads, ...writeRoutes(options.status ?? 200, options.error)],
+    [
+      ...reads,
+      ...writeRoutes(
+        options.status ?? 200,
+        options.error,
+        options.promotion === undefined ? PROMOTION : options.promotion,
+      ),
+    ],
     options.calls,
   );
 }
 
 /** How `fakeApi` answers a PATCH, POST or DELETE with the given status. */
-function writeRoutes(status: number, error = 'nope'): FakeRoute[] {
+function writeRoutes(
+  status: number,
+  error = 'nope',
+  promotion: WaitlistPromotion | null = PROMOTION,
+): FakeRoute[] {
   /** The answer to a write that, succeeding with a body, sends `body`. */
   function answer(body: unknown): {status: number; body?: unknown} {
     if (status === 204) return {status};
@@ -111,7 +161,7 @@ function writeRoutes(status: number, error = 'nope'): FakeRoute[] {
     {
       method: 'PATCH',
       url: path,
-      ...answer({...TOURNAMENT, promotion: PROMOTION}),
+      ...answer({...TOURNAMENT, promotion}),
     },
     {method: 'POST', url: `${path}/reset`, ...answer(RESET_RESPONSE)},
     {method: 'DELETE', url: path, ...answer(TOURNAMENT)},
@@ -130,10 +180,12 @@ function buildLoadEvent(fetchImpl: typeof fetch): Parameters<typeof load>[0] {
 function buildActionEvent(
   fetchImpl: typeof fetch,
   formData: FormData,
+  platform?: App.Platform,
 ): Parameters<typeof actions.update>[0] {
   return {
     params: {id: TOURNAMENT.id},
     fetch: fetchImpl,
+    platform,
     cookies: fakeCookies(),
     url: new URL(`http://localhost/admin/tournaments/${TOURNAMENT.id}/edit`),
     request: {formData: async () => formData},
@@ -161,6 +213,7 @@ describe('admin tournament edit +page.server load', () => {
       customName: TOURNAMENT.name,
       regions: [TOKYO],
       questionSets: ['宮崎'],
+      hasEntries: false,
       formDefinitionYaml:
         'tournamentSlug: saikyoi\n' +
         'fields:\n' +
@@ -173,7 +226,8 @@ describe('admin tournament edit +page.server load', () => {
 
   // Not the whole list to `find` the one being edited in (#123), and its
   // form fields with it rather than through the entry-period-gated read.
-  // The 問題セット suggestions come from their own read, not the list.
+  // The 問題セット suggestions come from their own read, not the list, and
+  // whether it has entries from the dashboard's counts (#284).
   it('load fetches only the tournament it needs', async () => {
     const calls: RecordedRequest[] = [];
 
@@ -181,9 +235,56 @@ describe('admin tournament edit +page.server load', () => {
 
     expect(calls.map(call => `${call.method} ${call.url}`).sort()).toEqual([
       'GET /api/regions',
+      'GET /api/staff/dashboard',
       `GET /api/tournaments/${TOURNAMENT.id}`,
       'GET /api/tournaments/question-sets',
     ]);
+  });
+
+  // #284: any entry, a cancelled one too, locks the region and type, and
+  // only this tournament's count is read.
+  it('reports the tournament as having entries from its dashboard counts', async () => {
+    const other: DashboardTournamentSummary = {
+      ...SUMMARY,
+      tournamentId: '00000000-0000-0000-0000-0000000000ff',
+      confirmedCount: 5,
+    };
+    const loadWith = (summaries: DashboardTournamentSummary[]) =>
+      load(buildLoadEvent(fakeApi({summaries})));
+
+    await expect(loadWith([other, SUMMARY])).resolves.toMatchObject({
+      hasEntries: false,
+    });
+    await expect(
+      loadWith([other, {...SUMMARY, cancelledCount: 1}]),
+    ).resolves.toMatchObject({hasEntries: true});
+  });
+
+  // The API still refuses the move (409), so a failed read only leaves the
+  // controls open rather than taking the page down.
+  it('leaves the region and type open when the dashboard cannot be read', async () => {
+    const failing = fakeFetch([
+      {method: 'GET', url: '/api/staff/dashboard', status: 500, body: {}},
+      {
+        method: 'GET',
+        url: /^\/api\/regions$/,
+        body: [TOKYO],
+      },
+      {method: 'GET', url: '/api/tournaments/question-sets', body: []},
+      {
+        method: 'GET',
+        url: `/api/tournaments/${TOURNAMENT.id}`,
+        body: {
+          tournament: TOURNAMENT,
+          customName: TOURNAMENT.name,
+          formFieldDefs: [],
+        },
+      },
+    ]);
+
+    await expect(load(buildLoadEvent(failing))).resolves.toMatchObject({
+      hasEntries: false,
+    });
   });
 
   it('reports an id that is not a UUID as not found, without asking the API', async () => {
@@ -221,6 +322,66 @@ describe('admin tournament edit +page.server load', () => {
       load(buildLoadEvent(fakeApi({tournaments: []}))),
     ).rejects.toMatchObject({status: 404} satisfies Partial<HttpError>);
   });
+
+  // The two reads run side by side; whichever of them reports an expired
+  // session sends it to log in, and after that the tournament's 404 wins
+  // over the regions read failing.
+  for (const {name, tournamentStatus, regionsStatus, status} of [
+    {
+      name: 'an expired session the regions read reports over a 404',
+      tournamentStatus: 404,
+      regionsStatus: 401,
+      status: 303,
+    },
+    {
+      name: 'an expired session the tournament read reports over a failure',
+      tournamentStatus: 401,
+      regionsStatus: 500,
+      status: 303,
+    },
+    {
+      name: 'a missing tournament over the regions read failing',
+      tournamentStatus: 404,
+      regionsStatus: 500,
+      status: 404,
+    },
+    {
+      name: 'a failed regions read as a bad gateway',
+      tournamentStatus: 200,
+      regionsStatus: 500,
+      status: 502,
+    },
+  ]) {
+    it(`reports ${name}`, async () => {
+      const failing = fakeFetch([
+        {
+          method: 'GET',
+          url: /^\/api\/regions$/,
+          status: regionsStatus,
+          body: regionsStatus === 200 ? [TOKYO] : {error: 'nope'},
+        },
+        {method: 'GET', url: '/api/staff/dashboard', body: [SUMMARY]},
+        {method: 'GET', url: '/api/tournaments/question-sets', body: []},
+        {
+          method: 'GET',
+          url: `/api/tournaments/${TOURNAMENT.id}`,
+          status: tournamentStatus,
+          body:
+            tournamentStatus === 200
+              ? {
+                  tournament: TOURNAMENT,
+                  customName: null,
+                  formFieldDefs: [],
+                }
+              : {error: 'nope'},
+        },
+      ]);
+
+      await expect(load(buildLoadEvent(failing))).rejects.toMatchObject({
+        status,
+      });
+    });
+  }
 });
 
 describe('admin tournament update action', () => {
@@ -385,6 +546,91 @@ describe('admin tournament update action', () => {
         values: {name: '書きかけの大会名'},
       },
     });
+  });
+
+  // #284: the tournament has entries, which a move would carry past the
+  // dual-entry checks they were accepted under.
+  it('surfaces a region or type change refused for a tournament with entries', async () => {
+    const event = buildActionEvent(
+      fakeApi({status: 409, error: TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE}),
+      updateFormData({type: 'shinjinou'}),
+    );
+
+    await expect(actions.update(event)).resolves.toMatchObject({
+      status: 409,
+      data: {
+        saved: false,
+        error: TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE,
+        values: {type: 'shinjinou'},
+      },
+    });
+  });
+});
+
+describe('admin tournament update action and the public list cache (#307)', () => {
+  /** Saves `updateFormData()` with a cached tokyo / saikyoi list. */
+  async function save(
+    options: Parameters<typeof fakeApi>[0] = {},
+    platformOptions: Parameters<typeof fakePlatform>[0] = {},
+  ) {
+    const calls: RecordedRequest[] = [];
+    const {platform, stored} = fakePlatform(platformOptions);
+    stored.set(TOKYO_SAIKYOI_LIST_KEY, Response.json('v1'));
+    const result = await actions.update(
+      buildActionEvent(
+        fakeApi({...options, calls}),
+        updateFormData(),
+        platform,
+      ),
+    );
+    return {result, calls, stored};
+  }
+
+  it('drops the list when the save promoted the waitlist', async () => {
+    const {result, calls, stored} = await save();
+
+    expect(result).toMatchObject({saved: true, promotion: PROMOTION});
+    expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(false);
+    // The tournament names its region by id; the slug comes from one read.
+    expect(calls.map(c => `${c.method} ${c.url}`)).toEqual([
+      `PATCH /api/tournaments/${TOURNAMENT.id}`,
+      'GET /api/regions',
+    ]);
+  });
+
+  it('drops the list when the promotion failed, since how far it got is unknown', async () => {
+    const {stored} = await save({promotion: null});
+
+    expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(false);
+  });
+
+  it('keeps the list, without reading the regions, when nobody was promoted', async () => {
+    const {calls, stored} = await save({
+      promotion: {promotedCount: 0, mailFailedCount: 0},
+    });
+
+    expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(true);
+    expect(calls.map(c => c.method)).toEqual(['PATCH']);
+  });
+
+  it('keeps the list when the save is refused', async () => {
+    const {calls, stored} = await save({status: 409, error: '重複しています'});
+
+    expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(true);
+    expect(calls.map(c => c.method)).toEqual(['PATCH']);
+  });
+
+  it('still reports the save when the regions cannot be read', async () => {
+    const {result, stored} = await save({regionsStatus: 500});
+
+    expect(result).toMatchObject({saved: true, promotion: PROMOTION});
+    expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(true);
+  });
+
+  it('still reports the save when the cache cannot be reached', async () => {
+    const {result} = await save({}, {failDelete: true});
+
+    expect(result).toMatchObject({saved: true, promotion: PROMOTION});
   });
 });
 
@@ -573,6 +819,53 @@ describe('admin tournament reset action', () => {
     await expect(actions.reset(event)).resolves.toMatchObject({
       status: 502,
       data: {resetError: '参加者データのリセットに失敗しました'},
+    });
+  });
+
+  describe('and the public list cache (#307)', () => {
+    /** Resets with a cached tokyo / saikyoi list. */
+    async function reset(
+      list: {regionSlug?: string; tournamentType?: string},
+      options: Parameters<typeof fakeApi>[0] = {},
+    ) {
+      const calls: RecordedRequest[] = [];
+      const {platform, stored} = fakePlatform();
+      stored.set(TOKYO_SAIKYOI_LIST_KEY, Response.json('v1'));
+      const formData = resetFormData();
+      for (const [key, value] of Object.entries(list)) {
+        formData.set(key, value);
+      }
+      const result = await actions.reset(
+        buildActionEvent(fakeApi({...options, calls}), formData, platform),
+      );
+      return {result, calls, stored};
+    }
+
+    it('drops the list the form names, without another read', async () => {
+      const {result, calls, stored} = await reset({
+        regionSlug: TOKYO.slug,
+        tournamentType: 'saikyoi',
+      });
+
+      expect(result).toEqual({reset: RESET_RESPONSE, resetError: null});
+      expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(false);
+      expect(calls.map(c => c.method)).toEqual(['POST']);
+    });
+
+    it('keeps the list when the reset is refused', async () => {
+      const {stored} = await reset(
+        {regionSlug: TOKYO.slug, tournamentType: 'saikyoi'},
+        {status: 409, error: 'エントリー期間中です'},
+      );
+
+      expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(true);
+    });
+
+    it('still resets when the form does not name the list', async () => {
+      const {result, stored} = await reset({tournamentType: 'unknown'});
+
+      expect(result).toEqual({reset: RESET_RESPONSE, resetError: null});
+      expect(stored.has(TOKYO_SAIKYOI_LIST_KEY)).toBe(true);
     });
   });
 });

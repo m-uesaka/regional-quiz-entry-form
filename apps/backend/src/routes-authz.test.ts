@@ -36,6 +36,8 @@ interface Route {
  * - `public`: anyone. Not probed; the reason says why that is fine.
  * - `entry-period`: anyone while the tournament's entry period is open, its
  *   own staff otherwise (`requireOpenEntryPeriodOrStaff()`).
+ * - `staff`: any staff member with a live session, 統括 or 地域
+ *   (`requireStaff()`), for what is about their own account.
  * - `general-staff`: 統括スタッフ only (`requireGeneralStaff()`).
  * - `scoped-staff`: staff whose region and tournament type cover the
  *   tournament or entry (`requireStaffForTournament()` /
@@ -47,6 +49,7 @@ interface Route {
 type Policy =
   | {access: 'public'; reason: string}
   | {access: 'entry-period'}
+  | {access: 'staff'}
   | {access: 'general-staff'}
   | {access: 'scoped-staff'}
   | {access: 'participant'};
@@ -156,6 +159,7 @@ const ROUTE_POLICIES: Readonly<Record<string, Policy>> = {
   'POST /api/staff/accounts/:id/revoke-sessions': {access: 'general-staff'},
   'POST /api/staff/accounts/:id/disable': {access: 'general-staff'},
   'POST /api/staff/accounts/:id/enable': {access: 'general-staff'},
+  'GET /api/staff/pending-invites': {access: 'staff'},
   'GET /api/mypage/entries': {access: 'participant'},
   'GET /api/mypage/entries/:entryId': {access: 'participant'},
   'PATCH /api/mypage/entries/:entryId': {access: 'participant'},
@@ -185,6 +189,7 @@ const DOCUMENTED_ACCESS: ReadonlyArray<[RegExp, Policy['access']]> = [
   [/^期間中はなし/, 'entry-period'],
   [/^統括スタッフ/, 'general-staff'],
   [/^スタッフ\(担当範囲\)/, 'scoped-staff'],
+  [/^スタッフ\(全員\)/, 'staff'],
   [/^参加者/, 'participant'],
 ];
 
@@ -476,6 +481,15 @@ const ENTRY_PERIOD_CLOSED = 'entry period closed';
  * behind a scoped guard lets the in-scope 地域スタッフ in.
  */
 const PROBES: Readonly<Record<Exclude<Policy['access'], 'public'>, Probe[]>> = {
+  staff: [
+    {session: 'none', status: 401, error: UNAUTHORIZED, allowedReads: []},
+    {
+      session: 'participant',
+      status: 401,
+      error: UNAUTHORIZED,
+      allowedReads: [],
+    },
+  ],
   'general-staff': [
     {session: 'none', status: 401, error: UNAUTHORIZED, allowedReads: []},
     {

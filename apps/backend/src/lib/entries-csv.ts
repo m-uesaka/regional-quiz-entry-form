@@ -1,5 +1,6 @@
 import {
   BOOLEAN_CHECKBOX_LABELS,
+  customFieldValueOf,
   isBooleanCheckbox,
   isFreeTextFieldType,
   labelPlainText,
@@ -99,7 +100,7 @@ export function buildEntriesCsv(
     ...fieldDefs.map(fieldDef =>
       formatCustomFieldValue(
         fieldDef,
-        entry.customFieldValues[fieldDef.fieldKey],
+        customFieldValueOf(entry.customFieldValues, fieldDef.fieldKey),
       ),
     ),
   ]);

@@ -1,5 +1,4 @@
 import {Hono} from 'hono';
-import {zValidator} from '@hono/zod-validator';
 import {
   ENTRY_PERIOD_ORDER_MESSAGE,
   QuestionSetListSchema,
@@ -9,6 +8,7 @@ import {
   TournamentResetInputSchema,
   type TournamentCreateInput,
   type TournamentResetResponse,
+  TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE,
   TournamentUpdateInputSchema,
   type TournamentUpdateInput,
   type TournamentUpdateResponse,
@@ -38,11 +38,13 @@ import {
   type PgErrorTable,
   stillReferenced,
   TOURNAMENT_IDS_MISMATCH_SQLSTATE,
+  TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE,
   UNIQUE_VIOLATION_SQLSTATE,
 } from '../lib/pg-errors';
 import {rowToTournament, TOURNAMENT_COLUMNS} from '../lib/tournaments';
 import {promoteWaitlistedEntries} from '../lib/waitlist';
 import {IdParamSchema, TournamentBySlugParamSchema} from './params';
+import {validate} from '../middleware/validate';
 
 /**
  * The constraint violations a tournament insert or update can run into that
@@ -76,6 +78,12 @@ const TOURNAMENT_WRITE_ERRORS = {
   [DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE]: {
     status: 409,
     error: DUAL_ENTRY_SHARED_QUESTION_SET_MESSAGE,
+  },
+  // A PATCH would move a tournament that has entries to another region or
+  // type (0050, #284). Only an update can raise it.
+  [TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE]: {
+    status: 409,
+    error: TOURNAMENT_REGION_TYPE_LOCKED_MESSAGE,
   },
 } as const satisfies PgErrorTable<400 | 409>;
 
@@ -187,7 +195,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
   .put(
     '/order',
     requireGeneralStaff(),
-    zValidator('json', TournamentOrderInputSchema),
+    validate('json', TournamentOrderInputSchema),
     async c => {
       const {error} = await createDbClient(c.env).rpc('reorder_tournaments', {
         p_tournament_ids: c.req.valid('json').tournamentIds,
@@ -249,7 +257,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
   .get(
     '/:id',
     requireGeneralStaff(),
-    zValidator('param', IdParamSchema),
+    validate('param', IdParamSchema),
     async c => {
       const db = createDbClient(c.env);
       const {data, error} = await db
@@ -284,7 +292,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
   .post(
     '/',
     requireGeneralStaff(),
-    zValidator('json', TournamentCreateInputSchema),
+    validate('json', TournamentCreateInputSchema),
     async c => {
       const db = createDbClient(c.env);
       const {data, error} = await db
@@ -306,8 +314,8 @@ export const tournamentsRoute = new Hono<StaffEnv>()
   .patch(
     '/:id',
     requireGeneralStaff(),
-    zValidator('param', IdParamSchema),
-    zValidator('json', TournamentUpdateInputSchema),
+    validate('param', IdParamSchema),
+    validate('json', TournamentUpdateInputSchema),
     async c => {
       const db = createDbClient(c.env);
       const {id} = c.req.valid('param');
@@ -368,7 +376,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
   .delete(
     '/:id',
     requireGeneralStaff(),
-    zValidator('param', IdParamSchema),
+    validate('param', IdParamSchema),
     async c => {
       const db = createDbClient(c.env);
       const {data, error} = await db
@@ -409,8 +417,8 @@ export const tournamentsRoute = new Hono<StaffEnv>()
   .post(
     '/:id/reset',
     requireGeneralStaff(),
-    zValidator('param', IdParamSchema),
-    zValidator('json', TournamentResetInputSchema),
+    validate('param', IdParamSchema),
+    validate('json', TournamentResetInputSchema),
     async c => {
       const {data, error} = await createDbClient(c.env).rpc(
         'reset_tournament_entries',
@@ -449,7 +457,7 @@ export const tournamentsRoute = new Hono<StaffEnv>()
   // (and rejected, or stashed) the tournament by the time this runs.
   .get(
     '/:regionSlug/:tournamentSlug',
-    zValidator('param', TournamentBySlugParamSchema),
+    validate('param', TournamentBySlugParamSchema),
     requireOpenEntryPeriodOrStaff(byTournamentSlugParams),
     async c => {
       const tournament = c.get('tournament');

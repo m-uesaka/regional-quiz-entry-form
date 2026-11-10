@@ -114,6 +114,41 @@ async function issueVerificationMail(
 }
 
 /**
+ * Gives an entry whose verification mail is deferred (#346) a token that
+ * has already expired, and whose link nobody has.
+ *
+ * Not to be followed: the deferred mail issues the real link when it is
+ * sent (`prepareVerificationResend()`, which takes an entry with no live
+ * token). It is there so the entry is not one with no token at all, which
+ * `lapse_expired_pending_entries()` passes over as still being written until
+ * it has gone a link lifetime untouched (0054): if the deferred mail never
+ * goes out, the owner's next submission lapses the entry at once and enters
+ * again, rather than being told the entry is waiting for a link that is not
+ * coming.
+ * @param env The Worker bindings.
+ * @param entryId The entry whose mail is deferred.
+ * @throws Error If the token could not be stored.
+ */
+export async function holdForDeferredVerification(
+  env: Bindings,
+  entryId: string,
+): Promise<void> {
+  const {error} = await createDbClient(env)
+    .from('email_verification_tokens')
+    .insert({
+      entry_id: entryId,
+      // The hash of a token that is thrown away: no link names it.
+      token_hash: await hashToken(generateToken()),
+      expires_at: new Date().toISOString(),
+    });
+  if (error) {
+    throw new Error(
+      `failed to hold the entry for its deferred mail: ${error.message}`,
+    );
+  }
+}
+
+/**
  * Deletes a verification token whose mail never went out.
  *
  * Left in place, the undelivered link would count as live: the entry would
@@ -211,6 +246,7 @@ export async function fetchResendableEntryIds(
 export async function prepareVerificationResend(
   env: Bindings,
   entryId: string,
+  withdrawnTournaments?: readonly string[],
 ): Promise<InternalResult<IssuedVerificationMail | null>> {
   const db = createDbClient(env);
   const {data, error} = await db
@@ -247,6 +283,7 @@ export async function prepareVerificationResend(
         tournament.type,
       ),
       tournament.capacity !== null,
+      withdrawnTournaments,
     );
     return {ok: true, value: issued};
   } catch (issueError) {
@@ -267,6 +304,24 @@ export async function prepareVerificationResend(
  *     when they couldn't be read.
  */
 function withdrawalNotice(tournamentNames: readonly string[]): string {
+  return (
+    describeWithdrawnEntries(tournamentNames) +
+    '引き続き参加を希望する場合は、このエントリーを確定した後、エントリーフォームからもう一度エントリーしてください。'
+  );
+}
+
+/**
+ * What a mail says about the pending entries a takeover of the unverified
+ * account withdrew (`take_over_unverified_participant()`, #189): which they
+ * were, why, and that their links no longer work. The mail goes on to say
+ * what the owner can do about it, which depends on how the submission that
+ * withdrew them ended.
+ * @param tournamentNames The withdrawn tournaments' display names, or empty
+ *     when they couldn't be read.
+ */
+export function describeWithdrawnEntries(
+  tournamentNames: readonly string[],
+): string {
   const which =
     tournamentNames.length > 0
       ? tournamentNames.map(name => `「${name}」`).join('、') + 'への'
@@ -274,8 +329,7 @@ function withdrawalNotice(tournamentNames: readonly string[]): string {
   return (
     `このメールアドレスで受け付けていた、まだ確定していない${which}エントリーは、` +
     '異なるパスワードまたは別の地域の大会でエントリーされたため取り消しました。' +
-    '取り消したエントリーの確認メールのリンクは使えません。' +
-    '引き続き参加を希望する場合は、このエントリーを確定した後、エントリーフォームからもう一度エントリーしてください。'
+    '取り消したエントリーの確認メールのリンクは使えません。'
   );
 }
 

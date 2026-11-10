@@ -1,5 +1,9 @@
-import type {StaffLoginScope} from '@regional-quiz/shared';
+import {
+  StaffLoginScopeSchema,
+  type StaffLoginScope,
+} from '@regional-quiz/shared';
 import type {DbClient} from './db';
+import {isPasswordHashUsable} from './password';
 
 /**
  * Looks up the enabled staff account an address and a scope name, the way
@@ -36,4 +40,39 @@ export async function findStaffAccountByScope<Columns extends string>(
       ? query.is('tournament_type', null)
       : query.eq('tournament_type', scope)
   ).maybeSingle();
+}
+
+/**
+ * The scopes of the address's other enabled accounts whose owner hasn't
+ * followed their invite link yet, i.e. whose `password_hash` is still
+ * `UNUSABLE_PASSWORD_HASH` (`GET /api/staff/pending-invites`).
+ * @param db The Supabase client to read with.
+ * @param email The address of the account the caller is logged in to.
+ * @param loggedInId That account, which is left out.
+ * @return The scopes in the order `StaffLoginScopeSchema` lists them, or the
+ *     error the read failed with.
+ */
+export async function findPendingInviteScopes(
+  db: DbClient,
+  email: string,
+  loggedInId: string,
+): Promise<
+  {scopes: StaffLoginScope[]; error: null} | {scopes: null; error: unknown}
+> {
+  const {data, error} = await db
+    .from('staff_accounts')
+    .select('tournament_type, password_hash')
+    .eq('email', email)
+    .is('disabled_at', null)
+    .neq('id', loggedInId);
+  if (error) return {scopes: null, error};
+  const pending = new Set<StaffLoginScope>(
+    data
+      .filter(account => !isPasswordHashUsable(account.password_hash))
+      .map(account => account.tournament_type ?? 'general'),
+  );
+  return {
+    scopes: StaffLoginScopeSchema.options.filter(scope => pending.has(scope)),
+    error: null,
+  };
 }

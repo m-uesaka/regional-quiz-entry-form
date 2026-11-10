@@ -98,11 +98,26 @@ export async function isSessionCurrent(
   env: Bindings,
   staff: StaffClaims,
 ): Promise<SessionCheck> {
-  const {data, error} = await createDbClient(env)
+  // The scope is matched in the same read (#296). The guards decide by the
+  // claims' role, region and type, which were copied off the row at login
+  // and would otherwise stand for up to 12 hours after the row changed: a
+  // general account moved down to regional would keep every region's
+  // participants in reach. Filtering on them makes such a session read as
+  // no row, the way a deleted account's does, without another round trip.
+  let query = createDbClient(env)
     .from('staff_accounts')
     .select('sessions_valid_from, disabled_at')
     .eq('id', staff.sub)
-    .maybeSingle();
+    .eq('role', staff.role);
+  query =
+    staff.regionId === null
+      ? query.is('region_id', null)
+      : query.eq('region_id', staff.regionId);
+  query =
+    staff.tournamentType === null
+      ? query.is('tournament_type', null)
+      : query.eq('tournament_type', staff.tournamentType);
+  const {data, error} = await query.maybeSingle();
   if (error) {
     console.error('failed to check the session against the staff account', {
       error: error.message,
@@ -110,7 +125,9 @@ export async function isSessionCurrent(
     return {ok: false};
   }
   // A missing row means the account was deleted after the cookie was issued,
-  // which is as much a dead session as a revoked one. So is a disabled
+  // or its role or scope no longer is what the session says, which is as
+  // much a dead session as a revoked one: logging in again issues claims
+  // that match the row. So is a disabled
   // account's (#156): disabling also moves `sessions_valid_from`, so the
   // generation check alone would already refuse it, but an account that is
   // disabled must stay shut out even if that column is ever moved back.
@@ -141,6 +158,20 @@ const ALLOWED: Authorization<undefined> = {
 const FORBIDDEN: Authorization<never> = {decision: 'forbidden'};
 const NOT_FOUND: Authorization<never> = {decision: 'not-found'};
 const AUTHORIZATION_ERROR: Authorization<never> = {decision: 'error'};
+
+/**
+ * Lets through any staff member with a live session, whatever their role or
+ * scope: for what a staff member may ask about their own account, which
+ * involves no region or tournament.
+ */
+export function requireStaff() {
+  return createMiddleware<StaffEnv>(async (c, next) => {
+    const auth = await authenticateStaff(c, () => ALLOWED);
+    if (auth instanceof Response) return auth;
+    c.set('staff', auth.staff);
+    await next();
+  });
+}
 
 /**
  * The verified, still-current claims of the caller's staff session, or the

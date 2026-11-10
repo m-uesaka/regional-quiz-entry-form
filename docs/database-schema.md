@@ -214,7 +214,8 @@ flowchart TB
 | `custom_field_values` | jsonb | not null, default `'{}'`, 回答の合計 10000 文字以内 | 追加フォーム項目の回答。`{ field_key: string \| string[] }` |
 | `status` | entry_status | not null, default `pending_verification` | |
 | `waitlist_position` | integer | nullable | キャンセル待ちの順位。`waitlisted` 以外では `null` |
-| `email_verified_at` | timestamptz | nullable | メール確認完了時刻 |
+| `email_verified_at` | timestamptz | nullable | メール確認完了時刻。キャンセル待ちになったときにも入る |
+| `confirmed_at` | timestamptz | nullable | 最後に `confirmed` になった時刻(`0052`、#287)。トリガ `entries_set_confirmed_at` が、`confirmed` になる INSERT と `confirmed` 以外からの UPDATE で `now()` を入れる。`confirmed` の行では必須(`entries_confirmed_has_confirmed_at`)。キャンセルしても残り、再エントリーで null に戻る |
 | `cancelled_at` | timestamptz | nullable | キャンセル時刻 |
 | `created_at` | timestamptz | not null, default `now()` | |
 | `updated_at` | timestamptz | not null, default `now()` | トリガ `entries_set_updated_at` が UPDATE のたびに更新 |
@@ -224,13 +225,19 @@ flowchart TB
 - `unique (participant_id, tournament_id)`: 1参加者につき1大会1エントリー。キャンセル後の再エントリーがこの行を再利用する理由でもあります。
 - `unique (id, tournament_id)`(`0018`): `id` は主キーなので一意性としては冗長ですが、`entry_regulations` から複合外部キーを張るために必要です(参照先はちょうどその列組の一意制約でなければならない)。
 - 選択したレギュレーションは `0018` で `entry_regulations` に移りました。`entries.regulation_id` はもうありません。
-- `entries_text_lengths`(`0021`、Task 11-7 / #122): 文字列項目の長さの check 制約。`name` / `furigana` / `display_name` は 100 文字、`free_text` は 2000 文字、`custom_field_values` は回答の合計 10000 文字まで(`custom_field_values_length()` で数える。キーは数えない)。上限の本体は `packages/shared` の Zod スキーマ(`EntryInputSchema` / `CustomFieldValuesInputSchema`。回答 1 件 2000 文字の上限もこちらにある)で、API・フォームとも同じものを使います。DB 側にも持つのは、直接 SQL でデータを入れる運用が当面残るためです。違反は SQLSTATE `23514`。Zod は UTF-16 のコード単位、`char_length()` はコードポイントで数えるため、絵文字などでは DB の方がわずかに緩くなります(Zod を通った値が DB で弾かれることはない向き)。上限を超える既存行があるとマイグレーションは件数と項目名を添えて止まります(`not valid` にはしない。適用前の確認は `docs/supabase-deployment.md` 5.2)。フォームは textarea の改行を CRLF ではなく `\n` に揃えてから送るので、ブラウザの `maxlength` と同じ数え方になります。
+- `entries_text_lengths`(`0021`、Task 11-7 / #122): 文字列項目の長さの check 制約。`name` / `furigana` / `display_name` は 100 文字、`free_text` は 2000 文字、`custom_field_values` は回答の合計 10000 文字まで(`custom_field_values_length()` で数える。キーは数えない)。上限の本体は `packages/shared` の Zod スキーマ(`EntryInputSchema` / `CustomFieldValuesInputSchema`。回答 1 件 2000 文字の上限もこちらにある)で、API・フォームとも同じものを使います。DB 側にも持つのは、直接 SQL でデータを入れる運用が当面残るためです。違反は SQLSTATE `23514`。Zod 側も `char_length()` と同じくコードポイントで数えます(`codePointLength()`、#302。それまでは UTF-16 のコード単位で数えていたため、絵文字や BMP 外の漢字の多い値が上限の半分ほどで断られていました)。ブラウザの `maxlength` は UTF-16 のコード単位で数えるので、フォームは上限の 2 倍(`maxLengthAttribute()`)を付け、正確な上限はスキーマの検査で伝えます。上限を超える既存行があるとマイグレーションは件数と項目名を添えて止まります(`not valid` にはしない。適用前の確認は `docs/supabase-deployment.md` 5.2)。フォームは textarea の改行を CRLF ではなく `\n` に揃えてから送るので、ブラウザの `maxlength` と同じ数え方になります。
 - `entries_tournament_id_created_at_idx`(`0005`): `(tournament_id, created_at)` の**部分インデックス**で、`status in ('confirmed', 'waitlisted', 'cancelled')` の行だけを対象にします。公開エントリーリスト API(`GET /api/tournaments/:tournamentId/entry-list`)が読む行だけを含むため、インデックスが小さく保たれます。既存の unique インデックスは `(participant_id, tournament_id)` で `tournament_id` が先頭列ではないため、この用途には使えません。
 
 `waitlist_position` について:
 
 - 1 始まりの整数です。`cancel_own_entry()` は waitlisted な行をキャンセルする際、後ろの行を1つずつ前に詰めます。
-- 繰り上げ(`promote_waitlisted_entries()`、`0037`)も、確定にした後で残りのキャンセル待ちを 1 から振り直します。そのため `confirm_entry_by_token()` の「次の順位 = 現在の waitlisted 件数 + 1」という採番が既存の順位と衝突しません。`0037` より前の `promote_next_waitlisted_entry()` は先頭を確定にするだけで後続を詰めなかったため欠番が残り、後から来た人が前から待っていた人と同じか小さい順位を得ることがありました(残っている欠番も、次に繰り上げが走った時点で詰められます)。
+- 繰り上げ(`promote_waitlisted_entries()`、`0037`)も、確定にした後で残りのキャンセル待ちを 1 から振り直します。`0037` より前の `promote_next_waitlisted_entry()` は先頭を確定にするだけで後続を詰めなかったため欠番が残り、後から来た人が前から待っていた人と同じか小さい順位を得ることがありました。
+- `confirm_entry_by_token()` の採番は「キャンセル待ちの最大の順位 + 1」です(`0051`、#286。それまでは「件数 + 1」で、欠番があると既存の順位と重なりました)。詰め直しは順番を保つためのもので、採番の正しさは詰め直しに頼りません。
+- 不変条件は制約で保証します(`0051`、#286。違反は `23514` / `23505`):
+  - `entries_waitlist_position_iff_waitlisted`: `check ((status = 'waitlisted') = (waitlist_position is not null))`。`waitlisted` の行には必ず順位があり、それ以外の行には無い
+  - `entries_waitlist_position_positive`: `check (waitlist_position > 0)`
+  - `entries_tournament_id_waitlist_position_key`: `unique (tournament_id, waitlist_position)` を **`deferrable initially deferred`** で。詰め直しの UPDATE は途中で同じ順位を一時的に作りうる(Postgres の即時の一意制約は行ごとに検査される)ので、コミット時に検査します。NULL は対象外なので `waitlisted` 以外の行には効きません
+  - `0051` は制約を足す前に既存の行を直します。`waitlisted` 以外の行の順位を消し、`waitlisted` の行を大会ごとに今の順(順位、同じ順位や順位なしは作成順・id 順)で 1 から振り直します
 
 ### entry_regulations — エントリーが選んだレギュレーション
 
@@ -318,7 +325,7 @@ flowchart TB
 - `general`(統括スタッフ)は `region_id` / `tournament_type` が `null` で、全地域・全大会にアクセスできます。
 - `regional`(地域スタッフ)は `(region_id, tournament_type)` の組が担当範囲で、その大会のエントリーしか閲覧できません。この範囲チェックは `apps/backend/src/middleware/staff-auth.ts` が担当します。
 - この 2 パターン以外の行は check 制約 `staff_accounts_scope_matches_role`(`0015`)が拒否します。`regional` なのに `region_id` か `tournament_type` の片方しか無い行は「担当範囲が狭いアカウント」ではなく**壊れた行**で、上記の範囲チェックがすべての大会で落ちるため、そのアカウントはどこにアクセスしても静かに 403 を返し続けます。Zod 側(`StaffAccountCreateInputSchema` の判別共用体)と両方で縛っているのは、Supabase を直接触って行を作る経路が残るためです。
-- `sessions_valid_from` は**発行済みスタッフセッションを切る**ためのものです(Task 11-3)。ログイン時にこの列の値を `sessionsValidFrom` クレームとして JWT に載せ、スタッフ用ミドルウェアが毎リクエストこの列を読み直して**一致しないセッションを 401 で拒否**します。統括スタッフが `POST /api/staff/accounts/:id/revoke-sessions` で進めるほか、`reset_staff_password()` がパスワードと同じ UPDATE 文で進めます。参加者側の `password_changed_at` と同じ仕組みですが、端末紛失・Cookie の漏洩などパスワード変更以外でも切れるようにこの名前にしています。セッションを切るだけなので、パスワードを知っている人の再ログインは止められません(締め出すには `disabled_at` で無効化します)。比較が値の一致である理由も参加者側と同じです。
+- `sessions_valid_from` は**発行済みスタッフセッションを切る**ためのものです(Task 11-3)。ログイン時にこの列の値を `sessionsValidFrom` クレームとして JWT に載せ、スタッフ用ミドルウェアが毎リクエストこの列を読み直して**一致しないセッションを 401 で拒否**します。同じ読み取りで `role` / `region_id` / `tournament_type` もクレームと突き合わせ、変わっていれば同じく 401 にします(#296)。統括スタッフが `POST /api/staff/accounts/:id/revoke-sessions` で進めるほか、`reset_staff_password()` がパスワードと同じ UPDATE 文で進めます。参加者側の `password_changed_at` と同じ仕組みですが、端末紛失・Cookie の漏洩などパスワード変更以外でも切れるようにこの名前にしています。セッションを切るだけなので、パスワードを知っている人の再ログインは止められません(締め出すには `disabled_at` で無効化します)。比較が値の一致である理由も参加者側と同じです。
 - `disabled_at` は**アカウントの無効化**です(#156)。退任者やパスワードごと漏れたアカウントを締め出すためのもので、無効なアカウントはログインできず(ログインが無効な行を探さない)、セッションも通らず(スタッフ用ミドルウェアがこの列も見る)、パスワード設定リンクも使えません(`reset_staff_password()` が拒否する)。無効化は `disable_staff_account()`、有効化は `POST /api/staff/accounts/:id/enable` が null に戻します。削除ではなく無効化にしているのは、行・パスワード・担当の記録を残し、有効化で元に戻せるようにするためです(スタッフを参照する外部キーは `staff_password_reset_tokens` だけなので、削除そのものは可能です)。
 - 作成は `POST /api/staff/accounts`(統括スタッフ限定)です。作成時の `password_hash` にはハッシュ形式に合わない固定値が入り、本人が招待メールのリンクでパスワードを設定するまでログインできません。統括スタッフが他人のパスワードを知らずに済ませるための作りです。
 
@@ -400,15 +407,15 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | 関数 | 定義ファイル | 呼び出し元 | 役割 |
 | --- | --- | --- | --- |
 | `sync_form_field_defs(uuid, jsonb)` | `0002` | `lib/form-definitions.ts` | 大会のフォーム項目定義を全削除+一括挿入で置き換える |
-| `confirm_entry_by_token(text)` | `0003` → `0008` → `0034` で再定義 | `lib/entry-confirmation.ts` | 確認トークンでエントリーを確定 / キャンセル待ちに載せる |
+| `confirm_entry_by_token(text)` | `0003` → `0008` → `0034` → `0047` → `0051` で再定義 | `lib/entry-confirmation.ts` | 確認トークンでエントリーを確定 / キャンセル待ちに載せる |
 | `promote_waitlisted_entries(uuid)` | `0037`(`promote_next_waitlisted_entry()` を置き換え) | `lib/waitlist.ts` | 空いた席の数だけキャンセル待ちを繰り上げ、残りの順位を振り直す |
 | `cancel_own_entry(uuid, uuid)` | `0006` | `lib/own-entries.ts` | 参加者自身のエントリーをキャンセルする |
 | `reset_participant_password(text, text)` | `0009` → `0010` で再定義 | `lib/password-reset.ts` | 再設定トークンを消費してパスワードを更新し、残りのトークンを焼き捨てる |
 | `take_over_unverified_participant(uuid, text, uuid)` | `0034` | `lib/entry-submission.ts` | 未確認の参加者アカウントのパスワードと地域を上書きし、それまでのエントリーを削除する |
 | `claim_participant_region(uuid, uuid)` | `0040` | (旧 Worker のみ) | 地域だけを見る旧版。デプロイ中の古い Worker のために残しており、次のマイグレーションで削除する |
 | `claim_participant_region_for_tournament(uuid, uuid)` | `0043` | `lib/entry-submission.ts` | 確認済みの参加者の地域を、同じ問題セットの別の地域に押さえるエントリーが無ければエントリーする大会の地域に移す |
-| `participant_holds_conflicting_region(uuid, uuid)` | `0043` | `lib/entry-submission.ts`、`check_entry_seat()` | 参加者が、その大会とは別の地域で同じ問題セットの大会の枠を押さえているか(ロックは取らない) |
-| `reenter_cancelled_entry(uuid, uuid, text, text, text, text, jsonb)` | `0041` | `lib/entry-submission.ts` | 参加者行をロックしてから、キャンセル済みのエントリー行を再エントリーとして上書きする |
+| `participant_holds_conflicting_region(uuid, uuid)` | `0043`(`0046`・`0052` で再定義) | `lib/entry-submission.ts`、`check_entry_seat()` | 参加者が、その大会とは別の地域で同じ問題セットの大会の枠を押さえているか(ロックは取らない) |
+| `reenter_cancelled_entry(uuid, uuid, text, text, text, text, jsonb)` | `0041`(`0052` で再定義) | `lib/entry-submission.ts` | 参加者行をロックしてから、キャンセル済みのエントリー行を再エントリーとして上書きする |
 | `reset_tournament_entries(uuid, boolean)` | `0038` | `routes/tournaments.ts` | 大会のエントリーを全件削除し、指定があれば他の大会にエントリーが残っていない参加者アカウントも削除する |
 | `tournament_entry_summary()` | `0013` | `routes/staff-dashboard.ts` | 全大会のエントリー件数をステータス別に集計する(読み取り専用) |
 | `sync_regulations(uuid, jsonb)` | `0014`(`0018`・`0042` で再定義) | `lib/regulations.ts` | 大会のレギュレーションを差分同期する(update / insert / 参照が無ければ delete) |
@@ -421,8 +428,8 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 
 | 経路 | ロック順 |
 | --- | --- |
-| エントリーの INSERT | 参加者行(`check_entry_seat()`)→ 大会行(外部キー検査の `for key share`) |
-| `reenter_cancelled_entry()` | 参加者行 → トークン行 → `entries` 行 |
+| エントリーの INSERT | 参加者行(`check_entry_seat()`)→ 大会行(`check_entry_seat()` と外部キー検査の `for key share`) |
+| `reenter_cancelled_entry()` | 参加者行 → トークン行 → `entries` 行 → 大会行(`check_entry_seat()` の `for key share`、`0050`) |
 | `confirm_entry_by_token()` | 参加者行 → トークン行 → 大会行 → `entries` 行 |
 | `take_over_unverified_participant()` | 参加者行 → トークン行 → `entries` 行(削除) |
 | `cancel_own_entry()` / `lapse_expired_pending_entries()` | トークン行 → 大会行 → `entries` 行 |
@@ -466,7 +473,7 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 2. トークン行を `for update of evt` でロックしつつ取得。未知 / 使用済み / 期限切れなら SQLSTATE `P0003` を raise。
 3. 大会行を `for update` でロック(`capacity` も同時に取得)。
 4. **ロック取得後に**エントリーの `status` を読み直し、`pending_verification` でなければ `P0003` を raise(`0008` で追加)。
-5. `confirmed` 件数を数え、`capacity` に空きがあれば `confirmed`、なければ `waitlisted`(順位 = 現在の waitlisted 件数 + 1)。
+5. `confirmed` 件数・`waitlisted` 件数・キャンセル待ちの最大の順位を数え、キャンセル待ちが 1 件でもあるか `capacity` に空きがなければ `waitlisted`(順位 = 最大の順位 + 1。`0047`、`0051`)、それ以外は `confirmed`。
 6. エントリーと トークン(`used_at`)を更新し、参加者の `email_verified_at` が null なら打刻する(`0034` で追加、#189)。
 
 参加者行を最初に取るのは、`check_entry_seat()` が「参加者行 → 大会行(外部キー検査の `for key share`)」の順で取るのと揃え、`take_over_unverified_participant()` と直列化するためです。大会行を持ったまま参加者行を取るとデッドロックし得ます。`for no key update` なので、エントリーの INSERT が外部キー検査で参加者行に取る `for key share` とは衝突しません。
@@ -510,7 +517,7 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 参加者の確定待ち(`pending_verification`)エントリーのうち、**確認トークンが 1 つ以上あり、そのどれもが使用済みか期限切れのもの**を `cancelled` にし、取り消したエントリーの id を返します(`0030`、#172)。エントリー処理(`enterTournament()`)が最初の段階 `lapseExpiredPendingEntries()` で呼びます。
 
 - 期限が切れたエントリーは確定できないのに、同じ大会への再エントリーと、重複参加を許さない地域のもう一方の大会へのエントリーを断っていました。キャンセル扱いにすることで、同じ大会なら行が再利用され(新しい確認メールが届く)、もう一方の大会の枠も空きます。
-- トークンが 1 つも無い確定待ちは、同じ参加者の別の送信が作っている途中のエントリーなので触りません。
+- トークンが 1 つも無い確定待ちは、同じ参加者の別の送信が作っている途中のエントリーなので触りません。ただし行が最後に書き込まれてから(`updated_at`)24 時間(確認リンクの有効期限)を過ぎていれば、作成途中ではなく巻き戻しの削除に失敗して残った行として取り消します(`0054`、#290)。`created_at` でなく `updated_at` で測るのは、キャンセル済みの行を再利用する再エントリーが古い `created_at` のまま行を書き直すためです。
 - 残っていたトークンは使用済みにします。
 - 候補はロック無しで先に絞り込み、期限内のリンクがある確定待ちにはロックを取りません。
 - 候補ごとのロック取得順は `confirm_entry_by_token()` / `cancel_own_entry()` と同じ「トークン行 → 大会行」。状態とトークンは大会行ロックの下で読み直すので、確認と同時に走っても二重に動きません。複数の候補は大会 id 順に処理し、別々の参加者の呼び出し同士のデッドロックを避けます。
@@ -531,7 +538,7 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 1. 参加者行を `for no key update` でロックする。
 2. `p_entry_id` の行が `p_participant_id` のもので `cancelled` なら、その行の使用済みと期限切れのトークンを削除する。有効なトークンは残す。
-3. **別の文で**、同じ条件で、入力の値と `pending_verification` で行を上書きする。`waitlist_position` / `email_verified_at` / `cancelled_at` は null に戻すので、新しく入れた行と同じ状態から始まります。
+3. **別の文で**、同じ条件で、入力の値と `pending_verification` で行を上書きする。`waitlist_position` / `email_verified_at` / `confirmed_at` / `cancelled_at` は null に戻すので、新しく入れた行と同じ状態から始まります。
 
 - 関数にしたのはロック順のためです。`entries` への直接の UPDATE は BEFORE ROW トリガが動く前に行をロックするので、トリガの中で参加者行を取ると「`entries` 行 → 参加者行」になり、`take_over_unverified_participant()` とデッドロックしました。先に参加者行を取れば、上書きとはそこで直列化されます。
 - 待っている間に行が `cancelled` でなくなっていれば(同時の再エントリーが取った、上書きが消した)0 行を返します。`setof entries` を返すので、呼び出し側は INSERT と同じ `.select('id').single()` で受けられ、0 行は `PGRST116` として `concurrent submission` の 409 になります。
@@ -544,7 +551,7 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 確認済みの参加者の `region_id` を、エントリーする大会の地域に移します(#236 の `0040` の `claim_participant_region()` を `0043` で大会単位にしたもの)。`enterTournament()` がエントリーを書く前に、期限切れの確定待ちを取り消してから `claimTournamentRegion()` の段階で呼びます。参加者行を `for no key update` でロックした後の別の文で、**エントリーする大会と問題セットが同じ別の地域の大会**に次のエントリーが無いことを確かめます(`participant_holds_conflicting_region()`)。
 
 - `cancelled` 以外のエントリー
-- 大会の受付終了より後にキャンセルした、確定済みだったエントリー(`email_verified_at` が null でなく、`cancelled_at > entry_closes_at`)
+- 大会の受付終了より後にキャンセルした、確定済みだったエントリー(`confirmed_at` が null でなく、`cancelled_at > entry_closes_at`)。`0052`(#287)より前は `email_verified_at` で見ていたため、キャンセル待ちのまま受付終了後に取り消した(一度も席を得なかった)エントリーも数えていました。`0052` より前に受付終了後に取り消された行は、確定済みだったかキャンセル待ちだったかを区別できないので、`email_verified_at` があれば確定済みだったものとして `confirmed_at` を埋めています(これまでと同じ判定)
 
 あれば何も変えずに `false` を返し、呼び出し側は `already registered in another region` で断ります。なければ地域を移して(もともとその地域なら何もせずに) `true` を返します。キャンセルには期限が無いので、後者を数えないと、大会に出た後でキャンセルして別の地域の大会にも出られてしまいます。
 
@@ -619,7 +626,7 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 
 **枠を取る書き込みだけ**を検査します(INSERT と、`cancelled` の行を再利用する再エントリーの UPDATE)。既に枠を持つ行のステータス変更(`pending_verification` → `confirmed`、キャンセル待ちの繰り上げ、キャンセル)は枠を取ったときに検査済みで、しかも `cancel_own_entry()` などが大会行のロックを持ったまま実行するため、そこで参加者行を取るとデッドロックを招きます(上の「エントリーまわりのロック順」)。
 
-参加者行を `for no key update` でロックしてから、次の順に検査します。地域行ではなく参加者行なのは、同じ地域の無関係な申し込みまで直列化しないためです。
+参加者行を `for no key update` でロックしてから、次の順に検査します。地域行ではなく参加者行なのは、同じ地域の無関係な申し込みまで直列化しないためです。続けて大会行を `for key share` でロックしてから大会の地域を読みます(`0050`、#284)。大会の地域・種別を変える UPDATE は大会行を `for update` で取るので、未コミットの移動と同時に来たエントリーは移動のコミットを待ち、移った先の地域で検査されます(ロックしないと移動前の地域で検査を通り、そのまま移った先に入っていました)。
 
 1. **地域をまたいだ参加。** 同じ問題セットの別の地域の大会に枠を押さえるエントリーがあれば(`participant_holds_conflicting_region()`)SQLSTATE `P0008`(`participant belongs to another region`)。`0043` までは参加者の地域(`participants.region_id`)と大会の地域の一致を見ていましたが、問題セットが違えば複数の地域に参加できるようになったので、エントリーそのものを見ます。`claim_participant_region_for_tournament()` の確認からエントリーの書き込みまでの間に、別の送信が別の地域の枠を取った場合の裏付けです。参加者行で直列化されるので、どちらが先でも後の側が先のエントリーを見て断ります。`enterTournament()` は `already registered in another region` の 409 にします(実際に枠があるので、やり直しを促す `concurrent submission` にはしません)。
 2. **重複エントリー。** `regions.allows_dual_entry` が `false` の地域で、同じ地域の別の大会に `cancelled` 以外のエントリーがあれば SQLSTATE `P0005`(`already entered another tournament in this region`)。アプリケーション側で「数える → 書く」と、地域の 2 大会への申し込みが同時に来たときに両方が 0 件を数えて両方とも通り、片方を取り消す経路も無いまま 2 枠を占有してしまいます。数えるのも書くのも参加者行のロックの下で行うので、この窓がありません。2 つ目のトランザクションは参加者行で待たされ、1 つ目のコミット後にその行を見て弾かれます。`enterTournament()` はこれを 409 `already entered another tournament in this region` に変換します(未認証の経路では案内メール `dual-entry` になります)。

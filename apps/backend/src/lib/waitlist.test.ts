@@ -93,7 +93,9 @@ describe.skipIf(!(await isDbReachable()))(
     async function createConfirmedEntry(
       fixture: TournamentFixture,
     ): Promise<void> {
-      const id = await createWaitlistedEntry(fixture, 0);
+      // A position no test waits at; it is cleared straight away. Positions
+      // start at 1 (0051).
+      const id = await createWaitlistedEntry(fixture, 999);
       await sql`
         update entries set status = 'confirmed', waitlist_position = null
         where id = ${id}

@@ -1,5 +1,7 @@
 import {parse as parseYaml, stringify as stringifyYaml} from 'yaml';
 import {z} from 'zod';
+import {SpreadsheetIdInputSchema} from './spreadsheet';
+import {wellFormedText} from './text';
 import {TournamentTypeSchema, type TournamentType} from './tournament';
 
 export const FormFieldTypeSchema = z.enum([
@@ -24,9 +26,31 @@ export function isFreeTextFieldType(
   return (FREE_TEXT_FIELD_TYPES as readonly FormFieldType[]).includes(type);
 }
 
+/**
+ * Names a field key may not take: what every plain object already has
+ * (`constructor`, `toString`, `__proto__`, ...) and `prototype`. Answers are
+ * kept in plain objects keyed by field key, where such a key reads or
+ * writes the object's own machinery instead of an answer (#299). The key
+ * pattern below lets only `constructor` of these through today; listing
+ * them all keeps the rule from depending on it.
+ */
+const RESERVED_FIELD_KEYS: ReadonlySet<string> = new Set([
+  ...Object.getOwnPropertyNames(Object.prototype),
+  'prototype',
+]);
+
+// A YAML double-quoted `"\ud800"` decodes to a lone surrogate, which the
+// database refuses (#298).
+const optionSchema = wellFormedText(z.string(), '選択肢');
+
 const BaseFormFieldDefYamlSchema = z.object({
-  key: z.string().regex(/^[a-z][a-z0-9_]*$/),
-  label: z.string(),
+  key: z
+    .string()
+    .regex(/^[a-z][a-z0-9_]*$/)
+    .refine(key => !RESERVED_FIELD_KEYS.has(key), {
+      message: 'このフィールドキーは使えません(予約語です)',
+    }),
+  label: wellFormedText(z.string(), 'ラベル'),
   required: z.boolean().default(false),
 });
 
@@ -34,17 +58,17 @@ export const FormFieldDefYamlSchema = z.discriminatedUnion('type', [
   // A plain boolean checkbox (e.g. "agree to the rules") has no options.
   BaseFormFieldDefYamlSchema.extend({
     type: z.literal('checkbox'),
-    options: z.array(z.string()).optional(),
+    options: z.array(optionSchema).optional(),
   }),
   // A radio group needs at least one option to be selectable.
   BaseFormFieldDefYamlSchema.extend({
     type: z.literal('radio'),
-    options: z.array(z.string()).min(1),
+    options: z.array(optionSchema).min(1),
   }),
   // Free text: `textarea` takes several lines, `textfield` one (#173).
   BaseFormFieldDefYamlSchema.extend({
     type: z.enum(FREE_TEXT_FIELD_TYPES),
-    options: z.array(z.string()).optional(),
+    options: z.array(optionSchema).optional(),
   }),
 ]);
 export type FormFieldDefYaml = z.infer<typeof FormFieldDefYamlSchema>;
@@ -101,7 +125,7 @@ export type FormDefinitionUpload = z.infer<typeof FormDefinitionUploadSchema>;
  * frontend and backend validate the same shape.
  */
 export const SheetImportRequestSchema = z.object({
-  spreadsheetId: z.string(),
+  spreadsheetId: SpreadsheetIdInputSchema,
   tournamentSlug: TournamentTypeSchema,
 });
 export type SheetImportRequest = z.infer<typeof SheetImportRequestSchema>;

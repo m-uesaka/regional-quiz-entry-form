@@ -37,6 +37,8 @@ export class RecordingQueue<Body> implements Queue<Body> {
   readonly sent: Body[] = [];
   /** How many messages each `send()`/`sendBatch()` call carried. */
   readonly callSizes: number[] = [];
+  /** The options each `send()` call was given, in order. */
+  readonly sendOptions: Array<QueueSendOptions | undefined> = [];
   /**
    * The 0-based call to reject, for the tests about a queue that is
    * refusing. Left unset, every call succeeds.
@@ -58,8 +60,9 @@ export class RecordingQueue<Body> implements Queue<Body> {
     return Promise.resolve(EMPTY_QUEUE_METRICS);
   }
 
-  send(message: Body): Promise<QueueSendResponse> {
+  send(message: Body, options?: QueueSendOptions): Promise<QueueSendResponse> {
     this.record([message]);
+    this.sendOptions.push(options);
     return Promise.resolve({metadata: {metrics: EMPTY_QUEUE_METRICS}});
   }
 
@@ -142,7 +145,11 @@ export function turnstileAwareFetch(
   return ((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString();
     if (url.includes('challenges.cloudflare.com')) {
-      return Promise.resolve(Response.json({success: verified}));
+      // Solved on the frontend `testBindings()` names, with no action: what
+      // a genuine token from that host looks like to every endpoint.
+      return Promise.resolve(
+        Response.json({success: verified, hostname: 'entry.example.com'}),
+      );
     }
     return fetchImpl(input as RequestInfo, init);
   }) as unknown as typeof fetch;

@@ -57,6 +57,16 @@ async function regionalStaffCookie(regionId: string): Promise<string> {
   return `staff_session=${token}`;
 }
 
+/**
+ * 200 bodies from Google that the converters can't make sense of: one that
+ * isn't JSON (a `SyntaxError`), and a grid with a row of the wrong shape (a
+ * `TypeError`).
+ */
+const UNEXPECTED_SHEET_BODIES = [
+  '<html>not json</html>',
+  JSON.stringify({values: [null]}),
+];
+
 describe('sheet-import routes', () => {
   const originalFetch = globalThis.fetch;
 
@@ -314,6 +324,37 @@ describe('sheet-import routes', () => {
     }
   });
 
+  // #293: what neither the sheet nor Google got wrong (a 200 that isn't
+  // JSON, a grid of an unexpected shape) is a logged 500, not a 400 showing
+  // staff the raw `SyntaxError` / `TypeError` message.
+  it('answers an unexpected failure with a 500 that hides its message', async () => {
+    const cookie = await generalStaffCookie();
+    for (const body of UNEXPECTED_SHEET_BODIES) {
+      globalThis.fetch = staffSessionAwareFetch((() =>
+        Promise.resolve(
+          new Response(body, {status: 200}),
+        )) as unknown as typeof fetch);
+
+      const res = await app.request(
+        '/api/sheet-import/preview',
+        {
+          method: 'POST',
+          headers: {cookie, 'content-type': 'application/json'},
+          body: JSON.stringify({
+            spreadsheetId: 'sheet-id',
+            tournamentSlug: 'saikyoi',
+          }),
+        },
+        env,
+      );
+
+      expect(res.status).toBe(500);
+      expect((await res.json()) as unknown).toEqual({
+        error: 'internal server error',
+      });
+    }
+  });
+
   describe('POST /regulations/preview', () => {
     function previewRegulations(cookie?: string, body: unknown = {}) {
       return app.request(
@@ -429,6 +470,26 @@ describe('sheet-import routes', () => {
       });
 
       expect(res.status).toBe(502);
+    });
+
+    // #293, as for the form-definition preview.
+    it('answers an unexpected failure with a 500 that hides its message', async () => {
+      const cookie = await generalStaffCookie();
+      for (const body of UNEXPECTED_SHEET_BODIES) {
+        globalThis.fetch = staffSessionAwareFetch((() =>
+          Promise.resolve(
+            new Response(body, {status: 200}),
+          )) as unknown as typeof fetch);
+
+        const res = await previewRegulations(cookie, {
+          spreadsheetId: 'sheet-id',
+        });
+
+        expect(res.status).toBe(500);
+        expect((await res.json()) as unknown).toEqual({
+          error: 'internal server error',
+        });
+      }
     });
   });
 });

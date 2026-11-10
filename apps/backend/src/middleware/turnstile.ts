@@ -1,6 +1,7 @@
 import {createMiddleware} from 'hono/factory';
-import {ENTRY_ERROR_CODES} from '@regional-quiz/shared';
+import {ENTRY_ERROR_CODES, type TurnstileAction} from '@regional-quiz/shared';
 import type {Env} from '../types/env';
+import {trustedHostnames} from '../lib/trusted-origins';
 import {verifyTurnstile} from '../lib/turnstile';
 
 /**
@@ -29,12 +30,21 @@ export const TURNSTILE_TOKEN_HEADER = 'cf-turnstile-response';
  *
  * A missing and an invalid token are answered the same way (400): the caller
  * fixes both by solving the widget again, and the difference is of interest
- * only to someone probing what gets through.
+ * only to someone probing what gets through. So is a token solved on another
+ * host or on another form (#297).
+ * @param action The form the endpoint is submitted from, as its page
+ *     renders the widget (`Turnstile.svelte`'s `action`).
  */
-export function requireTurnstile() {
+export function requireTurnstile(action: TurnstileAction) {
   return createMiddleware<Env>(async (c, next) => {
     const token = c.req.header(TURNSTILE_TOKEN_HEADER);
-    if (!token || !(await verifyTurnstile(c.env.TURNSTILE_SECRET_KEY, token))) {
+    if (
+      !token ||
+      !(await verifyTurnstile(c.env.TURNSTILE_SECRET_KEY, token, {
+        hostnames: trustedHostnames(c.env),
+        action,
+      }))
+    ) {
       return c.json(
         {error: ENTRY_ERROR_CODES.TURNSTILE_VERIFICATION_FAILED},
         400,

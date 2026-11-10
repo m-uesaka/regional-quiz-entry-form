@@ -1,5 +1,4 @@
 import {Hono} from 'hono';
-import {zValidator} from '@hono/zod-validator';
 import {
   FormDefinitionUploadSchema,
   parseFormDefinitionYaml,
@@ -19,6 +18,7 @@ import {
 } from '../lib/form-definitions';
 import {fetchFormFieldDefs} from '../lib/form-field-defs';
 import {TournamentIdParamSchema} from './params';
+import {validate} from '../middleware/validate';
 
 // The staff-only upload gets `requireGeneralStaff()` attached per-route
 // rather than through `.use('*', ...)`, because the read below is public
@@ -30,7 +30,7 @@ import {TournamentIdParamSchema} from './params';
 export const formDefinitionsRoute = new Hono<StaffEnv>()
   .get(
     '/:tournamentId',
-    zValidator('param', TournamentIdParamSchema),
+    validate('param', TournamentIdParamSchema),
     requireOpenEntryPeriodOrStaff(byTournamentIdParam),
     async c => {
       const db = createDbClient(c.env);
@@ -50,8 +50,8 @@ export const formDefinitionsRoute = new Hono<StaffEnv>()
   .put(
     '/:tournamentId',
     requireGeneralStaff(),
-    zValidator('param', TournamentIdParamSchema),
-    zValidator('json', FormDefinitionUploadSchema),
+    validate('param', TournamentIdParamSchema),
+    validate('json', FormDefinitionUploadSchema),
     async c => {
       let parsed;
       try {

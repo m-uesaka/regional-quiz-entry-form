@@ -206,6 +206,69 @@ describe.skipIf(!dbReachable)(
       expect(row.name).toBe('山田太郎');
     });
 
+    /**
+     * Resolves once some backend is waiting on a lock `holderPid` holds, so
+     * the holder commits only after the UPDATE under test has reached the
+     * row. The UPDATE runs in PostgREST's own connection, whose pid isn't
+     * known here.
+     */
+    async function waitUntilBlockedBy(holderPid: number): Promise<void> {
+      const deadline = Date.now() + 5_000;
+      for (;;) {
+        const [row] = await sql`
+          select exists (
+            select 1 from pg_stat_activity
+            where ${holderPid} = any(pg_blocking_pids(pid))
+          ) as waiting
+        `;
+        if ((row as {waiting: boolean}).waiting) {
+          return;
+        }
+        if (Date.now() > deadline) {
+          throw new Error(`nothing ever waited on backend ${holderPid}`);
+        }
+        await Bun.sleep(10);
+      }
+    }
+
+    it('leaves an entry cancelled between the check and the update alone', async () => {
+      const fixture = await createEntryFixture('cancel-race');
+      const canceller = await sql.reserve();
+      try {
+        // An uncommitted cancellation: the edit's unlocked check still reads
+        // the entry as confirmed, and its UPDATE then waits on the row.
+        await canceller`begin`;
+        await canceller`
+          update entries set status = 'cancelled', cancelled_at = now()
+          where id = ${fixture.entryId}
+        `;
+        const [{pid}] = await canceller`select pg_backend_pid() as pid`;
+
+        const updating = updateOwnEntry(
+          env,
+          fixture.participantId,
+          fixture.entryId,
+          patch,
+        );
+        await waitUntilBlockedBy(pid as number);
+        await canceller`commit`;
+        const result = await updating;
+
+        expect(result.ok).toBe(false);
+        expect(!result.ok && result.status).toBe(403);
+        expect(!result.ok && result.error).toBe('entry is cancelled');
+        const [row] = await sql`
+          select status, name, custom_field_values
+          from entries where id = ${fixture.entryId}
+        `;
+        expect(row.status).toBe('cancelled');
+        expect(row.name).toBe('山田太郎');
+        expect(row.custom_field_values).toEqual({t_shirt_size: 'M'});
+      } finally {
+        canceller.release();
+      }
+    });
+
     it('rejects custom field answers the tournament does not define', async () => {
       const fixture = await createEntryFixture('unknown-field');
 

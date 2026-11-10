@@ -1,11 +1,13 @@
 <script lang="ts">
   import type {Region} from '@regional-quiz/shared';
+  import {enhance} from '$app/forms';
   import NativeSelect from '$lib/components/form/NativeSelect.svelte';
   import Button from '$lib/components/ui/atoms/Button.svelte';
   import Input from '$lib/components/ui/atoms/Input.svelte';
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import Link from '$lib/components/ui/atoms/Link.svelte';
   import FlashMessage from '$lib/components/ui/items/FlashMessage.svelte';
+  import {InPlaceForm} from '$lib/in-place-form.svelte';
   import {datetimeLocalStep} from '$lib/jst-datetime';
   import type {TournamentFormValues} from '$lib/types/tournament-form';
 
@@ -26,17 +28,56 @@
     submitLabel: string;
     /** The named action to post to, or undefined for the page's default. */
     action?: string;
+    /**
+     * Whether the region and type are shown but can't be changed: the
+     * tournament has entries, which the database refuses to move (#284).
+     */
+    regionTypeLocked?: boolean;
   }
 
-  const {regions, values, questionSets, submitLabel, action}: Props =
-    $props();
+  const {
+    regions,
+    values,
+    questionSets,
+    submitLabel,
+    action,
+    regionTypeLocked = false,
+  }: Props = $props();
+
+  // The controls are not reset after a successful save: they take `value`
+  // rather than `bind:value`, so a reset would put back what the page was
+  // first rendered with, and a field the save left unchanged would never be
+  // set again from the re-read tournament.
+  const submission = new InPlaceForm({resetOnSuccess: false});
 </script>
 
 <!-- Posted to a form action rather than sent from the browser: `/api/*` is
      only routed to the backend Worker for requests the frontend makes
      itself, so a client-side write would 404 in production until Task 9-5
-     lands. See the note in this page's `+page.server.ts`. -->
-<form class="flex flex-col gap-4" method="POST" {action}>
+     lands. See the note in this page's `+page.server.ts`.
+     Sent with `use:enhance` so that saving re-runs `load` without a page
+     load, which on the edit page would throw away the form definition's
+     unsaved YAML draft below (#303); without JavaScript it still posts as a
+     plain form. See `InPlaceForm` for what it does with a failed action and
+     a second click. -->
+<form
+  class="flex flex-col gap-4"
+  method="POST"
+  {action}
+  use:enhance={submission.submit}
+>
+  {#if submission.error}
+    <FlashMessage kind="error">{submission.error}</FlashMessage>
+  {/if}
+
+  {#if regionTypeLocked}
+    <!-- A disabled control isn't submitted, and the action sends the region
+         and type on every save: these carry the stored ones in its place,
+         which the database lets through unchanged. -->
+    <input type="hidden" name="regionId" value={values.regionId} />
+    <input type="hidden" name="type" value={values.type} />
+  {/if}
+
   <div class="flex flex-col gap-1.5">
     <Label for="tournament-region">地域</Label>
     <!-- A select rather than a UUID typed by hand: the id is not something
@@ -44,9 +85,13 @@
          under a region nobody notices until its entry-form URL is wrong. -->
     <NativeSelect
       id="tournament-region"
-      name="regionId"
+      name={regionTypeLocked ? undefined : 'regionId'}
       value={values.regionId}
       required
+      disabled={regionTypeLocked}
+      aria-describedby={regionTypeLocked
+        ? 'tournament-region-type-locked'
+        : undefined}
     >
       <option value="" disabled>選択してください</option>
       {#each regions as region (region.id)}
@@ -64,11 +109,25 @@
 
   <div class="flex flex-col gap-1.5">
     <Label for="tournament-type">種別</Label>
-    <NativeSelect id="tournament-type" name="type" value={values.type}>
+    <NativeSelect
+      id="tournament-type"
+      name={regionTypeLocked ? undefined : 'type'}
+      value={values.type}
+      disabled={regionTypeLocked}
+      aria-describedby={regionTypeLocked
+        ? 'tournament-region-type-locked'
+        : undefined}
+    >
       <option value="saikyoi">最強位</option>
       <option value="shinjinou">新人王</option>
     </NativeSelect>
   </div>
+
+  {#if regionTypeLocked}
+    <p id="tournament-region-type-locked" class="text-sm text-muted-foreground">
+      エントリーがあるため、地域と種別は変更できません。
+    </p>
+  {/if}
 
   <div class="flex flex-col gap-1.5">
     <Label for="tournament-name">大会名(任意)</Label>
@@ -163,6 +222,6 @@
   </div>
 
   <div class="flex flex-wrap gap-2">
-    <Button type="submit">{submitLabel}</Button>
+    <Button type="submit" disabled={submission.pending}>{submitLabel}</Button>
   </div>
 </form>

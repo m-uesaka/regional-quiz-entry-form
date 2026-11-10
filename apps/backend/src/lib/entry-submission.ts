@@ -26,7 +26,11 @@ import {
   type TablesInsert,
 } from './db';
 import {sendEntryNoticeEmail, type EntryNoticeReason} from './entry-notice';
-import {sendVerificationEmail} from './entry-verification';
+import {
+  holdForDeferredVerification,
+  sendVerificationEmail,
+} from './entry-verification';
+import {deferEntryMail} from './deferred-entry-mail';
 import type {InternalFailure, LibFailure} from './errors';
 import {validateCustomFieldValues} from './form-field-defs';
 import {hashPassword, verifyPassword} from './password';
@@ -42,6 +46,18 @@ import {verifyAccountPassword} from './password-rehash';
 
 type CreateEntryResult =
   {ok: true; entry: {id: string}} | LibFailure<400 | 401 | 403 | 409>;
+
+/**
+ * What `createEntryAfterCheck()` comes to. A submission that took an
+ * unverified account over and then failed also carries the tournaments
+ * whose pending entries the takeover withdrew: the takeover can't be undone,
+ * so the notice of the failure is where the owner learns of them (#291).
+ */
+type AddressEntryResult =
+  | CreateEntryResult
+  | (Extract<CreateEntryResult, {ok: false}> & {
+      withdrawnTournaments: string[];
+    });
 
 /**
  * What the address-independent half of an entry submission concluded: the
@@ -122,7 +138,7 @@ const PARTICIPANT_COLUMNS = 'id, region_id, password_hash, email_verified_at';
 /**
  * The participant's existing entry for the tournament, if there is one.
  *
- * Every column `reenter_cancelled_entry()` (migration 0041) overwrites is
+ * Every column `reenter_cancelled_entry()` (migrations 0041, 0052) overwrites is
  * selected, not just the ones the reuse decision is made on, so a re-entry
  * that fails afterwards can put the row back exactly as it was. A column added
  * to that function's `set` list has to be added here and to `rollbackEntry()`.
@@ -137,6 +153,7 @@ interface ExistingEntryRow extends Pick<
   | 'status'
   | 'waitlist_position'
   | 'email_verified_at'
+  | 'confirmed_at'
   | 'cancelled_at'
   | 'custom_field_values'
 > {
@@ -150,7 +167,7 @@ interface ExistingEntryRow extends Pick<
 const EXISTING_ENTRY_COLUMNS = `
   id, name, furigana, display_name, entry_regulations(regulation_id),
   free_text, custom_field_values, status, waitlist_position,
-  email_verified_at, cancelled_at
+  email_verified_at, confirmed_at, cancelled_at
 `;
 
 /**
@@ -219,12 +236,38 @@ async function rollbackEntry(
   // reference it by foreign key, and on the reuse path dropping them is what
   // stops a link that did go out from confirming an entry that has been put
   // back into its cancellation.
-  await db.from('email_verification_tokens').delete().eq('entry_id', entryId);
+  const {error: tokensError} = await db
+    .from('email_verification_tokens')
+    .delete()
+    .eq('entry_id', entryId);
+  if (tokensError) {
+    console.error('failed to delete the verification tokens', {
+      entryId,
+      code: tokensError.code,
+      error: tokensError.message,
+    });
+  }
 
   if (!existingEntry) {
     // `entry_regulations` references the entry `on delete cascade`, so the
     // selection written for it goes with the row.
-    await db.from('entries').delete().eq('id', entryId);
+    //
+    // Logged rather than reported, as on the reuse path below. A row left
+    // behind here is a `pending_verification` entry whose link never
+    // arrived: a retry is refused as waiting for that link until the row
+    // lapses (`lapse_expired_pending_entries()`, 0054), so it must not pass
+    // silently either.
+    const {error: entryError} = await db
+      .from('entries')
+      .delete()
+      .eq('id', entryId);
+    if (entryError) {
+      console.error('failed to delete the entry', {
+        entryId,
+        code: entryError.code,
+        error: entryError.message,
+      });
+    }
     return;
   }
 
@@ -245,6 +288,10 @@ async function rollbackEntry(
       status: existingEntry.status,
       waitlist_position: existingEntry.waitlist_position,
       email_verified_at: existingEntry.email_verified_at,
+      // Whether the cancelled entry still holds its region after the entry
+      // period (0052): losing it would let the participant into another
+      // region's tournament on the same question set.
+      confirmed_at: existingEntry.confirmed_at,
       cancelled_at: existingEntry.cancelled_at,
     })
     .eq('id', entryId);
@@ -433,7 +480,8 @@ async function createEntryAfterCheck(
   env: Bindings,
   tournament: EntryTournamentRow,
   input: EntryInput,
-): Promise<CreateEntryResult> {
+  delivery: EntryMailDelivery = 'now',
+): Promise<AddressEntryResult> {
   const db = createDbClient(env);
 
   const {data: existingParticipant, error: participantError} = await db
@@ -455,6 +503,7 @@ async function createEntryAfterCheck(
       tournament,
       existingParticipant,
       input,
+      delivery,
     );
   }
 
@@ -495,9 +544,15 @@ async function createEntryAfterCheck(
           error: error?.message ?? 'failed to create participant',
         };
       }
-      return enterTournament(env, tournament, created.id, input.email, input, {
-        passwordHash,
-      });
+      return enterTournament(
+        env,
+        tournament,
+        created.id,
+        input.email,
+        input,
+        {passwordHash},
+        delivery,
+      );
     }
     // A different password: the account is handed to
     // this submission, and what the earlier ones made goes with the old
@@ -515,20 +570,32 @@ async function createEntryAfterCheck(
     }
     // Null when the address turned out to be verified (see below).
     if (withdrawn !== null) {
-      return enterTournament(
+      const otherWithdrawn = await withdrawnTournamentNames(
+        db,
+        withdrawn.filter(id => id !== tournament.id),
+      );
+      const entered = await enterTournament(
         env,
         tournament,
         existingParticipant.id,
         input.email,
         input,
-        {
-          passwordHash,
-          withdrawnTournaments: await withdrawnTournamentNames(
-            db,
-            withdrawn.filter(id => id !== tournament.id),
-          ),
-        },
+        {passwordHash, withdrawnTournaments: otherWithdrawn},
+        delivery,
       );
+      if (entered.ok) {
+        return entered;
+      }
+      // Only the new entry is rolled back; what the takeover deleted stays
+      // deleted, this tournament's earlier entry included.
+      const withdrawnTournaments = withdrawnWithoutReplacement(
+        tournament,
+        withdrawn,
+        otherWithdrawn,
+      );
+      return withdrawnTournaments
+        ? {...entered, withdrawnTournaments}
+        : entered;
     }
     // The address was verified since it was read above -- its owner
     // followed a link a moment ago -- so the account is theirs now, and
@@ -553,10 +620,17 @@ async function createEntryAfterCheck(
       tournament,
       verifiedParticipant,
       input,
+      delivery,
     );
   }
 
-  return enterVerifiedParticipant(env, tournament, existingParticipant, input);
+  return enterVerifiedParticipant(
+    env,
+    tournament,
+    existingParticipant,
+    input,
+    delivery,
+  );
 }
 
 /**
@@ -572,6 +646,7 @@ async function enterVerifiedParticipant(
   tournament: EntryTournamentRow,
   participant: ParticipantRow,
   input: EntryInput,
+  delivery: EntryMailDelivery,
 ): Promise<CreateEntryResult> {
   // Re-entering under a verified address must prove ownership of that
   // account, otherwise anyone who learns a participant's email could attach
@@ -597,7 +672,15 @@ async function enterVerifiedParticipant(
     return {ok: false, status: 401, error: ENTRY_ERROR_CODES.INVALID_PASSWORD};
   }
   await upgrade;
-  return enterTournament(env, tournament, participant.id, input.email, input);
+  return enterTournament(
+    env,
+    tournament,
+    participant.id,
+    input.email,
+    input,
+    undefined,
+    delivery,
+  );
 }
 
 /**
@@ -650,6 +733,7 @@ async function enterUnverifiedAccountAgain(
   tournament: EntryTournamentRow,
   account: ParticipantRow,
   input: EntryInput,
+  delivery: EntryMailDelivery,
 ): Promise<CreateEntryResult> {
   const lapsed = await lapseExpiredPendingEntries(db, account.id);
   if (!lapsed.ok) {
@@ -669,9 +753,15 @@ async function enterUnverifiedAccountAgain(
       error: ENTRY_ERROR_CODES.ALREADY_REGISTERED_IN_ANOTHER_REGION,
     };
   }
-  return enterTournament(env, tournament, account.id, input.email, input, {
-    passwordHash: account.password_hash,
-  });
+  return enterTournament(
+    env,
+    tournament,
+    account.id,
+    input.email,
+    input,
+    {passwordHash: account.password_hash},
+    delivery,
+  );
 }
 
 /**
@@ -712,6 +802,41 @@ async function withdrawnTournamentNames(
 }
 
 /**
+ * The tournaments a takeover withdrew pending entries from, for the notice
+ * of a submission that then failed: the ones the verification mail would
+ * have named, and this tournament too if it had one, since that entry is
+ * gone with nothing to replace it.
+ * @param tournament The tournament the submission tried to enter.
+ * @param withdrawnIds Every tournament `take_over_unverified_participant()`
+ *     reported.
+ * @param otherNames What `withdrawnTournamentNames()` read for the rest.
+ * @return `undefined` when nothing was withdrawn, and an empty list when
+ *     the names of the rest couldn't be read: naming only this tournament
+ *     would read as if it were the only one.
+ */
+function withdrawnWithoutReplacement(
+  tournament: EntryTournamentRow,
+  withdrawnIds: readonly string[],
+  otherNames: string[] | undefined,
+): string[] | undefined {
+  if (!withdrawnIds.includes(tournament.id)) {
+    return otherNames;
+  }
+  // `withdrawnTournamentNames()` answers empty only for a failed read.
+  if (otherNames?.length === 0) {
+    return [];
+  }
+  return [
+    tournamentDisplayName(
+      tournament.name,
+      tournament.regions.name,
+      tournament.type,
+    ),
+    ...(otherNames ?? []),
+  ];
+}
+
+/**
  * Enters a participant whose identity is already settled -- by password in
  * `createEntryAfterCheck()`, or by session in `createEntryForParticipant()`
  * -- into a checked tournament: lapses their entries whose verification
@@ -730,6 +855,8 @@ async function withdrawnTournamentNames(
  * @param participantId The participant being entered.
  * @param email The participant's address, where the link is sent.
  * @param input The entry itself.
+ * @param delivery Whether the verification link is mailed now, or
+ *     deferred for the address's limit (#346; see `EntryMailDelivery`).
  * @param unverifiedAccount For a participant whose address is not verified
  *     yet, the password hash this submission just gave the account (see
  *     `isStillUnverifiedAccountOf()` for what it guards against) and, when
@@ -746,6 +873,7 @@ async function enterTournament(
     passwordHash: string;
     withdrawnTournaments?: string[];
   },
+  delivery: EntryMailDelivery = 'now',
 ): Promise<CreateEntryResult> {
   const db = createDbClient(env);
   const tournamentId = tournament.id;
@@ -802,6 +930,7 @@ async function enterTournament(
     tournament,
     input,
     unverifiedAccount,
+    delivery,
   );
   if (!completed.ok) {
     // Rolled back here, and only here, for every stage after the write: a
@@ -838,6 +967,7 @@ async function completeWrittenEntry(
   input: EntrySessionInput,
   unverifiedAccount:
     {passwordHash: string; withdrawnTournaments?: string[]} | undefined,
+  delivery: EntryMailDelivery,
 ): Promise<{ok: true} | LibFailure<409>> {
   const stored = await storeEntryRegulations(
     db,
@@ -866,6 +996,7 @@ async function completeWrittenEntry(
     email,
     tournament,
     unverifiedAccount?.withdrawnTournaments,
+    delivery,
   );
 }
 
@@ -1170,8 +1301,22 @@ async function mailVerificationLink(
   email: string,
   tournament: EntryTournamentRow,
   withdrawnTournaments: string[] | undefined,
+  delivery: EntryMailDelivery,
 ): Promise<{ok: true} | InternalFailure> {
   try {
+    if (delivery === 'deferred') {
+      // Written now, mailed later (`lib/deferred-entry-mail.ts`). A failure
+      // to hold or enqueue it is a mail that will never go out, so it rolls
+      // the entry back like a failed send.
+      await holdForDeferredVerification(env, entryId);
+      await deferEntryMail(env, {
+        kind: 'deferred-verification',
+        entryId,
+        to: email,
+        ...(withdrawnTournaments ? {withdrawnTournaments} : {}),
+      });
+      return {ok: true};
+    }
     await sendVerificationEmail(
       env,
       entryId,
@@ -1258,6 +1403,14 @@ const ENTRY_NOTICE_REASONS: Partial<Record<EntryErrorCode, EntryNoticeReason>> =
   };
 
 /**
+ * When the mail of an anonymous entry goes out: at once, or later from the
+ * queue because its address was over the per-address limit when it was
+ * submitted (#346, `lib/deferred-entry-mail.ts`). The entry itself is made
+ * the same way either way.
+ */
+export type EntryMailDelivery = 'now' | 'deferred';
+
+/**
  * Enters an address-and-password submission whose answer the client never
  * sees (#117). The route has already answered -- identically, whatever the
  * address -- and runs this in `waitUntil()`, so the time it takes is not
@@ -1283,14 +1436,15 @@ export async function createEntryUnauthenticated(
   env: Bindings,
   tournament: EntryTournamentRow,
   input: EntryInput,
+  delivery: EntryMailDelivery = 'now',
 ): Promise<CreateEntryOutcome> {
   // Runs after the response, inside `waitUntil()`, where a throw would
   // surface as an unhandled rejection with none of the context below. So a
   // thrown error (a network failure inside the Supabase client, say) is
   // treated like any other failure on our side.
-  let result: CreateEntryResult;
+  let result: AddressEntryResult;
   try {
-    result = await createEntryAfterCheck(env, tournament, input);
+    result = await createEntryAfterCheck(env, tournament, input, delivery);
   } catch (e) {
     result = {
       ok: false,
@@ -1302,6 +1456,8 @@ export async function createEntryUnauthenticated(
     return {kind: 'created', entryId: result.entry.id};
   }
 
+  const withdrawnTournaments =
+    'withdrawnTournaments' in result ? result.withdrawnTournaments : undefined;
   // Only a known code: `error` can be any thrown or database message, and one
   // spelling an inherited property would otherwise read as a reason.
   const reason = isEntryErrorCode(result.error)
@@ -1319,10 +1475,26 @@ export async function createEntryUnauthenticated(
     // now, asking them to try again -- unless the mail provider is what
     // failed, in which case this one fails too and the log above is all
     // there is.
-    await sendEntryNotice(env, input.email, tournament, 'processing-failed');
+    await sendEntryNotice(
+      env,
+      input.email,
+      tournament,
+      'processing-failed',
+      delivery,
+      withdrawnTournaments,
+    );
     return {kind: 'failed', error: result.error};
   }
-  if (!(await sendEntryNotice(env, input.email, tournament, reason))) {
+  if (
+    !(await sendEntryNotice(
+      env,
+      input.email,
+      tournament,
+      reason,
+      delivery,
+      withdrawnTournaments,
+    ))
+  ) {
     return {kind: 'failed', error: 'failed to send the entry notice'};
   }
   return {kind: 'notified', reason};
@@ -1331,6 +1503,7 @@ export async function createEntryUnauthenticated(
 /**
  * Sends an entry notice, logging rather than throwing a failure: it runs in
  * the background, with no one left to report to.
+ * @param withdrawnTournaments As for `sendEntryNoticeEmail()`.
  * @return Whether the notice went out.
  */
 async function sendEntryNotice(
@@ -1338,18 +1511,32 @@ async function sendEntryNotice(
   email: string,
   tournament: EntryTournamentRow,
   reason: EntryNoticeReason,
+  delivery: EntryMailDelivery,
+  withdrawnTournaments: string[] | undefined,
 ): Promise<boolean> {
+  const tournamentName = tournamentDisplayName(
+    tournament.name,
+    tournament.regions.name,
+    tournament.type,
+  );
   try {
-    await sendEntryNoticeEmail(
-      env,
-      email,
-      tournamentDisplayName(
-        tournament.name,
-        tournament.regions.name,
-        tournament.type,
-      ),
-      reason,
-    );
+    if (delivery === 'deferred') {
+      await deferEntryMail(env, {
+        kind: 'deferred-notice',
+        to: email,
+        tournamentName,
+        reason,
+        ...(withdrawnTournaments ? {withdrawnTournaments} : {}),
+      });
+    } else {
+      await sendEntryNoticeEmail(
+        env,
+        email,
+        tournamentName,
+        reason,
+        withdrawnTournaments,
+      );
+    }
     return true;
   } catch (mailError) {
     console.error('failed to send the entry notice', {

@@ -93,11 +93,12 @@ describe('fetchTournamentRecipients', () => {
     expect(urls[0]).not.toContain('status=in.');
   });
 
-  it('keeps paging until a short page arrives', async () => {
+  it('keeps paging until an empty page arrives', async () => {
     const urls = mockFetch([
       [row('a@example.com'), row('b@example.com')],
       [row('c@example.com'), row('d@example.com')],
       [row('e@example.com')],
+      [],
     ]);
 
     const result = await fetchTournamentRecipients(
@@ -117,7 +118,39 @@ describe('fetchTournamentRecipients', () => {
         'e@example.com',
       ],
     });
-    expect(urls).toHaveLength(3);
+    expect(urls).toHaveLength(4);
+  });
+
+  // #292: a hosted `max_rows` below the page size trims every page, so a
+  // short page is not the end; stopping there would drop recipients.
+  it('does not stop on a page the server trimmed below the page size', async () => {
+    const urls = mockFetch([
+      [row('a@example.com')],
+      [row('b@example.com')],
+      [row('c@example.com')],
+      [],
+    ]);
+
+    const result = await fetchTournamentRecipients(
+      ENV,
+      TOURNAMENT_ID,
+      undefined,
+      3,
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      recipients: ['a@example.com', 'b@example.com', 'c@example.com'],
+    });
+    expect(urls).toHaveLength(4);
+    // Each request starts right after the rows actually received, not a
+    // full page further on, so no row is skipped.
+    expect(urls.map(url => new URL(url).searchParams.get('offset'))).toEqual([
+      '0',
+      '1',
+      '2',
+      '3',
+    ]);
   });
 
   it('stops on an exactly-full last page followed by an empty one', async () => {
@@ -137,7 +170,7 @@ describe('fetchTournamentRecipients', () => {
     expect(urls).toHaveLength(2);
   });
 
-  it('rejects a page size that would never end the loop', async () => {
+  it('rejects a page size that is not a positive integer', async () => {
     const urls = mockFetch([]);
 
     for (const pageSize of [0, -1, 1.5, Number.NaN]) {

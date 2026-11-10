@@ -309,6 +309,28 @@ describe('admin regulations +page.server load', () => {
       load(buildLoadEvent(fakeApi({regulationsStatus: 401}))),
     ).rejects.toMatchObject({status: 303});
   });
+
+  // An expired session either read reports wins over the other's 404.
+  it.each([
+    {tournamentStatus: 401, regulationsStatus: 404},
+    {tournamentStatus: 404, regulationsStatus: 401},
+  ])(
+    'sends an expired session to the login page over a 404 (%o)',
+    async statuses => {
+      await expect(
+        load(buildLoadEvent(fakeApi(statuses))),
+      ).rejects.toMatchObject({status: 303});
+    },
+  );
+
+  it('words a failed tournament read as the regulations failing', async () => {
+    await expect(
+      load(buildLoadEvent(fakeApi({tournamentStatus: 500}))),
+    ).rejects.toMatchObject({
+      status: 502,
+      body: {message: 'レギュレーションの取得に失敗しました'},
+    } satisfies Partial<HttpError>);
+  });
 });
 
 describe('admin regulations save action', () => {
@@ -744,7 +766,7 @@ describe('admin regulations import action', () => {
 
     await expect(actions.import(event)).resolves.toMatchObject({
       status: 400,
-      data: {error: 'スプレッドシートIDを入力してください'},
+      data: {error: 'スプレッドシートの ID または URL を入力してください'},
     });
     expect(log.previewBodies).toEqual([]);
   });

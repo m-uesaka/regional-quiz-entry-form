@@ -6,6 +6,7 @@ import {
   PARTICIPANT_REGION_SQLSTATE,
   REGION_DUAL_ENTRY_SQLSTATE,
   STAFF_ACCOUNT_DISABLED_SQLSTATE,
+  TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE,
 } from '../lib/pg-errors';
 import {
   CUSTOM_FIELD_VALUE_MAX_LENGTH,
@@ -14,6 +15,14 @@ import {
   ENTRY_NAME_MAX_LENGTH,
 } from '@regional-quiz/shared';
 import {DB_URL, isDbReachable} from '../test-support/db';
+import {
+  createEntryRow,
+  createTournamentAndRegulation,
+  createVerificationToken,
+  deleteTestRegionRows,
+  type TournamentFixture,
+} from '../test-support/db-fixtures';
+import {hashToken} from './token';
 
 // Probed once for the whole file rather than per `describe`, so a run without
 // a database pays for one failed connection instead of one per block.
@@ -810,6 +819,8 @@ describe.skipIf(!dbReachable)(
         ...entryFor('saikyoi', 'cancelled'),
         tournament_id: otherTournamentId,
         email_verified_at: '2026-05-01T00:00:00Z',
+        // Confirmed, not only verified: a waitlisted one holds nothing (0052).
+        confirmed_at: '2026-05-01T00:00:00Z',
         cancelled_at: '2099-01-01T00:00:00Z',
       })}`;
 
@@ -1355,6 +1366,241 @@ describe.skipIf(!dbReachable)(
   },
 );
 
+// 0050, #284: a tournament's entries were accepted under the dual-entry
+// checks of its region and type, so neither may change while it has any.
+describe.skipIf(!dbReachable)(
+  'region and type of a tournament with entries (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const regionSlug = 'db-schema-region-type-lock-test-region';
+    const emailDomain = 'db-schema-region-type-lock-test.example.com';
+
+    async function cleanup() {
+      const slugs = [regionSlug, `${regionSlug}-other`];
+      await sql`delete from entries where tournament_id in (
+        select t.id from tournaments t join regions r on r.id = t.region_id
+        where r.slug in ${sql(slugs)}
+      )`;
+      await sql`delete from participants where email like ${'%@' + emailDomain}`;
+      await sql`delete from tournaments where region_id in (
+        select id from regions where slug in ${sql(slugs)}
+      )`;
+      await sql`delete from regions where slug in ${sql(slugs)}`;
+    }
+
+    beforeEach(cleanup);
+
+    afterAll(async () => {
+      await cleanup();
+      await sql.close();
+    });
+
+    /** A region with a 最強位, a participant of that region, and another region. */
+    async function seed() {
+      const [region] = await sql`
+        insert into regions (slug, name) values (${regionSlug}, '移動元')
+        returning id
+      `;
+      const [other] = await sql`
+        insert into regions (slug, name) values (${`${regionSlug}-other`}, '移動先')
+        returning id
+      `;
+      const [tournament] = await sql`
+        insert into tournaments (
+          region_id, type, name, entry_opens_at, entry_closes_at
+        ) values (
+          ${region.id}, 'saikyoi', 'テスト大会', '2020-01-01T00:00:00Z',
+          '2099-01-01T00:00:00Z'
+        )
+        returning id
+      `;
+      const [participant] = await sql`
+        insert into participants (region_id, email, password_hash)
+        values (${region.id}, ${`p-${crypto.randomUUID()}@${emailDomain}`}, 'x')
+        returning id
+      `;
+      return {
+        regionId: region.id as string,
+        otherRegionId: other.id as string,
+        tournamentId: tournament.id as string,
+        participantId: participant.id as string,
+      };
+    }
+
+    function insertEntry(
+      db: SQL,
+      tournamentId: string,
+      participantId: string,
+      status = 'pending_verification',
+    ) {
+      return db`
+        insert into entries (
+          participant_id, tournament_id, name, furigana, display_name, status
+        ) values (
+          ${participantId}, ${tournamentId}, '山田太郎', 'ヤマダタロウ', '太郎',
+          ${status}
+        )
+      `;
+    }
+
+    async function refusalOf(query: PromiseLike<unknown>) {
+      try {
+        await query;
+        return undefined;
+      } catch (e: unknown) {
+        const {errno} = e as {errno?: string};
+        if (!errno) {
+          throw e;
+        }
+        return errno;
+      }
+    }
+
+    /** The backend id of a reserved connection, to watch it wait. */
+    async function backendPid(db: SQL): Promise<number> {
+      const [row] = await db`select pg_backend_pid() as pid`;
+      return (row as {pid: number}).pid;
+    }
+
+    /**
+     * Resolves once backend `pid` is waiting on a lock, so the other side
+     * commits only after the statement under test has reached it.
+     */
+    async function waitUntilLockWaiting(pid: number): Promise<void> {
+      const deadline = Date.now() + 5_000;
+      for (;;) {
+        const [row] = await sql`
+          select exists (
+            select 1 from pg_stat_activity
+            where pid = ${pid} and wait_event_type = 'Lock'
+          ) as waiting
+        `;
+        if ((row as {waiting: boolean}).waiting) {
+          return;
+        }
+        if (Date.now() > deadline) {
+          throw new Error(`backend ${pid} never waited on a lock`);
+        }
+        await Bun.sleep(10);
+      }
+    }
+
+    it('refuses changing the region or type once there is an entry, cancelled or not', async () => {
+      const {otherRegionId, tournamentId, participantId} = await seed();
+      await insertEntry(sql, tournamentId, participantId, 'cancelled');
+
+      const moved = await refusalOf(sql`
+        update tournaments set region_id = ${otherRegionId}
+        where id = ${tournamentId}
+      `);
+      const retyped = await refusalOf(sql`
+        update tournaments set type = 'shinjinou' where id = ${tournamentId}
+      `);
+
+      expect(moved).toBe(TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE);
+      expect(retyped).toBe(TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE);
+    });
+
+    it('lets the same region and type be written back, and anything else change', async () => {
+      const {regionId, tournamentId, participantId} = await seed();
+      await insertEntry(sql, tournamentId, participantId);
+
+      const code = await refusalOf(sql`
+        update tournaments
+        set region_id = ${regionId}, type = 'saikyoi', name = '改名',
+          capacity = 10
+        where id = ${tournamentId}
+      `);
+
+      expect(code).toBeUndefined();
+    });
+
+    it('lets a tournament without entries move', async () => {
+      const {otherRegionId, tournamentId} = await seed();
+
+      const code = await refusalOf(sql`
+        update tournaments set region_id = ${otherRegionId}, type = 'shinjinou'
+        where id = ${tournamentId}
+      `);
+
+      expect(code).toBeUndefined();
+    });
+
+    // The move waits on the tournament row an uncommitted entry holds, and
+    // then sees that entry.
+    it('sees an entry committed while the move waited for the tournament row', async () => {
+      const {otherRegionId, tournamentId, participantId} = await seed();
+      const holder = await sql.reserve();
+      const mover = await sql.reserve();
+      try {
+        const moverPid = await backendPid(mover);
+        await holder`begin`;
+        await insertEntry(holder, tournamentId, participantId);
+        const move = refusalOf(mover`
+          update tournaments set region_id = ${otherRegionId}
+          where id = ${tournamentId}
+        `);
+        await waitUntilLockWaiting(moverPid);
+        await holder`commit`;
+
+        expect(await move).toBe(TOURNAMENT_REGION_TYPE_LOCKED_SQLSTATE);
+      } finally {
+        // A no-op after the commit; ends the transaction if the test failed
+        // before it, so the connection goes back to the pool clean.
+        await holder`rollback`.catch(() => {});
+        holder.release();
+        mover.release();
+      }
+    });
+
+    // The other order: the move holds the row first, and the entry is
+    // checked where the tournament ends up, not where it was.
+    it('checks an entry that waited for an uncommitted move against the destination', async () => {
+      const {otherRegionId, tournamentId, participantId} = await seed();
+      // The participant already has a seat in the destination, which (like
+      // the source) doesn't allow dual entry. The 新人王's common questions
+      // differ from the 最強位's (0046), so it doesn't conflict across
+      // regions: only once both tournaments are in one region.
+      const [held] = await sql`
+        insert into tournaments (
+          region_id, type, name, entry_opens_at, entry_closes_at
+        ) values (
+          ${otherRegionId}, 'shinjinou', '移動先の大会',
+          '2020-01-01T00:00:00Z', '2099-01-01T00:00:00Z'
+        )
+        returning id
+      `;
+      await insertEntry(sql, held.id as string, participantId);
+      const mover = await sql.reserve();
+      const enterer = await sql.reserve();
+      try {
+        const entererPid = await backendPid(enterer);
+        await mover`begin`;
+        await mover`
+          update tournaments set region_id = ${otherRegionId}
+          where id = ${tournamentId}
+        `;
+        const entry = refusalOf(
+          insertEntry(enterer, tournamentId, participantId),
+        );
+        await waitUntilLockWaiting(entererPid);
+        await mover`commit`;
+
+        expect(await entry).toBe(REGION_DUAL_ENTRY_SQLSTATE);
+        const [{count}] = await sql`
+          select count(*)::integer as count from entries
+          where tournament_id = ${tournamentId}
+        `;
+        expect(count).toBe(0);
+      } finally {
+        await mover`rollback`.catch(() => {});
+        mover.release();
+        enterer.release();
+      }
+    });
+  },
+);
+
 // Also requires a running local Supabase instance: `tournament_entry_summary()`
 // is pure SQL living in `supabase/migrations/`, so the aggregation it does
 // for the general-staff dashboard can only be checked against a real
@@ -1439,6 +1685,8 @@ describe.skipIf(!dbReachable)(
         furigana: 'ヤマダタロウ',
         display_name: '太郎',
         status,
+        // Only a waitlisted entry has a position, and it must (0051).
+        waitlist_position: status === 'waitlisted' ? 1 : null,
       })}`;
     }
 
@@ -1677,9 +1925,9 @@ describe.skipIf(!dbReachable)(
     });
 
     // 0048 adds both `not valid`, so a tournament stored out of order
-    // before it doesn't stop the deploy; a later migration validates them
-    // once those are fixed. New writes are checked all the same (above).
-    it('adds the period and capacity checks without validating the rows already there', async () => {
+    // before it doesn't stop the deploy; 0049 validates them once no such
+    // row is left, so the rows already there are held to them as well.
+    it('validates the period and capacity checks for the rows already there', async () => {
       const rows = await sql`
         select conname, convalidated from pg_constraint
           where conrelid = 'tournaments'::regclass
@@ -1691,8 +1939,8 @@ describe.skipIf(!dbReachable)(
       `;
 
       expect([...rows]).toEqual([
-        {conname: 'tournaments_capacity_positive', convalidated: false},
-        {conname: 'tournaments_entry_period_ordered', convalidated: false},
+        {conname: 'tournaments_capacity_positive', convalidated: true},
+        {conname: 'tournaments_entry_period_ordered', convalidated: true},
       ]);
     });
 
@@ -2526,6 +2774,244 @@ describe.skipIf(!dbReachable)(
         select password_hash from participants where id = ${participantId}
       `;
       expect(row.password_hash).toBe('old-hash');
+    });
+  },
+);
+
+// The queue's order rests on its positions: a position only on a waitlisted
+// entry, never two alike in a tournament, and a new one behind the last
+// rather than at count + 1 (#286).
+describe.skipIf(!dbReachable)(
+  'waitlist positions (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const regionSlug = 'waitlist-position-test-region';
+    const emailDomain = 'waitlist-position-test.example.com';
+    let suffix = 0;
+
+    afterAll(async () => {
+      await deleteTestRegionRows(sql, regionSlug, emailDomain);
+      await sql.close();
+    });
+
+    // Capacity 1, so a confirmed entry fills it.
+    function createFixture(): Promise<TournamentFixture> {
+      suffix += 1;
+      return createTournamentAndRegulation(sql, `${regionSlug}-${suffix}`, {
+        capacity: 1,
+      });
+    }
+
+    async function refusalOf(query: PromiseLike<unknown>) {
+      try {
+        await query;
+        return undefined;
+      } catch (e: unknown) {
+        const {errno} = e as {errno?: string};
+        if (!errno) {
+          throw e;
+        }
+        return errno;
+      }
+    }
+
+    async function waitlistOf(tournamentId: string) {
+      return (await sql`
+        select id, waitlist_position from entries
+        where tournament_id = ${tournamentId} and status = 'waitlisted'
+        order by waitlist_position
+      `) as Array<{id: string; waitlist_position: number}>;
+    }
+
+    it('refuses a waitlisted entry without a position, and a position on any other', async () => {
+      const f = await createFixture();
+
+      const unplaced = await refusalOf(
+        createEntryRow(sql, f, emailDomain, {status: 'waitlisted'}),
+      );
+      const placedConfirmed = await refusalOf(
+        createEntryRow(sql, f, emailDomain, {
+          status: 'confirmed',
+          waitlistPosition: 1,
+        }),
+      );
+      const placedAtZero = await refusalOf(
+        createEntryRow(sql, f, emailDomain, {
+          status: 'waitlisted',
+          waitlistPosition: 0,
+        }),
+      );
+
+      expect(unplaced).toBe('23514');
+      expect(placedConfirmed).toBe('23514');
+      expect(placedAtZero).toBe('23514');
+    });
+
+    it('refuses two waitlisted entries at one position in a tournament', async () => {
+      const f = await createFixture();
+      const other = await createFixture();
+      await createEntryRow(sql, f, emailDomain, {
+        status: 'waitlisted',
+        waitlistPosition: 1,
+      });
+
+      // Another tournament's queue has positions of its own.
+      await createEntryRow(sql, other, emailDomain, {
+        status: 'waitlisted',
+        waitlistPosition: 1,
+      });
+      const duplicate = await refusalOf(
+        createEntryRow(sql, f, emailDomain, {
+          status: 'waitlisted',
+          waitlistPosition: 1,
+        }),
+      );
+
+      expect(duplicate).toBe('23505');
+    });
+
+    // Closing up the queue moves positions one at a time, passing through
+    // a duplicate; the constraint is checked at commit, not per row.
+    it('lets the queue be renumbered through a duplicate within a transaction', async () => {
+      const f = await createFixture();
+      const {participantId, entryId: head} = await createEntryRow(
+        sql,
+        f,
+        emailDomain,
+        {status: 'waitlisted', waitlistPosition: 1},
+      );
+      for (const position of [2, 3]) {
+        await createEntryRow(sql, f, emailDomain, {
+          status: 'waitlisted',
+          waitlistPosition: position,
+        });
+      }
+
+      await sql`select * from cancel_own_entry(${head}, ${participantId})`;
+
+      expect(
+        (await waitlistOf(f.tournamentId)).map(r => r.waitlist_position),
+      ).toEqual([1, 2]);
+    });
+
+    it('queues a newly confirmed entry behind the last position, past any gap', async () => {
+      const f = await createFixture();
+      await createEntryRow(sql, f, emailDomain, {status: 'confirmed'});
+      // Two waiting with a gap between: count + 1 would hand out 3 again.
+      for (const position of [1, 3]) {
+        await createEntryRow(sql, f, emailDomain, {
+          status: 'waitlisted',
+          waitlistPosition: position,
+        });
+      }
+      const {entryId} = await createEntryRow(sql, f, emailDomain);
+      const token = await createVerificationToken(sql, entryId);
+
+      const [{status}] = await sql`
+        select confirm_entry_by_token(${await hashToken(token)}) as status
+      `;
+
+      expect(status).toBe('waitlisted');
+      const waitlist = await waitlistOf(f.tournamentId);
+      expect(waitlist.map(r => r.waitlist_position)).toEqual([1, 3, 4]);
+      expect(waitlist[2].id).toBe(entryId);
+    });
+  },
+);
+
+// Whether a cancelled entry was ever confirmed decides whether it holds its
+// region after the close; a waitlisted entry is verified too, so the time
+// of the confirmation is kept apart from the verification's (#287).
+describe.skipIf(!dbReachable)(
+  'entries.confirmed_at (local Supabase integration)',
+  () => {
+    const sql = new SQL(DB_URL);
+    const regionSlug = 'confirmed-at-test-region';
+    const emailDomain = 'confirmed-at-test.example.com';
+    let suffix = 0;
+
+    afterAll(async () => {
+      await deleteTestRegionRows(sql, regionSlug, emailDomain);
+      await sql.close();
+    });
+
+    function createFixture(capacity: number): Promise<TournamentFixture> {
+      suffix += 1;
+      return createTournamentAndRegulation(sql, `${regionSlug}-${suffix}`, {
+        capacity,
+      });
+    }
+
+    async function confirmedAtOf(entryId: string) {
+      const [row] = await sql`
+        select status, email_verified_at, confirmed_at from entries
+        where id = ${entryId}
+      `;
+      return row as {
+        status: string;
+        email_verified_at: Date | null;
+        confirmed_at: Date | null;
+      };
+    }
+
+    async function followLink(entryId: string): Promise<void> {
+      const token = await createVerificationToken(sql, entryId);
+      await sql`select confirm_entry_by_token(${await hashToken(token)})`;
+    }
+
+    it('is set by the link that confirms an entry, and not by one that queues it', async () => {
+      const f = await createFixture(1);
+      const {entryId: seated} = await createEntryRow(sql, f, emailDomain);
+      const {entryId: queued} = await createEntryRow(sql, f, emailDomain);
+
+      await followLink(seated);
+      await followLink(queued);
+
+      const seatedRow = await confirmedAtOf(seated);
+      const queuedRow = await confirmedAtOf(queued);
+      expect(seatedRow.status).toBe('confirmed');
+      expect(seatedRow.confirmed_at).not.toBeNull();
+      expect(queuedRow.status).toBe('waitlisted');
+      expect(queuedRow.email_verified_at).not.toBeNull();
+      expect(queuedRow.confirmed_at).toBeNull();
+    });
+
+    it('is set by the promotion, and kept by the cancellation after it', async () => {
+      const f = await createFixture(1);
+      const {entryId} = await createEntryRow(sql, f, emailDomain, {
+        status: 'waitlisted',
+        waitlistPosition: 1,
+      });
+      const {participantId} = (
+        await sql`select participant_id as "participantId" from entries where id = ${entryId}`
+      )[0] as {participantId: string};
+
+      await sql`select * from promote_waitlisted_entries(${f.tournamentId})`;
+      const promoted = await confirmedAtOf(entryId);
+      await sql`select * from cancel_own_entry(${entryId}, ${participantId})`;
+      const cancelled = await confirmedAtOf(entryId);
+
+      expect(promoted.status).toBe('confirmed');
+      expect(promoted.confirmed_at).not.toBeNull();
+      expect(cancelled.status).toBe('cancelled');
+      expect(cancelled.confirmed_at).toEqual(promoted.confirmed_at);
+    });
+
+    it('is set on a row inserted as confirmed, and required while confirmed', async () => {
+      const f = await createFixture(5);
+      const {entryId} = await createEntryRow(sql, f, emailDomain, {
+        status: 'confirmed',
+      });
+
+      let errno: string | undefined;
+      try {
+        await sql`update entries set confirmed_at = null where id = ${entryId}`;
+      } catch (e: unknown) {
+        errno = (e as {errno?: string}).errno;
+      }
+
+      expect((await confirmedAtOf(entryId)).confirmed_at).not.toBeNull();
+      expect(errno).toBe('23514');
     });
   },
 );

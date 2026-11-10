@@ -168,7 +168,9 @@ describe('staff login action', () => {
       data: {
         email: CREDENTIALS.email,
         scope: CREDENTIALS.scope,
-        error: 'メールアドレス・区分・パスワードのいずれかが正しくありません',
+        error:
+          'メールアドレス・区分・パスワードのいずれかが正しくありません。' +
+          '招待メールのリンクからパスワードを設定していない場合も、このエラーになります',
       },
     });
   });

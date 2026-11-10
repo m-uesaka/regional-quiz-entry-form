@@ -6,6 +6,8 @@
 
 import {
   COMMON_ERROR_CODES,
+  EDITABLE_ENTRY_STATUSES,
+  ENTRY_EDIT_ERROR_CODES,
   ENTRY_ERROR_CODES,
   isEditableEntryStatus,
   NOT_EDITABLE_ENTRY_CODES,
@@ -13,7 +15,7 @@ import {
   type EntryEditInput,
 } from '@regional-quiz/shared';
 import type {Bindings} from '../types/env';
-import {createDbClient} from './db';
+import {createDbClient, type DbClient} from './db';
 import type {LibFailure} from './errors';
 import {validateCustomFieldValues} from './form-field-defs';
 import {promoteWaitlistedEntries} from './waitlist';
@@ -90,7 +92,13 @@ export async function updateOwnEntry(
     return customFieldValuesCheck;
   }
 
-  const {error} = await db
+  // The checks above read the entry without a lock, so a cancellation in
+  // another tab (or a lapse of an expired `pending_verification` entry) can
+  // commit before this runs. The owner and the editable statuses are
+  // therefore filtered again in the UPDATE itself: Postgres re-evaluates
+  // them against the committed row, so a row cancelled in between is left
+  // alone and comes back as no row (#288).
+  const {data: updated, error} = await db
     .from('entries')
     .update({
       name: patch.name,
@@ -99,11 +107,56 @@ export async function updateOwnEntry(
       free_text: patch.freeText ?? null,
       custom_field_values: patch.customFieldValues,
     })
-    .eq('id', entryId);
+    .eq('id', entryId)
+    .eq('participant_id', participantId)
+    .in('status', EDITABLE_ENTRY_STATUSES)
+    .select('id');
   if (error) {
     return {ok: false, status: 500, error: error.message};
   }
+  if (updated.length === 0) {
+    return refusedAfterRace(db, participantId, entryId);
+  }
   return {ok: true};
+}
+
+/**
+ * What an edit whose UPDATE matched no row answers with. The row was
+ * there, owned and editable when it was checked, so it changed in between;
+ * it is read again and told the way the check would tell it now, so the
+ * participant sees the same message as when the form is submitted a moment
+ * later.
+ * @param db The database client.
+ * @param participantId The logged-in participant.
+ * @param entryId The entry the edit was for.
+ */
+async function refusedAfterRace(
+  db: DbClient,
+  participantId: string,
+  entryId: string,
+): Promise<LibFailure<403 | 404>> {
+  const {data: entry, error} = await db
+    .from('entries')
+    .select('status')
+    .eq('id', entryId)
+    .eq('participant_id', participantId)
+    .maybeSingle();
+  if (error) {
+    return {ok: false, status: 500, error: error.message};
+  }
+  if (!entry) {
+    return {ok: false, status: 404, error: COMMON_ERROR_CODES.ENTRY_NOT_FOUND};
+  }
+  return {
+    ok: false,
+    status: 403,
+    // Editable again only if it was re-entered after the UPDATE missed it.
+    // It was cancelled when the edit was made, and the edit was for the
+    // entry as it was before, so it is told as cancelled all the same.
+    error: isEditableEntryStatus(entry.status)
+      ? ENTRY_EDIT_ERROR_CODES.ENTRY_CANCELLED
+      : NOT_EDITABLE_ENTRY_CODES[entry.status],
+  };
 }
 
 /**

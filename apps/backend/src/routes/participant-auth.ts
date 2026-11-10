@@ -1,5 +1,4 @@
 import {Hono} from 'hono';
-import {zValidator} from '@hono/zod-validator';
 import {sign} from 'hono/jwt';
 import {deleteCookie, setCookie} from 'hono/cookie';
 import {
@@ -11,6 +10,7 @@ import {createDbClient} from '../lib/db';
 import {verifyAccountPassword} from '../lib/password-rehash';
 import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
 import {PARTICIPANT_SESSION_COOKIE} from '../middleware/participant-auth';
+import {validate} from '../middleware/validate';
 
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
 // The attributes the session cookie is issued under, shared with `/logout`
@@ -46,7 +46,7 @@ export const participantAuthRoute = new Hono<Env>()
       c => `ip:${clientIp(c)}`,
       LOGIN_LIMIT_PERIOD_SECONDS,
     ),
-    zValidator('json', ParticipantLoginInputSchema),
+    validate('json', ParticipantLoginInputSchema),
     // After the validator, so the address counted against is one the schema
     // has already accepted rather than any string a caller cares to send.
     //
@@ -56,7 +56,7 @@ export const participantAuthRoute = new Hono<Env>()
     // budget.
     rateLimit<{out: {json: ParticipantLoginInput}}>(
       env => env.LOGIN_EMAIL_RATE_LIMITER,
-      c => `participant-login:${emailKey(c.req.valid('json').email)}`,
+      c => emailKey('participant-login', c.req.valid('json').email),
       LOGIN_LIMIT_PERIOD_SECONDS,
     ),
     async c => {

@@ -1,5 +1,4 @@
 import {Hono} from 'hono';
-import {zValidator} from '@hono/zod-validator';
 import {
   COMMON_ERROR_CODES,
   EntryEditInputSchema,
@@ -19,6 +18,7 @@ import {
   entryRegulationLabels,
 } from '../lib/entry-regulations';
 import {EntryIdParamSchema} from './params';
+import {validate} from '../middleware/validate';
 
 const LIST_COLUMNS = `
   id, tournament_id, status, waitlist_position,
@@ -79,63 +79,53 @@ export const mypageRoute = new Hono<ParticipantEnv>()
     }
     return c.json((data ?? []).map(rowToMypageEntry));
   })
-  .get(
-    '/entries/:entryId',
-    zValidator('param', EntryIdParamSchema),
-    async c => {
-      const db = createDbClient(c.env);
-      // Scoped to the session's participant so another participant's entry
-      // is indistinguishable from a nonexistent one.
-      const {data, error} = await db
-        .from('entries')
-        .select(DETAIL_COLUMNS)
-        .eq('id', c.req.valid('param').entryId)
-        .eq('participant_id', c.get('participantId'))
-        .maybeSingle();
-      if (error) {
-        return c.json(
-          internalError('failed to read the own entry', error),
-          500,
-        );
-      }
-      if (!data) {
-        return c.json({error: COMMON_ERROR_CODES.ENTRY_NOT_FOUND}, 404);
-      }
+  .get('/entries/:entryId', validate('param', EntryIdParamSchema), async c => {
+    const db = createDbClient(c.env);
+    // Scoped to the session's participant so another participant's entry
+    // is indistinguishable from a nonexistent one.
+    const {data, error} = await db
+      .from('entries')
+      .select(DETAIL_COLUMNS)
+      .eq('id', c.req.valid('param').entryId)
+      .eq('participant_id', c.get('participantId'))
+      .maybeSingle();
+    if (error) {
+      return c.json(internalError('failed to read the own entry', error), 500);
+    }
+    if (!data) {
+      return c.json({error: COMMON_ERROR_CODES.ENTRY_NOT_FOUND}, 404);
+    }
 
-      // The tournament's custom form fields, so the edit screen can
-      // re-render the same form the entry was submitted through.
-      const {fieldDefs, error: formFieldDefsError} = await fetchFormFieldDefs(
-        db,
-        data.tournament_id,
-      );
-      if (formFieldDefsError) {
-        return c.json(
-          internalError(
-            'failed to read the form field defs',
-            formFieldDefsError,
-          ),
-          500,
-        );
-      }
-
+    // The tournament's custom form fields, so the edit screen can
+    // re-render the same form the entry was submitted through.
+    const {fieldDefs, error: formFieldDefsError} = await fetchFormFieldDefs(
+      db,
+      data.tournament_id,
+    );
+    if (formFieldDefsError) {
       return c.json(
-        MypageEntryDetailSchema.parse({
-          ...rowToMypageEntry(data),
-          name: data.name,
-          furigana: data.furigana,
-          displayName: data.display_name,
-          regulationLabels: entryRegulationLabels(data.entry_regulations),
-          freeText: data.free_text,
-          customFieldValues: data.custom_field_values,
-          formFieldDefs: fieldDefs,
-        }),
+        internalError('failed to read the form field defs', formFieldDefsError),
+        500,
       );
-    },
-  )
+    }
+
+    return c.json(
+      MypageEntryDetailSchema.parse({
+        ...rowToMypageEntry(data),
+        name: data.name,
+        furigana: data.furigana,
+        displayName: data.display_name,
+        regulationLabels: entryRegulationLabels(data.entry_regulations),
+        freeText: data.free_text,
+        customFieldValues: data.custom_field_values,
+        formFieldDefs: fieldDefs,
+      }),
+    );
+  })
   .patch(
     '/entries/:entryId',
-    zValidator('param', EntryIdParamSchema),
-    zValidator('json', EntryEditInputSchema),
+    validate('param', EntryIdParamSchema),
+    validate('json', EntryEditInputSchema),
     async c => {
       const result = await updateOwnEntry(
         c.env,
@@ -151,7 +141,7 @@ export const mypageRoute = new Hono<ParticipantEnv>()
   )
   .delete(
     '/entries/:entryId',
-    zValidator('param', EntryIdParamSchema),
+    validate('param', EntryIdParamSchema),
     async c => {
       const result = await cancelOwnEntry(
         c.env,

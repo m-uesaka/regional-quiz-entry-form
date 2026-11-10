@@ -21,6 +21,8 @@
     regions: Region[];
     /** Passed straight through to the form's 問題セット suggestions. */
     questionSets: string[];
+    /** Whether the tournament has entries, which lock its region and type. */
+    regionTypeLocked: boolean;
     /** What the page's `update` action last answered with, if anything. */
     result: {
       saved: boolean;
@@ -37,14 +39,22 @@
     formDefinitionYaml,
     regions,
     questionSets,
+    regionTypeLocked,
     result,
   }: Props = $props();
 
   // A refused save re-renders what was submitted; anything else shows the
   // stored tournament, which `load` re-reads after every successful save.
-  const values = $derived(
-    result?.values ?? toTournamentFormValues(tournament, customName),
-  );
+  // Locked, the region and type are always the stored ones: a move refused
+  // because entries arrived after the page was rendered (409) is not sent
+  // again from controls that can no longer be changed.
+  const values = $derived.by(() => {
+    const shown =
+      result?.values ?? toTournamentFormValues(tournament, customName);
+    return regionTypeLocked
+      ? {...shown, regionId: tournament.regionId, type: tournament.type}
+      : shown;
+  });
 
   // What a saved capacity did to the waitlist (#223).
   const notice = $derived(
@@ -69,6 +79,7 @@
     {regions}
     {values}
     {questionSets}
+    {regionTypeLocked}
     submitLabel="更新"
     action="?/update"
   />

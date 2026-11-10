@@ -26,7 +26,7 @@ declare global {
     turnstile?: {
       render(
         container: HTMLElement,
-        options: {sitekey: string},
+        options: {sitekey: string; action?: string},
       ): string | undefined;
       // `widget` is the id `render` returned, or the container element --
       // which is the only handle there is on a widget the script rendered

@@ -1,5 +1,7 @@
+import {COMMON_ERROR_CODES} from '@regional-quiz/shared';
 import {Hono} from 'hono';
 import {csrf} from 'hono/csrf';
+import {HTTPException} from 'hono/http-exception';
 import {secureHeaders} from 'hono/secure-headers';
 import type {Bindings, Env} from './types/env';
 import {handleBulkMailQueue, type BulkMailMessage} from './lib/bulk-mail-queue';
@@ -14,6 +16,7 @@ import {entryListRoute} from './routes/entry-list';
 import {regulationsRoute} from './routes/regulations';
 import {staffEntriesRoute} from './routes/staff-entries';
 import {staffDashboardRoute} from './routes/staff-dashboard';
+import {staffPendingInvitesRoute} from './routes/staff-pending-invites';
 import {staffMailRoute} from './routes/staff-mail';
 import {staffAccountsRoute} from './routes/staff-accounts';
 import {entryVerificationRoute} from './routes/entry-verification';
@@ -21,12 +24,31 @@ import {formDefinitionsRoute} from './routes/form-definitions';
 import {sheetImportRoute} from './routes/sheet-import';
 import {mypageRoute} from './routes/mypage';
 import {portalRoute} from './routes/portal';
+import {trustedOrigins} from './lib/trusted-origins';
+import {internalError} from './lib/errors';
 
 // Exported by name for the tests, which drive the API through
 // `app.request()`. The default export below is the Worker itself, and it is
 // no longer this object: a Worker with a queue consumer has to export the
 // `queue` handler alongside `fetch`.
 export const app = new Hono<Env>().basePath('/api');
+
+// What answers when nothing else does, in the API's own `{error: string}`
+// shape (#294) rather than Hono's plain-text defaults. Registered on the app
+// itself, so the routes mounted below with `.route()` fall back to them too.
+//
+// An `HTTPException` is a refusal some middleware chose on purpose -- the
+// origin check's 403 below -- so it keeps the response it carries, as Hono's
+// default handler would give it. Anything else thrown is a fault on our side
+// (a `XSchema.parse()` meeting a database value it did not expect, say),
+// logged and answered with the same 500 a route's own `internalError()` gives.
+app.onError((err, c) => {
+  if (err instanceof HTTPException) {
+    return err.getResponse();
+  }
+  return c.json(internalError(`${c.req.method} ${c.req.path}`, err), 500);
+});
+app.notFound(c => c.json({error: COMMON_ERROR_CODES.NOT_FOUND}, 404));
 
 // Every response, the API's own errors included: registered first, so it
 // still sees the 403 the origin check below answers with.
@@ -68,7 +90,7 @@ const routes = app
   .route('/tournaments', entryListRoute)
   // Mounted before `tournamentsRoute` on purpose: its public
   // `/:regionSlug/:tournamentSlug` route also matches two segments, and its
-  // `zValidator` would answer `/:tournamentId/regulations` with a 400
+  // `validate()` would answer `/:tournamentId/regulations` with a 400
   // before this handler ever ran.
   .route('/tournaments', regulationsRoute)
   .route('/tournaments', tournamentsRoute)
@@ -79,6 +101,7 @@ const routes = app
   .route('/staff', staffEntryPauseRoute)
   .route('/staff', staffMailRoute)
   .route('/staff', staffAccountsRoute)
+  .route('/staff', staffPendingInvitesRoute)
   .route('/entries', entryVerificationRoute)
   .route('/form-definitions', formDefinitionsRoute)
   .route('/sheet-import', sheetImportRoute)
@@ -86,42 +109,6 @@ const routes = app
   .route('/portal', portalRoute);
 
 export type AppType = typeof routes;
-
-/** The last `trustedOrigins()` answer, and the bindings it was read from. */
-let trustedOriginsCache:
-  {key: string; origins: ReadonlySet<string>} | undefined;
-
-/**
- * The origins the CSRF check lets a form-like request come from:
- * `FRONTEND_URL` and whatever `CSRF_TRUSTED_ORIGINS` adds.
- *
- * Each is reduced to its origin, so a value written with a trailing slash or
- * a path still matches the `scheme://host[:port]` a browser sends. One that
- * is not a URL at all is left out rather than thrown on: a misconfigured
- * binding refuses form posts instead of letting every origin through.
- *
- * Parsed once and kept while the bindings say the same thing -- they are
- * fixed for an isolate's lifetime, so in practice that is once per isolate.
- * @param env The Worker's bindings.
- */
-function trustedOrigins(env: Bindings): ReadonlySet<string> {
-  const key = `${env.FRONTEND_URL}\n${env.CSRF_TRUSTED_ORIGINS ?? ''}`;
-  if (trustedOriginsCache?.key !== key) {
-    const origins = new Set<string>();
-    for (const value of [
-      env.FRONTEND_URL,
-      ...(env.CSRF_TRUSTED_ORIGINS ?? '').split(','),
-    ]) {
-      try {
-        origins.add(new URL(value.trim()).origin);
-      } catch {
-        // Not a URL; see above.
-      }
-    }
-    trustedOriginsCache = {key, origins};
-  }
-  return trustedOriginsCache.origins;
-}
 
 // The Worker's entry points. `fetch` answers the HTTP API as before;
 // `queue` is the consumer of the bulk mail queue declared in

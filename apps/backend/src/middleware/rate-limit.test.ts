@@ -106,7 +106,7 @@ describe('rateLimit', () => {
     // One address trying many accounts and many addresses trying one
     // account are different attacks, and only one key sees each of them.
     // Whether or not the two limits share a limiter, the `ip:` / `email:`
-    // prefixes are what keep them out of one another's bucket.
+    // parts of the keys are what keep them out of one another's bucket.
     const {binding, keys} = recordingRateLimiter();
     const app = new Hono<Env>().post(
       '/login',
@@ -118,7 +118,7 @@ describe('rateLimit', () => {
       zValidator('json', z.object({email: z.string().email()})),
       rateLimit<{out: {json: {email: string}}}>(
         env => env.LOGIN_IP_RATE_LIMITER,
-        c => `email:${c.req.valid('json').email}`,
+        c => emailKey('participant-login', c.req.valid('json').email),
         60,
       ),
       c => c.json({ok: true}),
@@ -138,7 +138,10 @@ describe('rateLimit', () => {
     );
 
     expect(res.status).toBe(200);
-    expect(keys).toEqual(['ip:203.0.113.7', 'email:participant@example.com']);
+    expect(keys).toEqual([
+      'ip:203.0.113.7',
+      'participant-login:email:participant@example.com',
+    ]);
   });
 
   it('never reaches the handler when the first key is refused', async () => {
@@ -156,7 +159,7 @@ describe('rateLimit', () => {
       zValidator('json', z.object({email: z.string().email()})),
       rateLimit<{out: {json: {email: string}}}>(
         env => env.LOGIN_IP_RATE_LIMITER,
-        c => `email:${c.req.valid('json').email}`,
+        c => emailKey('participant-login', c.req.valid('json').email),
         60,
       ),
       c => c.json({ok: true}),
@@ -215,8 +218,28 @@ describe('emailKey', () => {
     // One mailbox, so one bucket. Counted as submitted, the two spellings
     // would give a caller twice the budget the endpoint advertises -- and as
     // many times again as they care to vary the capitalization.
-    expect(emailKey('Victim@Example.com')).toBe(emailKey('victim@example.com'));
-    expect(emailKey('Victim@Example.com')).toBe('email:victim@example.com');
+    expect(emailKey('entry', 'Victim@Example.com')).toBe(
+      emailKey('entry', 'victim@example.com'),
+    );
+    expect(emailKey('entry', 'Victim@Example.com')).toBe(
+      'entry:email:victim@example.com',
+    );
+  });
+
+  it('gives each endpoint a bucket of its own for one address', () => {
+    // The endpoints share their limiters, so a key that named only the
+    // address would let requests to one of them refuse the address on
+    // another (#295).
+    const keys = (
+      [
+        'entry',
+        'participant-login',
+        'participant-password-reset',
+        'staff-login',
+        'staff-password-reset',
+      ] as const
+    ).map(endpoint => emailKey(endpoint, 'victim@example.com'));
+    expect(new Set(keys).size).toBe(keys.length);
   });
 });
 

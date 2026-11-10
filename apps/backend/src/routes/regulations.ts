@@ -1,5 +1,4 @@
 import {Hono} from 'hono';
-import {zValidator} from '@hono/zod-validator';
 import {
   RegulationSchema,
   RegulationSyncInputSchema,
@@ -21,6 +20,7 @@ import {
 } from '../lib/regulations';
 import {TournamentNotFoundError} from '../lib/tournament-errors';
 import {TournamentIdParamSchema} from './params';
+import {validate} from '../middleware/validate';
 
 const REGULATION_COLUMNS = `
   id, tournament_id, label, priority_starts_at, priority_ends_at,
@@ -62,7 +62,7 @@ function rowToRegulation(row: RegulationRow): Regulation {
 export const regulationsRoute = new Hono<StaffEnv>()
   .get(
     '/:tournamentId/regulations',
-    zValidator('param', TournamentIdParamSchema),
+    validate('param', TournamentIdParamSchema),
     requireOpenEntryPeriodOrStaff(byTournamentIdParam),
     async c => {
       const db = createDbClient(c.env);
@@ -86,8 +86,8 @@ export const regulationsRoute = new Hono<StaffEnv>()
   .put(
     '/:tournamentId/regulations',
     requireGeneralStaff(),
-    zValidator('param', TournamentIdParamSchema),
-    zValidator('json', RegulationSyncInputSchema),
+    validate('param', TournamentIdParamSchema),
+    validate('json', RegulationSyncInputSchema),
     async c => {
       try {
         await syncRegulations(

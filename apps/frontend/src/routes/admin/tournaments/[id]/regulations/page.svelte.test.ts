@@ -168,7 +168,9 @@ describe('admin regulations +page.svelte', () => {
   it('offers to read the regulations from a spreadsheet', () => {
     renderPage([GENERAL]);
 
-    expect(screen.getByLabelText('スプレッドシートID')).toHaveValue('');
+    expect(
+      screen.getByLabelText('スプレッドシート(URL または ID)'),
+    ).toHaveValue('');
     expect(
       screen.getByRole('button', {name: 'スプレッドシートから読み込む'}),
     ).toBeInTheDocument();
@@ -203,7 +205,9 @@ describe('admin regulations +page.svelte', () => {
     expect(screen.getByRole('status')).toHaveTextContent(
       'まだ保存されていません',
     );
-    expect(screen.getByLabelText('スプレッドシートID')).toHaveValue('sheet-id');
+    expect(
+      screen.getByLabelText('スプレッドシート(URL または ID)'),
+    ).toHaveValue('sheet-id');
     expect(
       screen
         .getAllByLabelText('レギュレーション名')

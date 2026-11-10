@@ -53,10 +53,16 @@ export interface Bindings {
   //     the cheaper that is to do (`wrangler.toml` has the numbers).
   //   - `MAIL_TRIGGER_EMAIL_RATE_LIMITER` caps how much of one inbox the
   //     endpoints that send mail to an address the caller chose can spend:
-  //     the entry form, and the participant and staff reset requests (the
-  //     staff one under a key of its own, so the two reset forms don't spend
-  //     each other's budget). This is the tight one: it is the mail bomb it
-  //     stops.
+  //     the entry form, and the participant and staff reset requests. This
+  //     is the tight one: it is the mail bomb it stops. Each endpoint counts
+  //     under a key of its own (`emailKey()`), so a flood of reset requests
+  //     for an address cannot refuse that address's entry (#295) -- at the
+  //     price of one inbox getting the limit once per endpoint. Flooding a
+  //     reset request with the victim's address still keeps it refused for
+  //     them; that is left as it is, by design (see `emailKey()`). The entry
+  //     form refuses nothing over the limit: it defers the mail instead
+  //     (#346, `lib/deferred-entry-mail.ts`), and the deferred mails are
+  //     paced under a key of their own on this same limiter.
   //   - `MAIL_TRIGGER_IP_RATE_LIMITER` caps the same endpoints, and the
   //     logged-in entry, per source address. All of them share one bucket
   //     per IP, so participants and staff behind one network (a venue's,

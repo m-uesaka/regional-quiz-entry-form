@@ -1,10 +1,10 @@
 import {Hono} from 'hono';
-import {zValidator} from '@hono/zod-validator';
 import {sign} from 'hono/jwt';
 import {deleteCookie, setCookie} from 'hono/cookie';
 import {
   StaffLoginInputSchema,
   StaffPasswordResetRequestInputSchema,
+  TURNSTILE_ACTIONS,
   type StaffClaims,
   type StaffLoginInput,
   type StaffPasswordResetRequestInput,
@@ -23,6 +23,7 @@ import {
 import {STAFF_SESSION_COOKIE} from '../middleware/staff-auth';
 import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';
 import {requireTurnstile} from '../middleware/turnstile';
+import {validate} from '../middleware/validate';
 
 const SESSION_TTL_SECONDS = 60 * 60 * 12;
 // The attributes the session cookie is issued under, shared with `/logout`
@@ -60,10 +61,10 @@ export const staffAuthRoute = new Hono<Env>()
       c => `ip:${clientIp(c)}`,
       LOGIN_LIMIT_PERIOD_SECONDS,
     ),
-    zValidator('json', StaffLoginInputSchema),
+    validate('json', StaffLoginInputSchema),
     rateLimit<{out: {json: StaffLoginInput}}>(
       env => env.LOGIN_EMAIL_RATE_LIMITER,
-      c => `staff-login:${emailKey(c.req.valid('json').email)}`,
+      c => emailKey('staff-login', c.req.valid('json').email),
       LOGIN_LIMIT_PERIOD_SECONDS,
     ),
     async c => {
@@ -153,11 +154,11 @@ export const staffAuthRoute = new Hono<Env>()
       c => `ip:${clientIp(c)}`,
       MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
     ),
-    requireTurnstile(),
-    zValidator('json', StaffPasswordResetRequestInputSchema),
+    requireTurnstile(TURNSTILE_ACTIONS.STAFF_PASSWORD_RESET),
+    validate('json', StaffPasswordResetRequestInputSchema),
     rateLimit<{out: {json: StaffPasswordResetRequestInput}}>(
       env => env.MAIL_TRIGGER_EMAIL_RATE_LIMITER,
-      c => `staff-password-reset:${emailKey(c.req.valid('json').email)}`,
+      c => emailKey('staff-password-reset', c.req.valid('json').email),
       MAIL_TRIGGER_LIMIT_PERIOD_SECONDS,
     ),
     c => {
@@ -175,7 +176,7 @@ export const staffAuthRoute = new Hono<Env>()
   // above mails.
   .post(
     '/password-reset/confirm',
-    zValidator('json', StaffPasswordResetConfirmInputSchema),
+    validate('json', StaffPasswordResetConfirmInputSchema),
     async c => {
       const result = await confirmStaffPasswordReset(
         c.env,

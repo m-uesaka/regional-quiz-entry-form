@@ -1,5 +1,4 @@
 import {Hono} from 'hono';
-import {zValidator} from '@hono/zod-validator';
 import {TournamentEntryPauseInputSchema} from '@regional-quiz/shared';
 import type {StaffEnv} from '../types/env';
 import {requireStaffForTournament} from '../middleware/staff-auth';
@@ -7,6 +6,7 @@ import {createDbClient} from '../lib/db';
 import {internalError} from '../lib/errors';
 import {rowToTournament, TOURNAMENT_COLUMNS} from '../lib/tournaments';
 import {TournamentIdParamSchema} from './params';
+import {validate} from '../middleware/validate';
 
 // Pauses or resumes taking entries for one tournament (0039). Open to the
 // tournament's own 地域スタッフ as well as 統括スタッフ, unlike the rest of
@@ -15,11 +15,11 @@ import {TournamentIdParamSchema} from './params';
 // it takes nothing away that resuming doesn't give back.
 export const staffEntryPauseRoute = new Hono<StaffEnv>().put(
   '/tournaments/:tournamentId/entry-pause',
-  zValidator('param', TournamentIdParamSchema),
+  validate('param', TournamentIdParamSchema),
   // After the guard, so a caller who may not pause this tournament is
   // refused as such whatever they sent.
   requireStaffForTournament(),
-  zValidator('json', TournamentEntryPauseInputSchema),
+  validate('json', TournamentEntryPauseInputSchema),
   async c => {
     const {data, error} = await createDbClient(c.env)
       .from('tournaments')

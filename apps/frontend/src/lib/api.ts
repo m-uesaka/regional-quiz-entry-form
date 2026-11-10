@@ -1,5 +1,6 @@
 import {hc} from 'hono/client';
 import type {AppType} from '@regional-quiz/backend';
+import {COMMON_ERROR_CODES} from '@regional-quiz/shared';
 
 /**
  * Creates a type-safe RPC client for the backend Hono API.
@@ -42,11 +43,34 @@ export function isNotFound(res: {status: number}): boolean {
 }
 
 /**
+ * The `error` strings that are only a code, worded nowhere: a body that
+ * failed the route's schema, and a path no route answers (#294). Until the
+ * backend answered these in the `{error: string}` shape they were a
+ * `ZodError` object and plain text, which {@link readErrorMessage} could not
+ * read either, so they still leave its fallback to speak.
+ */
+const UNWORDED_ERROR_CODES: ReadonlySet<string> = new Set([
+  COMMON_ERROR_CODES.INVALID_REQUEST,
+  COMMON_ERROR_CODES.NOT_FOUND,
+]);
+
+/**
+ * Whether an `error` string from the backend can be shown as it is, rather
+ * than being a bare code meant for the program (see `UNWORDED_ERROR_CODES`).
+ *
+ * @param error The `error` string of the response.
+ */
+export function isShowableError(error: string): boolean {
+  return !UNWORDED_ERROR_CODES.has(error);
+}
+
+/**
  * Reads the `{error: string}` body the backend answers a refusal with.
  *
  * @param res The failed API response.
  * @param fallback What to answer when the body names no error, e.g. a
- *     non-JSON proxy error page.
+ *     non-JSON proxy error page, or names one that is only a code (a body
+ *     the route's schema refused).
  */
 export async function readErrorMessage(
   res: {json(): Promise<unknown>},
@@ -58,7 +82,8 @@ export async function readErrorMessage(
       typeof body === 'object' &&
       body !== null &&
       'error' in body &&
-      typeof body.error === 'string'
+      typeof body.error === 'string' &&
+      isShowableError(body.error)
     ) {
       return body.error;
     }
