@@ -150,6 +150,147 @@ having sum(char_length(v.element)) > 10000;
 
 該当行があれば、参加者・地域スタッフと相談のうえ値を短くしてから(CRLF は `replace(free_text, E'\r\n', E'\n')` で 1 文字にできます)デプロイしてください。
 
+### 5.3 旧来の一般枠の優先期間を消す前の確認
+
+`0059_drop_legacy_general_phase_windows.sql` は、旧来の大会が一般枠に置いていた優先期間を null にします(#262)。同じリリースの Worker は、「`外す` の枠が終わった後に始まった、`外す` の付かない優先期間は制限にしない」という特例(`followsClosingPhase()`)を持ちません。マイグレーションは、消してもこの先の受付条件が変わらないと言える期間しか消さないので、**消されずに残った期間は、Worker が出た時点から書いたとおりの制限になります**(その期間中は、その枠を選んだ参加者しかエントリーできず、ポータルとエントリーフォームに優先エントリーの案内が出ます)。残った期間はほとんどの場合、今より絞る方向に効きます。緩む方向に効くのは、下の 2 つ目の SQL の `no_longer_required` に枠が出る行だけです。
+
+**このマイグレーションを含むリリースを staging / production に流す前に**、それぞれのプロジェクトの SQL Editor で次の 2 つを実行してください。どちらも読み取りだけです。判定に `now()` を使うので、結果は実行した時刻のものです。デプロイの直前に流してください。
+
+1 つ目は、マイグレーションが優先期間を消す行です。旧来の一般枠(優先枠の終了から締切までの期間を持つ行)だけが並んでいることを確かめます。ここに並ぶ期間は今も制限として効いておらず、消しても受付条件は変わりません。ただし、在住者優先のように本当に制限として置いたつもりの期間が混ざっていたら、デプロイを止めて地域スタッフに確かめてください(消さずに残せば、リリース後は書いたとおりの制限として効くようになる期間です)。
+
+```sql
+with phases as (
+  select
+    tournament_id,
+    min(priority_ends_at) filter (where closes_with_priority)
+      as first_closing_end,
+    max(priority_ends_at) filter (where closes_with_priority)
+      as last_closing_end,
+    max(priority_starts_at) as last_start
+  from regulations
+  where priority_starts_at is not null
+    and priority_ends_at is not null
+  group by tournament_id
+)
+select
+  rg.name as region,
+  t.type,
+  t.entry_closes_at,
+  r.label,
+  r.priority_starts_at,
+  r.priority_ends_at
+from regulations r
+join phases p on p.tournament_id = r.tournament_id
+join tournaments t on t.id = r.tournament_id
+join regions rg on rg.id = t.region_id
+where not r.closes_with_priority
+  and r.priority_starts_at is not null
+  and r.priority_ends_at is not null
+  and p.first_closing_end <= r.priority_starts_at
+  and (
+    r.priority_ends_at < now() - interval '1 minute'
+    or (
+      p.last_closing_end < now() - interval '1 minute'
+      and p.last_start <= now() - interval '1 minute'
+    )
+  )
+order by t.display_order, rg.name, t.type, r.display_order;
+```
+
+2 つ目は、特例の対象なのにマイグレーションが消さない行です。**0 件なら、このリリースの前後で受付条件は変わりません。**
+
+```sql
+with phases as (
+  select
+    tournament_id,
+    min(priority_ends_at) filter (where closes_with_priority)
+      as first_closing_end,
+    max(priority_ends_at) filter (where closes_with_priority)
+      as last_closing_end,
+    max(priority_starts_at) as last_start
+  from regulations
+  where priority_starts_at is not null
+    and priority_ends_at is not null
+  group by tournament_id
+),
+kept as (
+  select r.*, p.first_closing_end, p.last_closing_end, p.last_start
+  from regulations r
+  join phases p on p.tournament_id = r.tournament_id
+  where not r.closes_with_priority
+    and r.priority_starts_at is not null
+    and r.priority_ends_at is not null
+    and p.first_closing_end <= r.priority_starts_at
+    and not (
+      r.priority_ends_at < now() - interval '1 minute'
+      or (
+        p.last_closing_end < now() - interval '1 minute'
+        and p.last_start <= now() - interval '1 minute'
+      )
+    )
+)
+select
+  rg.name as region,
+  t.type,
+  t.entry_closes_at,
+  k.label,
+  k.priority_starts_at,
+  k.priority_ends_at,
+  case
+    when k.priority_starts_at > now() - interval '1 minute'
+      then 'まだ始まっていない'
+    when k.last_closing_end >= now() - interval '1 minute'
+      then '外す枠がまだ終わっていない'
+    else 'これから始まる優先期間がある'
+  end as kept_because,
+  -- 外す枠がすべて終わってからこの期間が始まるまでの間。この間は今、外す枠も
+  -- 選べる。期間を消すと、この間は外す枠が選べなくなる。
+  greatest(k.priority_starts_at - k.last_closing_end, interval '0')
+    as gap_before,
+  -- 今はこの期間中に単独で選べるが、特例が無くなると、この期間が開いている
+  -- 間は単独では選べなくなる枠。
+  (
+    select string_agg(o.label, ' / ' order by o.display_order)
+    from regulations o
+    where o.tournament_id = k.tournament_id
+      and o.id <> k.id
+      and (o.priority_starts_at is null or not o.closes_with_priority)
+      and not coalesce(
+        o.priority_starts_at <= k.priority_starts_at
+          and o.priority_ends_at >= k.priority_ends_at,
+        false
+      )
+  ) as no_longer_enough_alone,
+  -- 今はこの期間中も必須だが、特例が無くなると、この行の枠だけを選んでも
+  -- 通るようになる枠。
+  (
+    select string_agg(o.label, ' / ' order by o.display_order)
+    from regulations o
+    where o.tournament_id = k.tournament_id
+      and not o.closes_with_priority
+      and o.priority_starts_at < k.first_closing_end
+      and o.priority_starts_at <= k.priority_ends_at
+      and o.priority_ends_at >= k.priority_starts_at
+  ) as no_longer_required
+from kept k
+join tournaments t on t.id = k.tournament_id
+join regions rg on rg.id = t.region_id
+order by t.display_order, rg.name, t.type, k.display_order;
+```
+
+行が返った大会は、一般枠の段階に入った後(`外す` の枠がすべて終わり、どの優先期間も始まった後)、その期間が開いている間の扱いが変わります。それより前の扱いは変わりません。
+
+| 列 | 意味 |
+| --- | --- |
+| `kept_because` | 消さなかった理由。`まだ始まっていない` は一般枠の期間がこれから始まる大会、`外す枠がまだ終わっていない` は別の `外す` の枠が続いている大会、`これから始まる優先期間がある` は後ろに別の期間が控えている大会 |
+| `gap_before` | `外す` の枠がすべて終わってからこの期間が始まるまでの間隔。今はこの間、`外す` の枠も選べる。始まる前に期間を消すと、この間は `外す` の枠が選べなくなる |
+| `no_longer_enough_alone` | 今は一般枠の段階で単独で選べるが、リリース後は、この期間が開いている間、この行の枠と一緒でないと選べなくなる枠。**空でなければ受付条件が変わる** |
+| `no_longer_required` | 今は一般枠の段階でも必須だが、リリース後は、この行の枠だけを選んでも通るようになる枠。**空でなければ受付条件が変わる** |
+
+- `no_longer_enough_alone` と `no_longer_required` が両方空の行は、誰がエントリーできるかは変わりません。変わるのは、一般枠の段階に入った後もその期間が開いている間、ポータルとエントリーフォームにその枠の優先エントリーの案内が出ることだけです。
+- 旧来の一般枠の行は、その大会が一般枠の段階に入った後に、管理画面のレギュレーション編集でその枠の優先期間を空欄にして保存すれば、今の受付条件のまま期間を消せます(マイグレーションが消すのと同じ条件です。リリースの前に行っても後に行っても、今の受付条件と同じになります)。段階に入る前に空欄にすると、`gap_before` の間に `外す` の枠が選べなくなるなど、受付条件が変わります。
+- 本当に制限として置いた期間(`外す` の枠の後に始まる在住者優先など)が返った場合、その大会は今、一般枠の段階に入るとその期間でも誰でもエントリーできています。リリース後は書いたとおりに絞られます。どちらが意図か、地域スタッフに確かめてください。
+
 ## 6. 環境変数・シークレット管理
 
 ### 6.1 Supabase 側の値

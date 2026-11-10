@@ -26,7 +26,6 @@ describe('priorityEntryNotices', () => {
     ).toEqual([]);
   });
 
-  // A window stored before #243 to open the general phase.
   it('announces nothing once the marked phases are over', () => {
     expect(
       priorityEntryNotices(
@@ -39,14 +38,38 @@ describe('priorityEntryNotices', () => {
           },
           {
             label: '一般',
-            priorityStartsAt: '2026-11-01T12:00:00Z',
-            priorityEndsAt: '2026-12-31T00:00:00Z',
+            priorityStartsAt: null,
+            priorityEndsAt: null,
             closesWithPriority: false,
           },
         ],
         now,
       ),
     ).toEqual([]);
+  });
+
+  // #262: a window is announced for as long as it is open, one that follows
+  // a marked phase included.
+  it('announces a window that opened after a marked phase', () => {
+    const notices = priorityEntryNotices(
+      [
+        {
+          label: '優先参加枠',
+          priorityStartsAt: '2026-10-29T12:00:00Z',
+          priorityEndsAt: '2026-11-01T12:00:00Z',
+          closesWithPriority: true,
+        },
+        {
+          label: '県内在住',
+          priorityStartsAt: '2026-11-01T12:00:00Z',
+          priorityEndsAt: '2026-12-31T00:00:00Z',
+          closesWithPriority: false,
+        },
+      ],
+      now,
+    );
+
+    expect(notices.map(notice => notice.labels)).toEqual([['県内在住']]);
   });
 
   // Each notice names the window its regulations are prioritised over, so

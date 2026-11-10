@@ -63,47 +63,20 @@ function arePhasesOver(windows: readonly PriorityWindow[], now: Date): boolean {
 }
 
 /**
- * Whether a window only opens the general phase rather than restricting
- * anyone: it isn't marked to close, and started once a marked phase had
- * ended. Windows stored before #243 work this way, marking where the general
- * phase starts. One that began before any marked phase ended keeps
- * restricting its whole period.
- * @param window The window.
- * @param windows The tournament's priority windows.
- */
-function followsClosingPhase(
-  window: PriorityWindow,
-  windows: readonly PriorityWindow[],
-): boolean {
-  return (
-    !window.closesWithPriority &&
-    windows.some(
-      earlier =>
-        earlier.closesWithPriority &&
-        Date.parse(earlier.priorityEndsAt) <=
-          Date.parse(window.priorityStartsAt),
-    )
-  );
-}
-
-/**
  * The regulations whose priority window is open at `now`, ends included --
  * the regulations a participant has to pick at least one of while any is
- * listed -- less, once the marked phases are over (`arePhasesOver()`), the
- * windows that only followed them (`followsClosingPhase()`). Generic so a
- * caller keeps whatever else its regulations carry (the label the entry form
- * and the portal print).
+ * listed. A window restricts for as long as it is open, whatever else the
+ * tournament has: one left on a general regulation is a restriction like any
+ * other, so a general regulation carries none (#262). Generic so a caller
+ * keeps whatever else its regulations carry (the label the entry form and
+ * the portal print).
  * @param regulations The tournament's regulations.
  * @param now The moment to check at.
  */
 export function activePriorityRegulations<
   T extends Omit<RegulationWindow, 'id'>,
 >(regulations: readonly T[], now: Date): Array<T & PriorityWindow> {
-  const windows = regulations.filter(hasPriorityWindow);
-  const open = openWindows(windows, now);
-  return arePhasesOver(windows, now)
-    ? open.filter(window => !followsClosingPhase(window, windows))
-    : open;
+  return openWindows(regulations.filter(hasPriorityWindow), now);
 }
 
 /**
@@ -155,8 +128,7 @@ export type RegulationSelectionRefusal =
  * any regulation, the selection has to contain at least one of them — the
  * window says only participants meeting that condition may enter, not that
  * they may claim nothing else. Where it lists none, any set of the
- * tournament's selectable regulations goes (`selectableRegulations()`): no
- * window is open, or the only ones open just followed the marked phases.
+ * tournament's selectable regulations goes (`selectableRegulations()`).
  *
  * An empty selection is never allowed: requirements.md asks for at least
  * one condition to be met.

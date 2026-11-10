@@ -214,7 +214,7 @@ describe('activePriorityRegulations', () => {
       priorityEndsAt: null,
       closesWithPriority: false,
     };
-    // How a general phase was set up before #243, and may still be stored.
+    // How a general phase was set up before #243.
     const generalWindow = {
       ...general,
       priorityStartsAt: '2026-10-31T12:00:00Z',
@@ -299,17 +299,26 @@ describe('activePriorityRegulations', () => {
     it('does not depend on a window reaching the close', () => {
       const short = {...generalWindow, priorityEndsAt: '2026-12-19T12:00:00Z'};
 
-      expect(listed([priority, short], '2026-11-01T00:00:00Z')).toEqual([]);
       expect(selectable([priority, short], '2026-12-20T00:00:00Z')).toEqual([
         'general',
       ]);
     });
 
-    it('treats a stored general window as opening the phase', () => {
-      const regulations = [priority, generalWindow];
+    // #262: how a general phase was set up before #243. Nothing sets such a
+    // window apart any more, so it restricts like any other; 0059 cleared
+    // the stored ones.
+    it('restricts on a window left on the general regulation', () => {
+      const other = {...general, id: 'other'};
+      const regulations = [priority, generalWindow, other];
 
-      expect(listed(regulations, AFTER)).toEqual([]);
-      expect(selectable(regulations, AFTER)).toEqual(['general']);
+      expect(listed(regulations, AFTER)).toEqual(['general']);
+      expect(selectable(regulations, AFTER)).toEqual(['general', 'other']);
+      expect(
+        regulationSelectionRefusal(regulations, ['other'], new Date(AFTER)),
+      ).toBe('needs-priority');
+      expect(
+        regulationSelectionRefusal(regulations, ['general'], new Date(AFTER)),
+      ).toBeNull();
     });
 
     // 北海道: both stay on offer until the window still to come starts.
