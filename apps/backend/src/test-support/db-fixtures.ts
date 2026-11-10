@@ -93,8 +93,8 @@ export async function createEntryRow(
   fixturePasswordHash ??= hashPassword('quiz-entry-pass1');
   const email = `entry-${crypto.randomUUID()}@${emailDomain}`;
   const [participant] = await sql`
-    insert into participants (region_id, email, password_hash)
-    values (${fixture.regionId}, ${email}, ${await fixturePasswordHash})
+    insert into participants (email, password_hash)
+    values (${email}, ${await fixturePasswordHash})
     returning id
   `;
   const [entry] = await sql`

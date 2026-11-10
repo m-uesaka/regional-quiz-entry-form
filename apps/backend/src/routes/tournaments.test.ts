@@ -1431,8 +1431,8 @@ describe.skipIf(!dbReachable)(
         id: string;
       };
       const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${regionId}, 'tournament-delete-test@example.com', 'hash')
+        insert into participants (email, password_hash)
+        values ('tournament-delete-test@example.com', 'hash')
         returning id
       `;
       await sql`
@@ -1492,13 +1492,13 @@ describe.skipIf(!dbReachable)(
           await postTournament(regionId, {type: 'shinjinou'})
         ).json()) as {id: string};
         const [onlyHere] = await sql`
-          insert into participants (region_id, email, password_hash)
-          values (${regionId}, ${`reset-only-${suffix}@example.com`}, 'hash')
+          insert into participants (email, password_hash)
+          values (${`reset-only-${suffix}@example.com`}, 'hash')
           returning id
         `;
         const [alsoElsewhere] = await sql`
-          insert into participants (region_id, email, password_hash)
-          values (${regionId}, ${`reset-both-${suffix}@example.com`}, 'hash')
+          insert into participants (email, password_hash)
+          values (${`reset-both-${suffix}@example.com`}, 'hash')
           returning id
         `;
         const [pending] = await sql`

@@ -236,7 +236,7 @@ export type Database = {
           id: string
           password_changed_at: string
           password_hash: string
-          region_id: string
+          region_id: string | null
         }
         Insert: {
           created_at?: string
@@ -245,7 +245,7 @@ export type Database = {
           id?: string
           password_changed_at?: string
           password_hash: string
-          region_id: string
+          region_id?: string | null
         }
         Update: {
           created_at?: string
@@ -254,7 +254,7 @@ export type Database = {
           id?: string
           password_changed_at?: string
           password_hash?: string
-          region_id?: string
+          region_id?: string | null
         }
         Relationships: [
           {
@@ -646,7 +646,7 @@ export type Database = {
         Args: {
           p_participant_id: string
           p_password_hash: string
-          p_region_id: string
+          p_region_id?: string
         }
         Returns: string[]
       }
