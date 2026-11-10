@@ -10,6 +10,22 @@ const RESEND_API_BASE_URL = 'https://api.resend.com';
 const CONCURRENT_IDEMPOTENT_REQUESTS = 'concurrent_idempotent_requests';
 
 /**
+ * How long a send may wait for Resend's answer before it is given up as a
+ * network error (#345). Without a limit, a connection that stalls holds its
+ * caller until the platform kills the invocation: a queue consumer killed
+ * that way acks nothing, so its whole batch is delivered again -- mail
+ * already sent included.
+ *
+ * Resend normally answers within a second or two. Ten seconds leaves it
+ * ample room while staying well inside every budget a send runs under: the
+ * response of the user-facing requests that await a single send (entry
+ * verification, password reset), the ~30 seconds of a request's
+ * `waitUntil()`, and the consumer's run, where a message is attempted at
+ * most `1 + MAIL_MAX_RETRIES` times (`bulk-mail.ts`).
+ */
+export const MAIL_SEND_TIMEOUT_MS = 10_000;
+
+/**
  * The site's name, as the frontend's `<title>` gives it. Every name a mail
  * shows -- its sender, its subject prefix, its footer -- is built from this
  * one, so a rename can't leave them disagreeing.
@@ -228,12 +244,15 @@ export class ResendMailSender implements MailSender {
    *     pass this, pointing the sender at a local stub so a test run
    *     neither needs a real API key nor delivers mail; production leaves
    *     it at Resend's own origin.
+   * @param timeoutMs How long a send waits for an answer before it fails as
+   *     a network error. Only the tests shorten it.
    * @throws MailConfigError If `baseUrl` is not an `http:`/`https:` URL.
    */
   constructor(
     private readonly apiKey: string,
     private readonly fromAddress: string,
     baseUrl: string = RESEND_API_BASE_URL,
+    private readonly timeoutMs: number = MAIL_SEND_TIMEOUT_MS,
   ) {
     this.endpoint = emailsEndpoint(baseUrl);
   }
@@ -251,10 +270,15 @@ export class ResendMailSender implements MailSender {
           ...(idempotencyKey ? {'Idempotency-Key': idempotencyKey} : {}),
         },
         body: JSON.stringify({from: this.fromAddress, ...mail}),
+        // Also bounds reading the body of a refusal below: a stalled body
+        // aborts, and `readErrorName()` then reports no name.
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {
       // `fetch` rejects (typically with a `TypeError`) when no answer came
-      // back at all. Wrapped so that every failed send reaches the caller as
+      // back at all, and with a `TimeoutError` when none came in time --
+      // which says no more about whether Resend took the mail, so it is a
+      // network error too, and as transient. Wrapped so that every failed send reaches the caller as
       // the one error type, which can tell this outage from a rejection.
       throw new MailSendError(undefined, undefined, {cause: error});
     }

@@ -183,6 +183,57 @@ describe('ResendMailSender', () => {
     expect(mailError.isTransient()).toBe(true);
   });
 
+  // #345: a stalled connection must not hold the caller until the platform
+  // kills it.
+  it('gives up on an answer that does not come in time, as transient', async () => {
+    let signal: AbortSignal | undefined;
+    globalThis.fetch = ((_input: unknown, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      // Never answers; only the abort settles it, as `fetch` does.
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(signal?.reason));
+      });
+    }) as unknown as typeof fetch;
+
+    const sender = new ResendMailSender(
+      'test-api-key',
+      'entry@example.com',
+      undefined,
+      10,
+    );
+
+    const error = await sender
+      .send({to: 'user@example.com', subject: 'Hi', html: '<p>Hi</p>'})
+      .then(
+        () => null,
+        (thrown: unknown) => thrown,
+      );
+
+    expect(signal?.aborted).toBe(true);
+    expect(error).toBeInstanceOf(MailSendError);
+    const mailError = error as MailSendError;
+    expect(mailError.status).toBeUndefined();
+    expect((mailError.cause as Error).name).toBe('TimeoutError');
+    expect(mailError.isTransient()).toBe(true);
+  });
+
+  it('sends with a timeout by default', async () => {
+    let signal: AbortSignal | null | undefined;
+    globalThis.fetch = ((_input: unknown, init?: RequestInit) => {
+      signal = init?.signal;
+      return Promise.resolve(new Response(null, {status: 200}));
+    }) as unknown as typeof fetch;
+
+    await new ResendMailSender('test-api-key', 'entry@example.com').send({
+      to: 'user@example.com',
+      subject: 'Hi',
+      html: '<p>Hi</p>',
+    });
+
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal?.aborted).toBe(false);
+  });
+
   // #344: `fetch` would refuse these as it does a lost connection, and the
   // caller would retry a send that can never succeed.
   it('refuses an API origin it cannot post to before anything is sent', () => {
