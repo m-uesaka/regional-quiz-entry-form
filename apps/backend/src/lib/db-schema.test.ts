@@ -1089,73 +1089,49 @@ describe.skipIf(!dbReachable)(
       expect(code).toBe(REGION_DUAL_ENTRY_SQLSTATE);
     });
 
-    // Only Workers from before #308 call this. It stays until they are gone
-    // (#309's second stage), and has to keep answering for the participants
-    // newer Workers create, which have no `region_id` (0056): the answer is
-    // the same, and there is no region to move.
-    it('claims a region by tournament, refusing only the same question set', async () => {
-      const {participantId, entryFor} = await seedRegion(false);
-      await sql`insert into entries ${sql(entryFor('saikyoi'))}`;
-      const sameSetTournamentId = await seedOtherRegionTournament('claim-same');
-      const ownSetTournamentId = await seedOtherRegionTournament(
-        'claim-own',
-        '鹿児島',
-      );
-      const claim = async (tournamentId: string) => {
-        const [row] = await sql`
-          select claim_participant_region_for_tournament(
-            ${participantId}, ${tournamentId}
-          ) as claimed
-        `;
-        return row.claimed as boolean;
-      };
-
-      const sameSet = await claim(sameSetTournamentId);
-      const ownSet = await claim(ownSetTournamentId);
-      const [{region_id: regionId}] = await sql`
-        select region_id from participants where id = ${participantId}
+    // 0055 (#308) dropped the region-only function and 0060 (#309) the one
+    // by tournament, which only Workers from before #308 called. The rule
+    // itself is the trigger's (`participant_holds_conflicting_region()`).
+    it('no longer has a function claiming a region ahead of the write', async () => {
+      const [row] = await sql`
+        select
+          to_regprocedure('claim_participant_region(uuid, uuid)')
+            as "regionOnly",
+          to_regprocedure(
+            'claim_participant_region_for_tournament(uuid, uuid)'
+          ) as "byTournament",
+          to_regprocedure(
+            'participant_holds_conflicting_region(uuid, uuid)'
+          ) is not null as "hasRule"
       `;
 
-      expect(sameSet).toBe(false);
-      expect(ownSet).toBe(true);
-      expect(regionId).toBeNull();
+      expect(row).toEqual({
+        regionOnly: null,
+        byTournament: null,
+        hasRule: true,
+      });
     });
 
-    it('still moves the region of a participant an older Worker created', async () => {
-      const {participantId} = await seedRegion(false);
-      const tournamentId = await seedOtherRegionTournament('claim-legacy');
-      const [{region_id: tournamentRegionId}] = await sql`
-        select region_id from tournaments where id = ${tournamentId}
+    // 0060 (#309): the account itself belongs to no region.
+    it('has no region on the participant row', async () => {
+      const rows = await sql`
+        select 1 from information_schema.columns
+        where table_schema = 'public'
+          and table_name = 'participants'
+          and column_name = 'region_id'
       `;
-      const [{id: startingRegionId}] = await sql`
-        select id from regions where slug = ${testRegionSlug}
-      `;
-      await sql`
-        update participants set region_id = ${startingRegionId}
-        where id = ${participantId}
-      `;
-
-      const [{claimed}] = await sql`
-        select claim_participant_region_for_tournament(
-          ${participantId}, ${tournamentId}
-        ) as claimed
+      const [{index, foreignKey}] = await sql`
+        select
+          to_regclass('public.participants_region_id_idx') as index,
+          exists (
+            select 1 from pg_constraint
+            where conname = 'participants_region_id_fkey'
+          ) as "foreignKey"
       `;
 
-      const [{region_id: regionId}] = await sql`
-        select region_id from participants where id = ${participantId}
-      `;
-      expect(claimed).toBe(true);
-      expect(regionId).toBe(tournamentRegionId);
-    });
-
-    // 0055 (#308). `claim_participant_region_for_tournament()` above stays
-    // until `participants.region_id` is dropped (#309's second stage).
-    it('no longer has the region-only claim_participant_region()', async () => {
-      const [{oid}] = await sql`
-        select to_regprocedure('claim_participant_region(uuid, uuid)') as oid
-      `;
-
-      expect(oid).toBeNull();
+      expect(rows).toHaveLength(0);
+      expect(index).toBeNull();
+      expect(foreignKey).toBe(false);
     });
 
     // Each write's `check_entry_seat()` takes the participant row in turn,
@@ -2807,38 +2783,65 @@ describe.skipIf(!dbReachable)(
       ).toHaveLength(0);
     });
 
-    // A Worker from before 0056 (#309) is still running while the migration
-    // is applied, and sends `p_region_id`. Through PostgREST, because which
-    // function a set of named arguments resolves to is its decision; the
-    // newer Worker's two-argument call goes the same way in
-    // `entry-submission.test.ts`.
-    it('take_over_unverified_participant still takes the p_region_id of an older Worker, and ignores it', async () => {
-      const {participantId, regionId} = await seed('takeover-legacy');
-
-      const response = await fetch(
-        `${SUPABASE_URL}/rest/v1/rpc/take_over_unverified_participant`,
-        {
-          method: 'POST',
-          headers: {
-            apikey: SUPABASE_SECRET_KEY,
-            Authorization: `Bearer ${SUPABASE_SECRET_KEY}`,
-            'Content-Type': 'application/json',
+    // 0060 (#309) dropped `p_region_id`, which changes the function's
+    // identity: the three-argument one has to be gone rather than left as an
+    // overload, and the grants have to be the new function's own. Through
+    // PostgREST, because which function a set of named arguments resolves to
+    // is its decision, and it is how the Worker calls.
+    it('take_over_unverified_participant takes two arguments, from service_role only', async () => {
+      const {participantId, regionId} = await seed('takeover-args');
+      const call = async (args: Record<string, unknown>) => {
+        const response = await fetch(
+          `${SUPABASE_URL}/rest/v1/rpc/take_over_unverified_participant`,
+          {
+            method: 'POST',
+            headers: {
+              apikey: SUPABASE_SECRET_KEY,
+              Authorization: `Bearer ${SUPABASE_SECRET_KEY}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(args),
           },
-          body: JSON.stringify({
-            p_participant_id: participantId,
-            p_password_hash: 'new-hash',
-            p_region_id: regionId,
-          }),
-        },
-      );
+        );
+        return {
+          status: response.status,
+          body: (await response.json()) as unknown,
+        };
+      };
 
-      expect(response.status).toBe(200);
-      expect((await response.json()) as unknown).toEqual([]);
+      const withRegion = await call({
+        p_participant_id: participantId,
+        p_password_hash: 'older-worker-hash',
+        p_region_id: regionId,
+      });
+      const twoArguments = await call({
+        p_participant_id: participantId,
+        p_password_hash: 'new-hash',
+      });
+
+      expect(withRegion.status).toBe(404);
+      expect(twoArguments).toEqual({status: 200, body: []});
       const [row] = await sql`
-        select region_id, password_hash from participants
-        where id = ${participantId}
+        select password_hash from participants where id = ${participantId}
       `;
-      expect(row).toEqual({region_id: null, password_hash: 'new-hash'});
+      expect(row).toEqual({password_hash: 'new-hash'});
+      const [signatures] = await sql`
+        select
+          array_agg(p.oid::regprocedure::text) as names,
+          bool_and(has_function_privilege('service_role', p.oid, 'execute'))
+            as "serviceRole",
+          bool_or(
+            has_function_privilege('anon', p.oid, 'execute')
+            or has_function_privilege('authenticated', p.oid, 'execute')
+          ) as "anyoneElse"
+        from pg_proc p
+        where p.proname = 'take_over_unverified_participant'
+      `;
+      expect(signatures).toEqual({
+        names: ['take_over_unverified_participant(uuid,text)'],
+        serviceRole: true,
+        anyoneElse: false,
+      });
     });
 
     it('take_over_unverified_participant leaves a verified account alone', async () => {

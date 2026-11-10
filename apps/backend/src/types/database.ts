@@ -236,7 +236,6 @@ export type Database = {
           id: string
           password_changed_at: string
           password_hash: string
-          region_id: string | null
         }
         Insert: {
           created_at?: string
@@ -245,7 +244,6 @@ export type Database = {
           id?: string
           password_changed_at?: string
           password_hash: string
-          region_id?: string | null
         }
         Update: {
           created_at?: string
@@ -254,17 +252,8 @@ export type Database = {
           id?: string
           password_changed_at?: string
           password_hash?: string
-          region_id?: string | null
         }
-        Relationships: [
-          {
-            foreignKeyName: "participants_region_id_fkey"
-            columns: ["region_id"]
-            isOneToOne: false
-            referencedRelation: "regions"
-            referencedColumns: ["id"]
-          },
-        ]
+        Relationships: []
       }
       password_reset_tokens: {
         Row: {
@@ -507,10 +496,6 @@ export type Database = {
           previous_status: Database["public"]["Enums"]["entry_status"]
         }[]
       }
-      claim_participant_region_for_tournament: {
-        Args: { p_participant_id: string; p_tournament_id: string }
-        Returns: boolean
-      }
       confirm_entry_by_token: {
         Args: { p_token_hash: string }
         Returns: Database["public"]["Enums"]["entry_status"]
@@ -643,11 +628,7 @@ export type Database = {
         Returns: undefined
       }
       take_over_unverified_participant: {
-        Args: {
-          p_participant_id: string
-          p_password_hash: string
-          p_region_id?: string
-        }
+        Args: { p_participant_id: string; p_password_hash: string }
         Returns: string[]
       }
       tournament_entry_summary: {
