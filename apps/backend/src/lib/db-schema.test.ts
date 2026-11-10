@@ -2,6 +2,7 @@ import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'bun:test';
 import {SQL, type ReservedSQL} from 'bun';
 import {readFileSync} from 'node:fs';
 import {
+  DIRECT_REENTRY_SQLSTATE,
   DUAL_ENTRY_SHARED_QUESTION_SET_SQLSTATE,
   PARTICIPANT_REGION_SQLSTATE,
   REGION_DUAL_ENTRY_SQLSTATE,
@@ -523,35 +524,164 @@ describe.skipIf(!dbReachable)(
       expect(otherRegionEntry).toBe(PARTICIPANT_REGION_SQLSTATE);
     });
 
-    // Migrations run before the Worker is deployed, so the Worker of the
-    // previous release writes re-entries directly for a while after 0041.
-    it('still checks a re-entry written directly to the table', async () => {
-      const {participantId, entryFor} = await seedRegion(false);
-      const [first] = await sql`
+    // An update straight to the table locks the entry before the trigger can
+    // take the participant, the order a takeover deadlocks against. The Worker
+    // that wrote re-entries that way is gone, so the trigger refuses it
+    // (0057, #261) -- even where the seat itself would be allowed.
+    it('refuses a re-entry written directly to the table', async () => {
+      const {participantId, entryFor} = await seedRegion(true);
+      const [cancelled] = await sql`
         insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}
         returning id
       `;
-      const [second] = await sql`
-        insert into entries ${sql(entryFor('shinjinou', 'cancelled'))}
-        returning id
-      `;
-      const directly = (id: string) => sql`
+
+      const toPending = await refusalOf(sql`
         update entries
         set status = 'pending_verification', cancelled_at = null
-        where id = ${id} and status = 'cancelled'
-        returning id
-      `;
+        where id = ${cancelled.id} and status = 'cancelled'
+      `);
+      const toConfirmed = await refusalOf(sql`
+        update entries set status = 'confirmed' where id = ${cancelled.id}
+      `);
 
-      const [reentered] = await directly(first.id);
-      const code = await refusalOf(directly(second.id));
-
-      expect(reentered.id).toBe(first.id);
-      expect(code).toBe(REGION_DUAL_ENTRY_SQLSTATE);
+      expect(toPending).toBe(DIRECT_REENTRY_SQLSTATE);
+      expect(toConfirmed).toBe(DIRECT_REENTRY_SQLSTATE);
       const [row] = await sql`
         select count(*)::int as live from entries
         where participant_id = ${participantId} and status <> 'cancelled'
       `;
-      expect(row.live).toBe(1);
+      expect(row.live).toBe(0);
+    });
+
+    // Refused ahead of the participant lock: the update already holds the
+    // entry row, and waiting for the participant there is the inverted order.
+    it('refuses a direct re-entry without waiting for the participant row', async () => {
+      const {participantId, entryFor} = await seedRegion(true);
+      const [cancelled] = await sql`
+        insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}
+        returning id
+      `;
+
+      const holder = await sql.reserve();
+      try {
+        await holder`begin`;
+        await holder`
+          select 1 from participants where id = ${participantId}
+          for no key update
+        `;
+        // Waiting for the lock would end as `55P03` instead.
+        const code = await refusalOf(
+          sql.begin(async tx => {
+            await tx`set local lock_timeout = '2s'`;
+            await tx`
+              update entries set status = 'pending_verification'
+              where id = ${cancelled.id}
+            `;
+          }),
+        );
+        await holder`commit`;
+
+        expect(code).toBe(DIRECT_REENTRY_SQLSTATE);
+      } finally {
+        await releaseClean(holder);
+      }
+    });
+
+    // What the function lets through is the one row it was called for, and
+    // only its own update: the rest of the transaction is refused as before.
+    it('lets no other direct update through after a re-entry', async () => {
+      const {participantId, entryFor} = await seedRegion(true);
+      const [reentered] = await sql`
+        insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}
+        returning id
+      `;
+      const [other] = await sql`
+        insert into entries ${sql(entryFor('shinjinou', 'cancelled'))}
+        returning id
+      `;
+
+      const conn = await sql.reserve();
+      const directly = (id: string) => conn`
+        update entries set status = 'pending_verification' where id = ${id}
+      `;
+      try {
+        await conn`begin`;
+        await conn`
+          select * from reenter_cancelled_entry(
+            ${reentered.id}, ${participantId}, '鈴木花子', 'スズキハナコ',
+            '花子', null, '{}'
+          )
+        `;
+        await conn`
+          update entries set status = 'cancelled' where id = ${reentered.id}
+        `;
+        await conn`savepoint after_reentry`;
+        const sameRow = await refusalOf(directly(reentered.id));
+        await conn`rollback to savepoint after_reentry`;
+        const otherRow = await refusalOf(directly(other.id));
+        await conn`rollback`;
+
+        expect(sameRow).toBe(DIRECT_REENTRY_SQLSTATE);
+        expect(otherRow).toBe(DIRECT_REENTRY_SQLSTATE);
+      } finally {
+        await releaseClean(conn);
+      }
+    });
+
+    // Naming the row by hand gets past the refusal -- it guards against code
+    // that forgot the function, not against whoever can run SQL -- but not
+    // past the checks on the seat itself.
+    it('still checks the seat of a direct update that names its row', async () => {
+      const {entryFor} = await seedRegion(false);
+      const [cancelled] = await sql`
+        insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}
+        returning id
+      `;
+      await sql`insert into entries ${sql(entryFor('shinjinou'))}`;
+
+      const code = await refusalOf(
+        sql.begin(async tx => {
+          await tx`
+            select set_config(
+              'app.reentering_entry_id', ${cancelled.id}::text, true
+            )
+          `;
+          await tx`
+            update entries set status = 'pending_verification'
+            where id = ${cancelled.id}
+          `;
+        }),
+      );
+
+      expect(code).toBe(REGION_DUAL_ENTRY_SQLSTATE);
+    });
+
+    // What `rollbackEntry()` writes when a re-entry fails after the row was
+    // taken, and what a cancellation writes: neither takes a seat, so the
+    // refusal doesn't reach them.
+    it('lets a direct update put a row back into its cancellation', async () => {
+      const {participantId, entryFor} = await seedRegion(true);
+      const [cancelled] = await sql`
+        insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}
+        returning id
+      `;
+      await reenter(sql, cancelled.id, participantId);
+
+      const back = await refusalOf(sql`
+        update entries
+        set status = 'cancelled', cancelled_at = now(), name = '元の名前'
+        where id = ${cancelled.id}
+      `);
+      const edited = await refusalOf(sql`
+        update entries set name = '直した名前' where id = ${cancelled.id}
+      `);
+
+      expect(back).toBeUndefined();
+      expect(edited).toBeUndefined();
+      const [row] = await sql`
+        select status, name from entries where id = ${cancelled.id}
+      `;
+      expect(row).toEqual({status: 'cancelled', name: '直した名前'});
     });
 
     // What `take_over_unverified_participant()` deadlocked against: an update
@@ -743,18 +873,17 @@ describe.skipIf(!dbReachable)(
     // refuses a seat in another region on the same question set (0043).
     it('refuses a seat while another region on the same question set is held', async () => {
       const {participantId, entryFor} = await seedRegion(false);
-      await sql`insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}`;
+      const [cancelled] = await sql`
+        insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}
+        returning id
+      `;
       const otherTournamentId = await seedOtherRegionTournament('moved');
       await sql`insert into entries ${sql({
         ...entryFor('saikyoi'),
         tournament_id: otherTournamentId,
       })}`;
 
-      const code = await refusalOf(sql`
-        update entries set status = 'pending_verification'
-        where participant_id = ${participantId}
-          and tournament_id = ${entryFor('saikyoi').tournament_id}
-      `);
+      const code = await refusalOf(reenter(sql, cancelled.id, participantId));
 
       expect(code).toBe(PARTICIPANT_REGION_SQLSTATE);
     });
