@@ -473,7 +473,12 @@ describe.skipIf(!(await isDbReachable()))(
         return sheetsFetch(input as RequestInfo, init);
       }) as typeof fetch;
 
-      const [previewed] = await previewTournamentImport(env, 'index', NOW);
+      const [previewed] = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
 
       expect(indexQuery?.get('valueRenderOption')).toBe('UNFORMATTED_VALUE');
       expect(indexQuery?.get('dateTimeRenderOption')).toBe('SERIAL_NUMBER');
@@ -496,7 +501,12 @@ describe.skipIf(!(await isDbReachable()))(
       };
       stubSheets();
 
-      const [previewed] = await previewTournamentImport(env, 'index', NOW);
+      const [previewed] = await previewTournamentImport(
+        env,
+        createDbClient(env),
+        'index',
+        NOW,
+      );
 
       expect(previewed.error).toContain('2026-11-04 21:00 〜 2026-11-04 20:00');
     });
