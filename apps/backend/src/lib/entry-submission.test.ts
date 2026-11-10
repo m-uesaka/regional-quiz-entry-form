@@ -7,8 +7,8 @@ import {
   checkEntrySubmission,
   createEntry,
   createEntryForParticipant,
-  createEntryUnauthenticated,
 } from './entry-submission';
+import {createEntryUnauthenticated} from './entry-unauthenticated';
 import {hashPassword, verifyPassword} from './password';
 import {testBindings} from '../test-support/bindings';
 import {
