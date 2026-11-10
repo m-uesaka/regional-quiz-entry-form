@@ -764,8 +764,8 @@ describe.skipIf(!(await isDbReachable()))(
         where tournament_id = ${tournament?.id} and label = '上記以外の方'
       `;
       const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${regionIds[regionA]}, ${prefix + '@example.com'}, 'hash')
+        insert into participants (email, password_hash)
+        values (${prefix + '@example.com'}, 'hash')
         returning id
       `;
       const [entry] = await sql`

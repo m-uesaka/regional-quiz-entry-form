@@ -85,7 +85,6 @@ export interface EntryTournamentRow extends Pick<
   | 'id'
   | 'name'
   | 'type'
-  | 'region_id'
   | 'capacity'
   | 'entry_opens_at'
   | 'entry_closes_at'
@@ -129,11 +128,11 @@ const REGULATION_REFUSALS: Record<
  */
 type ParticipantRow = Pick<
   Tables<'participants'>,
-  'id' | 'region_id' | 'password_hash' | 'email_verified_at'
+  'id' | 'password_hash' | 'email_verified_at'
 >;
 
 /** What `ParticipantRow` is selected with. */
-const PARTICIPANT_COLUMNS = 'id, region_id, password_hash, email_verified_at';
+const PARTICIPANT_COLUMNS = 'id, password_hash, email_verified_at';
 
 /**
  * The participant's existing entry for the tournament, if there is one.
@@ -381,7 +380,7 @@ export async function checkEntrySubmission(
     .from('tournaments')
     .select(
       `
-        id, name, type, region_id, capacity, entry_opens_at, entry_closes_at,
+        id, name, type, capacity, entry_opens_at, entry_closes_at,
         entries_paused,
         regions(name),
         regulations(id, priority_starts_at, priority_ends_at,
@@ -466,12 +465,11 @@ export async function checkEntrySubmission(
  * password, and can't enter tournaments of two regions using the same
  * question set. One whose address never was (#189) is taken over instead:
  * the account was made by a submission nobody has confirmed, possibly from
- * someone who typed another person's address to lock them into a far
- * region, so its password and region carry no weight. The submission at
- * hand replaces them, the same way it would have created the account had it
- * come first -- unless it comes with the account's own password, which
- * makes it a further entry from whoever made the account, held to the same
- * rules as a verified one.
+ * someone who typed another person's address, so its password and entries
+ * carry no weight. The submission at hand replaces them, the same way it
+ * would have created the account had it come first -- unless it comes with
+ * the account's own password, which makes it a further entry from whoever
+ * made the account, held to the same rules as a verified one.
  * @param env The Worker bindings.
  * @param tournament The checked tournament.
  * @param input The validated entry form submission.
@@ -535,7 +533,6 @@ async function createEntryAfterCheck(
         .from('participants')
         .insert({
           email: input.email,
-          region_id: tournament.region_id,
           password_hash: passwordHash,
         })
         .select('id')
@@ -575,7 +572,6 @@ async function createEntryAfterCheck(
       {
         p_participant_id: existingParticipant.id,
         p_password_hash: passwordHash,
-        p_region_id: tournament.region_id,
       },
     );
     if (takeOverError) {
@@ -615,7 +611,7 @@ async function createEntryAfterCheck(
     // this submission is held to it like any other. Read again, because
     // what the takeover found verified need not be the row read above:
     // another submission may have taken the account over in between, and
-    // had its own link followed, leaving another password and region.
+    // had its own link followed, leaving another password.
     const {data: verifiedParticipant, error: rereadError} = await db
       .from('participants')
       .select(PARTICIPANT_COLUMNS)
@@ -1247,7 +1243,7 @@ async function mailVerificationLink(
  * the password this submission gave it.
  *
  * Every link mailed for an unverified account has to belong to a
- * submission made with the account's current password and region, because
+ * submission made with the account's current password, because
  * following it is what verifies the account with them (migration 0034).
  * `take_over_unverified_participant()` keeps that by deleting the earlier
  * submissions' entries, but it can only delete entries that exist: one
@@ -1316,7 +1312,7 @@ export type EntryMailDelivery = 'now' | 'deferred';
  *
  * - An unregistered address gets an account and the entry, as before.
  * - A registered address that was never verified has its account taken
- *   over -- password and region replaced, earlier submissions' entries
+ *   over -- password replaced, earlier submissions' entries
  *   dropped -- and gets the entry (#189). With the account's own password
  *   it is entered under the same rules as a verified one, in any region.
  * - A verified address with the matching password gets the entry.

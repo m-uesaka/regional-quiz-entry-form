@@ -25,11 +25,9 @@ describe.skipIf(!(await isDbReachable()))(
   'password reset (local Supabase integration)',
   () => {
     const sql = new SQL(DB_URL);
-    const testRegionSlug = 'password-reset-test-region';
     const testEmailDomain = 'password-reset-test.example.com';
     const originalFetch = globalThis.fetch;
     const sentMails: SentMail[] = [];
-    let regionId: string;
 
     beforeAll(async () => {
       // The Supabase client also runs on `fetch`, so only intercept the
@@ -46,13 +44,6 @@ describe.skipIf(!(await isDbReachable()))(
         }
         return originalFetch(input, init);
       }) as typeof fetch;
-
-      const [region] = await sql`
-        insert into regions (slug, name)
-        values (${testRegionSlug}, 'テスト地域')
-        returning id
-      `;
-      regionId = region.id as string;
     });
 
     afterAll(async () => {
@@ -61,7 +52,6 @@ describe.skipIf(!(await isDbReachable()))(
         select id from participants where email like ${'%@' + testEmailDomain}
       )`;
       await sql`delete from participants where email like ${'%@' + testEmailDomain}`;
-      await sql`delete from regions where slug = ${testRegionSlug}`;
       await sql.close();
     });
 
@@ -73,9 +63,9 @@ describe.skipIf(!(await isDbReachable()))(
       const verifiedAt = options.verified === false ? null : new Date();
       const [participant] = await sql`
         insert into participants (
-          region_id, email, password_hash, email_verified_at
+          email, password_hash, email_verified_at
         ) values (
-          ${regionId}, ${email}, ${await hashPassword(password)}, ${verifiedAt}
+          ${email}, ${await hashPassword(password)}, ${verifiedAt}
         )
         returning id
       `;

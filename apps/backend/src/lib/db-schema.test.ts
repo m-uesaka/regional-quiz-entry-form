@@ -14,7 +14,12 @@ import {
   ENTRY_FREE_TEXT_MAX_LENGTH,
   ENTRY_NAME_MAX_LENGTH,
 } from '@regional-quiz/shared';
-import {DB_URL, isDbReachable} from '../test-support/db';
+import {
+  DB_URL,
+  isDbReachable,
+  SUPABASE_SECRET_KEY,
+  SUPABASE_URL,
+} from '../test-support/db';
 import {
   createEntryRow,
   createTournamentAndRegulation,
@@ -68,8 +73,8 @@ describe.skipIf(!dbReachable)(
         returning id
       `;
       const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${region.id}, ${testEmail}, 'hash')
+        insert into participants (email, password_hash)
+        values (${testEmail}, 'hash')
         returning id
       `;
       const entryInput = {
@@ -164,8 +169,8 @@ describe.skipIf(!dbReachable)(
         shinjinou: await seedTournament('shinjinou'),
       };
       const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${region.id}, ${testEmail}, 'hash')
+        insert into participants (email, password_hash)
+        values (${testEmail}, 'hash')
         returning id
       `;
       const participantId = participant.id as string;
@@ -587,9 +592,6 @@ describe.skipIf(!dbReachable)(
 
     it('sees the row a takeover deleted while it waited for the lock', async () => {
       const {participantId, entryFor} = await seedRegion(false);
-      const [regionRow] = await sql`
-        select region_id from participants where id = ${participantId}
-      `;
       const [entry] = await sql`
         insert into entries ${sql(entryFor('saikyoi', 'cancelled'))}
         returning id
@@ -601,7 +603,7 @@ describe.skipIf(!dbReachable)(
         await takingOver`begin`;
         await takingOver`
           select take_over_unverified_participant(
-            ${participantId}, 'new-hash', ${regionRow.region_id}
+            ${participantId}, 'new-hash'
           )
         `;
         const reentry = reenter(sql, entry.id, participantId).execute();
@@ -618,9 +620,6 @@ describe.skipIf(!dbReachable)(
 
     it('does not deadlock a re-entry with a takeover', async () => {
       const {participantId, entryFor} = await seedRegion(false);
-      const [regionRow] = await sql`
-        select region_id from participants where id = ${participantId}
-      `;
       const takingOver = new SQL(DB_URL);
       const refusals: Array<string | undefined> = [];
 
@@ -636,7 +635,7 @@ describe.skipIf(!dbReachable)(
               refusalOf(reenter(sql, entry.id, participantId)),
               refusalOf(takingOver`
                 select take_over_unverified_participant(
-                  ${participantId}, 'new-hash', ${regionRow.region_id}
+                  ${participantId}, 'new-hash'
                 )
               `),
             ])),
@@ -961,6 +960,10 @@ describe.skipIf(!dbReachable)(
       expect(code).toBe(REGION_DUAL_ENTRY_SQLSTATE);
     });
 
+    // Only Workers from before #308 call this. It stays until they are gone
+    // (#309's second stage), and has to keep answering for the participants
+    // newer Workers create, which have no `region_id` (0056): the answer is
+    // the same, and there is no region to move.
     it('claims a region by tournament, refusing only the same question set', async () => {
       const {participantId, entryFor} = await seedRegion(false);
       await sql`insert into entries ${sql(entryFor('saikyoi'))}`;
@@ -983,17 +986,41 @@ describe.skipIf(!dbReachable)(
       const [{region_id: regionId}] = await sql`
         select region_id from participants where id = ${participantId}
       `;
-      const [{region_id: ownSetRegionId}] = await sql`
-        select region_id from tournaments where id = ${ownSetTournamentId}
-      `;
 
       expect(sameSet).toBe(false);
       expect(ownSet).toBe(true);
-      expect(regionId).toBe(ownSetRegionId);
+      expect(regionId).toBeNull();
+    });
+
+    it('still moves the region of a participant an older Worker created', async () => {
+      const {participantId} = await seedRegion(false);
+      const tournamentId = await seedOtherRegionTournament('claim-legacy');
+      const [{region_id: tournamentRegionId}] = await sql`
+        select region_id from tournaments where id = ${tournamentId}
+      `;
+      const [{id: startingRegionId}] = await sql`
+        select id from regions where slug = ${testRegionSlug}
+      `;
+      await sql`
+        update participants set region_id = ${startingRegionId}
+        where id = ${participantId}
+      `;
+
+      const [{claimed}] = await sql`
+        select claim_participant_region_for_tournament(
+          ${participantId}, ${tournamentId}
+        ) as claimed
+      `;
+
+      const [{region_id: regionId}] = await sql`
+        select region_id from participants where id = ${participantId}
+      `;
+      expect(claimed).toBe(true);
+      expect(regionId).toBe(tournamentRegionId);
     });
 
     // 0055 (#308). `claim_participant_region_for_tournament()` above stays
-    // until `participants.region_id` goes (#309).
+    // until `participants.region_id` is dropped (#309's second stage).
     it('no longer has the region-only claim_participant_region()', async () => {
       const [{oid}] = await sql`
         select to_regprocedure('claim_participant_region(uuid, uuid)') as oid
@@ -1377,8 +1404,8 @@ describe.skipIf(!dbReachable)(
         returning id
       `;
       const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${region.id}, ${`p-${crypto.randomUUID()}@${emailDomain}`}, 'x')
+        insert into participants (email, password_hash)
+        values (${`p-${crypto.randomUUID()}@${emailDomain}`}, 'x')
         returning id
       `;
       return {
@@ -1636,8 +1663,8 @@ describe.skipIf(!dbReachable)(
       status: string,
     ): Promise<void> {
       const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${tournament.regionId}, ${email}, 'hash')
+        insert into participants (email, password_hash)
+        values (${email}, 'hash')
         returning id
       `;
       await sql`insert into entries ${sql({
@@ -2060,8 +2087,8 @@ describe.skipIf(!dbReachable)(
       tournamentId: string;
     }): Promise<string> {
       const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${tournament.regionId}, ${testEmail}, 'hash')
+        insert into participants (email, password_hash)
+        values (${testEmail}, 'hash')
         returning id
       `;
       const [entry] = await sql`
@@ -2188,8 +2215,8 @@ describe.skipIf(!dbReachable)(
         returning id
       `;
       const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${region.id}, ${testEmail}, 'hash')
+        insert into participants (email, password_hash)
+        values (${testEmail}, 'hash')
         returning id
       `;
       return {
@@ -2428,11 +2455,6 @@ describe.skipIf(!dbReachable)('indexes (local Supabase integration)', () => {
     expect(indexes.length).toBeGreaterThan(0);
   });
 
-  it('participants has an index on region_id', async () => {
-    const indexes = await indexesLeadingWith('participants', 'region_id');
-    expect(indexes.length).toBeGreaterThan(0);
-  });
-
   it('staff_accounts has an index on region_id', async () => {
     const indexes = await indexesLeadingWith('staff_accounts', 'region_id');
     expect(indexes.length).toBeGreaterThan(0);
@@ -2494,8 +2516,8 @@ describe.skipIf(!dbReachable)(
         returning id
       `;
       const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${region.id}, ${suffix + '@' + testEmailDomain}, 'old-hash')
+        insert into participants (email, password_hash)
+        values (${suffix + '@' + testEmailDomain}, 'old-hash')
         returning id
       `;
       /**
@@ -2632,28 +2654,22 @@ describe.skipIf(!dbReachable)(
         insert into email_verification_tokens (entry_id, token_hash, expires_at)
         values (${pendingId}, 'db-schema-takeover-token', now() + interval '1 day')
       `;
-      const [other] = await sql`
-        insert into regions (slug, name)
-        values (${testRegionSlug + '-takeover-other'}, '別の地域')
-        returning id
-      `;
 
       // As JSON, the way PostgREST hands the array to the app; Bun's client
       // would otherwise leave a `uuid[]` as its text literal.
       const [{tookOver}] = await sql`
         select to_jsonb(take_over_unverified_participant(
-          ${participantId}, 'new-hash', ${other.id}
+          ${participantId}, 'new-hash'
         )) as "tookOver"
       `;
 
       // The pending entry it withdrew, for the new entry's mail to report.
       expect(tookOver).toEqual([tournament.tournament_id]);
       const [row] = await sql`
-        select region_id, password_hash, email_verified_at from participants
+        select password_hash, email_verified_at from participants
         where id = ${participantId}
       `;
       expect(row).toEqual({
-        region_id: other.id,
         password_hash: 'new-hash',
         email_verified_at: null,
       });
@@ -2662,8 +2678,42 @@ describe.skipIf(!dbReachable)(
       ).toHaveLength(0);
     });
 
+    // A Worker from before 0056 (#309) is still running while the migration
+    // is applied, and sends `p_region_id`. Through PostgREST, because which
+    // function a set of named arguments resolves to is its decision; the
+    // newer Worker's two-argument call goes the same way in
+    // `entry-submission.test.ts`.
+    it('take_over_unverified_participant still takes the p_region_id of an older Worker, and ignores it', async () => {
+      const {participantId, regionId} = await seed('takeover-legacy');
+
+      const response = await fetch(
+        `${SUPABASE_URL}/rest/v1/rpc/take_over_unverified_participant`,
+        {
+          method: 'POST',
+          headers: {
+            apikey: SUPABASE_SECRET_KEY,
+            Authorization: `Bearer ${SUPABASE_SECRET_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            p_participant_id: participantId,
+            p_password_hash: 'new-hash',
+            p_region_id: regionId,
+          }),
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect((await response.json()) as unknown).toEqual([]);
+      const [row] = await sql`
+        select region_id, password_hash from participants
+        where id = ${participantId}
+      `;
+      expect(row).toEqual({region_id: null, password_hash: 'new-hash'});
+    });
+
     it('take_over_unverified_participant leaves a verified account alone', async () => {
-      const {participantId, regionId} = await seed('takeover-verified');
+      const {participantId} = await seed('takeover-verified');
       await sql`
         update participants set email_verified_at = now()
         where id = ${participantId}
@@ -2671,7 +2721,7 @@ describe.skipIf(!dbReachable)(
 
       const [{tookOver}] = await sql`
         select take_over_unverified_participant(
-          ${participantId}, 'new-hash', ${regionId}
+          ${participantId}, 'new-hash'
         ) as "tookOver"
       `;
 
@@ -2685,12 +2735,12 @@ describe.skipIf(!dbReachable)(
     // Belt and braces for an account the backfill missed: a confirmed entry
     // proves the address whatever the participant row says.
     it('take_over_unverified_participant leaves an account with a confirmed entry alone', async () => {
-      const {participantId, regionId, enter} = await seed('takeover-confirmed');
+      const {participantId, enter} = await seed('takeover-confirmed');
       await enter('confirmed', '2026-05-01T00:00:00Z');
 
       const [{tookOver}] = await sql`
         select take_over_unverified_participant(
-          ${participantId}, 'new-hash', ${regionId}
+          ${participantId}, 'new-hash'
         ) as "tookOver"
       `;
 
@@ -2703,7 +2753,7 @@ describe.skipIf(!dbReachable)(
     // started with. The confirmation here stamps only the entry, as one
     // the backfill missed would look.
     it('take_over_unverified_participant sees an entry confirmed while it waited for the lock', async () => {
-      const {participantId, regionId, enter} = await seed('takeover-waiting');
+      const {participantId, enter} = await seed('takeover-waiting');
       const entryId = await enter('pending_verification', null);
 
       const confirming = await sql.reserve();
@@ -2720,7 +2770,7 @@ describe.skipIf(!dbReachable)(
         `;
         const takeOver = sql`
           select to_jsonb(take_over_unverified_participant(
-            ${participantId}, 'new-hash', ${regionId}
+            ${participantId}, 'new-hash'
           )) as "tookOver"
         `.execute();
         // Long enough for the takeover to be queued on the lock.

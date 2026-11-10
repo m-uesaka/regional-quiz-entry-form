@@ -505,14 +505,12 @@ describe.skipIf(!(await isDbReachable()))(
     });
 
     it('returns 409 when a removed regulation is referenced by an entry', async () => {
-      const {regionId, tournamentId} = await createTestTournament('in-use');
+      const {tournamentId} = await createTestTournament('in-use');
       await put(tournamentId, [{label: '使用中の部'}]);
       const [inUse] = await regulationsOf(tournamentId);
       const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
-        values (
-          ${regionId}, 'regulations-route-test-1@example.com', 'hash'
-        )
+        insert into participants (email, password_hash)
+        values ('regulations-route-test-1@example.com', 'hash')
         returning id
       `;
       const [entry] = await sql`insert into entries ${sql({

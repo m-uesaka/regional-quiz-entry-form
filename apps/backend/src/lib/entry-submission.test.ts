@@ -362,8 +362,8 @@ describe.skipIf(!dbReachable)(
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       await sql`
         insert into participants (
-          region_id, email, password_hash, email_verified_at
-        ) values (${fixtureA.regionId}, ${email}, ${await hashPassword('quiz-entry-pass1')}, now())
+          email, password_hash, email_verified_at
+        ) values (${email}, ${await hashPassword('quiz-entry-pass1')}, now())
       `;
       await enterAsConfirmed(email, fixtureA.tournamentId);
 
@@ -404,8 +404,8 @@ describe.skipIf(!dbReachable)(
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       await sql`
         insert into participants (
-          region_id, email, password_hash, email_verified_at
-        ) values (${fixture.regionId}, ${email}, ${await hashPassword('the-real-password')}, now())
+          email, password_hash, email_verified_at
+        ) values (${email}, ${await hashPassword('the-real-password')}, now())
       `;
 
       const result = await createEntry(
@@ -443,8 +443,8 @@ describe.skipIf(!dbReachable)(
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       await sql`
         insert into participants (
-          region_id, email, password_hash, email_verified_at
-        ) values (${fixture.regionId}, ${email}, ${await hashPassword('the-real-password')}, now())
+          email, password_hash, email_verified_at
+        ) values (${email}, ${await hashPassword('the-real-password')}, now())
       `;
       mailSendCount = 0;
 
@@ -468,8 +468,8 @@ describe.skipIf(!dbReachable)(
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       await sql`
         insert into participants (
-          region_id, email, password_hash, email_verified_at
-        ) values (${fixtureA.regionId}, ${email}, ${await hashPassword('quiz-entry-pass1')}, now())
+          email, password_hash, email_verified_at
+        ) values (${email}, ${await hashPassword('quiz-entry-pass1')}, now())
       `;
       await enterAsConfirmed(email, fixtureA.tournamentId);
       mailSendCount = 0;
@@ -488,8 +488,8 @@ describe.skipIf(!dbReachable)(
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       const [participant] = await sql`
         insert into participants (
-          region_id, email, password_hash, email_verified_at
-        ) values (${fixture.regionId}, ${email}, ${await hashPassword('the-real-password')}, now())
+          email, password_hash, email_verified_at
+        ) values (${email}, ${await hashPassword('the-real-password')}, now())
         returning id
       `;
 
@@ -1019,7 +1019,7 @@ describe.skipIf(!dbReachable)(
           where entry_id = ${entryId} order by regulation_id
         `;
         const [participant] = await sql`
-          select region_id, password_hash, email_verified_at
+          select password_hash, email_verified_at
           from participants where email = ${email}
         `;
         return {entry, regulations: [...regulations], participant};
@@ -1054,7 +1054,6 @@ describe.skipIf(!dbReachable)(
         expect(
           await readState(seat.cancelledEntryId, seat.input.email),
         ).toEqual(before);
-        expect(before.participant.region_id).toBe(seat.regionId);
         expect(mailSendCount).toBe(0);
         // The token cleanup is rolled back with the refused write.
         expect(await tokenHashes(seat.cancelledEntryId)).toHaveLength(3);
@@ -1432,14 +1431,12 @@ describe.skipIf(!dbReachable)(
     /** The account registered under `email`, as the takeover tests read it. */
     async function readParticipant(email: string): Promise<{
       id: string;
-      region_id: string;
       password_hash: string;
       password_changed_at: Date;
       email_verified_at: Date | null;
     }> {
       const [row] = await sql`
-        select id, region_id, password_hash, password_changed_at,
-               email_verified_at
+        select id, password_hash, password_changed_at, email_verified_at
         from participants where email = ${email}
       `;
       return row;
@@ -1448,7 +1445,7 @@ describe.skipIf(!dbReachable)(
     // The attack in #189: an entry under someone else's address in a far
     // region, never confirmed, must not keep the owner out of their own
     // region or leave the account with the first submitter's password.
-    it('takes an unverified account over: password, region and earlier entries', async () => {
+    it('takes an unverified account over: password and earlier entries', async () => {
       const far = await createFixture('takeover-far');
       const near = await createFixture('takeover-near');
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
@@ -1465,6 +1462,11 @@ describe.skipIf(!dbReachable)(
       expect(first.ok).toBe(true);
       if (!first.ok) return;
       const before = await readParticipant(email);
+      // Stage one of #309: the column is still there, and nothing writes it.
+      const [{region_id: regionId}] = await sql`
+        select region_id from participants where id = ${before.id}
+      `;
+      expect(regionId).toBeNull();
 
       const result = await createEntry(
         env,
@@ -1475,7 +1477,6 @@ describe.skipIf(!dbReachable)(
       expect(result.ok).toBe(true);
       const after = await readParticipant(email);
       expect(after.id).toBe(before.id);
-      expect(after.region_id).toBe(near.regionId);
       expect(after.email_verified_at).toBeNull();
       expect(
         (await verifyPassword('quiz-entry-pass1', after.password_hash)).valid,
@@ -1607,7 +1608,6 @@ describe.skipIf(!dbReachable)(
         error: 'already registered in another region',
       });
       const after = await readParticipant(email);
-      expect(after.region_id).toBe(far.regionId);
       const rows = await sql`
         select tournament_id from entries where participant_id = ${after.id}
       `;
@@ -1650,12 +1650,11 @@ describe.skipIf(!dbReachable)(
     });
 
     it('createEntryUnauthenticated takes an unverified account over without a notice', async () => {
-      const far = await createFixture('unauth-takeover-far');
       const near = await createFixture('unauth-takeover-near');
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${far.regionId}, ${email}, ${await hashPassword('someone-elses-password')})
+        insert into participants (email, password_hash)
+        values (${email}, ${await hashPassword('someone-elses-password')})
       `;
       mailSendCount = 0;
 
@@ -1667,30 +1666,33 @@ describe.skipIf(!dbReachable)(
       expect(outcome.kind).toBe('created');
       // The verification mail, and nothing else.
       expect(mailSendCount).toBe(1);
-      expect((await readParticipant(email)).region_id).toBe(near.regionId);
+      const {password_hash: passwordHash} = await readParticipant(email);
+      expect(
+        (await verifyPassword('quiz-entry-pass1', passwordHash)).valid,
+      ).toBe(true);
     });
 
     // #236: the region is held by taking part, not by having registered.
     describe('entering another region after cancelling', () => {
-      async function verifiedIn(regionId: string): Promise<string> {
+      async function verifiedParticipant(): Promise<string> {
         const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
         await sql`
           insert into participants (
-            region_id, email, password_hash, email_verified_at
+            email, password_hash, email_verified_at
           ) values (
-            ${regionId}, ${email},
+            ${email},
             ${await hashPassword('quiz-entry-pass1')}, now()
           )
         `;
         return email;
       }
 
-      // Nothing moves `participants.region_id` for it any more (#308): the
-      // column takes no part in the decision (0043) and goes in #309.
+      // The participant row carries no region to move (#309): what the
+      // decision reads is the entries themselves (0043).
       it('enters the new region once every entry in the old region is cancelled', async () => {
         const oldRegion = await createFixture('move-old');
         const newRegion = await createFixture('move-new');
-        const email = await verifiedIn(oldRegion.regionId);
+        const email = await verifiedParticipant();
         await enterAsConfirmed(email, oldRegion.tournamentId, 'cancelled');
 
         const result = await createEntry(
@@ -1712,7 +1714,7 @@ describe.skipIf(!dbReachable)(
       it('lets the participant come back to the region they left', async () => {
         const oldRegion = await createFixture('back-old');
         const newRegion = await createFixture('back-new');
-        const email = await verifiedIn(oldRegion.regionId);
+        const email = await verifiedParticipant();
         await enterAsConfirmed(email, oldRegion.tournamentId, 'cancelled');
         const moved = await createEntry(
           env,
@@ -1758,7 +1760,7 @@ describe.skipIf(!dbReachable)(
             entryClosesAt: closedAt,
           });
           const open = await createFixture(`${suffix}-open`);
-          const email = await verifiedIn(closed.regionId);
+          const email = await verifiedParticipant();
           await enterAsConfirmed(email, closed.tournamentId, 'cancelled');
           await sql`
             update entries
@@ -1823,7 +1825,7 @@ describe.skipIf(!dbReachable)(
       it('still refuses while an entry in the old region is live', async () => {
         const oldRegion = await createFixture('live-old');
         const newRegion = await createFixture('live-new');
-        const email = await verifiedIn(oldRegion.regionId);
+        const email = await verifiedParticipant();
         await enterAsConfirmed(email, oldRegion.tournamentId, 'waitlisted');
 
         const result = await createEntry(
@@ -1840,7 +1842,7 @@ describe.skipIf(!dbReachable)(
       it('frees the old region once an entry link there expired', async () => {
         const oldRegion = await createFixture('lapse-old');
         const newRegion = await createFixture('lapse-new');
-        const email = await verifiedIn(oldRegion.regionId);
+        const email = await verifiedParticipant();
         await enterAsConfirmed(
           email,
           oldRegion.tournamentId,
@@ -1863,15 +1865,15 @@ describe.skipIf(!dbReachable)(
       });
     });
 
-    it('holds a verified account to its password and region, unchanged', async () => {
+    it('holds a verified account to its password and its entries, unchanged', async () => {
       const far = await createFixture('verified-far');
       const near = await createFixture('verified-near');
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       await sql`
         insert into participants (
-          region_id, email, password_hash, email_verified_at
+          email, password_hash, email_verified_at
         ) values (
-          ${far.regionId}, ${email},
+          ${email},
           ${await hashPassword('the-real-password')}, now()
         )
       `;
@@ -1905,8 +1907,8 @@ describe.skipIf(!dbReachable)(
       const fixture = await createFixture('takeover-common-password');
       const email = `entry-${crypto.randomUUID()}@${testEmailDomain}`;
       await sql`
-        insert into participants (region_id, email, password_hash)
-        values (${fixture.regionId}, ${email}, ${await hashPassword('someone-elses-password')})
+        insert into participants (email, password_hash)
+        values (${email}, ${await hashPassword('someone-elses-password')})
       `;
       const before = await readParticipant(email);
 

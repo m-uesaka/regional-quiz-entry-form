@@ -86,9 +86,8 @@ describe.skipIf(!dbReachable)(
         )
       `;
       const [participant] = await sql`
-        insert into participants (region_id, email, password_hash)
+        insert into participants (email, password_hash)
         values (
-          ${region.id},
           ${`update-${crypto.randomUUID()}@${testEmailDomain}`},
           'hash'
         )

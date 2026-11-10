@@ -80,9 +80,8 @@ describe.skipIf(!(await isDbReachable()))(
           select id from regions where slug like ${testRegionSlug + '%'}
         )
       )`;
-      await sql`delete from participants where region_id in (
-        select id from regions where slug like ${testRegionSlug + '%'}
-      )`;
+      // Every participant of this suite is `mypage-...@example.com`.
+      await sql`delete from participants where email like 'mypage-%@example.com'`;
       await sql`delete from regulations where tournament_id in (
         select id from tournaments where region_id in (
           select id from regions where slug like ${testRegionSlug + '%'}
@@ -140,14 +139,11 @@ describe.skipIf(!(await isDbReachable()))(
      * A participant whose address is verified: `requireParticipant()`
      * refuses any session of one that isn't (#189).
      */
-    async function createParticipant(
-      regionId: string,
-      email: string,
-    ): Promise<string> {
+    async function createParticipant(email: string): Promise<string> {
       const [participant] = await sql`
         insert into participants (
-          region_id, email, password_hash, email_verified_at
-        ) values (${regionId}, ${email}, 'hash', now())
+          email, password_hash, email_verified_at
+        ) values (${email}, 'hash', now())
         returning id
       `;
       return participant.id as string;
@@ -199,12 +195,8 @@ describe.skipIf(!(await isDbReachable()))(
       const regionId = await createRegion('own');
       const tournamentId = await createTournament(regionId, 'saikyoi');
       const regulationId = await createRegulation(tournamentId);
-      const participantId = await createParticipant(
-        regionId,
-        'mypage-own@example.com',
-      );
+      const participantId = await createParticipant('mypage-own@example.com');
       const otherParticipantId = await createParticipant(
-        regionId,
         'mypage-other@example.com',
       );
       await createEntry(participantId, tournamentId, regulationId);
@@ -235,10 +227,7 @@ describe.skipIf(!(await isDbReachable()))(
       const shinjinouId = await createTournament(regionId, 'shinjinou');
       const saikyoiRegulationId = await createRegulation(saikyoiId);
       const shinjinouRegulationId = await createRegulation(shinjinouId);
-      const participantId = await createParticipant(
-        regionId,
-        'mypage-both@example.com',
-      );
+      const participantId = await createParticipant('mypage-both@example.com');
       await createEntry(participantId, saikyoiId, saikyoiRegulationId);
       await createEntry(participantId, shinjinouId, shinjinouRegulationId);
 
@@ -309,7 +298,6 @@ describe.skipIf(!(await isDbReachable()))(
       );
       const regulationId = await createRegulation(tournamentId);
       const participantId = await createParticipant(
-        regionId,
         'mypage-detail@example.com',
       );
       const entryId = await createEntry(
@@ -353,11 +341,9 @@ describe.skipIf(!(await isDbReachable()))(
       );
       const regulationId = await createRegulation(tournamentId);
       const ownerId = await createParticipant(
-        regionId,
         'mypage-detail-owner@example.com',
       );
       const otherId = await createParticipant(
-        regionId,
         'mypage-detail-intruder@example.com',
       );
       const entryId = await createEntry(ownerId, tournamentId, regulationId);
@@ -372,9 +358,7 @@ describe.skipIf(!(await isDbReachable()))(
     });
 
     it('rejects a PATCH with an invalid body with 400', async () => {
-      const regionId = await createRegion('patch-invalid');
       const participantId = await createParticipant(
-        regionId,
         'mypage-patch-invalid@example.com',
       );
 
@@ -395,9 +379,7 @@ describe.skipIf(!(await isDbReachable()))(
     });
 
     it('rejects a session issued before the password was reset with 401', async () => {
-      const regionId = await createRegion('reset-cuts-session');
       const participantId = await createParticipant(
-        regionId,
         'mypage-reset-cuts-session@example.com',
       );
       // The session is matched on the stamp to the millisecond. On a fast
@@ -445,10 +427,7 @@ describe.skipIf(!(await isDbReachable()))(
         OPEN_PERIOD,
       );
       const regulationId = await createRegulation(tournamentId);
-      const participantId = await createParticipant(
-        regionId,
-        'mypage-patch@example.com',
-      );
+      const participantId = await createParticipant('mypage-patch@example.com');
       const entryId = await createEntry(
         participantId,
         tournamentId,
@@ -477,7 +456,6 @@ describe.skipIf(!(await isDbReachable()))(
       });
       const regulationId = await createRegulation(tournamentId);
       const participantId = await createParticipant(
-        regionId,
         'mypage-patch-closed@example.com',
       );
       const entryId = await createEntry(
@@ -521,7 +499,6 @@ describe.skipIf(!(await isDbReachable()))(
       );
       const regulationId = await createRegulation(tournamentId);
       const participantId = await createParticipant(
-        regionId,
         'mypage-delete@example.com',
       );
       const entryId = await createEntry(
@@ -549,11 +526,9 @@ describe.skipIf(!(await isDbReachable()))(
       );
       const regulationId = await createRegulation(tournamentId);
       const ownerId = await createParticipant(
-        regionId,
         'mypage-delete-owner@example.com',
       );
       const otherId = await createParticipant(
-        regionId,
         'mypage-delete-intruder@example.com',
       );
       const entryId = await createEntry(ownerId, tournamentId, regulationId);

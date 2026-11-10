@@ -190,8 +190,6 @@ describe('POST /tournaments/:tournamentId/entries (request validation)', () => {
 
 const TOURNAMENT_ID = '22222222-2222-2222-2222-222222222222';
 const TOURNAMENT_NAME = 'テスト大会';
-const REGION_ID = '33333333-3333-3333-3333-333333333333';
-const OTHER_REGION_ID = '44444444-4444-4444-4444-444444444444';
 const PARTICIPANT_ID = '55555555-5555-5555-5555-555555555555';
 const NEW_PARTICIPANT_ID = '66666666-6666-6666-6666-666666666666';
 const ENTRY_ID = '77777777-7777-7777-7777-777777777777';
@@ -226,7 +224,6 @@ function tournamentRow(
   return {
     id: TOURNAMENT_ID,
     name: TOURNAMENT_NAME,
-    region_id: REGION_ID,
     capacity: overrides.capacity ?? null,
     entry_opens_at: new Date(Date.now() - DAY_MS).toISOString(),
     entry_closes_at:
@@ -372,7 +369,6 @@ function mockSupabase(options: {
           participant = {
             ...participant,
             password_hash: args.p_password_hash,
-            region_id: args.p_region_id,
           };
         }
         if (!tookOver && options.verifiedMeanwhile) {
@@ -428,12 +424,11 @@ function mockSupabase(options: {
  * address has been verified.
  */
 async function registeredParticipant(
-  overrides: {password?: string; regionId?: string; verified?: boolean} = {},
+  overrides: {password?: string; verified?: boolean} = {},
 ): Promise<Record<string, unknown>> {
   return {
     id: PARTICIPANT_ID,
     email: validBody.email,
-    region_id: overrides.regionId ?? REGION_ID,
     password_hash: await hashPassword(overrides.password ?? 'quiz-entry-pass1'),
     password_changed_at: PASSWORD_CHANGED_AT,
     email_verified_at:
@@ -700,7 +695,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
 
   it('mails the owner instead of answering when the address is in another region', async () => {
     const recorded = mockSupabase({
-      participant: await registeredParticipant({regionId: OTHER_REGION_ID}),
+      participant: await registeredParticipant(),
       entryWriteErrorCode: PARTICIPANT_REGION_SQLSTATE,
     });
 
@@ -723,7 +718,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
   // #236: nothing but a cancelled entry is left in the old region.
   it('enters a verified participant with nothing left in their old region', async () => {
     const recorded = mockSupabase({
-      participant: await registeredParticipant({regionId: OTHER_REGION_ID}),
+      participant: await registeredParticipant(),
     });
 
     await postWithContext(TOURNAMENT_PATH, validBody);
@@ -738,7 +733,6 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
   it('never writes an entry to a verified account for a wrong password', async () => {
     const recorded = mockSupabase({
       participant: await registeredParticipant({
-        regionId: OTHER_REGION_ID,
         password: 'the-real-password',
       }),
     });
@@ -893,7 +887,6 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     const recorded = mockSupabase({
       participant: await registeredParticipant({
         password: 'someone-elses-password',
-        regionId: OTHER_REGION_ID,
         verified: false,
       }),
     });
@@ -908,7 +901,8 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     expect(recorded.takeOvers).toHaveLength(1);
     const [takeOver] = recorded.takeOvers;
     expect(takeOver.p_participant_id).toBe(PARTICIPANT_ID);
-    expect(takeOver.p_region_id).toBe(REGION_ID);
+    // The account has no region to replace (#309).
+    expect(takeOver).not.toHaveProperty('p_region_id');
     expect(
       await verifyPassword(
         validBody.password,
@@ -1086,7 +1080,6 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
   it('enters an unverified account under its own password in a region it may also enter', async () => {
     const recorded = mockSupabase({
       participant: await registeredParticipant({
-        regionId: OTHER_REGION_ID,
         verified: false,
       }),
     });
@@ -1113,7 +1106,6 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
   it('refuses an unverified account under its own password in a region on the same question set', async () => {
     const recorded = mockSupabase({
       participant: await registeredParticipant({
-        regionId: OTHER_REGION_ID,
         verified: false,
       }),
       entryWriteErrorCode: PARTICIPANT_REGION_SQLSTATE,
@@ -1184,7 +1176,6 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
     const recorded = mockSupabase({
       participant: await registeredParticipant({
         password: 'someone-elses-password',
-        regionId: OTHER_REGION_ID,
         verified: false,
       }),
       takeOver: false,
@@ -1204,7 +1195,7 @@ describe('POST /tournaments/:tournamentId/entries (mocked Supabase)', () => {
 
   it('never takes over a verified account', async () => {
     const recorded = mockSupabase({
-      participant: await registeredParticipant({regionId: OTHER_REGION_ID}),
+      participant: await registeredParticipant(),
       entryWriteErrorCode: PARTICIPANT_REGION_SQLSTATE,
     });
 
@@ -1490,7 +1481,7 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
   // nothing they don't know.
   it('still reports errors directly for a logged-in participant', async () => {
     const recorded = mockSupabase({
-      participant: await registeredParticipant({regionId: OTHER_REGION_ID}),
+      participant: await registeredParticipant(),
       entryWriteErrorCode: PARTICIPANT_REGION_SQLSTATE,
     });
 
@@ -1509,7 +1500,7 @@ describe('POST /tournaments/:tournamentId/entries/session (mocked Supabase)', ()
 
   it('enters a participant with nothing left in their old region (#236)', async () => {
     const recorded = mockSupabase({
-      participant: await registeredParticipant({regionId: OTHER_REGION_ID}),
+      participant: await registeredParticipant(),
     });
 
     const res = await postWithContext(
