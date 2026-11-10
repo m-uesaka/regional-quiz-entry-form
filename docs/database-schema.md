@@ -91,7 +91,7 @@ flowchart TB
 - `pending_verification` → `confirmed` / `waitlisted` は DB 関数 `confirm_entry_by_token()` が行う。
 - `cancelled` への遷移は DB 関数 `cancel_own_entry()` が行う。
 - `waitlisted` → `confirmed`(繰り上げ)は DB 関数 `promote_waitlisted_entries()`(`0037`。それ以前は `promote_next_waitlisted_entry()`)が行う。
-- `cancelled` からの再エントリーは新しい行を作らず、`unique (participant_id, tournament_id)` 制約のため**既存の行を再利用して上書き**する(`apps/backend/src/lib/entry-submission.ts` の `enterTournament()` の書き込み段階 `writeEntry()`)。
+- `cancelled` からの再エントリーは新しい行を作らず、`unique (participant_id, tournament_id)` 制約のため**既存の行を再利用して上書き**する(`apps/backend/src/lib/entry-submission.ts` の `enterTournament()` が呼ぶ書き込み段階 `apps/backend/src/lib/entry-write.ts` の `writeEntry()`)。
 
 ## 3. テーブル定義
 
@@ -104,7 +104,7 @@ flowchart TB
 | `name` | text | not null | 表示名 |
 | `allows_dual_entry` | boolean | not null, default `false` | 同一地域の最強位と新人王の**両方**にエントリーできるか |
 
-`allows_dual_entry` は requirements.md の「両方に参加することができる**ような地域も存在します**」に対応します。既定を `false` にしているのは、現在の「どの地域でも両方に出られる」挙動が仕様の欠落であって意図された既定ではないためで、許可する地域には運用開始前に明示的に `true` を立ててもらいます。判定は `check_entry_seat()` トリガ(マイグレーション `0041`)だけが行い、`cancelled` 以外のエントリーが同一地域の別大会にあれば書き込みを断ります(下記)。`apps/backend/src/lib/entry-submission.ts` の `enterTournament()`(書き込み段階の `writeEntry()`)はこれを 409 に変換します。エントリーポータル(`/portal`)は `GET /api/portal/tournaments` の `regionAllowsDualEntry` でこの設定を受け取り、許可していて最強位・新人王の両方が並んでいる地域に「この地域は最強位と新人王の両方にエントリー可能です(重複エントリー可)」と表示します。地域のルールとしての表示なので、各大会の受付状況(受付開始前 / 受付中 / 受付終了)にかかわらず出します。
+`allows_dual_entry` は requirements.md の「両方に参加することができる**ような地域も存在します**」に対応します。既定を `false` にしているのは、現在の「どの地域でも両方に出られる」挙動が仕様の欠落であって意図された既定ではないためで、許可する地域には運用開始前に明示的に `true` を立ててもらいます。判定は `check_entry_seat()` トリガ(マイグレーション `0041`)だけが行い、`cancelled` 以外のエントリーが同一地域の別大会にあれば書き込みを断ります(下記)。`apps/backend/src/lib/entry-submission.ts` の `enterTournament()`(書き込み段階の `lib/entry-write.ts` の `writeEntry()`)はこれを 409 に変換します。エントリーポータル(`/portal`)は `GET /api/portal/tournaments` の `regionAllowsDualEntry` でこの設定を受け取り、許可していて最強位・新人王の両方が並んでいる地域に「この地域は最強位と新人王の両方にエントリー可能です(重複エントリー可)」と表示します。地域のルールとしての表示なので、各大会の受付状況(受付開始前 / 受付中 / 受付終了)にかかわらず出します。
 
 重複エントリーを認める地域では、最強位と新人王に同じ問題セット(`tournaments.question_set`)を設定できません(`0045`。下記「重複エントリーを認める地域の問題セット」)。
 
@@ -257,7 +257,7 @@ flowchart TB
 - `foreign key (entry_id, tournament_id) references entries (id, tournament_id) on delete cascade`
 - `foreign key (regulation_id, tournament_id) references regulations (id, tournament_id)`
 - 上の2本が `tournament_id` を**共有している**ことが要点です。「この行の大会 = エントリーの大会」かつ「この行の大会 = レギュレーションの大会」が同時に成り立つので、**あるエントリーが別の大会のレギュレーションを参照することは DB レベルで不可能**なまま(移行前の `entries` の複合 FK と同じ保証)。片方だけでは、もう一方とずれた行を止められません。
-- `on delete cascade` なので、エントリーを消せば選択も一緒に消えます。`lib/entry-submission.ts` のロールバック(`rollbackEntry()`、確認メール送信に失敗したときなど)がこれに乗っています。
+- `on delete cascade` なので、エントリーを消せば選択も一緒に消えます。`lib/entry-write.ts` のロールバック(`rollbackEntry()`、確認メール送信に失敗したときなど)がこれに乗っています。
 - `entry_regulations_regulation_id_idx`(`0018`): 主キーの先頭列は `entry_id` なので、`sync_regulations()` の「まだ参照されているレギュレーションか」判定と `regulations` 側 FK の参照チェックのために別途張っています。
 - **「1エントリーにつき最低1件」は DB では保証されていません**。旧 `entries.regulation_id` は `not null` だったので DB が担保していましたが、中間テーブルでは0行を止められません。この規則は `EntryInputSchema.regulationIds` の `min(1)` と `regulationSelectionRefusal()`(空集合を拒否)がアプリ側で担保しています。
 
@@ -417,7 +417,7 @@ Supabase 経由の複数クエリはそれぞれ別トランザクションに�
 | `take_over_unverified_participant(uuid, text, uuid)` | `0034`(`0056` で再定義。現在の本体は `0058`) | `lib/entry-submission.ts` | 未確認の参加者アカウントのパスワードを上書きし、それまでのエントリーを削除する。3 つ目の引数 `p_region_id` は古い Worker のために受け取るだけで使わない(既定値 `null`。#309 の 2 段階目で引数ごと削除する) |
 | `claim_participant_region_for_tournament(uuid, uuid)` | `0043` | (旧 Worker のみ) | 確認済みの参加者の地域を、同じ問題セットの別の地域に押さえるエントリーが無ければエントリーする大会の地域に移す。#308 で Worker から呼ばなくなった。デプロイ中の古い Worker のために残しており、`participants.region_id` の列と合わせて #309 の 2 段階目で削除する |
 | `participant_holds_conflicting_region(uuid, uuid)` | `0043`(`0046`・`0052` で再定義) | `check_entry_seat()` | 参加者が、その大会とは別の地域で同じ問題セットの大会の枠を押さえているか(ロックは取らない) |
-| `reenter_cancelled_entry(uuid, uuid, text, text, text, text, jsonb)` | `0041`(`0052`・`0057` で再定義) | `lib/entry-submission.ts` | 参加者行をロックしてから、キャンセル済みのエントリー行を再エントリーとして上書きする。`cancelled` の行を戻せるのはこの関数だけ(`0057`) |
+| `reenter_cancelled_entry(uuid, uuid, text, text, text, text, jsonb)` | `0041`(`0052`・`0057` で再定義) | `lib/entry-write.ts` | 参加者行をロックしてから、キャンセル済みのエントリー行を再エントリーとして上書きする。`cancelled` の行を戻せるのはこの関数だけ(`0057`) |
 | `reset_tournament_entries(uuid, boolean)` | `0038`(`0058` で再定義) | `routes/tournaments.ts` | 大会のエントリーを全件削除し、指定があれば他の大会にエントリーが残っていない参加者アカウントも削除する |
 | `tournament_entry_summary()` | `0013` | `routes/staff-dashboard.ts` | 全大会のエントリー件数をステータス別に集計する(読み取り専用) |
 | `sync_regulations(uuid, jsonb)` | `0014`(`0018`・`0042`・`0058` で再定義) | `lib/regulations.ts` | 大会のレギュレーションを差分同期する(update / insert / 参照が無ければ delete) |
@@ -552,7 +552,7 @@ TypeScript 側(`lib/regulations.ts`)は `P0002` → `TournamentNotFoundError`(40
 - 待っている間に行が `cancelled` でなくなっていれば(同時の再エントリーが取った、上書きが消した)0 行を返します。`setof entries` を返すので、呼び出し側は INSERT と同じ `.select('id').single()` で受けられ、0 行は `PGRST116` として `concurrent submission` の 409 になります。
 - 地域と重複エントリーの検査は `check_entry_seat()` のままなので、`P0008` / `P0005` はそのまま呼び出し側に返ります。トークンの削除も同じトランザクションなので、断られた再エントリーは何も残しません。
 - トークンの削除とステータスの変更が一度に見えるので、新しいリンクを書くまでの間、行は「確定待ちでトークンが無い」状態になります。これが同じ参加者の同時の送信の `lapse_expired_pending_entries()` に、作成中で期限切れではないと伝えます。
-- 上書きする列を増やすときは、失敗時に元へ戻す `ExistingEntryRow` と `rollbackEntry()`(`lib/entry-submission.ts`)も同じ列に揃えます。揃え忘れは、メール送信に失敗した再エントリーのテスト(`entry-submission.test.ts`)が行全体を再エントリーの前と比べて検出します。`rollbackEntry()` は行を `cancelled` に戻す直接の UPDATE で、枠を取らないので `P0012` の対象になりません。
+- 上書きする列を増やすときは、失敗時に元へ戻す `ExistingEntryRow` と `rollbackEntry()`(`lib/entry-write.ts`)も同じ列に揃えます。揃え忘れは、メール送信に失敗した再エントリーのテスト(`entry-submission.test.ts`)が行全体を再エントリーの前と比べて検出します。`rollbackEntry()` は行を `cancelled` に戻す直接の UPDATE で、枠を取らないので `P0012` の対象になりません。
 
 ### claim_participant_region_for_tournament(p_participant_id, p_tournament_id)
 

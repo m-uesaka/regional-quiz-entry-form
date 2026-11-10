@@ -8,8 +8,8 @@ import type {Env, ParticipantEnv} from '../types/env';
 import {
   checkEntrySubmission,
   createEntryForParticipant,
-  createEntryUnauthenticated,
 } from '../lib/entry-submission';
+import {createEntryUnauthenticated} from '../lib/entry-unauthenticated';
 import {respondFailure} from '../lib/errors';
 import {requireParticipant} from '../middleware/participant-auth';
 import {clientIp, emailKey, rateLimit} from '../middleware/rate-limit';

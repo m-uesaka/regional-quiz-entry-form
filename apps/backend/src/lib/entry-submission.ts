@@ -1,16 +1,19 @@
 /**
  * @fileoverview Entry submissions: checking one against its tournament
- * (`checkEntrySubmission()`), settling whose it is, writing the entry and
- * rolling it back when a later step fails, and -- for the unauthenticated
- * route -- turning a refusal into the notice mailed to the address instead.
- * Editing or cancelling an entry once made is `own-entries.ts`.
+ * (`checkEntrySubmission()`), settling whose it is, and entering them
+ * (`enterTournament()`), rolling the entry back when a later step fails. The
+ * stages around that live next to it: `entry-write.ts` (the write and its
+ * rollback), `entry-takeover.ts` (unverified accounts), and
+ * `entry-unauthenticated.ts` (the unauthenticated route's notices, which
+ * imports `createEntryAfterCheck()` from here); the types they share are in
+ * `entry-submission-types.ts`. Editing or cancelling an entry once made is
+ * `own-entries.ts`.
  */
 
 import {
   COMMON_ERROR_CODES,
   ENTRY_ERROR_CODES,
   entryAvailability,
-  isEntryErrorCode,
   regulationSelectionRefusal,
   type EntryErrorCode,
   type EntryInput,
@@ -19,40 +22,36 @@ import {
 } from '@regional-quiz/shared';
 import {isCommonPassword} from '@regional-quiz/shared/password-policy';
 import type {Bindings} from '../types/env';
-import {type DbClient, type Tables, type TablesInsert} from './db';
-import {sendEntryNoticeEmail, type EntryNoticeReason} from './entry-notice';
+import {type DbClient, type Tables} from './db';
 import {
   holdForDeferredVerification,
   sendVerificationEmail,
 } from './entry-verification';
 import {deferEntryMail} from './deferred-entry-mail';
+import {
+  FailureAfterTakeover,
+  type AddressEntryResult,
+  type CreateEntryResult,
+  type EntryMailDelivery,
+  type EntryTournamentRow,
+} from './entry-submission-types';
+import {
+  ensureStillUnverifiedAccountOf,
+  withdrawnTournamentNames,
+  withdrawnWithoutReplacement,
+} from './entry-takeover';
+import {
+  findReusableEntry,
+  rollbackEntry,
+  storeEntryRegulations,
+  writeEntry,
+} from './entry-write';
 import {UnexpectedFailure, unwrap, type ClientFailure} from './errors';
 import {validateCustomFieldValues} from './form-field-defs';
 import {hashPassword, verifyPassword} from './password';
-import {
-  FOREIGN_KEY_VIOLATION_SQLSTATE,
-  NO_ROW_PGRST_CODE,
-  PARTICIPANT_REGION_SQLSTATE,
-  REGION_DUAL_ENTRY_SQLSTATE,
-  UNIQUE_VIOLATION_SQLSTATE,
-} from './pg-errors';
+import {UNIQUE_VIOLATION_SQLSTATE} from './pg-errors';
 import {tournamentDisplayName} from './tournaments';
 import {verifyAccountPassword} from './password-rehash';
-
-type CreateEntryResult =
-  {ok: true; entry: {id: string}} | ClientFailure<400 | 401 | 403 | 409>;
-
-/**
- * What `createEntryAfterCheck()` comes to. A submission that took an
- * unverified account over and then failed also carries the tournaments
- * whose pending entries the takeover withdrew: the takeover can't be undone,
- * so the notice of the failure is where the owner learns of them (#291).
- */
-type AddressEntryResult =
-  | CreateEntryResult
-  | (Extract<CreateEntryResult, {ok: false}> & {
-      withdrawnTournaments: string[];
-    });
 
 /**
  * What the address-independent half of an entry submission concluded: the
@@ -60,68 +59,6 @@ type AddressEntryResult =
  */
 export type EntrySubmissionCheck =
   {ok: true; tournament: EntryTournamentRow} | ClientFailure<400 | 403 | 409>;
-
-/**
- * An `UnexpectedFailure` of the entry that followed a takeover of an
- * unverified account (#189). The takeover is already committed and can't be
- * undone, so the failure carries the tournaments it withdrew entries from, for
- * the notice of the failure (#291) -- as a returned failure does in
- * `AddressEntryResult`. To `app.onError` it is any other `UnexpectedFailure`.
- */
-class FailureAfterTakeover extends UnexpectedFailure {
-  constructor(
-    failure: UnexpectedFailure,
-    readonly withdrawnTournaments: string[] | undefined,
-  ) {
-    super(failure.context, failure.cause);
-  }
-}
-
-/**
- * A fault on our side as `createEntryUnauthenticated()` sees it, once caught:
- * not a refusal, so not a `ClientFailure`.
- */
-interface UnexpectedEntryResult {
-  ok: false;
-  status: 500;
-  error: string;
-  withdrawnTournaments?: string[];
-}
-
-/**
- * What an unauthenticated entry submission came to, once it has run in the
- * background (`createEntryUnauthenticated()`). Never sent to the client,
- * whose answer is the same whichever of these it was.
- */
-export type CreateEntryOutcome =
-  | {kind: 'created'; entryId: string}
-  | {kind: 'notified'; reason: EntryNoticeReason}
-  | {kind: 'failed'; error: string};
-
-/**
- * The tournament an entry submission is checked against. `capacity` is null
- * for an uncapped tournament, which can never waitlist anyone.
- */
-export interface EntryTournamentRow extends Pick<
-  Tables<'tournaments'>,
-  | 'id'
-  | 'name'
-  | 'type'
-  | 'capacity'
-  | 'entry_opens_at'
-  | 'entry_closes_at'
-  | 'entries_paused'
-> {
-  // A to-one embed, so PostgREST answers with the region object itself
-  // rather than a single-element array (unlike `regulations` below).
-  regions: Pick<Tables<'regions'>, 'name'>;
-  regulations: Array<
-    Pick<
-      Tables<'regulations'>,
-      'id' | 'priority_starts_at' | 'priority_ends_at' | 'closes_with_priority'
-    >
-  >;
-}
 
 /**
  * What each way of refusing a regulation selection answers with. Naming what
@@ -155,202 +92,6 @@ type ParticipantRow = Pick<
 
 /** What `ParticipantRow` is selected with. */
 const PARTICIPANT_COLUMNS = 'id, password_hash, email_verified_at';
-
-/**
- * The participant's existing entry for the tournament, if there is one.
- *
- * Every column `reenter_cancelled_entry()` (migrations 0041, 0052, 0057)
- * overwrites is selected, not just the ones the reuse decision is made on, so
- * a re-entry that fails afterwards can put the row back exactly as it was. A
- * column added to that function's `set` list has to be added here and to
- * `rollbackEntry()`; the test of a re-entry whose mail fails compares the
- * whole row, so one that was missed fails there.
- */
-interface ExistingEntryRow extends Pick<
-  Tables<'entries'>,
-  | 'id'
-  | 'name'
-  | 'furigana'
-  | 'display_name'
-  | 'free_text'
-  | 'status'
-  | 'waitlist_position'
-  | 'email_verified_at'
-  | 'confirmed_at'
-  | 'cancelled_at'
-  | 'custom_field_values'
-> {
-  // The row's own regulation selection, as a to-many embed. Restored as a
-  // whole on rollback, because the reuse path replaces the set rather than
-  // editing it in place.
-  entry_regulations: Array<Pick<Tables<'entry_regulations'>, 'regulation_id'>>;
-}
-
-/** The columns of `ExistingEntryRow`, for the snapshot select. */
-const EXISTING_ENTRY_COLUMNS = `
-  id, name, furigana, display_name, entry_regulations(regulation_id),
-  free_text, custom_field_values, status, waitlist_position,
-  email_verified_at, confirmed_at, cancelled_at
-`;
-
-/**
- * Replaces an entry's regulation selection with `regulationIds`.
- *
- * Written as its own statement rather than alongside the entry: the
- * Supabase client speaks REST, so there is no transaction to put both in.
- * The delete comes first because the reuse path starts from a row that
- * still carries the selection of the entry it was cancelled from — a
- * re-entry's own choice replaces that set wholesale rather than merging
- * into it.
- *
- * Duplicate ids are collapsed. A hand-made request could repeat one, and
- * the `(entry_id, regulation_id)` primary key would answer that with a
- * constraint violation rather than with the selection the participant
- * plainly meant.
- * @param db The Supabase client to write with.
- * @param entryId The entry whose selection is being written.
- * @param tournamentId The entry's tournament, carried on every row so the
- *     composite foreign keys can tie entry and regulation to one tournament.
- * @param regulationIds The regulations the entry claims.
- */
-async function replaceEntryRegulations(
-  db: DbClient,
-  entryId: string,
-  tournamentId: string,
-  regulationIds: readonly string[],
-): Promise<{error: {message: string; code: string} | null}> {
-  const {error: deleteError} = await db
-    .from('entry_regulations')
-    .delete()
-    .eq('entry_id', entryId);
-  if (deleteError) {
-    return {error: deleteError};
-  }
-  const {error} = await db.from('entry_regulations').insert(
-    [...new Set(regulationIds)].map(regulationId => ({
-      entry_id: entryId,
-      regulation_id: regulationId,
-      tournament_id: tournamentId,
-    })),
-  );
-  return {error};
-}
-
-/**
- * Undoes a half-finished `createEntry()`, so a submission that failed after
- * the `entries` row was written doesn't leave one behind. Leaving it in
- * place would permanently block a retry — on the unique
- * (participant_id, tournament_id) constraint for a new row, or on the
- * 'already entered' check for a reused one — even though the participant
- * never got an entry out of it.
- * @param db The Supabase client to write with.
- * @param entryId The entry written by the attempt being rolled back.
- * @param tournamentId The entry's tournament.
- * @param existingEntry The snapshot of the cancelled row the attempt reused,
- *     or `null` when it inserted a fresh entry.
- */
-async function rollbackEntry(
-  db: DbClient,
-  entryId: string,
-  tournamentId: string,
-  existingEntry: ExistingEntryRow | null,
-): Promise<void> {
-  // The verification tokens go first. Deleting the entry would take them
-  // with it (`on delete cascade`, 0058), but the reuse path keeps the row,
-  // and dropping them there is what stops a link that did go out from
-  // confirming an entry that has been put back into its cancellation.
-  const {error: tokensError} = await db
-    .from('email_verification_tokens')
-    .delete()
-    .eq('entry_id', entryId);
-  if (tokensError) {
-    console.error('failed to delete the verification tokens', {
-      entryId,
-      code: tokensError.code,
-      error: tokensError.message,
-    });
-  }
-
-  if (!existingEntry) {
-    // `entry_regulations` references the entry `on delete cascade`, so the
-    // selection written for it goes with the row.
-    //
-    // Logged rather than reported, as on the reuse path below. A row left
-    // behind here is a `pending_verification` entry whose link never
-    // arrived: a retry is refused as waiting for that link until the row
-    // lapses (`lapse_expired_pending_entries()`, 0054), so it must not pass
-    // silently either.
-    const {error: entryError} = await db
-      .from('entries')
-      .delete()
-      .eq('id', entryId);
-    if (entryError) {
-      console.error('failed to delete the entry', {
-        entryId,
-        code: entryError.code,
-        error: entryError.message,
-      });
-    }
-    return;
-  }
-
-  // A reused row is put back into the cancellation it came from rather than
-  // deleted, so a failed re-entry doesn't erase the record of the original
-  // entry. Every column `reenter_cancelled_entry()` overwrote is restored from
-  // the snapshot taken before it: restoring only the status would still leave
-  // the cancelled entry permanently carrying the failed re-entry's answers
-  // and its cleared verification timestamp.
-  const {error: restoreError} = await db
-    .from('entries')
-    .update({
-      name: existingEntry.name,
-      furigana: existingEntry.furigana,
-      display_name: existingEntry.display_name,
-      free_text: existingEntry.free_text,
-      custom_field_values: existingEntry.custom_field_values,
-      status: existingEntry.status,
-      waitlist_position: existingEntry.waitlist_position,
-      email_verified_at: existingEntry.email_verified_at,
-      // Whether the cancelled entry still holds its region after the entry
-      // period (0052): losing it would let the participant into another
-      // region's tournament on the same question set.
-      confirmed_at: existingEntry.confirmed_at,
-      cancelled_at: existingEntry.cancelled_at,
-    })
-    .eq('id', entryId);
-  if (restoreError) {
-    console.error('failed to restore the cancelled entry', {
-      entryId,
-      error: restoreError.message,
-    });
-  }
-
-  // The regulation selection lives in its own table, so it is rewritten
-  // rather than restored by the update above.
-  //
-  // Both writes are logged rather than reported: the caller is already on a
-  // failure path and has an error of its own to answer with, and there is
-  // nothing further it could do about a rollback that didn't take. But a
-  // failure here is the one that leaves no trace anywhere else — the
-  // cancelled entry stays in the participant's history carrying none of the
-  // regulations it was entered under — so it must not pass silently.
-  const {error: regulationsError} = await replaceEntryRegulations(
-    db,
-    entryId,
-    tournamentId,
-    existingEntry.entry_regulations.map(row => row.regulation_id),
-  );
-  if (regulationsError) {
-    console.error('failed to restore the cancelled entry regulations', {
-      entryId,
-      regulationIds: existingEntry.entry_regulations.map(
-        row => row.regulation_id,
-      ),
-      code: regulationsError.code,
-      error: regulationsError.message,
-    });
-  }
-}
 
 /**
  * Runs the full entry-creation flow for an address-and-password submission,
@@ -497,7 +238,7 @@ export async function checkEntrySubmission(
  * @param tournament The checked tournament.
  * @param input The validated entry form submission.
  */
-async function createEntryAfterCheck(
+export async function createEntryAfterCheck(
   env: Bindings,
   db: DbClient,
   tournament: EntryTournamentRow,
@@ -744,78 +485,6 @@ async function isUnverifiedAccountPassword(
 }
 
 /**
- * The display names of the tournaments whose pending entries a takeover
- * withdrew, for the verification mail of the entry that took over.
- *
- * Those entries may well have been the address owner's own -- a mistyped
- * password, or a tournament in another region, is enough for a takeover --
- * and the verification mail is the one message that reaches only the owner,
- * so it is where they learn which entries to make again.
- * @param db The Supabase client to read with.
- * @param tournamentIds The tournaments `take_over_unverified_participant()`
- *     reported, less the one being entered now.
- * @return `undefined` when nothing was withdrawn. A failed read still
- *     reports the withdrawal, without the names (an empty list).
- */
-async function withdrawnTournamentNames(
-  db: DbClient,
-  tournamentIds: string[],
-): Promise<string[] | undefined> {
-  if (tournamentIds.length === 0) {
-    return undefined;
-  }
-  const {data, error} = await db
-    .from('tournaments')
-    .select('name, type, regions(name)')
-    .in('id', tournamentIds);
-  if (error || !data) {
-    console.error('failed to look up the withdrawn tournaments', {
-      tournamentIds,
-      error: error?.message,
-    });
-    return [];
-  }
-  return data.map(row =>
-    tournamentDisplayName(row.name, row.regions.name, row.type),
-  );
-}
-
-/**
- * The tournaments a takeover withdrew pending entries from, for the notice
- * of a submission that then failed: the ones the verification mail would
- * have named, and this tournament too if it had one, since that entry is
- * gone with nothing to replace it.
- * @param tournament The tournament the submission tried to enter.
- * @param withdrawnIds Every tournament `take_over_unverified_participant()`
- *     reported.
- * @param otherNames What `withdrawnTournamentNames()` read for the rest.
- * @return `undefined` when nothing was withdrawn, and an empty list when
- *     the names of the rest couldn't be read: naming only this tournament
- *     would read as if it were the only one.
- */
-function withdrawnWithoutReplacement(
-  tournament: EntryTournamentRow,
-  withdrawnIds: readonly string[],
-  otherNames: string[] | undefined,
-): string[] | undefined {
-  if (!withdrawnIds.includes(tournament.id)) {
-    return otherNames;
-  }
-  // `withdrawnTournamentNames()` answers empty only for a failed read.
-  if (otherNames?.length === 0) {
-    return [];
-  }
-  return [
-    tournamentDisplayName(
-      tournament.name,
-      tournament.regions.name,
-      tournament.type,
-    ),
-    ...(otherNames ?? []),
-  ];
-}
-
-/**
  * Enters a participant whose identity is already settled -- by password in
  * `createEntryAfterCheck()`, or by session in `createEntryForParticipant()`
  * -- into a checked tournament: lapses their entries whose verification
@@ -967,29 +636,6 @@ async function completeWrittenEntry(
 }
 
 /**
- * The stage of `enterTournament()` that refuses the submission when a later
- * one has taken the unverified account over since (see
- * `isStillUnverifiedAccountOf()`).
- * @param db The Supabase client to read with.
- * @param participantId The account the entry was written for.
- * @param passwordHash The hash this submission set on it.
- */
-async function ensureStillUnverifiedAccountOf(
-  db: DbClient,
-  participantId: string,
-  passwordHash: string,
-): Promise<{ok: true} | ClientFailure<409>> {
-  if (!(await isStillUnverifiedAccountOf(db, participantId, passwordHash))) {
-    return {
-      ok: false,
-      status: 409,
-      error: ENTRY_ERROR_CODES.SUPERSEDED_BY_LATER_SUBMISSION,
-    };
-  }
-  return {ok: true};
-}
-
-/**
  * The first stage of `enterTournament()`: cancels the participant's entries
  * whose verification link expired unused (`lapse_expired_pending_entries()`).
  * @param db The Supabase client to write with.
@@ -1014,211 +660,6 @@ async function lapseExpiredPendingEntries(
     }),
     'failed to lapse the expired pending entries',
   );
-}
-
-/**
- * The stage of `enterTournament()` that looks up the participant's existing
- * entry for the tournament, refusing the submission unless there is none or
- * it is cancelled.
- * @param db The Supabase client to read with.
- * @param participantId The participant being entered.
- * @param tournamentId The tournament being entered.
- * @return The cancelled entry to reuse, as a snapshot `rollbackEntry()` can
- *     restore, or `null` when a fresh entry is to be inserted.
- */
-async function findReusableEntry(
-  db: DbClient,
-  participantId: string,
-  tournamentId: string,
-): Promise<
-  {ok: true; existingEntry: ExistingEntryRow | null} | ClientFailure<409>
-> {
-  // A participant who cancelled may enter the same tournament again with the
-  // same credentials. The unique (participant_id, tournament_id) constraint
-  // means that has to reuse the cancelled row instead of inserting a second
-  // one.
-  const existingEntry = unwrap(
-    await db
-      .from('entries')
-      .select(EXISTING_ENTRY_COLUMNS)
-      .eq('participant_id', participantId)
-      .eq('tournament_id', tournamentId)
-      .maybeSingle(),
-    'failed to read the existing entry',
-  );
-  if (existingEntry && existingEntry.status !== 'cancelled') {
-    return {
-      ok: false,
-      status: 409,
-      // Still pending after `lapseExpiredPendingEntries()` means its link is
-      // still valid.
-      error:
-        existingEntry.status === 'pending_verification'
-          ? ENTRY_ERROR_CODES.ENTRY_PENDING_VERIFICATION
-          : ENTRY_ERROR_CODES.ALREADY_ENTERED,
-    };
-  }
-  return {ok: true, existingEntry};
-}
-
-/**
- * The stage of `enterTournament()` that writes the `entries` row: a fresh
- * insert, or `reenter_cancelled_entry()` over the participant's own
- * cancelled row. This is the write `check_entry_seat()` refuses, for the
- * region's dual-entry rule and for a seat held in another region on the same
- * question set alike. Nothing is left behind when it fails, so there is
- * nothing to roll back.
- * @param db The Supabase client to write with.
- * @param participantId The participant being entered.
- * @param tournamentId The tournament being entered.
- * @param input The entry itself.
- * @param existingEntry The cancelled entry to reuse, from
- *     `findReusableEntry()`, or `null` to insert a fresh one.
- */
-async function writeEntry(
-  db: DbClient,
-  participantId: string,
-  tournamentId: string,
-  input: EntrySessionInput,
-  existingEntry: ExistingEntryRow | null,
-): Promise<{ok: true; entryId: string} | ClientFailure<409>> {
-  const entryValues = {
-    participant_id: participantId,
-    tournament_id: tournamentId,
-    name: input.name,
-    furigana: input.furigana,
-    display_name: input.displayName,
-    free_text: input.freeText ?? null,
-    custom_field_values: input.customFieldValues,
-    status: 'pending_verification',
-  } satisfies TablesInsert<'entries'>;
-
-  const {data: entry, error} = existingEntry
-    ? await db
-        // Takes the participant row before the entry's, the order a takeover
-        // takes them in, which an update here would reverse. It also resets
-        // the row to what a fresh insert would be and drops the dead tokens
-        // of the entry it was cancelled from, with the status flip, so a
-        // refused re-entry changes nothing. It matches no row once the row
-        // stopped being `cancelled`, so two concurrent re-entries behave like
-        // two concurrent first entries: the second one is refused instead of
-        // mailing a second verification link for the same entry.
-        .rpc('reenter_cancelled_entry', {
-          p_entry_id: existingEntry.id,
-          p_participant_id: participantId,
-          p_name: entryValues.name,
-          p_furigana: entryValues.furigana,
-          p_display_name: entryValues.display_name,
-          p_free_text: entryValues.free_text,
-          p_custom_field_values: entryValues.custom_field_values,
-        })
-        .select('id')
-        .single()
-    : await db.from('entries').insert(entryValues).select('id').single();
-  // `check_entry_seat()` is the only place the rule of
-  // `regions.allows_dual_entry` and the rule against two regions on one
-  // question set are decided: it decides under the participant's row lock,
-  // so nothing checked ahead of the write could add to it, and a copy here
-  // could only drift from it.
-  if (error?.code === REGION_DUAL_ENTRY_SQLSTATE) {
-    // The statement or function was rolled back, so nothing was written: the
-    // row stays the cancellation it was, with its tokens, and there is
-    // nothing to roll back here.
-    return {
-      ok: false,
-      status: 409,
-      error: ENTRY_ERROR_CODES.ALREADY_ENTERED_ANOTHER_TOURNAMENT,
-    };
-  }
-  // The participant holds a seat in another region on the same question set
-  // (0043). Taking part there is what stops an entry here, not having
-  // registered there: a participant who cancelled there in time can enter
-  // here (#236). Retrying won't change a seat that is really there, so even
-  // one a concurrent submission just took is answered as taking part there
-  // rather than as a concurrent submission.
-  if (error?.code === PARTICIPANT_REGION_SQLSTATE) {
-    return {
-      ok: false,
-      status: 409,
-      error: ENTRY_ERROR_CODES.ALREADY_REGISTERED_IN_ANOTHER_REGION,
-    };
-  }
-  // A concurrent submission got there first: it inserted the same entry, or
-  // -- on a re-entry -- took or deleted the cancelled row `.single()` was
-  // looking for.
-  if (
-    error?.code === UNIQUE_VIOLATION_SQLSTATE ||
-    (existingEntry && error?.code === NO_ROW_PGRST_CODE)
-  ) {
-    return {
-      ok: false,
-      status: 409,
-      error: ENTRY_ERROR_CODES.CONCURRENT_SUBMISSION,
-    };
-  }
-  if (error || !entry) {
-    // Anything else -- a check constraint (0021's length limits), Supabase
-    // being down -- is ours to fix, and its message names the table and
-    // the constraint, so it goes to the log behind a 500 (#191).
-    throw new UnexpectedFailure(
-      'failed to create the entry',
-      error ?? {message: 'the write returned no row'},
-    );
-  }
-  return {ok: true, entryId: entry.id};
-}
-
-/**
- * The stage of `enterTournament()` that writes the regulations the new entry
- * claims.
- * @param db The Supabase client to write with.
- * @param entryId The entry `writeEntry()` wrote.
- * @param tournamentId The entry's tournament.
- * @param regulationIds The regulations the entry claims.
- */
-async function storeEntryRegulations(
-  db: DbClient,
-  entryId: string,
-  tournamentId: string,
-  regulationIds: readonly string[],
-): Promise<{ok: true} | ClientFailure<409>> {
-  // The selection is written after the entry because it references it. The
-  // composite foreign keys behind `entry_regulations` are what refuse a
-  // regulation belonging to another tournament, so a submission that got
-  // past `regulationSelectionRefusal()` on a regulation list
-  // `sync_regulations()` deleted from under it is stopped here rather than
-  // stored — which is why a failure rolls the entry back instead of leaving
-  // one claiming nothing.
-  const {error: regulationsError} = await replaceEntryRegulations(
-    db,
-    entryId,
-    tournamentId,
-    regulationIds,
-  );
-  if (regulationsError) {
-    console.error('failed to store the entry regulations', {
-      entryId,
-      code: regulationsError.code,
-      error: regulationsError.message,
-    });
-    // A regulation dropped by a concurrent `sync_regulations()` is the only
-    // failure of that write the participant can act on, so it alone earns
-    // `REGULATION_NO_LONGER_AVAILABLE`. Anything else is a server fault, and
-    // telling the participant their regulations changed would send them to
-    // reload a page that will fail again in exactly the same way.
-    if (regulationsError.code !== FOREIGN_KEY_VIOLATION_SQLSTATE) {
-      throw new UnexpectedFailure(
-        'failed to store the entry regulations',
-        regulationsError,
-      );
-    }
-    return {
-      ok: false,
-      status: 409,
-      error: ENTRY_ERROR_CODES.REGULATION_NO_LONGER_AVAILABLE,
-    };
-  }
-  return {ok: true};
 }
 
 /**
@@ -1276,219 +717,6 @@ async function mailVerificationLink(
       'failed to send the verification email',
       mailError,
     );
-  }
-}
-
-/**
- * Whether the unverified account an entry was just written for still has
- * the password this submission gave it.
- *
- * Every link mailed for an unverified account has to belong to a
- * submission made with the account's current password, because
- * following it is what verifies the account with them (migration 0034).
- * `take_over_unverified_participant()` keeps that by deleting the earlier
- * submissions' entries, but it can only delete entries that exist: one
- * written after a later submission took the account over would carry a link
- * that verifies the account with that later submission's password -- and
- * the later submitter is not necessarily the owner of the address.
- *
- * Read after the entry is written, which leaves no gap: a takeover that
- * commits before this read is seen here, and one that commits after it
- * deletes the entry (and with it the link) itself.
- *
- * A takeover is the only thing that changes an unverified account's hash:
- * a password reset is refused for one (`reset_participant_password()`,
- * migration 0034), so a reset made while this entry was being written can't
- * be mistaken for a later submission and withdraw it.
- * @param db The Supabase client to read with.
- * @param participantId The account the entry was written for.
- * @param passwordHash The hash this submission set on it.
- */
-async function isStillUnverifiedAccountOf(
-  db: DbClient,
-  participantId: string,
-  passwordHash: string,
-): Promise<boolean> {
-  const {data} = await db
-    .from('participants')
-    .select('password_hash')
-    .eq('id', participantId)
-    .maybeSingle();
-  // A failed read counts as taken over: mailing a link that might verify
-  // someone else's password is worse than asking the owner to try again.
-  return data?.password_hash === passwordHash;
-}
-
-/**
- * The refusals `createEntryAfterCheck()` can end in that are about the
- * address's own account, mapped to the mail that tells its owner. Each is
- * something only the owner of the address should learn, so the
- * unauthenticated route mails it instead of answering with it.
- */
-const ENTRY_NOTICE_REASONS: Partial<Record<EntryErrorCode, EntryNoticeReason>> =
-  {
-    [ENTRY_ERROR_CODES.INVALID_PASSWORD]: 'password-mismatch',
-    [ENTRY_ERROR_CODES.ALREADY_REGISTERED_IN_ANOTHER_REGION]: 'other-region',
-    [ENTRY_ERROR_CODES.ALREADY_ENTERED]: 'already-entered',
-    [ENTRY_ERROR_CODES.ENTRY_PENDING_VERIFICATION]: 'pending-verification',
-    [ENTRY_ERROR_CODES.COMMON_PASSWORD]: 'common-password',
-    [ENTRY_ERROR_CODES.ALREADY_ENTERED_ANOTHER_TOURNAMENT]: 'dual-entry',
-    [ENTRY_ERROR_CODES.REGULATION_NO_LONGER_AVAILABLE]:
-      'regulation-unavailable',
-  };
-
-/**
- * When the mail of an anonymous entry goes out: at once, or later from the
- * queue because its address was over the per-address limit when it was
- * submitted (#346, `lib/deferred-entry-mail.ts`). The entry itself is made
- * the same way either way.
- */
-export type EntryMailDelivery = 'now' | 'deferred';
-
-/**
- * Enters an address-and-password submission whose answer the client never
- * sees (#117). The route has already answered -- identically, whatever the
- * address -- and runs this in `waitUntil()`, so the time it takes is not
- * visible either.
- *
- * - An unregistered address gets an account and the entry, as before.
- * - A registered address that was never verified has its account taken
- *   over -- password replaced, earlier submissions' entries
- *   dropped -- and gets the entry (#189). With the account's own password
- *   it is entered under the same rules as a verified one, in any region.
- * - A verified address with the matching password gets the entry.
- * - Anything about the address's own account that would otherwise have
- *   been an error -- a wrong password, taking part in another region, an
- *   entry already made -- is mailed to that address instead, so only its
- *   owner learns it. No entry is made.
- * - A failure on our side is logged; there is no one left to tell.
- * @param env The Worker bindings.
- * @param tournament The tournament, already through
- *     `checkEntrySubmission()`.
- * @param input The validated entry form submission.
- */
-export async function createEntryUnauthenticated(
-  env: Bindings,
-  db: DbClient,
-  tournament: EntryTournamentRow,
-  input: EntryInput,
-  delivery: EntryMailDelivery = 'now',
-): Promise<CreateEntryOutcome> {
-  // Runs after the response, inside `waitUntil()`, where a throw would
-  // surface as an unhandled rejection with none of the context below. So a
-  // thrown error (a network failure inside the Supabase client, say) is
-  // treated like any other failure on our side.
-  //
-  // A fault on our side is thrown (#378), and is a failure here like any
-  // other: the message holds the context and the database's own message, and
-  // a failure after a takeover still tells what the takeover withdrew.
-  let result: AddressEntryResult | UnexpectedEntryResult;
-  try {
-    result = await createEntryAfterCheck(env, db, tournament, input, delivery);
-  } catch (e) {
-    result = {
-      ok: false,
-      status: 500,
-      error: e instanceof Error ? e.message : String(e),
-      ...(e instanceof FailureAfterTakeover &&
-      e.withdrawnTournaments !== undefined
-        ? {withdrawnTournaments: e.withdrawnTournaments}
-        : {}),
-    };
-  }
-  if (result.ok) {
-    return {kind: 'created', entryId: result.entry.id};
-  }
-
-  const withdrawnTournaments =
-    'withdrawnTournaments' in result ? result.withdrawnTournaments : undefined;
-  // Only a known code: `error` can be any thrown or database message, and one
-  // spelling an inherited property would otherwise read as a reason.
-  const reason = isEntryErrorCode(result.error)
-    ? ENTRY_NOTICE_REASONS[result.error]
-    : undefined;
-  if (!reason) {
-    // The address itself isn't logged: it is what an attacker would be
-    // probing for, and nothing here needs it to be diagnosed.
-    console.error('failed to create an unauthenticated entry', {
-      tournamentId: tournament.id,
-      status: result.status,
-      error: result.error,
-    });
-    // The submitter was told a mail was on its way, so one is sent even
-    // now, asking them to try again -- unless the mail provider is what
-    // failed, in which case this one fails too and the log above is all
-    // there is.
-    await sendEntryNotice(
-      env,
-      input.email,
-      tournament,
-      'processing-failed',
-      delivery,
-      withdrawnTournaments,
-    );
-    return {kind: 'failed', error: result.error};
-  }
-  if (
-    !(await sendEntryNotice(
-      env,
-      input.email,
-      tournament,
-      reason,
-      delivery,
-      withdrawnTournaments,
-    ))
-  ) {
-    return {kind: 'failed', error: 'failed to send the entry notice'};
-  }
-  return {kind: 'notified', reason};
-}
-
-/**
- * Sends an entry notice, logging rather than throwing a failure: it runs in
- * the background, with no one left to report to.
- * @param withdrawnTournaments As for `sendEntryNoticeEmail()`.
- * @return Whether the notice went out.
- */
-async function sendEntryNotice(
-  env: Bindings,
-  email: string,
-  tournament: EntryTournamentRow,
-  reason: EntryNoticeReason,
-  delivery: EntryMailDelivery,
-  withdrawnTournaments: string[] | undefined,
-): Promise<boolean> {
-  const tournamentName = tournamentDisplayName(
-    tournament.name,
-    tournament.regions.name,
-    tournament.type,
-  );
-  try {
-    if (delivery === 'deferred') {
-      await deferEntryMail(env, {
-        kind: 'deferred-notice',
-        to: email,
-        tournamentName,
-        reason,
-        ...(withdrawnTournaments ? {withdrawnTournaments} : {}),
-      });
-    } else {
-      await sendEntryNoticeEmail(
-        env,
-        email,
-        tournamentName,
-        reason,
-        withdrawnTournaments,
-      );
-    }
-    return true;
-  } catch (mailError) {
-    console.error('failed to send the entry notice', {
-      tournamentId: tournament.id,
-      reason,
-      error: mailError,
-    });
-    return false;
   }
 }
 

@@ -634,7 +634,7 @@ DB の制約違反は、Postgres のメッセージ(テーブル名・列名・�
 
 ### `POST /api/tournaments/:tournamentId/entries`
 
-未ログインでのエントリー登録。処理の本体は `apps/backend/src/lib/entry-submission.ts` の `checkEntrySubmission()` と `createEntryUnauthenticated()` です。
+未ログインでのエントリー登録。処理の本体は `apps/backend/src/lib/entry-submission.ts` の `checkEntrySubmission()` と、`apps/backend/src/lib/entry-unauthenticated.ts` の `createEntryUnauthenticated()` です。
 
 **応答はメールアドレスの状態によらず同じです**(#117)。「登録済みのアドレスか」「どの地域で登録済みか」が応答から読めると、この API がアドレスの登録有無を調べる手段になってしまうためです(ログインとパスワード再設定要求は既に同じ対策をしています)。そこで:
 
