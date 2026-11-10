@@ -842,7 +842,8 @@ describe.skipIf(!dbReachable)(
       await sql`insert into entries ${sql(entryFor('saikyoi'))}`;
 
       // `errno` is where Bun's SQL client puts the SQLSTATE; the same code
-      // reaches `lib/entry-submission.ts` as `error.code` through supabase-js.
+      // reaches `writeEntry()` in `lib/entry-write.ts` as `error.code` through
+      // supabase-js.
       let raised: {errno?: string; message?: string} | undefined;
       try {
         await sql`insert into entries ${sql(entryFor('shinjinou'))}`;
