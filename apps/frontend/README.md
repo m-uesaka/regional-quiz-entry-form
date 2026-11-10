@@ -145,6 +145,73 @@ message rather than a silent misfile.) See #98.
 Any new form built this way needs the same shape: state in a child, the child
 keyed on whatever identifies the record it was seeded from.
 
+## Remote forms (experimental, tried on `admin/regions`)
+
+`admin/regions` submits through SvelteKit's remote functions (`form()` from
+`$app/server`) rather than form actions, as a trial (#376). Every other screen
+still uses actions. The feature is experimental — it is switched on by
+`experimental.remoteFunctions` in `vite.config.ts`, and its API may change in
+a minor release of `@sveltejs/kit` — so this section records what the trial
+found, for whoever converts the next screen or bumps the version.
+
+The shape, using that screen as the example:
+
+| File | What it holds |
+| --- | --- |
+| `regions.remote.ts` | The forms themselves: `form(Schema, handler)`. Only remote functions may be exported from a `*.remote.ts` file. |
+| `region-forms.server.ts` | What each handler does once the schema has passed, as plain functions a test can call. |
+| `+page.server.ts` | `load` only. A successful submission re-runs it. |
+| `$lib/remote-form.ts` | The glue every such screen needs (below). |
+
+What `form()` takes over: reading the `FormData`, validating it against the
+shared Zod schema (Zod ≥ 3.24 is a Standard Schema, so the schema is passed as
+it is), handing rejected input back to the controls, per-field messages
+(`fields.x.issues()`), one instance per row (`updateRegion.for(region.id)`),
+and working without JavaScript. The handler reports what only the API knows
+with `invalid(issue.slug('...'))` for a control or `invalid('...')` for the
+form as a whole.
+
+What it does not do for us, each found by `apps/e2e/tests/admin-regions.spec.ts`:
+
+- **The layout's guard does not cover a remote function.** It is an endpoint
+  of its own, so `admin/+layout.server.ts` never runs for it. Each handler
+  checks `locals.staff` itself (`requireGeneralStaff()` in
+  `regions.remote.ts`); the API checks again either way.
+- **Input typed before hydration is unknown to the form.** It keeps its own
+  copy of each value and only hears `input` events from after it hydrated.
+  The controls keep what was typed (they are bound, as above) until the form
+  renders them again from its copy — which a refused submission does, emptying
+  them. `{@attach adoptEarlyInput}` on the `<form>`, after the form's own
+  spread, replays the missed input. Every remote form needs it.
+- **`form.for(key)` does not keep returning the same instance.** For a row
+  the server rendered, the instance is dropped when the list is loaded again
+  after a successful submission, and the result it had just received goes
+  with it: the row's "saved" message showed for a few milliseconds and
+  vanished. `keyedForms(updateRegion)` holds one instance per key for as long
+  as the page lives. Every screen that uses `for()` needs it.
+- **Without JavaScript, `event.url` carries the form's action.** The browser
+  posts to `?/remote=<id>`, so a link back to the page built from `url` (the
+  login screen's `redirectTo`) would carry it too. `remoteFormPageUrl()`
+  strips it.
+- **`field.as('text')` does not fit `TextField` as it is** (`value` is typed
+  `string | number`, and it brings an `aria-invalid` that `TextField` derives
+  itself). `textFieldProps(field, initial?)` adapts it and adds the field's
+  first issue as `error`. `Checkbox` takes `field.as('checkbox', initial)`
+  directly.
+- **A component test cannot import a `*.remote.ts` module**: outside a running
+  app there is no endpoint behind it. The test mocks the module with
+  `fakeRemoteForm()` (`src/test-support/fake-remote-form.ts`) and puts each
+  form in the state it wants rendered, where it used to pass a `form` prop.
+
+Not needed, despite what the documentation says for remote functions in
+general: `compilerOptions.experimental.async`. It is for `await` in markup
+(`query()`), which this trial does not use.
+
+Not yet tried: a form with nested rows (`regulations[0].label`), a field that
+must not be echoed back (a password takes a name starting with `_`), a
+Turnstile token, and the build running on Cloudflare (only `vite dev` and
+`vite build` have been exercised).
+
 ## Building
 
 To create a production version of your app (from the repo root):

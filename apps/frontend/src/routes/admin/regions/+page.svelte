@@ -7,25 +7,22 @@
   import Checkbox from '$lib/components/ui/atoms/Checkbox.svelte';
   import Label from '$lib/components/ui/atoms/Label.svelte';
   import FlashMessage from '$lib/components/ui/items/FlashMessage.svelte';
+  import {
+    adoptEarlyInput,
+    formErrorMessage,
+    keyedForms,
+    textFieldProps,
+  } from '$lib/remote-form';
   import type {PageProps} from './$types';
+  import {createRegion, updateRegion} from './regions.remote';
 
-  const {data, form}: PageProps = $props();
+  const {data}: PageProps = $props();
 
-  // The create form's own result, if the last submission came from it. The
-  // row forms share the same `form` prop, so each half checks the intent
-  // before showing anything.
-  const createResult = $derived(form?.intent === 'create' ? form : null);
+  const updateFormOf = keyedForms(updateRegion);
 
-  /**
-   * The result belonging to one region's row, if that row was the one just
-   * submitted.
-   * @param regionId The row's region.
-   */
-  function updateResult(regionId: string) {
-    return form?.intent === 'update' && form.regionId === regionId
-      ? form
-      : null;
-  }
+  const createError = $derived(
+    formErrorMessage(createRegion.fields.allIssues()),
+  );
 </script>
 
 <PageContainer>
@@ -34,45 +31,37 @@
   <Card>
     <h2 class="text-lg font-bold">地域を追加</h2>
 
-    {#if createResult?.saved}
+    {#if createError}
+      <FlashMessage kind="error">{createError}</FlashMessage>
+    {:else if createRegion.result?.saved}
       <FlashMessage kind="success">地域を追加しました</FlashMessage>
     {/if}
-    {#if createResult?.error}
-      <FlashMessage kind="error">{createResult.error}</FlashMessage>
-    {/if}
 
-    <form method="POST" action="?/create" class="flex flex-col gap-4">
+    <form {...createRegion} {@attach adoptEarlyInput} class="flex flex-col gap-4">
       <!-- Fixed at creation time: it is one segment of the published entry-form
            URL, so the row forms below carry no control for it. -->
       <TextField
         id="region-create-slug"
         class="w-full"
-        name="slug"
         label="slug"
-        type="text"
         required
-        error={createResult?.fieldErrors.slug?.[0]}
         errorRole="alert"
-        value={createResult?.values.slug ?? ''}
+        {...textFieldProps(createRegion.fields.slug)}
       />
 
       <TextField
         id="region-create-name"
         class="w-full"
-        name="name"
         label="地域名"
-        type="text"
         required
-        error={createResult?.fieldErrors.name?.[0]}
         errorRole="alert"
-        value={createResult?.values.name ?? ''}
+        {...textFieldProps(createRegion.fields.name)}
       />
 
       <div class="flex items-center gap-2">
         <Checkbox
           id="region-create-dual-entry"
-          name="allowsDualEntry"
-          checked={createResult?.values.allowsDualEntry ?? false}
+          {...createRegion.fields.allowsDualEntry.as('checkbox')}
         />
         <Label for="region-create-dual-entry">
           最強位と新人王の両方へのエントリーを認める
@@ -95,40 +84,42 @@
     {:else}
       <ul class="flex flex-col gap-4">
         {#each data.regions as region (region.id)}
-          {@const result = updateResult(region.id)}
+          {@const update = updateFormOf(region.id)}
+          {@const updateError = formErrorMessage(update.fields.allIssues())}
           <li>
             <Card class="gap-4">
               <h3 class="font-mono text-base font-bold">{region.slug}</h3>
 
-              {#if result?.saved}
+              {#if updateError}
+                <FlashMessage kind="error">{updateError}</FlashMessage>
+              {:else if update.result?.saved}
                 <FlashMessage kind="success">保存しました</FlashMessage>
               {/if}
-              {#if result?.error}
-                <FlashMessage kind="error">{result.error}</FlashMessage>
-              {/if}
 
-              <form method="POST" action="?/update" class="flex flex-col gap-4">
-                <input type="hidden" name="id" value={region.id} />
+              <form
+                {...update}
+                {@attach adoptEarlyInput}
+                class="flex flex-col gap-4"
+              >
+                <input {...update.fields.id.as('hidden', region.id)} />
 
                 <TextField
                   id="region-{region.id}-name"
                   class="w-full"
-                  name="name"
                   label="地域名"
-                  type="text"
                   required
-                  error={result?.fieldErrors.name?.[0]}
                   errorRole="alert"
-                  value={result?.values.name ?? region.name}
+                  {...textFieldProps(update.fields.name, region.name)}
                 />
 
                 <div class="flex items-center gap-2">
                   <Checkbox
                     id="region-{region.id}-dual-entry"
                     aria-describedby="region-{region.id}-dual-entry-hint"
-                    name="allowsDualEntry"
-                    checked={result?.values.allowsDualEntry ??
-                      region.allowsDualEntry}
+                    {...update.fields.allowsDualEntry.as(
+                      'checkbox',
+                      region.allowsDualEntry,
+                    )}
                   />
                   <Label for="region-{region.id}-dual-entry">
                     最強位と新人王の両方へのエントリーを認める

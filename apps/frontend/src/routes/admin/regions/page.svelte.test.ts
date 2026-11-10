@@ -1,8 +1,23 @@
 import {render, screen, within} from '@testing-library/svelte';
-import {describe, expect, it} from 'vitest';
+import {beforeEach, describe, expect, it, vi} from 'vitest';
 import type {Region, StaffClaims} from '@regional-quiz/shared';
+import type {FakeRemoteForm} from '../../../test-support/fake-remote-form';
 import Page from './+page.svelte';
-import type {PageProps} from './$types';
+import {createRegion, updateRegion} from './regions.remote';
+
+// The page's two forms are remote functions, which only a running app can
+// serve; see `test-support/fake-remote-form.ts`.
+vi.mock('./regions.remote', async () => {
+  const {fakeRemoteForm} =
+    await import('../../../test-support/fake-remote-form');
+  return {
+    createRegion: fakeRemoteForm('?/remote=create'),
+    updateRegion: fakeRemoteForm('?/remote=update'),
+  };
+});
+
+const createForm = createRegion as unknown as FakeRemoteForm;
+const updateForm = updateRegion as unknown as FakeRemoteForm;
 
 // Handed down by `routes/admin/+layout.server.ts`.
 const STAFF: StaffClaims = {
@@ -27,9 +42,9 @@ const OSAKA: Region = {
   allowsDualEntry: true,
 };
 
-function renderPage(regions: Region[], form: PageProps['form'] = null) {
+function renderPage(regions: Region[]) {
   render(Page, {
-    props: {params: {}, data: {staff: STAFF, regions}, form},
+    props: {params: {}, data: {staff: STAFF, regions}, form: null},
   });
 }
 
@@ -41,6 +56,11 @@ function rowOf(slug: string): HTMLElement {
 }
 
 describe('admin regions +page.svelte', () => {
+  beforeEach(() => {
+    createForm.reset();
+    updateForm.reset();
+  });
+
   it('renders each region with its current name and dual-entry setting', () => {
     renderPage([TOKYO, OSAKA]);
 
@@ -49,14 +69,12 @@ describe('admin regions +page.svelte', () => {
     expect(within(rowOf('osaka')).getByRole('checkbox')).toBeChecked();
   });
 
-  // 0045: allowing dual entry is refused while both tournaments share a
-  // question set, which is changed on the tournament screen.
   it('explains the question set rule next to the dual-entry box', () => {
     renderPage([TOKYO]);
 
     expect(
       within(rowOf('tokyo')).getByRole('checkbox'),
-    ).toHaveAccessibleDescription(/同じ問題セット.*大会の編集画面/);
+    ).toHaveAccessibleDescription(/同じ問題セットが設定されていると/);
   });
 
   it('carries the region id the row form saves to', () => {
@@ -67,32 +85,45 @@ describe('admin regions +page.svelte', () => {
     ).toHaveValue(TOKYO.id);
   });
 
-  it('reports a duplicate slug on the create form only', () => {
-    renderPage([TOKYO], {
-      intent: 'create',
-      regionId: null,
-      saved: false,
-      error: '入力内容を確認してください',
-      fieldErrors: {slug: ['この slug は既に使われています']},
-      values: {slug: 'tokyo', name: '東京(2)', allowsDualEntry: false},
-    });
+  it('gives each row a form of its own to post to', () => {
+    renderPage([TOKYO, OSAKA]);
 
-    expect(
-      screen.getByText('この slug は既に使われています'),
-    ).toBeInTheDocument();
+    const actionOf = (slug: string) =>
+      rowOf(slug).querySelector('form')?.getAttribute('action');
+    expect(actionOf('tokyo')).toBe(`?/remote=update/${TOKYO.id}`);
+    expect(actionOf('osaka')).toBe(`?/remote=update/${OSAKA.id}`);
+  });
+
+  it('reports a duplicate slug on the create form only', () => {
+    createForm.setState({
+      issues: [{path: ['slug'], message: 'この slug は既に使われています'}],
+      values: {slug: 'tokyo', name: '東京(2)'},
+    });
+    renderPage([TOKYO]);
+
+    expect(screen.getByLabelText('slug')).toHaveValue('tokyo');
+    expect(screen.getByLabelText('slug')).toHaveAccessibleDescription(
+      'この slug は既に使われています',
+    );
+    // Above the form, issues that belong to controls are summed up.
+    expect(screen.getByText('入力内容を確認してください')).toBeInTheDocument();
     // The row form is untouched by a create failure.
     expect(within(rowOf('tokyo')).getByLabelText('地域名')).toHaveValue('東京');
   });
 
+  it('tells staff the region was added', () => {
+    createForm.setState({result: {saved: true}});
+    renderPage([TOKYO]);
+
+    expect(screen.getByText('地域を追加しました')).toBeInTheDocument();
+  });
+
   it('shows an update failure beside the row it came from', () => {
-    renderPage([TOKYO, OSAKA], {
-      intent: 'update',
-      regionId: OSAKA.id,
-      saved: false,
-      error: '地域が見つかりません',
-      fieldErrors: {},
-      values: {slug: '', name: '大阪府', allowsDualEntry: true},
+    updateForm.for(OSAKA.id).setState({
+      issues: [{path: [], message: '地域が見つかりません'}],
+      values: {name: '大阪府', allowsDualEntry: true},
     });
+    renderPage([TOKYO, OSAKA]);
 
     expect(within(rowOf('osaka')).getByRole('alert')).toHaveTextContent(
       '地域が見つかりません',
@@ -101,6 +132,16 @@ describe('admin regions +page.svelte', () => {
       '大阪府',
     );
     expect(within(rowOf('tokyo')).queryByRole('alert')).toBeNull();
+  });
+
+  it('shows a save on the row it was made on', () => {
+    updateForm.for(OSAKA.id).setState({result: {saved: true}});
+    renderPage([TOKYO, OSAKA]);
+
+    expect(
+      within(rowOf('osaka')).getByText('保存しました'),
+    ).toBeInTheDocument();
+    expect(within(rowOf('tokyo')).queryByText('保存しました')).toBeNull();
   });
 
   it('tells staff when no region exists yet', () => {
