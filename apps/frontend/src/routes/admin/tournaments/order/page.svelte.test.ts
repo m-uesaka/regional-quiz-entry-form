@@ -18,7 +18,11 @@ const TOURNAMENTS: OrderedTournament[] = [
   {id: 'a', regionName: '東京', typeLabel: '最強位', name: '東京最強位'},
 ];
 
-type Form = {saved: boolean; error: string | null} | null;
+type Form = {
+  saved: boolean;
+  error: string | null;
+  order: string[] | null;
+} | null;
 
 function renderPage(tournaments: OrderedTournament[], form: Form = null) {
   render(Page, {
@@ -30,6 +34,13 @@ function renderPage(tournaments: OrderedTournament[], form: Form = null) {
   });
 }
 
+/** The tournament names, in the order the rows are rendered in. */
+function rowNames(): string[] {
+  return Array.from(
+    document.querySelectorAll<HTMLInputElement>('input[data-reorder-position]'),
+  ).map(input => input.getAttribute('aria-label')!.replace(/の表示順$/, ''));
+}
+
 describe('admin tournament order +page.svelte', () => {
   it('numbers each tournament with its current position', () => {
     renderPage(TOURNAMENTS);
@@ -39,7 +50,7 @@ describe('admin tournament order +page.svelte', () => {
   });
 
   it('says the order was saved', () => {
-    renderPage(TOURNAMENTS, {saved: true, error: null});
+    renderPage(TOURNAMENTS, {saved: true, error: null, order: null});
 
     expect(screen.getByRole('status')).toHaveTextContent(
       '表示順を保存しました',
@@ -47,11 +58,45 @@ describe('admin tournament order +page.svelte', () => {
   });
 
   it('shows why a save was refused', () => {
-    renderPage(TOURNAMENTS, {saved: false, error: '読み込み直してください'});
+    renderPage(TOURNAMENTS, {
+      saved: false,
+      error: '読み込み直してください',
+      order: null,
+    });
 
     expect(screen.getByRole('alert')).toHaveTextContent(
       '読み込み直してください',
     );
+  });
+
+  it('keeps the order a failed save submitted', () => {
+    const c: OrderedTournament = {
+      id: 'c',
+      regionName: '大阪',
+      typeLabel: '最強位',
+      name: '大阪最強位',
+    };
+    // 'x' is no longer listed and 'c' was not submitted: the one is
+    // skipped and the other goes last.
+    renderPage([...TOURNAMENTS, c], {
+      saved: false,
+      error: '表示順の保存に失敗しました',
+      order: ['a', 'x', 'b'],
+    });
+
+    expect(rowNames()).toEqual(['東京最強位', '東京新人王', '大阪最強位']);
+    expect(screen.getByLabelText('東京最強位の表示順')).toHaveValue(1);
+    expect(screen.getByLabelText('大阪最強位の表示順')).toHaveValue(3);
+  });
+
+  it('starts over from the stored order when a refusal hands none back', () => {
+    renderPage(TOURNAMENTS, {
+      saved: false,
+      error: '大会が追加または削除されました',
+      order: null,
+    });
+
+    expect(rowNames()).toEqual(['東京新人王', '東京最強位']);
   });
 
   it('says so when there is no tournament to order', () => {

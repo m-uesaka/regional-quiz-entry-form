@@ -13,13 +13,18 @@
   import {tick} from 'svelte';
   import {dragReorder, moveItem, renumberRows} from '$lib/drag-reorder';
   import {Hydrated} from '$lib/hydrated.svelte';
+  import {arrangeBySubmittedIds} from '$lib/submitted-order';
   import type {PageProps} from './$types';
 
   const {data, form}: PageProps = $props();
 
   // Reordered on screen until saved. Saving submits the page as a plain form,
-  // so the next load starts again from what the API has.
-  let tournaments = $derived(data.tournaments);
+  // so the next load starts again from what the API has -- except after a
+  // failed save, which hands back the order that was being saved so it
+  // isn't lost.
+  let tournaments = $derived(
+    arrangeBySubmittedIds(data.tournaments, form?.order),
+  );
   let list = $state<HTMLElement>();
   // What a screen reader hears after a row is moved.
   let announcement = $state('');

@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {sortBySubmittedOrder} from './submitted-order';
+import {arrangeBySubmittedIds, sortBySubmittedOrder} from './submitted-order';
 
 /** Rows `a`, `b`, `c`... with the given "表示順" values, in rendered order. */
 function rows(...orders: string[]) {
@@ -65,6 +65,39 @@ describe('sortBySubmittedOrder', () => {
       'c',
       'a',
       'b',
+    ]);
+  });
+});
+
+describe('arrangeBySubmittedIds', () => {
+  const items = [{id: 'a'}, {id: 'b'}, {id: 'c'}];
+
+  it('keeps the stored order when nothing was submitted', () => {
+    expect(arrangeBySubmittedIds(items, null)).toEqual(items);
+    expect(arrangeBySubmittedIds(items, undefined)).toEqual(items);
+  });
+
+  it('puts the items in the submitted order', () => {
+    expect(arrangeBySubmittedIds(items, ['c', 'a', 'b'])).toEqual([
+      {id: 'c'},
+      {id: 'a'},
+      {id: 'b'},
+    ]);
+  });
+
+  it('skips ids no item has and counts a repeated id once', () => {
+    expect(arrangeBySubmittedIds(items, ['x', 'b', 'c', 'b', 'a'])).toEqual([
+      {id: 'b'},
+      {id: 'c'},
+      {id: 'a'},
+    ]);
+  });
+
+  it('puts the items missing from the submission last, in stored order', () => {
+    expect(arrangeBySubmittedIds(items, ['c'])).toEqual([
+      {id: 'c'},
+      {id: 'a'},
+      {id: 'b'},
     ]);
   });
 });
