@@ -132,6 +132,18 @@ Rules for the report:
   design is fine, say so in the verdict and stop.
 - Mark anything you inferred rather than observed.
 
+The report also follows the writing rules in
+`.claude/skills/documentation/writing_rules.md` (a path from the repository
+root). Read that file before writing the report. The elements of the report
+are of the following kinds:
+
+- Title: the headings.
+- Paragraph: the verdict, at most two sentences.
+- Bullet: "Tasks walked", "Not checked", and each item in "What already
+  works".
+- Short summary: each "Problem" cell and each "Fix" cell of the findings
+  table. The table is not exempt from the limits here.
+
 ## Testing with real users
 
 When the team can run a usability study, the source recommends:
