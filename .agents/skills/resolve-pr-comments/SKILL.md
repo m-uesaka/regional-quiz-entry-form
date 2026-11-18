@@ -23,3 +23,7 @@ allowed-tools: Read Grep Bash Write Agent
    - `<comment_id>` is the `id` printed next to each comment by `find-pr-comments.sh`.
    - `<commit_hash>` is the hash of the commit where the comment is resolved, taken from the disposable subagent's one-line result in step 4.
    - `<comments>` is an additional comment to explain the detail of the change. Keep it short (a maximum of two short sentences) — the orchestrator only has the disposable subagent's one-line result to go on, so base this on the comment body and the commit, not on a diff it never saw.
+   - The replies and the final summary follow the writing rules in `.claude/skills/documentation/writing_rules.md` (a path from the repository root, like the script paths). Read that file before writing the first reply.
+     - `<comments>` is a Paragraph, limited to two sentences as stated above.
+     - The final summary is a list with one Bullet per comment: its `id`, then the commit hash and the reply link, or `SKIPPED` and the reason.
+     - Write each reply in the language of the comment it replies to.
