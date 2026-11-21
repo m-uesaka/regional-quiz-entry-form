@@ -291,8 +291,7 @@ function mockSupabase(options: {
   /**
    * The SQLSTATE the entry write is refused with, if it is. Nothing is asked
    * of the database ahead of the write (#308) -- the mock throws on a call
-   * it doesn't know, `claim_participant_region_for_tournament()` and
-   * `participant_holds_conflicting_region()` included -- so
+   * it doesn't know, `participant_holds_conflicting_region()` included -- so
    * `PARTICIPANT_REGION_SQLSTATE` here is how a participant holding a seat
    * in another region on the same question set looks.
    */

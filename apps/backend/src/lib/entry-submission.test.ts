@@ -1617,11 +1617,6 @@ describe.skipIf(!dbReachable)(
       expect(first.ok).toBe(true);
       if (!first.ok) return;
       const before = await readParticipant(email);
-      // Stage one of #309: the column is still there, and nothing writes it.
-      const [{region_id: regionId}] = await sql`
-        select region_id from participants where id = ${before.id}
-      `;
-      expect(regionId).toBeNull();
 
       const result = await createEntry(
         env,
